@@ -98,39 +98,7 @@ const SEED_SUPPLIERS = [
 ];
 
 // Open deals that use these products
-const SEED_DEALS = [
-  {id:"deal1", name:"Ankeny CSD — T&F Spring", school:"Ankeny CSD", stage:"Follow-Up 1", value:4200, assignee:"Matt",
-   items:[
-     {productId:"b1", sku:"BL-39AL", qty:6,  quotedPrice:280.00},
-     {productId:"b3", sku:"BL-SB",   qty:4,  quotedPrice:195.00},
-     {productId:"b5", sku:"BL-DISC", qty:4,  quotedPrice:88.00},
-     {productId:"g2", sku:"GA-SP12", qty:8,  quotedPrice:154.00},
-   ]},
-  {id:"deal2", name:"Denver Public Schools — Baseball", school:"Denver Public Schools", stage:"Negotiating", value:11800, assignee:"Matt",
-   items:[
-     {productId:"d1", sku:"DIA-DOL1",qty:24, quotedPrice:72.00},
-     {productId:"d6", sku:"DIA-HEL", qty:16, quotedPrice:125.00},
-     {productId:"w3", sku:"DEM-VOO1",qty:12, quotedPrice:299.00},
-     {productId:"w1", sku:"WIL-A2000",qty:6, quotedPrice:282.00},
-   ]},
-  {id:"deal3", name:"Fargo South — Full T&F", school:"Fargo South HS", stage:"Quoted", value:6700, assignee:"Matt",
-   items:[
-     {productId:"b4", sku:"BL-HH39", qty:8,  quotedPrice:315.00},
-     {productId:"g5", sku:"GA-DM16", qty:6,  quotedPrice:88.00},
-     {productId:"g7", sku:"GA-HM726",qty:4,  quotedPrice:148.00},
-     {productId:"b8", sku:"BL-PVS",  qty:1,  quotedPrice:1850.00},
-   ]},
-  {id:"deal4", name:"Iowa IGHSAU Bid — Volleyballs", school:"Iowa IGHSAU", stage:"Pricing", value:9200, assignee:"Matt",
-   items:[
-     {productId:"m1", sku:"MOL-V5M5",qty:48, quotedPrice:68.00},
-     {productId:"m2", sku:"MOL-V5M4",qty:60, quotedPrice:49.00},
-   ]},
-  {id:"deal5", name:"Moorhead HS — Shot Puts", school:"Moorhead HS", stage:"Engaged", value:1900, assignee:"Rep 2",
-   items:[
-     {productId:"g1", sku:"GA-SP8",  qty:8,  quotedPrice:154.00},
-     {productId:"g2", sku:"GA-SP12", qty:8,  quotedPrice:154.00},
-   ]},
-];
+const SEED_DEALS = [];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const uid    = () => Math.random().toString(36).slice(2,9);

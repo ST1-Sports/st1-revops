@@ -33,33 +33,10 @@ const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{mo
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
   currentUserId: null,
-  deals: [
-    {id:mkId(),name:"Ankeny CSD — T&F Spring",contact:"Sarah Johnson",school:"Ankeny CSD",state:"IA",stage:"Follow-Up 1",value:4200,product:"Track & Field Equipment",assignee:"matt",quoteDate:"2026-03-10",followUpDate:"2026-03-24",lastTouch:Date.now()-86400000*14,notes:"Sent quote 3/10. No response. Budget meeting was 3/20.",priority:"hot",touchHistory:[{id:mkId(),type:"email",date:"2026-03-10",note:"Sent initial quote",author:"matt"}],competitor:null,zoho_synced:false},
-    {id:mkId(),name:"Denver Public Schools — Baseball",contact:"Lisa Park",school:"Denver Public Schools",state:"CO",stage:"Negotiating",value:11800,product:"Baseball / Softball",assignee:"matt",quoteDate:"2026-03-05",followUpDate:"2026-03-28",lastTouch:Date.now()-86400000*2,notes:"Price match vs BSN. $400 apart. Decision end of month.",priority:"hot",touchHistory:[{id:mkId(),type:"email",date:"2026-03-05",note:"Sent quote",author:"matt"},{id:mkId(),type:"call",date:"2026-03-12",note:"Price match request",author:"matt"}],competitor:"BSN Sports",zoho_synced:true},
-    {id:mkId(),name:"Fargo South — Full T&F",contact:"Tom Bergstrom",school:"Fargo South HS",state:"ND",stage:"Quoted",value:6700,product:"Track & Field Equipment",assignee:"matt",quoteDate:"2026-03-18",followUpDate:"2026-03-31",lastTouch:Date.now()-86400000*8,notes:"BWTF connection. Tom knew Bruce.",priority:"hot",touchHistory:[{id:mkId(),type:"email",date:"2026-03-18",note:"Quote with BWTF intro",author:"matt"}],competitor:null,zoho_synced:false},
-    {id:mkId(),name:"Iowa City CSD — Volleyballs",contact:"Rachel Kim",school:"Iowa City CSD",state:"IA",stage:"PO Received",value:2100,product:"Volleyball",assignee:"rep2",quoteDate:"2026-03-12",followUpDate:null,lastTouch:Date.now()-86400000*3,notes:"PO received 3/23. Processing with Molten.",priority:"warm",touchHistory:[{id:mkId(),type:"po",date:"2026-03-23",note:"PO received",author:"rep2"}],competitor:null,zoho_synced:true},
-    {id:mkId(),name:"Moorhead HS — Shot Puts",contact:"Mike Olson",school:"Moorhead HS",state:"MN",stage:"Follow-Up 2",value:1900,product:"Track & Field Equipment",assignee:"rep2",quoteDate:"2026-03-01",followUpDate:"2026-03-22",lastTouch:Date.now()-86400000*22,notes:"Gone quiet after initial interest.",priority:"warm",touchHistory:[{id:mkId(),type:"email",date:"2026-03-01",note:"Quote sent",author:"rep2"}],competitor:"MF Athletic",zoho_synced:false},
-    {id:mkId(),name:"Bismarck SD — Team Store",contact:"Tara Schmidt",school:"Bismarck SD",state:"ND",stage:"On Hold",value:3500,product:"Custom Team Stores",assignee:"rep3",quoteDate:"2026-02-20",followUpDate:"2026-04-01",lastTouch:Date.now()-86400000*30,notes:"Revisit after spring break.",priority:"cold",touchHistory:[],competitor:null,zoho_synced:false},
-  ],
-  invoices: [
-    {id:mkId(),number:"INV-00892",customer:"Ankeny CSD",email:"sjohnson@ankenyschools.org",date:"2026-03-10",dueDate:"2026-04-09",status:"overdue",total:4200,balance:4200,assignee:"matt",crmSynced:false,items:[{name:"Blazer Hurdles x6",qty:6,rate:280,total:1680},{name:"Starting Blocks x4",qty:4,rate:195,total:780},{name:"Gill Shot Puts x8",qty:8,rate:93.75,total:750},{name:"FinishLynx USB",qty:1,rate:498,total:498}]},
-    {id:mkId(),number:"INV-00891",customer:"Iowa City CSD",email:"rkim@iccsd.k12.ia.us",date:"2026-03-23",dueDate:"2026-04-22",status:"sent",total:2100,balance:2100,assignee:"rep2",crmSynced:true,items:[{name:"Molten V5M5000 x12",qty:12,rate:68,total:816},{name:"Molten Practice x18",qty:18,rate:49,total:882},{name:"Volleyball Net",qty:1,rate:402,total:402}]},
-    {id:mkId(),number:"INV-00890",customer:"Denver Public Schools",email:"lpark@dpsk12.org",date:"2026-03-20",dueDate:"2026-04-19",status:"viewed",total:11800,balance:11800,assignee:"matt",crmSynced:true,items:[{name:"Diamond Game Balls x24 dz",qty:24,rate:72,total:1728},{name:"All-Star Catcher Sets x8",qty:8,rate:349,total:2792},{name:"DeMarini BBCOR x12",qty:12,rate:299,total:3588}]},
-    {id:mkId(),number:"INV-00889",customer:"Fargo South HS",email:"tbergstrom@fargo.k12.nd.us",date:"2026-02-28",dueDate:"2026-03-29",status:"overdue",total:6700,balance:6700,assignee:"matt",crmSynced:false,items:[{name:"Steel Hurdles x8",qty:8,rate:315,total:2520},{name:"Gill Discus x6",qty:6,rate:88,total:528},{name:"Pole Vault Standards",qty:1,rate:1850,total:1850}]},
-    {id:mkId(),number:"INV-00888",customer:"Moorhead HS",email:"molson@moorheadschools.org",date:"2026-03-01",dueDate:"2026-03-31",status:"paid",total:1900,balance:0,assignee:"rep2",crmSynced:true,items:[{name:"Shot Puts Girls x8",qty:8,rate:82,total:656},{name:"Shot Puts Boys x8",qty:8,rate:87.55,total:700},{name:"Throwing Circle",qty:1,rate:544,total:544}]},
-    {id:mkId(),number:"INV-00887",customer:"Bismarck SD",email:"tschmidt@bismarck.k12.nd.us",date:"2026-03-18",dueDate:"2026-04-17",status:"draft",total:3400,balance:3400,assignee:"rep3",crmSynced:false,items:[{name:"Hurdles 30in x6",qty:6,rate:310,total:1860},{name:"Gill Shot Puts x10",qty:10,rate:154,total:1540}]},
-  ],
-  rfps: [
-    {id:mkId(),title:"Iowa IGHSAU Athletic Supplies",bidId:"B26-IGHSAU-001",issuer:"Iowa IGHSAU",state:"IA",dueDate:"2026-04-15",stage:"Pricing",value:45000,assignee:"matt",checklist:[{id:mkId(),item:"Review line items",done:true},{id:mkId(),item:"Pull Blazer pricing",done:true},{id:mkId(),item:"Calculate freight",done:false},{id:mkId(),item:"Build response",done:false},{id:mkId(),item:"Submit",done:false}],notes:"Annual bid — 180+ member schools"},
-    {id:mkId(),title:"Colorado Springs D11 Equipment",bidId:"RFB-2152-26",issuer:"Colorado Springs D11",state:"CO",dueDate:"2026-03-31",stage:"Submitted",value:28000,assignee:"matt",checklist:[{id:mkId(),item:"All complete",done:true}],notes:"Submitted 3/25. Awaiting award."},
-    {id:mkId(),title:"Fargo Public Schools RFP",bidId:"FPS-2026-ATH",issuer:"Fargo Public Schools",state:"ND",dueDate:"2026-04-30",stage:"Reviewing",value:18000,assignee:"rep2",checklist:[{id:mkId(),item:"Review specs",done:true},{id:mkId(),item:"Confirm eligibility",done:false},{id:mkId(),item:"Get Blazer pricing",done:false},{id:mkId(),item:"Build response",done:false},{id:mkId(),item:"Submit",done:false}],notes:"BWTF territory"},
-  ],
-  reorders: [
-    {id:mkId(),school:"Ankeny CSD",contact:"Sarah Johnson",state:"IA",sport:"Track & Field",lastOrderDate:"2025-03-10",lastOrderValue:4200,lastItems:["Blazer Hurdles x6","Starting Blocks x4"],status:"pending",snoozedUntil:null},
-    {id:mkId(),school:"Iowa City CSD",contact:"Rachel Kim",state:"IA",sport:"Volleyball",lastOrderDate:"2025-08-15",lastOrderValue:1640,lastItems:["Molten Game Balls x10","Practice Balls x20"],status:"pending",snoozedUntil:null},
-    {id:mkId(),school:"Moorhead HS",contact:"Mike Olson",state:"MN",sport:"Track & Field",lastOrderDate:"2025-03-01",lastOrderValue:1900,lastItems:["Shot Puts x16","Throwing Circle"],status:"sent",snoozedUntil:null},
-    {id:mkId(),school:"Ames CSD",contact:"Jim Walsh",state:"IA",sport:"Baseball",lastOrderDate:"2025-03-15",lastOrderValue:5600,lastItems:["Diamond Balls x30 dz","Catcher Mitts x4"],status:"pending",snoozedUntil:null},
-  ],
+  deals: [],
+  invoices: [],
+  rfps: [],
+  reorders: [],
   contacts: [],
   alerts: [],
   activity: [],
@@ -77,13 +54,13 @@ function useStore() {
       if (saved) {
         const p = JSON.parse(saved);
         return {...SEED,...p,
-          deals:    p.deals    || SEED.deals,
-          invoices: p.invoices || SEED.invoices,
-          rfps:     p.rfps     || SEED.rfps,
-          reorders: p.reorders || SEED.reorders,
-          contacts: p.contacts || [],
-          alerts:   p.alerts   || [],
-          activity: p.activity || [],
+          deals:    Array.isArray(p.deals)    ? p.deals    : [],
+          invoices: Array.isArray(p.invoices) ? p.invoices : [],
+          rfps:     Array.isArray(p.rfps)     ? p.rfps     : [],
+          reorders: Array.isArray(p.reorders) ? p.reorders : [],
+          contacts: Array.isArray(p.contacts) ? p.contacts : [],
+          alerts:   Array.isArray(p.alerts)   ? p.alerts   : [],
+          activity: Array.isArray(p.activity) ? p.activity : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
         };
       }
