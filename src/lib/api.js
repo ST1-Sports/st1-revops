@@ -1,55 +1,152 @@
 /**
- * Central API client for ST1 RevOps
- * Proxies all Claude API requests through /api/claude (Vercel Edge Function)
- * so the ANTHROPIC_KEY is never exposed to the browser.
+ * ST1 RevOps — Central AI client
+ * All Anthropic calls go through /api/claude (Vercel serverless proxy).
+ * The API key never touches the browser bundle.
  */
 
-const API_ENDPOINT = '/api/claude';
+// In local dev (npm run dev): call Anthropic directly using VITE_ANTHROPIC_KEY
+// In production on Vercel: route through /api/claude edge proxy (key stays server-side)
+const IS_DEV   = typeof import.meta !== 'undefined' && import.meta.env?.DEV
+const DEV_KEY  = typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_ANTHROPIC_KEY || '') : ''
+const ENDPOINT = IS_DEV ? 'https://api.anthropic.com/v1/messages' : '/api/claude'
 
 /**
- * Send a message to Claude via the server-side proxy.
- * @param {Object} body - Full Anthropic messages API request body
- * @returns {Promise<Object>} Anthropic API response JSON
+ * Core call — mirrors Anthropic /v1/messages signature
+ * @param {object} opts
+ * @param {string} opts.prompt       - User message
+ * @param {string} [opts.sys]        - System prompt
+ * @param {number} [opts.tokens=900] - max_tokens
+ * @param {boolean}[opts.search]     - Enable web search tool
+ * @param {boolean}[opts.json]       - Parse response as JSON
+ * @param {Array}  [opts.mcpServers] - MCP servers array
+ * @returns {Promise<string|object|null>}
  */
-export async function callClaude(body) {
-  const res = await fetch(API_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Claude API error ${res.status}: ${text}`);
+export async function aiCall(prompt, opts = {}) {
+  const body = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: opts.tokens || 900,
+    messages: [{ role: 'user', content: prompt }],
   }
 
-  return res.json();
+  if (opts.sys) {
+    body.system = opts.json
+      ? opts.sys + '\n\nReturn ONLY valid JSON. No markdown fences, no explanation.'
+      : opts.sys
+  } else if (opts.json) {
+    body.system = 'Return ONLY valid JSON. No markdown fences, no explanation.'
+  }
+
+  if (opts.search) {
+    body.tools = [{ type: 'web_search_20250305', name: 'web_search' }]
+  }
+
+  if (opts.mcpServers) {
+    body.mcp_servers = opts.mcpServers
+  }
+
+  const headers = { 'Content-Type': 'application/json' }
+  if (IS_DEV && DEV_KEY) {
+    headers['x-api-key'] = DEV_KEY
+    headers['anthropic-version'] = '2023-06-01'
+    headers['anthropic-beta'] = 'mcp-client-2025-04-04'
+  }
+
+  const r = await fetch(ENDPOINT, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+
+  if (!r.ok) {
+    const err = await r.text().catch(() => 'unknown error')
+    throw new Error(`Claude API ${r.status}: ${err.slice(0, 200)}`)
+  }
+
+  const d = await r.json()
+  const text = (d.content || [])
+    .filter(b => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+
+  if (!opts.json) return text
+
+  try {
+    const m = text.match(/[\[{][\s\S]*[\]}]/s)
+    return m ? JSON.parse(m[0]) : null
+  } catch {
+    return null
+  }
 }
 
 /**
- * Convenience wrapper: single user message, returns assistant text.
- * @param {string} prompt
- * @param {Object} options - model, max_tokens, system, tools
- * @returns {Promise<string>}
+ * Send a Slack message via MCP through the proxy
+ * Channel C09F64RK0MN = #all-st1-sports
  */
-export async function askClaude(prompt, options = {}) {
-  const {
-    model = 'claude-sonnet-4-20250514',
-    max_tokens = 1024,
-    system,
-    tools,
-  } = options;
+export async function slackSend(channelId, message) {
+  const r = await fetch(ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      mcp_servers: [{ type: 'url', url: 'https://mcp.slack.com/mcp', name: 'slack' }],
+      messages: [{
+        role: 'user',
+        content: `Send this exact message to Slack channel ${channelId} using the slack_send_message tool:\n\n${message}\n\nReply with just "sent".`
+      }]
+    })
+  })
+  if (!r.ok) throw new Error(`Slack proxy ${r.status}`)
+  const d = await r.json()
+  return d
+}
 
-  const body = {
-    model,
-    max_tokens,
-    messages: [{ role: 'user', content: prompt }],
-  };
+/**
+ * Zoho Books REST call (direct from browser — credentials stored locally)
+ */
+export async function booksAPI(endpoint, method = 'GET', body = null, token, orgId) {
+  const sep = endpoint.includes('?') ? '&' : '?'
+  const url = `https://www.zohoapis.com/books/v3${endpoint}${sep}organization_id=${orgId}`
+  const r = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Zoho-oauthtoken ${token}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  if (!r.ok) throw new Error(`Books ${r.status}`)
+  return r.json()
+}
 
-  if (system) body.system = system;
-  if (tools) body.tools = tools;
+/**
+ * Zoho CRM REST call (direct from browser)
+ */
+export async function crmAPI(endpoint, method = 'GET', body = null, token) {
+  const r = await fetch(`https://www.zohoapis.com/crm/v3${endpoint}`, {
+    method,
+    headers: {
+      Authorization: `Zoho-oauthtoken ${token}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  if (!r.ok) throw new Error(`CRM ${r.status}`)
+  return r.json()
+}
 
-  const data = await callClaude(body);
-  const block = data.content?.find(b => b.type === 'text');
-  return block?.text ?? '';
+/**
+ * WooCommerce REST call (direct from browser — st1sports.com)
+ */
+export async function wooAPI(endpoint, method = 'GET', body = null, ck, cs) {
+  const r = await fetch(`https://st1sports.com/wp-json/wc/v3${endpoint}`, {
+    method,
+    headers: {
+      Authorization: `Basic ${btoa(`${ck}:${cs}`)}`,
+      'Content-Type': 'application/json',
+    },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  if (!r.ok) throw new Error(`WooCommerce ${r.status}`)
+  return r.json()
 }
