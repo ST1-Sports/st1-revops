@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/manifest.json" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#F37321" />
+    <link rel="manifest" href="/manifest.json" />
+    <title>ST1 Sports RevOps</title>
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        background: #111827;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        transition: opacity 0.3s ease;
+      }
+      #splash.hidden { opacity: 0; pointer-events: none; }
+      .splash-inner { text-align: center; color: #F37321; font-family: system-ui, sans-serif; }
+      .splash-inner h1 { font-size: 2rem; font-weight: 700; margin: 0 0 0.5rem; }
+      .splash-inner p { color: #9ca3af; margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="splash">
+      <div class="splash-inner">
+        <h1>ST1 Sports</h1>
+        <p>RevOps Platform</p>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script>
+      window.__hideSplash = function() {
+        var splash = document.getElementById('splash');
+        if (splash) {
+          splash.classList.add('hidden');
+          setTimeout(function() { splash.remove(); }, 350);
+        }
+      };
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
