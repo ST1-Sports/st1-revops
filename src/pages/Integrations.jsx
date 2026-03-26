@@ -652,7 +652,7 @@ Channel: ${slackChannelName}`);
 
               {/* Env vars reference */}
               <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,marginBottom:14,fontFamily:"monospace",fontSize:11}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8,fontFamily:"'Lexend',sans-serif"}}>VERCEL ENVIRONMENT VARIABLES</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>VERCEL ENVIRONMENT VARIABLES</div>
                 {[
                   ["ZOHO_CLIENT_ID",     "From api-console.zoho.com → your app"],
                   ["ZOHO_CLIENT_SECRET", "From api-console.zoho.com → your app"],
