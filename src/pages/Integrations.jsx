@@ -57,11 +57,18 @@ async function aiText(prompt) {
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
 const STORE_KEY = "st1_integrations_v1";
+const STATUS_KEY = "st1_integrations_status_v1";
 function loadCreds() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)||"{}"); } catch { return {}; }
 }
 function saveCreds(creds) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(creds)); } catch {}
+}
+function loadStatus() {
+  try { return JSON.parse(localStorage.getItem(STATUS_KEY)||"{}"); } catch { return {}; }
+}
+function saveStatus(status) {
+  try { localStorage.setItem(STATUS_KEY, JSON.stringify(status)); } catch {}
 }
 
 // ─── SEED DATA for demo when not connected ────────────────────────────────────
@@ -85,7 +92,7 @@ const DEMO_PRODUCTS = [
 export default function IntegrationsHub() {
   const [tab, setTab]     = useState("overview");
   const [creds, setCreds] = useState(loadCreds);
-  const [status, setStatus] = useState({slack:true, books:false, crm:false, woo:false}); // Slack is MCP-connected
+  const [status, setStatus] = useState(() => ({slack:true, books:false, crm:false, woo:false, ...loadStatus()}));
   const [testing,  setTesting]  = useState(null);
   const [log, setLog]     = useState([]);
   const [invoices,setInvoices]  = useState(DEMO_INVOICES);
@@ -101,6 +108,7 @@ export default function IntegrationsHub() {
 
   // Save creds to localStorage whenever they change
   useEffect(()=>saveCreds(creds),[creds]);
+  useEffect(()=>saveStatus(status),[status]);
 
   const setC = (k,v) => setCreds(c=>({...c,[k]:v}));
 
