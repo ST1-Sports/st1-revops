@@ -165,7 +165,9 @@ async function callClaudeMsg(messages, sys="", tokens=4000) {
       system:sys+"\n\nReturn ONLY valid JSON, no markdown fences.",
       messages})
   });
-  const d = await r.json();
+  let d;
+  try { d = await r.json(); } catch(e) { throw new Error(`API returned non-JSON (status ${r.status}). The file may be too large or the server timed out.`); }
+  if(d.error) throw new Error(d.error);
   const t = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
   try{const m=t.match(/[\[{][\s\S]*[\]}]/s);return m?JSON.parse(m[0]):null;}catch{return null;}
 }
