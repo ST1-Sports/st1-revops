@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import * as XLSX from "xlsx";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -153,7 +154,21 @@ async function callClaude(prompt, sys="") {
   try{const m=t.match(/[\[{][\s\S]*[\]}]/s);return m?JSON.parse(m[0]):null;}catch{return null;}
 }
 
-const toText = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f);});
+const toText   = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f);});
+const toBase64 = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
+const toBuffer = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsArrayBuffer(f);});
+
+async function callClaudeMsg(messages, sys="", tokens=4000) {
+  const r = await fetch("/api/claude",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:tokens,
+      system:sys+"\n\nReturn ONLY valid JSON, no markdown fences.",
+      messages})
+  });
+  const d = await r.json();
+  const t = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  try{const m=t.match(/[\[{][\s\S]*[\]}]/s);return m?JSON.parse(m[0]):null;}catch{return null;}
+}
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function PriceListManager() {
@@ -167,6 +182,7 @@ export default function PriceListManager() {
   const [gettingSuggestions, setGettingSuggestions] = useState(null);
   const [importing, setImporting] = useState(false);
   const [importLog, setImportLog] = useState([]);
+  const [importPreview, setImportPreview] = useState(null); // {supplierName,supplierCategory,products,targetSupplierId}
   const [editingPrice, setEditingPrice] = useState(null); // {productId, field}
   const [filterSupplier, setFilterSupplier] = useState("all");
   const [filterStatus,   setFilterStatus]   = useState("all");
@@ -249,76 +265,194 @@ export default function PriceListManager() {
     }));
   };
 
-  // Import price list from CSV
+  // Import price list — PDF, Excel, or CSV
   const handleImport = async (e) => {
     const file = e.target.files[0];
     if(!file) return;
-    setImporting(true); setImportLog([]);
-    const text = await toText(file);
-    const lines = text.split("\n").filter(l=>l.trim());
-    const header = lines[0].split(",").map(h=>h.replace(/"/g,"").trim().toLowerCase());
-
+    setImporting(true); setImportLog([]); setImportPreview(null);
     const addLog = (msg,type="info") => setImportLog(l=>[...l,{id:uid(),msg,type,ts:Date.now()}]);
-    addLog(`Parsing ${file.name} — ${lines.length-1} rows...`);
+    const ext = file.name.split(".").pop().toLowerCase();
 
-    // Use Claude to map columns
-    const sample = lines.slice(0,4).join("\n");
-    const mapping = await callClaude(
-`Given this CSV header and sample rows from a supplier price list, map the columns.
-Header: ${header.join(",")}
-Sample rows:
-${sample}
-Return JSON: {"skuCol":"column name for SKU/item number","nameCol":"column name for product name","costCol":"column name for dealer/cost price","mapCol":"column name for MAP price or null","categoryCol":"column name for category or null"}`);
+    addLog(`Reading ${file.name} (${ext.toUpperCase()})...`);
 
-    if(!mapping) { addLog("Could not parse column mapping","error"); setImporting(false); return; }
-    addLog(`Mapped: SKU=${mapping.skuCol}, Name=${mapping.nameCol}, Cost=${mapping.costCol}`,"success");
+    try {
+      let extracted = null;
 
-    const skuIdx  = header.indexOf(mapping.skuCol?.toLowerCase()?.trim());
-    const nameIdx = header.indexOf(mapping.nameCol?.toLowerCase()?.trim());
-    const costIdx = header.indexOf(mapping.costCol?.toLowerCase()?.trim());
-    const mapIdx  = mapping.mapCol ? header.indexOf(mapping.mapCol?.toLowerCase()?.trim()) : -1;
+      if(ext === "pdf") {
+        // ── PDF: send to Claude as base64 document ──────────────────────────
+        addLog("Sending PDF to Claude for analysis...");
+        const b64 = await toBase64(file);
+        extracted = await callClaudeMsg([{
+          role:"user",
+          content:[
+            { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+            { type:"text", text:
+`This is a supplier price list PDF. Extract ALL products listed.
+Return JSON:
+{
+  "supplierName": "name of the supplier/manufacturer",
+  "supplierCategory": "sport category e.g. Track & Field, Baseball/Softball, Volleyball, Timing Systems",
+  "repName": "sales rep name if visible or null",
+  "repEmail": "rep email if visible or null",
+  "products": [
+    {
+      "sku": "item/part number",
+      "name": "full product name",
+      "cost": dealer_cost_as_number,
+      "map": map_price_as_number_or_null,
+      "ourPrice": suggested_sell_price_as_number_or_null,
+      "category": "subcategory within this supplier",
+      "unit": "each or dozen or set or pair"
+    }
+  ]
+}
+Extract every product row. If a column is not present use null. cost should be the dealer/wholesale price.` }
+          ]
+        }], "", 8000);
 
-    if(skuIdx<0 || costIdx<0) { addLog("Could not find SKU or cost columns","error"); setImporting(false); return; }
+      } else if(ext === "xlsx" || ext === "xls") {
+        // ── Excel: parse with SheetJS, convert first sheet to CSV text ──────
+        addLog("Parsing Excel file...");
+        const buf = await toBuffer(file);
+        const wb  = XLSX.read(buf, {type:"array"});
+        const ws  = wb.Sheets[wb.SheetNames[0]];
+        const csv = XLSX.utils.sheet_to_csv(ws);
+        const rows = csv.split("\n").filter(l=>l.trim()).slice(0,150); // cap rows for context
+        addLog(`Loaded ${rows.length} rows from sheet "${wb.SheetNames[0]}", asking Claude to parse...`);
+        extracted = await callClaudeMsg([{
+          role:"user",
+          content:`This is a supplier price list exported from Excel as CSV.\n\n${rows.join("\n")}\n\n` +
+`Extract ALL products. Return JSON:
+{
+  "supplierName": "supplier/manufacturer name",
+  "supplierCategory": "sport category",
+  "repName": null,
+  "repEmail": null,
+  "products": [
+    { "sku":"item number","name":"product name","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
+  ]
+}
+cost = dealer/wholesale price. Skip blank rows and header rows.`
+        }], "", 6000);
 
-    let updated=0, added=0, unchanged=0;
-    const updates = [];
+      } else {
+        // ── CSV: read as text, same approach ────────────────────────────────
+        addLog("Parsing CSV...");
+        const text = await toText(file);
+        const rows = text.split("\n").filter(l=>l.trim()).slice(0,150);
+        extracted = await callClaudeMsg([{
+          role:"user",
+          content:`Supplier price list CSV:\n\n${rows.join("\n")}\n\n` +
+`Extract ALL products. Return JSON:
+{
+  "supplierName": "supplier/manufacturer name",
+  "supplierCategory": "sport category",
+  "repName": null,
+  "repEmail": null,
+  "products": [
+    { "sku":"item number","name":"product name","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
+  ]
+}
+cost = dealer/wholesale price. Skip blank rows and header rows.`
+        }], "", 6000);
+      }
 
-    lines.slice(1).forEach(line => {
-      const cols = line.split(",").map(c=>c.replace(/^"|"$/g,"").trim());
-      const sku  = cols[skuIdx];
-      const name = nameIdx>=0 ? cols[nameIdx] : sku;
-      const cost = parseFloat(cols[costIdx]);
-      const map  = mapIdx>=0 ? parseFloat(cols[mapIdx]) : null;
-      if(!sku || isNaN(cost)) return;
-      updates.push({sku, name, cost, map});
+      if(!extracted || !extracted.products?.length) {
+        addLog("Could not extract products from file. Check the file has price data.", "error");
+        setImporting(false);
+        e.target.value = "";
+        return;
+      }
+
+      // Suggest target supplier by name match
+      const nameLower = extracted.supplierName?.toLowerCase() || "";
+      const existing  = suppliers.find(s => s.name.toLowerCase().includes(nameLower.slice(0,6)) || nameLower.includes(s.name.toLowerCase().slice(0,6)));
+
+      addLog(`Found ${extracted.products.length} products for "${extracted.supplierName}"`, "success");
+      if(existing) addLog(`Matched to existing supplier: ${existing.name}`, "info");
+      else addLog(`New supplier — will be created as "${extracted.supplierName}"`, "info");
+
+      setImportPreview({
+        supplierName:     extracted.supplierName     || file.name.replace(/\.[^.]+$/,""),
+        supplierCategory: extracted.supplierCategory || "Other",
+        repName:          extracted.repName  || "",
+        repEmail:         extracted.repEmail || "",
+        products:         extracted.products,
+        targetSupplierId: existing?.id || null,
+      });
+
+    } catch(err) {
+      addLog(`Error: ${err.message}`, "error");
+    }
+
+    setImporting(false);
+    e.target.value = "";
+  };
+
+  // Commit import preview into catalog
+  const commitImport = () => {
+    if(!importPreview) return;
+    const {supplierName, supplierCategory, repName, repEmail, products, targetSupplierId} = importPreview;
+    const today = new Date().toISOString().slice(0,10);
+    const addLog = (msg,type="info") => setImportLog(l=>[...l,{id:uid(),msg,type,ts:Date.now()}]);
+
+    setSuppliers(prev => {
+      if(targetSupplierId) {
+        // Update / append to existing supplier
+        return prev.map(s => {
+          if(s.id !== targetSupplierId) return s;
+          let updated=0, added=0;
+          const existingSkus = new Map(s.products.map(p=>[p.sku,p]));
+          const existingNames= new Map(s.products.map(p=>[p.name.toLowerCase(),p]));
+
+          const newProducts = products.map(p => {
+            const bySkuMatch  = existingSkus.get(p.sku);
+            const byNameMatch = existingNames.get(p.name?.toLowerCase());
+            const match = bySkuMatch || byNameMatch;
+            if(match) {
+              if(p.cost === match.cost) return match;
+              updated++;
+              return {...match, lastCost:match.cost, cost:p.cost,
+                map:p.map??match.map, ourPrice:p.ourPrice??match.ourPrice,
+                updatedAt:today};
+            }
+            added++;
+            return {id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed",
+              cost:parseFloat(p.cost)||0, map:p.map||null,
+              ourPrice:p.ourPrice || parseFloat(p.cost)*1.25 || 0,
+              category:p.category||"General", unit:p.unit||"each",
+              lastCost:parseFloat(p.cost)||0, updatedAt:today};
+          });
+
+          // Preserve any existing products not in the new list
+          const uploadSkus = new Set(products.map(p=>p.sku));
+          const uploadNames= new Set(products.map(p=>p.name?.toLowerCase()));
+          const retained = s.products.filter(p => !uploadSkus.has(p.sku) && !uploadNames.has(p.name?.toLowerCase()));
+
+          addLog(`Updated ${updated} products, added ${added} new, kept ${retained.length} unchanged`, "success");
+          return {...s, lastUpdated:today, products:[...newProducts, ...retained]};
+        });
+      } else {
+        // Create new supplier
+        const newSupplier = {
+          id: uid(),
+          name: supplierName, category: supplierCategory,
+          rep: repName, repEmail, repPhone:"",
+          notes:"", lastUpdated:today,
+          products: products.map(p=>({
+            id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed",
+            cost:parseFloat(p.cost)||0, map:p.map||null,
+            ourPrice:p.ourPrice || parseFloat(p.cost)*1.25 || 0,
+            category:p.category||"General", unit:p.unit||"each",
+            lastCost:parseFloat(p.cost)||0, updatedAt:today,
+          }))
+        };
+        addLog(`Created new supplier "${supplierName}" with ${newSupplier.products.length} products`, "success");
+        return [...prev, newSupplier];
+      }
     });
 
-    // Match against existing products and update
-    setSuppliers(prev => prev.map(s => {
-      // Try to match this file to a supplier by looking at SKU prefixes
-      const matchedProducts = updates.filter(u =>
-        s.products.some(p => p.sku === u.sku || p.name.toLowerCase() === u.name?.toLowerCase())
-      );
-      if(!matchedProducts.length) return s;
-
-      return { ...s, lastUpdated: new Date().toISOString().slice(0,10),
-        products: s.products.map(p => {
-          const match = updates.find(u => u.sku === p.sku || u.name?.toLowerCase() === p.name.toLowerCase());
-          if(!match) return p;
-          if(match.cost === p.cost) { unchanged++; return p; }
-          const direction = match.cost > p.cost ? "↑" : "↓";
-          addLog(`${direction} ${p.name}: ${fmt$(p.cost)} → ${fmt$(match.cost)} (${costIncreasePct(p.cost,match.cost)>0?"+":""}${costIncreasePct(p.cost,match.cost).toFixed(1)}%)`,
-            match.cost > p.cost ? "warn" : "success");
-          updated++;
-          return {...p, lastCost:p.cost, cost:match.cost,
-            map:match.map||p.map, updatedAt:new Date().toISOString().slice(0,10)};
-        })
-      };
-    }));
-
-    addLog(`Import complete — ${updated} updated, ${added} new, ${unchanged} unchanged`,updated>0?"warn":"success");
-    setImporting(false);
-    e.target.value="";
+    setImportPreview(null);
   };
 
   // Get AI suggestions for a deal with compressed margins
@@ -462,7 +596,7 @@ Provide strategic pricing advice. Return JSON:
             style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5}}>
             ↑ UPLOAD PRICE LIST
           </button>
-          <input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleImport} style={{display:"none"}}/>
+          <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleImport} style={{display:"none"}}/>
         </div>
       </div>
 
@@ -862,50 +996,171 @@ Provide strategic pricing advice. Return JSON:
 
         {/* ── UPLOAD ── */}
         {tab==="upload"&&(
-          <div className="fu" style={{maxWidth:680}}>
+          <div className="fu" style={{maxWidth:780}}>
             <div style={{marginBottom:20}}>
               <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3}}>UPLOAD PRICE LIST</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Upload a CSV from any supplier — AI maps the columns and updates costs automatically</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Upload a PDF, Excel, or CSV from any supplier — AI extracts everything and adds it to the catalog</div>
               <div style={{width:36,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
             </div>
 
-            <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
-              <div onClick={()=>fileInputRef.current?.click()}
-                style={{border:`2px dashed ${B.borderD}`,borderRadius:6,padding:"32px 24px",textAlign:"center",cursor:"pointer",background:B.surface}}>
-                <div style={{fontSize:32,marginBottom:8}}>📄</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,fontWeight:500}}>Click to upload supplier price list</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:4}}>CSV format · Blazer, Gill, Diamond, Wilson, Molten, FinishLynx</div>
-              </div>
-              {importing&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow,marginTop:10,display:"flex",alignItems:"center",gap:8}}><span className="blink">●</span>Processing...</div>}
-              {importLog.length>0&&(
-                <div style={{marginTop:12,background:B.surface,borderRadius:5,padding:12,maxHeight:200,overflowY:"auto"}}>
-                  {importLog.map(l=>(
-                    <div key={l.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:{success:B.green,warn:B.yellow,error:B.red,info:B.muted}[l.type]||B.muted,lineHeight:1.9}}>
-                      {l.msg}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="card">
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>HOW IT WORKS</div>
-              {[
-                ["Upload any CSV","Export from your supplier portal, email, or catalog — any format works"],
-                ["AI maps the columns","Automatically identifies SKU, product name, dealer cost, MAP, and category columns"],
-                ["Costs update instantly","Matching products update with new dealer costs. Old cost saved as 'previous'"],
-                ["Margin alerts fire","Any open deal where margins drop below 15% immediately shows in Margin Alerts"],
-                ["AI suggests price fixes","Get AI-powered recommendations on whether to raise prices, hold, or substitute products"],
-              ].map(([t,d])=>(
-                <div key={t} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                  <div style={{width:5,height:5,borderRadius:"50%",background:B.orange,marginTop:5,flexShrink:0}}/>
-                  <div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{t}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.5}}>{d}</div>
+            {/* Drop zone */}
+            {!importPreview&&(
+              <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
+                <div onClick={()=>!importing&&fileInputRef.current?.click()}
+                  style={{border:`2px dashed ${B.borderD}`,borderRadius:6,padding:"40px 24px",textAlign:"center",
+                    cursor:importing?"not-allowed":"pointer",background:B.surface,
+                    transition:"border-color .15s"}}>
+                  <div style={{fontSize:36,marginBottom:10}}>📂</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,fontWeight:500}}>
+                    {importing?"Processing…":"Click to upload supplier price list"}
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:6,display:"flex",gap:12,justifyContent:"center"}}>
+                    {["PDF","Excel (.xlsx)","CSV"].map(t=>(
+                      <span key={t} style={{background:B.border,borderRadius:3,padding:"2px 8px",fontWeight:500}}>{t}</span>
+                    ))}
                   </div>
                 </div>
-              ))}
-            </div>
+                {importing&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow,marginTop:10,display:"flex",alignItems:"center",gap:8}}>
+                    <span className="blink">●</span>AI is reading the file — this may take 15–30 seconds for PDFs…
+                  </div>
+                )}
+                {importLog.length>0&&(
+                  <div style={{marginTop:12,background:B.surface,borderRadius:5,padding:12,maxHeight:200,overflowY:"auto"}}>
+                    {importLog.map(l=>(
+                      <div key={l.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,
+                        color:{success:B.green,warn:B.yellow,error:B.red,info:B.muted}[l.type]||B.muted,lineHeight:1.9}}>
+                        {l.msg}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Review extracted products before committing */}
+            {importPreview&&(
+              <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.orange,letterSpacing:1,marginBottom:4}}>REVIEW EXTRACTED PRODUCTS</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,fontWeight:600}}>{importPreview.supplierName}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>
+                      {importPreview.supplierCategory} · {importPreview.products.length} products extracted
+                      {importPreview.targetSupplierId
+                        ? ` · will update existing supplier "${suppliers.find(s=>s.id===importPreview.targetSupplierId)?.name}"`
+                        : " · will create new supplier"}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>{setImportPreview(null);setImportLog([]);}}
+                      style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",color:B.muted}}>
+                      Cancel
+                    </button>
+                    <button onClick={commitImport}
+                      style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+                      ✓ ADD {importPreview.products.length} PRODUCTS
+                    </button>
+                  </div>
+                </div>
+
+                {/* Supplier mapping selector */}
+                <div style={{marginBottom:14,padding:10,background:B.surface,borderRadius:5,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontWeight:500}}>Add to:</div>
+                  <select value={importPreview.targetSupplierId||"__new__"}
+                    onChange={e=>setImportPreview(p=>({...p,targetSupplierId:e.target.value==="__new__"?null:e.target.value}))}
+                    style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",color:B.text,background:B.white}}>
+                    <option value="__new__">+ Create new supplier: {importPreview.supplierName}</option>
+                    {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  {!importPreview.targetSupplierId&&(
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {[
+                        {label:"Supplier name",val:importPreview.supplierName,field:"supplierName"},
+                        {label:"Category",val:importPreview.supplierCategory,field:"supplierCategory"},
+                      ].map(({label,val,field})=>(
+                        <div key={field} style={{display:"flex",alignItems:"center",gap:4}}>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{label}:</span>
+                          <input value={val} onChange={e=>setImportPreview(p=>({...p,[field]:e.target.value}))}
+                            style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 6px",width:140,color:B.text}}/>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Product table preview */}
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                    <thead>
+                      <tr style={{background:B.surface,borderBottom:`2px solid ${B.border}`}}>
+                        {["SKU","Product Name","Category","Unit","Cost","MAP","Our Price"].map(h=>(
+                          <th key={h} style={{padding:"6px 8px",textAlign:h==="Cost"||h==="MAP"||h==="Our Price"?"right":"left",
+                            fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,color:B.muted,fontWeight:700}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importPreview.products.map((p,i)=>(
+                        <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2===0?B.white:B.surface}}>
+                          <td style={{padding:"5px 8px",color:B.muted,fontFamily:"monospace",fontSize:10}}>{p.sku||"—"}</td>
+                          <td style={{padding:"5px 8px",color:B.text,fontWeight:500,maxWidth:220}}>{p.name||"—"}</td>
+                          <td style={{padding:"5px 8px",color:B.muted}}>{p.category||"—"}</td>
+                          <td style={{padding:"5px 8px",color:B.muted}}>{p.unit||"each"}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:B.text,fontWeight:500}}>{p.cost?fmt$(p.cost):"—"}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:B.muted}}>{p.map?fmt$(p.map):"—"}</td>
+                          <td style={{padding:"5px 8px",textAlign:"right",color:p.ourPrice?B.green:B.muted}}>
+                            {p.ourPrice?fmt$(p.ourPrice):p.cost?fmt$(p.cost*1.25):"—"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {importLog.length>0&&(
+                  <div style={{marginTop:10,background:B.surface,borderRadius:5,padding:10,maxHeight:120,overflowY:"auto"}}>
+                    {importLog.map(l=>(
+                      <div key={l.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,
+                        color:{success:B.green,warn:B.yellow,error:B.red,info:B.muted}[l.type]||B.muted,lineHeight:1.9}}>
+                        {l.msg}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Upload another / How it works */}
+            {!importPreview&&!importing&&(
+              <div className="card">
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>HOW IT WORKS</div>
+                {[
+                  ["Upload PDF, Excel, or CSV","Drop in the price list file your rep sends — any format works"],
+                  ["AI extracts every product","Claude reads the file and pulls out SKUs, names, dealer costs, MAP, and categories"],
+                  ["Review before committing","See all extracted products in a table and confirm before they're added"],
+                  ["Update or create","Matching products update costs automatically. New products are added to the catalog"],
+                  ["Margin alerts fire automatically","Any open deal with compressed margins will appear in Margin Alerts instantly"],
+                ].map(([t,d])=>(
+                  <div key={t} style={{display:"flex",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{width:5,height:5,borderRadius:"50%",background:B.orange,marginTop:5,flexShrink:0}}/>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{t}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.5}}>{d}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {importPreview&&(
+              <div style={{textAlign:"center",marginTop:8}}>
+                <button onClick={()=>{setImportPreview(null);setImportLog([]);fileInputRef.current?.click();}}
+                  style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",color:B.muted}}>
+                  Upload a different file
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
