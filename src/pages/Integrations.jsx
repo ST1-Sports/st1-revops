@@ -19,28 +19,18 @@ const fmtD  = d  => d ? new Date(d).toLocaleDateString("en-US",{month:"short",da
 const uid   = () => Math.random().toString(36).slice(2,9);
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 
-// ─── ZOHO BOOKS API ───────────────────────────────────────────────────────────
-async function booksAPI(endpoint, method="GET", body=null, token, orgId) {
-  const sep = endpoint.includes("?")?"&":"?";
-  const url = `https://www.zohoapis.com/books/v3${endpoint}${sep}organization_id=${orgId}`;
-  const r = await fetch(url, {
-    method,
-    headers:{"Authorization":`Zoho-oauthtoken ${token}`,"Content-Type":"application/json"},
-    ...(body?{body:JSON.stringify(body)}:{})
+// ─── ZOHO PROXY (server-side via /api/zoho) ───────────────────────────────────
+// All Zoho calls go through the Vercel function — never direct from browser.
+// Credentials live in Vercel env vars, not localStorage.
+async function zohoAPI(service, endpoint, method="GET", body=null) {
+  const r = await fetch("/api/zoho", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ service, endpoint, method, body }),
   });
-  if(!r.ok) throw new Error(`Books ${r.status}: ${await r.text().catch(()=>"")}`);
-  return r.json();
-}
-
-// ─── ZOHO CRM API ─────────────────────────────────────────────────────────────
-async function crmAPI(endpoint, method="GET", body=null, token) {
-  const r = await fetch(`https://www.zohoapis.com/crm/v3${endpoint}`, {
-    method,
-    headers:{"Authorization":`Zoho-oauthtoken ${token}`,"Content-Type":"application/json"},
-    ...(body?{body:JSON.stringify(body)}:{})
-  });
-  if(!r.ok) throw new Error(`CRM ${r.status}: ${await r.text().catch(()=>"")}`);
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || `Zoho ${service} ${r.status}`);
+  return data;
 }
 
 // ─── WOOCOMMERCE API ──────────────────────────────────────────────────────────
@@ -116,34 +106,39 @@ export default function IntegrationsHub() {
 
   // ── TEST CONNECTIONS ────────────────────────────────────────────────────────
   const testBooks = async () => {
-    if(!creds.booksToken||!creds.orgId) { addLog("Enter Zoho Books token and org ID first","warn"); return; }
     setTesting("books"); addLog("Testing Zoho Books connection...");
     try {
-      const d = await booksAPI("/invoices?per_page=5","GET",null,creds.booksToken,creds.orgId);
+      const d = await zohoAPI("books", "/invoices?per_page=25&sort_column=created_time&sort_order=D");
       if(d.invoices) {
         setInvoices(d.invoices.map(inv=>({...inv,crm_synced:false})));
         setStatus(s=>({...s,books:true}));
         addLog(`✓ Zoho Books connected — ${d.invoices.length} invoices loaded`,"success");
+      } else {
+        throw new Error(d.message || "No invoices in response");
       }
     } catch(e) {
-      addLog(`Books connection failed: ${e.message.slice(0,80)}`,"error");
-      addLog("Using demo data — check token and org ID","warn");
-      setStatus(s=>({...s,books:true})); // allow demo use
+      if(e.message?.includes("not configured") || e.message?.includes("env var")) {
+        addLog(`Books: ${e.message}`,"error");
+        addLog("Add ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO_ORG_ID to Vercel env vars, then run /api/zoho-setup","warn");
+      } else {
+        addLog(`Books: ${e.message.slice(0,120)}`,"error");
+      }
     }
     setTesting(null);
   };
 
   const testCRM = async () => {
-    if(!creds.crmToken) { addLog("Enter Zoho CRM token first","warn"); return; }
     setTesting("crm"); addLog("Testing Zoho CRM connection...");
     try {
-      await crmAPI("/users?type=CurrentUser","GET",null,creds.crmToken);
+      await zohoAPI("crm", "/users?type=CurrentUser");
       setStatus(s=>({...s,crm:true}));
       addLog("✓ Zoho CRM connected","success");
     } catch(e) {
-      addLog(`CRM: ${e.message.slice(0,80)}`,"warn");
-      setStatus(s=>({...s,crm:true}));
-      addLog("CRM connected (demo mode)","warn");
+      if(e.message?.includes("not configured") || e.message?.includes("env var")) {
+        addLog(`CRM: ${e.message}`,"error");
+      } else {
+        addLog(`CRM: ${e.message.slice(0,120)}`,"error");
+      }
     }
     setTesting(null);
   };
@@ -200,19 +195,19 @@ Use the slack_send_message tool with channel_id="${slackChannel}". Reply with ju
 
   // ── TAG CRM CONTACT AS CUSTOMER ─────────────────────────────────────────────
   const tagCRMCustomer = async (inv) => {
-    if(!status.crm||!creds.crmToken) { addLog("Connect Zoho CRM first","warn"); return; }
+    if(!status.crm) { addLog("Connect Zoho CRM first","warn"); return; }
     addLog(`Updating CRM: ${inv.customer_name} → Customer...`);
     try {
-      const search = await crmAPI(`/Contacts/search?criteria=(Email:equals:${encodeURIComponent(inv.email||"")})`,
-        "GET",null,creds.crmToken);
+      const search = await zohoAPI("crm",
+        `/Contacts/search?criteria=(Email:equals:${encodeURIComponent(inv.email||"")})`)
       const contactId = search.data?.[0]?.id;
       if(contactId) {
-        await crmAPI(`/Contacts/${contactId}`,"PUT",{data:[{
+        await zohoAPI("crm", `/Contacts/${contactId}`, "PUT", {data:[{
           id:contactId, Lead_Status:"Customer",
           Customer_Since:new Date().toISOString().slice(0,10),
           Last_Invoice_Number:inv.number, Last_Invoice_Amount:inv.total,
           Account_Type:"Customer"
-        }]},creds.crmToken);
+        }]});
         addLog(`✓ ${inv.customer_name} → Customer in Zoho CRM`,"success");
       } else {
         addLog(`CRM: no contact found for ${inv.customer_name}`,"warn");
@@ -609,43 +604,66 @@ Channel: ${slackChannelName}`);
                 <div style={{width:32,height:3,background:B.red,marginTop:7,borderRadius:2}}/>
               </div>
 
+              {/* Connection status cards */}
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
-                {/* Zoho Books */}
                 <ConnCard id="books" title="Zoho Books" sub="Live invoices, AR, payment status" color={B.red} icon="📒" connected={status.books}>
-                  <Field label="OAUTH TOKEN" val={creds.booksToken} onChange={v=>setC("booksToken",v)} type="password" placeholder="Zoho-oauthtoken 1000.xxxx..."/>
-                  <Field label="ORGANIZATION ID" val={creds.orgId} onChange={v=>setC("orgId",v)} placeholder="e.g. 20081234567"/>
-                  <OBtn onClick={testBooks} disabled={testing==="books"||!creds.booksToken||!creds.orgId} style={{width:"100%",marginTop:4}}>
-                    {testing==="books"?"CONNECTING...":status.books?"✓ RECONNECT":"CONNECT BOOKS"}
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:8}}>
+                    Credentials stored in Vercel env vars — not in the browser.
+                  </div>
+                  <OBtn onClick={testBooks} disabled={testing==="books"} style={{width:"100%"}}>
+                    {testing==="books"?"CONNECTING...":status.books?"✓ RECONNECT":"TEST CONNECTION"}
                   </OBtn>
                 </ConnCard>
 
-                {/* Zoho CRM */}
-                <ConnCard id="crm" title="Zoho CRM" sub="Contact status, Lead_Status, customer tagging" color={B.red} icon="👥" connected={status.crm}>
-                  <Field label="CRM OAUTH TOKEN" val={creds.crmToken} onChange={v=>setC("crmToken",v)} type="password" placeholder="Zoho-oauthtoken 1000.xxxx..."/>
-                  <OBtn onClick={testCRM} disabled={testing==="crm"||!creds.crmToken} style={{width:"100%",marginTop:4}}>
-                    {testing==="crm"?"CONNECTING...":status.crm?"✓ RECONNECT":"CONNECT CRM"}
+                <ConnCard id="crm" title="Zoho CRM" sub="Contact sync, Lead_Status, customer tagging" color={B.red} icon="👥" connected={status.crm}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:8}}>
+                    Same OAuth app and refresh token as Zoho Books — one setup for both.
+                  </div>
+                  <OBtn onClick={testCRM} disabled={testing==="crm"} style={{width:"100%"}}>
+                    {testing==="crm"?"CONNECTING...":status.crm?"✓ RECONNECT":"TEST CONNECTION"}
                   </OBtn>
-                  {status.crm&&(
-                    <div style={{marginTop:10,fontSize:10,color:B.muted,lineHeight:1.6}}>
-                      When an invoice is sent: updates <code style={{background:B.surface,padding:"1px 3px",borderRadius:2}}>Lead_Status → Customer</code>, <code style={{background:B.surface,padding:"1px 3px",borderRadius:2}}>Customer_Since</code>, <code style={{background:B.surface,padding:"1px 3px",borderRadius:2}}>Account_Type</code>
-                    </div>
-                  )}
                 </ConnCard>
               </div>
 
-              {/* Token how-to */}
-              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:2,marginBottom:10}}>HOW TO GET TOKENS</div>
-                {[["1","Go to api-console.zoho.com"],["2","Click Self Client → Create"],["3","Add scopes: ZohoBooks.invoices.ALL, ZohoCRM.modules.Contacts.ALL"],["4","Click Generate Code → copy the token (valid 60 mins for testing)"],["5","Org ID: Zoho Books → Settings → Organization Profile"]].map(([n,step])=>(
-                  <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
-                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span>
+              {/* Setup guide */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:2,marginBottom:12}}>ONE-TIME SETUP</div>
+                {[
+                  ["1","Go to api-console.zoho.com → click Server-based Applications → Create"],
+                  ["2","Set Redirect URI to: https://YOUR-VERCEL-DOMAIN/api/zoho-setup"],
+                  ["3","Add ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET to Vercel env vars"],
+                  ["4","Visit /api/zoho-setup on your deployed app — click the Authorize button"],
+                  ["5","Copy the ZOHO_REFRESH_TOKEN shown on screen into Vercel env vars"],
+                  ["6","Add ZOHO_ORG_ID — find it in Zoho Books → Settings → Organization Profile"],
+                  ["7","Redeploy in Vercel (or trigger a new deployment) for env vars to take effect"],
+                ].map(([n,step])=>(
+                  <div key={n} style={{display:"flex",gap:9,padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:18,flexShrink:0}}>{n}</span>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{step}</span>
                   </div>
                 ))}
-                <div style={{marginTop:10,padding:"8px 10px",background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:4}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,fontWeight:500}}>⚠ Token expires in 60 minutes</div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>For production use, set up a Server-based OAuth app with refresh tokens. The Self Client is fine for initial testing.</div>
+                <div style={{marginTop:12,padding:"10px 12px",background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:4}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:500}}>Refresh tokens don't expire</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                    Unlike the 60-min Self Client tokens, a Server-based OAuth app gives you a refresh token that works indefinitely. You only do this setup once.
+                  </div>
                 </div>
+              </div>
+
+              {/* Env vars reference */}
+              <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,marginBottom:14,fontFamily:"monospace",fontSize:11}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8,fontFamily:"'Lexend',sans-serif"}}>VERCEL ENVIRONMENT VARIABLES</div>
+                {[
+                  ["ZOHO_CLIENT_ID",     "From api-console.zoho.com → your app"],
+                  ["ZOHO_CLIENT_SECRET", "From api-console.zoho.com → your app"],
+                  ["ZOHO_REFRESH_TOKEN", "From /api/zoho-setup after authorization"],
+                  ["ZOHO_ORG_ID",        "Zoho Books → Settings → Organization Profile"],
+                ].map(([k,hint])=>(
+                  <div key={k} style={{display:"flex",gap:12,padding:"4px 0",borderBottom:`1px solid ${B.border}`,alignItems:"baseline"}}>
+                    <span style={{color:B.orange,minWidth:200,flexShrink:0}}>{k}</span>
+                    <span style={{color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{hint}</span>
+                  </div>
+                ))}
               </div>
 
               {/* Live invoices table */}
