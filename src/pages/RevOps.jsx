@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ const SEED = {
   rfps: [],
   reorders: [],
   contacts: [],
+  sequences: [],
   alerts: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
@@ -59,8 +61,9 @@ function useStore() {
           invoices: Array.isArray(p.invoices) ? p.invoices : [],
           rfps:     Array.isArray(p.rfps)     ? p.rfps     : [],
           reorders: Array.isArray(p.reorders) ? p.reorders : [],
-          contacts: Array.isArray(p.contacts) ? p.contacts : [],
-          alerts:   Array.isArray(p.alerts)   ? p.alerts   : [],
+          contacts:  Array.isArray(p.contacts)  ? p.contacts  : [],
+          sequences: Array.isArray(p.sequences) ? p.sequences : [],
+          alerts:    Array.isArray(p.alerts)    ? p.alerts    : [],
           activity: Array.isArray(p.activity) ? p.activity : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
         };
@@ -79,6 +82,22 @@ function useStore() {
 
   return [s, set];
 }
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const toBuffer = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsArrayBuffer(f);});
+
+// Sport → best outreach window (months before season for procurement decisions)
+const SPORT_WINDOWS = {
+  "Track & Field":    "Nov–Jan",
+  "Cross Country":    "Jun–Jul",
+  "Baseball":         "Dec–Feb",
+  "Softball":         "Dec–Feb",
+  "Baseball/Softball":"Dec–Feb",
+  "Volleyball":       "Jun–Jul",
+  "Football":         "Apr–Jun",
+  "Basketball":       "Sep–Oct",
+  "Wrestling":        "Sep–Oct",
+};
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
 async function aiCall(prompt, opts={}) {
@@ -110,6 +129,9 @@ function reducer(prev, action, payload) {
     case "UPDATE_REORDER":    return {...prev, reorders:prev.reorders.map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
+    case "UPDATE_CONTACT":    return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "ADD_SEQUENCE":      return {...prev, sequences:[payload,...(prev.sequences||[])]};
+    case "UPDATE_SEQUENCE":   return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
@@ -884,6 +906,7 @@ function ModProspecting() {
   const [editing,setEditing]=useState(null);
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
+  const importFileRef=useRef();
 
   // Load persisted task state on mount
   const savedTask = bgTasks.getTask(SCRAPE_TASK_ID);
@@ -892,6 +915,11 @@ function ModProspecting() {
   const [schools,setSchools] = useState(savedTask?.orgs||[]);
   const [contacts,setContacts] = useState(savedTask?.contacts||[]);
   const [log,setLog]         = useState(savedTask?.log||[]);
+
+  // Import-list state
+  const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
+  const [importRows,setImportRows]   = useState([]);
+  const [importSel,setImportSel]     = useState(new Set());
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -990,13 +1018,71 @@ function ModProspecting() {
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
   };
 
+  const handleListUpload=async(e)=>{
+    const file=e.target.files[0];
+    if(!file)return;
+    e.target.value="";
+    setImportPhase("parsing");setImportRows([]);
+    try {
+      const buf=await toBuffer(file);
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const csvText=XLSX.utils.sheet_to_csv(ws);
+      const lines=csvText.split("\n").filter(l=>l.trim()).slice(0,201);
+      if(lines.length<2){toast("File appears empty","error");setImportPhase("idle");return;}
+      const result=await aiCall(
+        `CRM export (Zoho or similar). Map and normalize contacts.\n\nCSV:\n${lines.join("\n")}\n\n`+
+        `For each data row extract: firstName, lastName, fullName, email, phone, title (job role/position), school (org/company name), city, state (2-letter), `+
+        `orgType (school|club|district|company), sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
+        `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
+        `tags (array: include "BWTF" if MN or ND state, "multi-sport" if multiple sports implied, "club-director" if club org director, etc.), `+
+        `outreachWindow (best 2-month window to reach out for purchasing decisions based on their sport — e.g. "Nov–Jan" for T&F). `+
+        `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. `+
+        `Skip blank rows and header rows. Use empty string for unknown fields.`,
+        {json:true,tokens:4000}
+      );
+      if(Array.isArray(result)&&result.length>0){
+        const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
+          ...c,
+          id:mkId(),
+          confidence:"medium",
+          outreachStatus:"new",
+          bwtf:!!(c.tags||[]).includes("BWTF")||(c.state==="MN"||c.state==="ND"),
+          importedAt:Date.now(),
+        }));
+        setImportRows(mapped);
+        setImportSel(new Set(mapped.map(c=>c.id)));
+        setImportPhase("preview");
+        toast(`${mapped.length} contacts mapped — review below`,"success");
+      } else {
+        toast("Could not extract contacts from this file","error");
+        setImportPhase("idle");
+      }
+    } catch(err) {
+      toast(`Import error: ${err.message}`,"error");
+      setImportPhase("idle");
+    }
+  };
+
+  const commitListImport=()=>{
+    const selected=importRows.filter(c=>importSel.has(c.id));
+    const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
+    const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
+    const dupes=selected.length-toAdd.length;
+    dispatch("ADD_CONTACTS",toAdd);
+    toast(`Imported ${toAdd.length} contacts${dupes>0?` · ${dupes} duplicates skipped`:""}  `,"success");
+    setImportPhase("idle");setImportRows([]);setImportSel(new Set());
+  };
+
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
   const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 
+  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`]];
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="PROSPECTING ENGINE" sub="Scrape real school contacts by sport, location, and role"
-        action={<div style={{display:"flex",gap:6}}>{["areas","results"].map(v=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{v==="areas"?"FOCUS AREAS":`RESULTS (${contacts.length})`}</button>)}</div>}/>
+      <PH title="PROSPECTING ENGINE" sub="Scrape contacts, import lists, manage your contact database"
+        action={<div style={{display:"flex",gap:6}}>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
 
       {view==="areas"&&(
         <div>
@@ -1058,6 +1144,132 @@ function ModProspecting() {
                 )}
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {view==="import"&&(
+        <div>
+          {/* Upload zone */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{(s.contacts||[]).length} contacts in database · Upload CSV or Excel from Zoho or any CRM</div>
+            <div style={{display:"flex",gap:8}}>
+              <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
+              <OBtn sm onClick={()=>importFileRef.current?.click()} disabled={importPhase==="parsing"}>
+                {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD LIST"}
+              </OBtn>
+            </div>
+          </div>
+
+          {/* Preview table */}
+          {importPhase==="preview"&&importRows.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{importRows.length} contacts ready · {importSel.size} selected</div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
+                  <OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ IMPORT {importSel.size} CONTACTS</OBtn>
+                </div>
+              </div>
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                  <thead>
+                    <tr style={{borderBottom:`2px solid ${B.border}`}}>
+                      {["","Name","Title / Org","Email","Sport","Outreach Window","Priority","Tags"].map(h=>(
+                        <th key={h} style={{padding:"7px 10px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importRows.map((c,i)=>(
+                      <tr key={c.id} style={{borderBottom:`1px solid ${B.border}`,background:importSel.has(c.id)?`${B.orange}06`:B.white}}>
+                        <td style={{padding:"6px 10px"}}>
+                          <input type="checkbox" checked={importSel.has(c.id)} onChange={()=>setImportSel(s=>{const n=new Set(s);n.has(c.id)?n.delete(c.id):n.add(c.id);return n;})}/>
+                        </td>
+                        <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
+                          <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
+                          <div style={{color:B.muted,fontSize:10}}>{c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
+                        </td>
+                        <td style={{padding:"6px 10px"}}>
+                          <div style={{color:B.text}}>{c.title||"—"}</div>
+                          <div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
+                        </td>
+                        <td style={{padding:"6px 10px",color:c.email?B.green:B.muted}}>{c.email||"—"}</td>
+                        <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
+                          {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{c.sport}</span>}
+                        </td>
+                        <td style={{padding:"6px 10px",color:B.orange,fontWeight:500,fontSize:10,whiteSpace:"nowrap"}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]||"—"}</td>
+                        <td style={{padding:"6px 10px"}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,background:{high:B.greenBg,medium:B.blueBg,low:B.surface}[c.priority]||B.surface,padding:"2px 6px",borderRadius:3}}>{(c.priority||"med").toUpperCase()}</span>
+                        </td>
+                        <td style={{padding:"6px 10px"}}>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                            {(c.tags||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>{t}</span>)}
+                            {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Contact database */}
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>YOUR CONTACT DATABASE ({(s.contacts||[]).length})</div>
+            {(s.contacts||[]).length===0&&importPhase==="idle"&&(
+              <div className="card" style={{padding:30,textAlign:"center"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:8}}>No contacts yet</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Upload a CSV/Excel export from Zoho CRM, or run a scrape from your Focus Areas</div>
+                <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CONTACT LIST</OBtn>
+              </div>
+            )}
+            {(s.contacts||[]).length>0&&(
+              <div>
+                {/* Summary stats */}
+                {(()=>{
+                  const ct=s.contacts||[];
+                  const stats=[[ct.length,"Total"],[ct.filter(c=>c.email).length,"With Email"],[ct.filter(c=>c.priority==="high").length,"High Priority"],[ct.filter(c=>c.bwtf).length,"BWTF"],[[...new Set(ct.map(c=>c.sport).filter(Boolean))].length,"Sports"]];
+                  return <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8,marginBottom:14}}>
+                    {stats.map(([v,l])=>(
+                      <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 10px",textAlign:"center"}}>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{v}</div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                      </div>
+                    ))}
+                  </div>;
+                })()}
+                {/* Contact list (grouped by outreach window) */}
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {(s.contacts||[]).slice(0,100).map(c=>(
+                    <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.priority==="high"?B.orange:c.priority==="medium"?B.blue:B.border}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                        <div>
+                          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed"}</span>
+                            {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                            {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
+                            {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
+                          <div style={{display:"flex",gap:10,marginTop:2}}>
+                            {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✉ {c.email}</span>}
+                            {c.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</span>}
+                          </div>
+                        </div>
+                        <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                          {(c.outreachWindow||SPORT_WINDOWS[c.sport])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]}</div>}
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {(s.contacts||[]).length>100&&<div style={{textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Showing 100 of {(s.contacts||[]).length} — export CSV to see all</div>}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1124,7 +1336,8 @@ function ModProspecting() {
 //  MARKETING
 // ════════════════════════════════════════════════════════════════════════════
 function ModMarketing() {
-  const [mode,setMode]=useState("copy");
+  const {s,dispatch,toast}=useApp();
+  const [tab,setTab]=useState("campaigns");
   const [product,setProduct]=useState("Track & Field Equipment");
   const [audience,setAudience]=useState("Athletic Director");
   const [channel,setChannel]=useState("cold email");
@@ -1133,46 +1346,330 @@ function ModMarketing() {
   const [out,setOut]=useState("");
   const [running,setRunning]=useState(false);
 
+  // Campaigns state
+  const [selSeq,setSelSeq]=useState(null);
+  const [building,setBuilding]=useState(false);
+  const [newCamp,setNewCamp]=useState(null); // draft campaign form
+  const [genRunning,setGenRunning]=useState(false);
+  const [filterSport,setFilterSport]=useState("all");
+
   const gen=async()=>{
     setRunning(true);setOut("");
     let p="";
-    if(mode==="copy") p=`Write ${channel} copy for ST1 Sports targeting ${audience}s. Product: ${product}. Tone: ${tone}. ${ctx} ${ST1}. Include subject line if email. Under 120 words. Use {{firstName}} {{orgName}}.`;
-    else if(mode==="sequence") p=`3-touch ${channel} sequence for ST1 Sports targeting ${audience}s, product ${product}. Tone: ${tone}. ${ctx} ${ST1}. Label Touch N — Day X. Under 80 words each.`;
+    if(tab==="copy") p=`Write ${channel} copy for ST1 Sports targeting ${audience}s. Product: ${product}. Tone: ${tone}. ${ctx} ${ST1}. Include subject line if email. Under 120 words. Use {{firstName}} {{orgName}}.`;
     else p=`90-day marketing strategy for ST1 Sports. Focus: ${product}. Audience: ${audience}s. ${ctx} ${ST1}. Include positioning, channels, monthly plan, KPIs.`;
     const t=await aiCall(p,{tokens:900});setOut(t||"");setRunning(false);
   };
 
+  const startNewCampaign=()=>{
+    setNewCamp({name:"",product,audience,channel,tone,ctx:"",touches:[],assignAll:false});
+    setBuilding(true);
+  };
+
+  const generateTouches=async()=>{
+    if(!newCamp)return;
+    setGenRunning(true);
+    const contacts=s.contacts||[];
+    const seg=contacts.filter(c=>
+      (newCamp.audience==="all"||!newCamp.audience||(c.title||"").toLowerCase().includes(newCamp.audience.toLowerCase().split(" ")[0].toLowerCase()))
+    );
+    const windowHint=SPORT_WINDOWS[newCamp.product?.split(" ")[0]]||"";
+    const result=await aiCall(
+      `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
+      `Product: ${newCamp.product}. Audience: ${newCamp.audience}. Channel: ${newCamp.channel}. Tone: ${newCamp.tone}.\n`+
+      `${newCamp.ctx?`Context: ${newCamp.ctx}.\n`:""}`+
+      `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
+      `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
+      `Each touch under 100 words. Use {{firstName}} {{orgName}} merge tags. Step 2 should reference no response to step 1. Step 3 is a final check-in.`,
+      {json:true,tokens:1200}
+    );
+    const touches=(result?.touches||[]).map(t=>({...t,id:mkId()}));
+    setNewCamp(c=>({...c,touches,segmentCount:seg.length}));
+    setGenRunning(false);
+  };
+
+  const saveCampaign=()=>{
+    if(!newCamp||!newCamp.touches.length)return;
+    const contacts=s.contacts||[];
+    const seg=contacts.filter(c=>
+      (newCamp.audience==="all"||!newCamp.audience||(c.title||"").toLowerCase().includes(newCamp.audience.toLowerCase().split(" ")[0].toLowerCase()))
+    );
+    const today=new Date().toISOString().slice(0,10);
+    const seq={
+      id:mkId(),
+      name:newCamp.name||`${newCamp.product} — ${newCamp.audience}`,
+      product:newCamp.product,
+      audience:newCamp.audience,
+      channel:newCamp.channel,
+      tone:newCamp.tone,
+      touches:newCamp.touches,
+      enrollments:seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:today,nextDate:today})),
+      status:"active",
+      createdAt:today,
+    };
+    dispatch("ADD_SEQUENCE",seq);
+    setBuilding(false);setNewCamp(null);setSelSeq(seq.id);
+    toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
+  };
+
+  const markContacted=(seqId,contactId)=>{
+    const seq=(s.sequences||[]).find(s=>s.id===seqId);
+    if(!seq)return;
+    const enroll=seq.enrollments.find(e=>e.contactId===contactId);
+    if(!enroll)return;
+    const nextStep=enroll.step+1;
+    const done=nextStep>=seq.touches.length;
+    const nextTouch=seq.touches[nextStep];
+    const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+    const updated={...seq,enrollments:seq.enrollments.map(e=>
+      e.contactId===contactId?{...e,step:nextStep,status:done?"done":"active",nextDate:nextDate||e.nextDate,lastContacted:today()}:e
+    )};
+    dispatch("UPDATE_SEQUENCE",updated);
+  };
+
+  const markReplied=(seqId,contactId)=>{
+    const seq=(s.sequences||[]).find(s=>s.id===seqId);
+    if(!seq)return;
+    dispatch("UPDATE_SEQUENCE",{...seq,enrollments:seq.enrollments.map(e=>
+      e.contactId===contactId?{...e,status:"replied"}:e
+    )});
+    dispatch("UPDATE_CONTACT",{id:contactId,outreachStatus:"replied"});
+  };
+
+  const activeSeq=selSeq?(s.sequences||[]).find(s=>s.id===selSeq):null;
+  const contactMap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+
+  const allSports=[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="MARKETING STUDIO" sub="AI copy, drip sequences, and go-to-market strategy"/>
+      <PH title="MARKETING STUDIO" sub="Campaigns, outreach sequences, and AI copy generation"/>
       <div style={{display:"flex",gap:7,marginBottom:18}}>
-        {[["copy","Ad Copy"],["sequence","Sequence"],["strategy","Strategy"]].map(([id,l])=>(
-          <button key={id} onClick={()=>setMode(id)} style={{background:mode===id?B.orange:B.white,color:mode===id?B.white:B.muted,border:`1px solid ${mode===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
+        {[["campaigns","Campaigns"],["copy","Copy Generator"],["strategy","Strategy"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
         ))}
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
-        <div style={{display:"flex",flexDirection:"column",gap:9}}>
-          {[["Product",["Track & Field Equipment","Baseball / Softball","Volleyball","Timing Systems","Custom Team Stores","Competition Spikes"],product,setProduct],
-            ["Audience",["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager","Coach"],audience,setAudience],
-            ["Channel",["cold email","LinkedIn","email newsletter","SMS","Instagram"],channel,setChannel],
-            ["Tone",["friendly","professional","urgent","conversational"],tone,setTone]].map(([l,opts,val,set])=>(
-            <div key={l} className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>{l}</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {opts.map(o=><button key={o} onClick={()=>set(o)} style={{background:val===o?`${B.orange}14`:B.white,color:val===o?B.orange:B.muted,border:`1px solid ${val===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+
+      {/* ── CAMPAIGNS ──────────────────────────────────────────────── */}
+      {tab==="campaigns"&&(
+        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
+          {/* Left: sequence list */}
+          <div>
+            <OBtn sm onClick={startNewCampaign} style={{width:"100%",marginBottom:12}}>+ NEW CAMPAIGN</OBtn>
+            {(s.sequences||[]).length===0&&!building&&(
+              <div className="card" style={{padding:20,textAlign:"center"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No campaigns yet</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Create a campaign to enroll contacts from your database and track outreach</div>
+              </div>
+            )}
+            {(s.sequences||[]).map(seq=>{
+              const active=seq.enrollments.filter(e=>e.status==="active").length;
+              const replied=seq.enrollments.filter(e=>e.status==="replied").length;
+              const done=seq.enrollments.filter(e=>e.status==="done").length;
+              return (
+                <div key={seq.id} onClick={()=>{setSelSeq(seq.id);setBuilding(false);}} className="card fu" style={{padding:"11px 13px",marginBottom:8,borderLeft:`3px solid ${selSeq===seq.id?B.orange:B.border}`,cursor:"pointer",background:selSeq===seq.id?`${B.orange}06`:B.white}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:3}}>{seq.name}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{seq.product} · {seq.channel}</div>
+                  <div style={{display:"flex",gap:6}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{active} active</span>
+                    {replied>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>{replied} replied</span>}
+                    {done>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"2px 6px",borderRadius:3}}>{done} done</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Right: new campaign builder OR campaign detail */}
+          {building&&newCamp&&(
+            <div className="card" style={{padding:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>NEW CAMPAIGN</div>
+                <GBtn onClick={()=>{setBuilding(false);setNewCamp(null);}}>CANCEL</GBtn>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                <div>
+                  <Lbl s={{marginBottom:4}}>Campaign Name</Lbl>
+                  <input value={newCamp.name} onChange={e=>setNewCamp(c=>({...c,name:e.target.value}))} placeholder="e.g. T&F ADs — Spring 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:4}}>Channel</Lbl>
+                  <select value={newCamp.channel} onChange={e=>setNewCamp(c=>({...c,channel:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                    {["cold email","LinkedIn","email newsletter","SMS","phone"].map(o=><option key={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:4}}>Product Focus</Lbl>
+                  <select value={newCamp.product} onChange={e=>setNewCamp(c=>({...c,product:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                    {PRODUCT_CATS.map(o=><option key={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:4}}>Audience (role keyword)</Lbl>
+                  <input value={newCamp.audience} onChange={e=>setNewCamp(c=>({...c,audience:e.target.value}))} placeholder="Athletic Director, Coach, all..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <Lbl s={{marginBottom:4}}>Tone</Lbl>
+                <div style={{display:"flex",gap:5}}>
+                  {["friendly","professional","urgent","conversational"].map(t=>(
+                    <button key={t} onClick={()=>setNewCamp(c=>({...c,tone:t}))} style={{background:newCamp.tone===t?`${B.orange}14`:B.white,color:newCamp.tone===t?B.orange:B.muted,border:`1px solid ${newCamp.tone===t?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{t}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{marginBottom:12}}>
+                <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
+                <textarea value={newCamp.ctx} onChange={e=>setNewCamp(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, BWTF angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+              <div style={{marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+                  Audience match: <strong style={{color:B.text}}>{(s.contacts||[]).filter(c=>(newCamp.audience==="all"||!newCamp.audience)||(c.title||"").toLowerCase().includes((newCamp.audience||"").toLowerCase().split(" ")[0].toLowerCase())).length} contacts</strong> from your database
+                </div>
+              </div>
+              <OBtn onClick={generateTouches} disabled={genRunning} style={{marginBottom:14,width:"100%"}}>
+                {genRunning?"✦ GENERATING SEQUENCE...":"✦ GENERATE 3-TOUCH SEQUENCE"}
+              </OBtn>
+              {newCamp.touches.length>0&&(
+                <div>
+                  {newCamp.touches.map((t,i)=>(
+                    <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
+                      {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:5}}>Subj: {t.subject}</div>}
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{t.body}</div>
+                    </div>
+                  ))}
+                  <OBtn onClick={saveCampaign} style={{width:"100%",marginTop:4}}>✓ LAUNCH CAMPAIGN</OBtn>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeSeq&&!building&&(
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                <div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:3}}>{activeSeq.name}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{activeSeq.product} · {activeSeq.channel} · {activeSeq.touches.length} touches</div>
+                </div>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3,letterSpacing:.5}}>{activeSeq.status?.toUpperCase()}</span>
+              </div>
+              {/* Sequence touchpoints */}
+              <div style={{display:"flex",gap:8,marginBottom:16}}>
+                {activeSeq.touches.map((t,i)=>(
+                  <div key={t.id||i} className="card" style={{flex:1,padding:10,borderTop:`2px solid ${B.orange}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:5}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
+                    {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{t.body?.slice(0,120)}{t.body?.length>120?"…":""}</div>
+                  </div>
+                ))}
+              </div>
+              {/* Enrolled contacts */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({activeSeq.enrollments.length})</div>
+                <div style={{display:"flex",gap:6}}>
+                  {["all",...allSports].map(sp=>(
+                    <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
+                  ))}
+                </div>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {activeSeq.enrollments
+                  .filter(e=>{
+                    const c=contactMap[e.contactId];
+                    return !c||(filterSport==="all"||c.sport===filterSport);
+                  })
+                  .sort((a,b)=>a.step-b.step)
+                  .map(e=>{
+                    const c=contactMap[e.contactId];
+                    if(!c)return null;
+                    const touch=activeSeq.touches[e.step];
+                    const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                    return (
+                      <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                          <div>
+                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2}}>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
+                              {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                            </div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                            {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
+                            {touch&&e.status==="active"&&(
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>
+                                Next: Touch {touch.step} · {e.nextDate||"today"}{touch.subject?` — "${touch.subject}"`:""}</div>
+                            )}
+                          </div>
+                          {e.status==="active"&&(
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              <GBtn onClick={()=>markContacted(activeSeq.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT</GBtn>
+                              <button onClick={()=>markReplied(activeSeq.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </div>
-          ))}
-          <div className="card" style={{padding:12}}><Lbl s={{marginBottom:6}}>Context</Lbl><textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={2} placeholder="Any specific angle or context..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical"}}/></div>
-          <OBtn onClick={gen} disabled={running} style={{width:"100%"}}>{running?"GENERATING...":"✦ GENERATE"}</OBtn>
+          )}
+          {!building&&!activeSeq&&(s.sequences||[]).length>0&&(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Select a campaign to view details</div>
+          )}
         </div>
-        <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><Lbl>Output</Lbl>{out&&<GBtn onClick={()=>navigator.clipboard?.writeText(out)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}</div>
-          {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate</div>}
-          {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing...</div>}
-          {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
+      )}
+
+      {/* ── COPY GENERATOR ─────────────────────────────────────────── */}
+      {tab==="copy"&&(
+        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
+          <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            {[["Product",PRODUCT_CATS,product,setProduct],
+              ["Audience",["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager","Coach"],audience,setAudience],
+              ["Channel",["cold email","LinkedIn","email newsletter","SMS","Instagram"],channel,setChannel],
+              ["Tone",["friendly","professional","urgent","conversational"],tone,setTone]].map(([l,opts,val,set])=>(
+              <div key={l} className="card" style={{padding:12}}>
+                <Lbl s={{marginBottom:7}}>{l}</Lbl>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {opts.map(o=><button key={o} onClick={()=>set(o)} style={{background:val===o?`${B.orange}14`:B.white,color:val===o?B.orange:B.muted,border:`1px solid ${val===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+                </div>
+              </div>
+            ))}
+            <div className="card" style={{padding:12}}><Lbl s={{marginBottom:6}}>Context</Lbl><textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={2} placeholder="Any specific angle or context..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical"}}/></div>
+            <OBtn onClick={gen} disabled={running} style={{width:"100%"}}>{running?"GENERATING...":"✦ GENERATE"}</OBtn>
+          </div>
+          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><Lbl>Output</Lbl>{out&&<GBtn onClick={()=>navigator.clipboard?.writeText(out)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}</div>
+            {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate</div>}
+            {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing...</div>}
+            {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* ── STRATEGY ───────────────────────────────────────────────── */}
+      {tab==="strategy"&&(
+        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
+          <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            {[["Product",PRODUCT_CATS,product,setProduct],
+              ["Audience",["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager","Coach"],audience,setAudience]].map(([l,opts,val,set])=>(
+              <div key={l} className="card" style={{padding:12}}>
+                <Lbl s={{marginBottom:7}}>{l}</Lbl>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {opts.map(o=><button key={o} onClick={()=>set(o)} style={{background:val===o?`${B.orange}14`:B.white,color:val===o?B.orange:B.muted,border:`1px solid ${val===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+                </div>
+              </div>
+            ))}
+            <div className="card" style={{padding:12}}><Lbl s={{marginBottom:6}}>Context</Lbl><textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={3} placeholder="Target season, budget cycle, competitive notes..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical"}}/></div>
+            <OBtn onClick={()=>{setRunning(true);setOut("");aiCall(`90-day marketing strategy for ST1 Sports. Focus: ${product}. Audience: ${audience}s. ${ctx} ${ST1}. Include positioning, channels, monthly plan, KPIs.`,{tokens:900}).then(t=>{setOut(t||"");setRunning(false);});}} disabled={running} style={{width:"100%"}}>{running?"GENERATING...":"✦ BUILD STRATEGY"}</OBtn>
+          </div>
+          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><Lbl>Strategy Output</Lbl>{out&&<GBtn onClick={()=>navigator.clipboard?.writeText(out)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}</div>
+            {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate strategy</div>}
+            {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Generating strategy...</div>}
+            {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
