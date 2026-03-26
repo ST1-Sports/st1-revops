@@ -128,6 +128,8 @@ const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota (BWTF), North Dakota (BWTF). Acquired Bruce Whiting Track & Field. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
+const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleyball","Timing Systems","Custom Team Stores","Apparel","Competition Spikes","Cross Country","Other"];
+const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
 function urgentCount(s) {
   return s.deals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
@@ -468,6 +470,35 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
             {loadAdv&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow}}><Spin/>Analyzing...</div>}
             {advice&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:8}}>{advice}</div><GBtn onClick={getAdvice} style={{width:"100%",fontSize:10}}>↺ REFRESH</GBtn></div>}
           </div>
+          <div className="card" style={{padding:14,marginBottom:12}}>
+            <Lbl s={{marginBottom:10}}>Win Rate by Product</Lbl>
+            {(()=>{
+              const wonDeals = s.deals.filter(d=>d.stage==="Closed Won");
+              const totalClosed = s.deals.filter(d=>["Closed Won","Closed Lost"].includes(d.stage));
+              if(totalClosed.length===0) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Win data appears as deals close</div>;
+              const cats = PRODUCT_CATS.map(cat=>{
+                const won  = wonDeals.filter(d=>d.product===cat);
+                const lost = s.deals.filter(d=>d.stage==="Closed Lost"&&d.product===cat);
+                const rate = (won.length+lost.length)>0 ? Math.round(won.length/(won.length+lost.length)*100) : null;
+                const rev  = won.reduce((a,d)=>a+d.value,0);
+                return {cat,won:won.length,lost:lost.length,rate,rev};
+              }).filter(c=>c.won+c.lost>0).sort((a,b)=>b.rev-a.rev);
+              if(cats.length===0) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Win data appears as deals close</div>;
+              const maxRev = Math.max(...cats.map(c=>c.rev),1);
+              return cats.map(({cat,won,lost,rate,rev})=>(
+                <div key={cat} style={{marginBottom:9}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,fontWeight:500}}>{cat}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{won}W / {lost}L {rate!==null?`· ${rate}%`:""}</span>
+                  </div>
+                  <div style={{height:5,background:B.border,borderRadius:3}}>
+                    <div style={{height:"100%",width:`${Math.round(rev/maxRev*100)}%`,background:rate>=60?B.green:rate>=40?B.orange:B.red,borderRadius:3,transition:"width .4s"}}/>
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{fmt$(rev)} won</div>
+                </div>
+              ));
+            })()}
+          </div>
           <div className="card" style={{padding:14}}>
             <Lbl s={{marginBottom:9}}>Recent Activity</Lbl>
             {s.activity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Activity appears as you use the platform</div>}
@@ -552,7 +583,7 @@ Under 80 words. Include subject line. Warm tone.`);
             {[["Deal Name","name"],["Contact","contact"],["School","school"],["Value ($)","value"],["Quote Date","quoteDate"],["Follow-Up Date","followUpDate"],["Notes","notes"]].map(([l,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={k.includes("Date")?"date":"text"} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
             ))}
-            {[["Stage",DEAL_STAGES,"stage"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
+            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><select value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{opts.map(o=><option key={o}>{o}</option>)}</select></div>
             ))}
           </div>
@@ -846,7 +877,7 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
 function ModProspecting() {
   const {s,dispatch,toast}=useApp();
   const [view,setView]=useState("areas");
-  const [areas,setAreas]=useState([{id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],roles:["Athletic Director","Head Track Coach"],maxSchools:10,active:true}]);
+  const [areas,setAreas]=useState([{id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:10,active:true}]);
   const [editing,setEditing]=useState(null);
   const [phase,setPhase]=useState("idle");
   const [progress,setProgress]=useState(0);
@@ -861,22 +892,49 @@ function ModProspecting() {
   const runScrape=async(area)=>{
     setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
     abortRef.current=false;setPhase("finding");
-    addLog("Searching for schools...");
-    const scopeDesc=`the state${area.states.length>1?"s":""} of ${area.states.join(" and ")}`;
-    const schoolRes=await aiCall(
-      `Find public high schools in ${scopeDesc} with ${area.sports.join(", ")} programs. Use web search. Return JSON array (max ${area.maxSchools}): [{"name":"","district":"","city":"","state":"","website":"","bwtf":${area.states.some(s=>s==="MN"||s==="ND")}}]`,
-      {search:true,json:true,tokens:1400}
-    );
-    const sl=(Array.isArray(schoolRes)?schoolRes:[]).slice(0,area.maxSchools).map(s=>({...s,id:mkId(),status:"pending"}));
-    setSchools(sl);setProgress(25);addLog(`Found ${sl.length} schools`,"success");
+    const isClubs  = area.orgType==="clubs";
+    const isBoth   = area.orgType==="both";
+    const scopeDesc= `the state${area.states.length>1?"s":""} of ${area.states.join(" and ")}`;
+    const bwtf     = area.states.some(s=>s==="MN"||s==="ND");
+    const maxOrgs  = area.maxOrgs||area.maxSchools||10;
+
+    let orgs = [];
+
+    if(!isClubs) {
+      addLog("Searching for schools...");
+      const res = await aiCall(
+        `Find public high schools and school districts in ${scopeDesc} with ${area.sports.join(", ")} programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
+        {search:true,json:true,tokens:1400}
+      );
+      orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"school"}))];
+      addLog(`Found ${orgs.length} schools`,"success");
+    }
+
+    if(isClubs||isBoth) {
+      addLog("Searching for youth sports clubs...");
+      const res = await aiCall(
+        `Find youth sports clubs, travel teams, recreational leagues, and club programs in ${scopeDesc} for ${area.sports.join(", ")}. Include club teams, AAU, travel leagues, and recreational programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
+        {search:true,json:true,tokens:1400}
+      );
+      orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"club"}))];
+      addLog(`Found ${(Array.isArray(res)?res:[]).length} clubs`,"success");
+    }
+
+    const sl = orgs.slice(0,maxOrgs).map(o=>({...o,id:mkId(),status:"pending"}));
+    setSchools(sl);setProgress(25);
     setPhase("scraping");
+
     for(let i=0;i<sl.length;i++){
       if(abortRef.current){addLog("Stopped");break;}
       const sc=sl[i];
+      const isClubOrg = sc.orgType==="club";
       setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"scraping"}:x));
-      addLog(`[${i+1}/${sl.length}] ${sc.name}, ${sc.city}`);
+      addLog(`[${i+1}/${sl.length}] ${sc.name}, ${sc.city} (${isClubOrg?"club":"school"})`);
+      const roles = area.roles?.length
+        ? area.roles
+        : isClubOrg ? CLUB_ROLES : ["Athletic Director","Head Coach","Procurement Manager"];
       const found=await aiCall(
-        `Find ${area.roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}. ${sc.website?"Website: "+sc.website:""} Search their athletics staff directory. Return JSON array (empty if none found): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
+        `Find ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}. ${sc.website?"Website: "+sc.website:""} ${isClubOrg?"This is a youth sports club or league.":"Search their athletics staff directory."} Return JSON array (empty if none found): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
         {search:true,json:true,tokens:1400}
       );
       if(Array.isArray(found)&&found.length>0){
@@ -892,13 +950,13 @@ function ModProspecting() {
       setProgress(25+Math.round((i+1)/sl.length*70));
       await new Promise(r=>setTimeout(r,700));
     }
-    setProgress(100);setPhase("done");addLog(`Complete — ${contacts.length} contacts from ${sl.length} schools`,"success");
+    setProgress(100);setPhase("done");addLog(`Complete — ${contacts.length} contacts from ${sl.length} orgs`,"success");
     dispatch("ADD_CONTACTS",contacts);toast(`${contacts.length} contacts added to your database`,"success");
   };
 
   const exportCsv=()=>{
-    const h=["firstName","lastName","fullName","title","school","city","state","email","phone","source","confidence","bwtf","orgName"];
-    const r=contacts.map(c=>[c.firstName||"",c.lastName||"",c.fullName||"",c.title||"",c.school||"",c.city||"",c.state||"",c.email||"",c.phone||"",c.source||"",c.confidence||"",c.bwtf?"BWTF":"",c.school||""].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
+    const h=["firstName","lastName","fullName","title","orgName","orgType","city","state","email","phone","source","confidence","bwtf"];
+    const r=contacts.map(c=>[c.firstName||"",c.lastName||"",c.fullName||"",c.title||"",c.school||"",c.orgType||"school",c.city||"",c.state||"",c.email||"",c.phone||"",c.source||"",c.confidence||"",c.bwtf?"BWTF":""].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
     const csv=[h.join(","),...r].join("\n");
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
   };
@@ -926,7 +984,16 @@ function ModProspecting() {
                       <input value={area.name} onChange={e=>setAreas(as=>as.map(a=>a.id===area.id?{...a,name:e.target.value}:a))} style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,background:"none",border:"none",flex:1}}/>
                       <OBtn sm onClick={()=>setEditing(null)}>DONE</OBtn>
                     </div>
-                    {[["States",STATES_LIST,"states"],["Sports",SPORTS_LIST,"sports"],["Roles",["Athletic Director","Head Track Coach","Head Baseball Coach","Head Softball Coach","Procurement Manager"],"roles"]].map(([l,opts,k])=>(
+                    <div style={{marginBottom:10}}>
+                      <Lbl s={{marginBottom:5}}>Target Type</Lbl>
+                      <div style={{display:"flex",gap:4}}>
+                        {[["schools","🏫 Schools"],["clubs","⚽ Youth Clubs"],["both","Both"]].map(([v,l])=>(
+                          <button key={v} onClick={()=>setAreas(as=>as.map(a=>a.id===area.id?{...a,orgType:v}:a))}
+                            style={{background:area.orgType===v?B.orange:B.white,color:area.orgType===v?B.white:B.muted,border:`1px solid ${area.orgType===v?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l}</button>
+                        ))}
+                      </div>
+                    </div>
+                    {[["States",STATES_LIST,"states"],["Sports",SPORTS_LIST,"sports"]].map(([l,opts,k])=>(
                       <div key={k} style={{marginBottom:10}}>
                         <Lbl s={{marginBottom:5}}>{l}</Lbl>
                         <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -934,7 +1001,15 @@ function ModProspecting() {
                         </div>
                       </div>
                     ))}
-                    <div><Lbl s={{marginBottom:4}}>Max Schools</Lbl><select value={area.maxSchools} onChange={e=>setAreas(as=>as.map(a=>a.id===area.id?{...a,maxSchools:Number(e.target.value)}:a))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}>{[5,10,20,30].map(n=><option key={n}>{n}</option>)}</select></div>
+                    <div style={{marginBottom:10}}>
+                      <Lbl s={{marginBottom:5}}>Roles</Lbl>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {(area.orgType==="clubs"?CLUB_ROLES:area.orgType==="both"?[...["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager"],...CLUB_ROLES]:["Athletic Director","Head Track Coach","Head Baseball Coach","Head Softball Coach","Procurement Manager"]).map(o=>(
+                          <button key={o} onClick={()=>setAreas(as=>as.map(a=>a.id===area.id?{...a,roles:tog(a.roles||[],o)}:a))} style={{background:(area.roles||[]).includes(o)?`${B.orange}15`:B.white,color:(area.roles||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(area.roles||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{o}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div><Lbl s={{marginBottom:4}}>Max Orgs</Lbl><select value={area.maxOrgs||area.maxSchools||10} onChange={e=>setAreas(as=>as.map(a=>a.id===area.id?{...a,maxOrgs:Number(e.target.value)}:a))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}>{[5,10,20,30].map(n=><option key={n}>{n}</option>)}</select></div>
                   </div>
                 ):(
                   <div>
@@ -946,7 +1021,9 @@ function ModProspecting() {
                       {(area.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}
                       {(area.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{sp}</span>)}
                     </div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>Roles: {(area.roles||[]).join(", ")||"all"} · max {area.maxSchools} schools</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
+                      {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
+                    </div>
                     <OBtn onClick={()=>runScrape(area)} style={{width:"100%"}} sm>⊕ SCRAPE THIS AREA</OBtn>
                   </div>
                 )}
@@ -967,8 +1044,8 @@ function ModProspecting() {
                 {contacts.length>0&&<OBtn sm onClick={exportCsv}>↓ EXPORT CSV</OBtn>}
               </div>
             </div>
-            {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
-              {[[contacts.length,"Contacts",B.orange],[contacts.filter(c=>c.email).length,"With Email",B.green],[contacts.filter(c=>c.bwtf).length,"BWTF",B.orange]].map(([v,l,c])=>(
+            {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
+              {[[contacts.length,"Contacts",B.orange],[contacts.filter(c=>c.email).length,"With Email",B.green],[contacts.filter(c=>c.orgType==="club").length,"Clubs",B.blue],[contacts.filter(c=>c.bwtf).length,"BWTF",B.orange]].map(([v,l,c])=>(
                 <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 10px",borderTop:`2px solid ${c}`,textAlign:"center"}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:c}}>{v}</div>
                   <Lbl s={{marginTop:2}}>{l}</Lbl>
@@ -980,7 +1057,11 @@ function ModProspecting() {
                 <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.email?B.green:B.border}`}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div>
-                      <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:2}}><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName+" "+(c.lastName||"")}</span>{c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}</div>
+                      <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:2}}>
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName+" "+(c.lastName||"")}</span>
+                        {c.orgType==="club"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>CLUB</span>}
+                        {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
+                      </div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city}, {c.state}</div>
                       {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginTop:2}}>✉ {c.email}</div>}
                       {c.phone&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</div>}
