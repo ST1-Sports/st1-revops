@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as XLSX from "xlsx";
+import * as bgTasks from "../lib/bgTasks.js";
+
+const IMPORT_TASK_ID = "price_import";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -183,8 +186,14 @@ export default function PriceListManager() {
   const [aiSuggestions, setAiSuggestions] = useState({});
   const [gettingSuggestions, setGettingSuggestions] = useState(null);
   const [importing, setImporting] = useState(false);
-  const [importLog, setImportLog] = useState([]);
-  const [importPreview, setImportPreview] = useState(null); // {supplierName,supplierCategory,products,targetSupplierId}
+  const [importLog, setImportLog] = useState(() => {
+    const t = bgTasks.getTask(IMPORT_TASK_ID);
+    return t?.log || [];
+  });
+  const [importPreview, setImportPreview] = useState(() => {
+    const t = bgTasks.getTask(IMPORT_TASK_ID);
+    return (t?.status === "done" && t?.data?.preview) ? t.data.preview : null;
+  }); // {supplierName,supplierCategory,products,targetSupplierId}
   const [editingPrice, setEditingPrice] = useState(null); // {productId, field}
   const [filterSupplier, setFilterSupplier] = useState("all");
   const [filterStatus,   setFilterStatus]   = useState("all");
@@ -272,7 +281,12 @@ export default function PriceListManager() {
     const file = e.target.files[0];
     if(!file) return;
     setImporting(true); setImportLog([]); setImportPreview(null);
-    const addLog = (msg,type="info") => setImportLog(l=>[...l,{id:uid(),msg,type,ts:Date.now()}]);
+    bgTasks.createTask(IMPORT_TASK_ID, `Price import: ${file.name}`);
+    bgTasks.updateTask(IMPORT_TASK_ID, { type:"import" });
+    const addLog = (msg,type="info") => {
+      setImportLog(l=>[...l,{id:uid(),msg,type,ts:Date.now()}]);
+      bgTasks.appendLog(IMPORT_TASK_ID, msg, type);
+    };
     const ext = file.name.split(".").pop().toLowerCase();
 
     addLog(`Reading ${file.name} (${ext.toUpperCase()})...`);
@@ -374,17 +388,23 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
       if(existing) addLog(`Matched to existing supplier: ${existing.name}`, "info");
       else addLog(`New supplier — will be created as "${extracted.supplierName}"`, "info");
 
-      setImportPreview({
+      const preview = {
         supplierName:     extracted.supplierName     || file.name.replace(/\.[^.]+$/,""),
         supplierCategory: extracted.supplierCategory || "Other",
         repName:          extracted.repName  || "",
         repEmail:         extracted.repEmail || "",
         products:         extracted.products,
         targetSupplierId: existing?.id || null,
+      };
+      setImportPreview(preview);
+      bgTasks.completeTask(IMPORT_TASK_ID, {
+        summary: `${extracted.products.length} products ready to review — ${extracted.supplierName}`,
+        data: { preview },
       });
 
     } catch(err) {
       addLog(`Error: ${err.message}`, "error");
+      bgTasks.failTask(IMPORT_TASK_ID, err.message);
     }
 
     setImporting(false);
@@ -455,6 +475,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
     });
 
     setImportPreview(null);
+    bgTasks.clearTask(IMPORT_TASK_ID);
   };
 
   // Get AI suggestions for a deal with compressed margins
@@ -1055,7 +1076,7 @@ Provide strategic pricing advice. Return JSON:
                     </div>
                   </div>
                   <div style={{display:"flex",gap:8}}>
-                    <button onClick={()=>{setImportPreview(null);setImportLog([]);}}
+                    <button onClick={()=>{setImportPreview(null);setImportLog([]);bgTasks.clearTask(IMPORT_TASK_ID);}}
                       style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",color:B.muted}}>
                       Cancel
                     </button>
@@ -1157,7 +1178,7 @@ Provide strategic pricing advice. Return JSON:
 
             {importPreview&&(
               <div style={{textAlign:"center",marginTop:8}}>
-                <button onClick={()=>{setImportPreview(null);setImportLog([]);fileInputRef.current?.click();}}
+                <button onClick={()=>{setImportPreview(null);setImportLog([]);bgTasks.clearTask(IMPORT_TASK_ID);fileInputRef.current?.click();}}
                   style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",color:B.muted}}>
                   Upload a different file
                 </button>

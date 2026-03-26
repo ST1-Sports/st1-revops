@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -874,19 +875,29 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
 // ════════════════════════════════════════════════════════════════════════════
 //  PROSPECTING
 // ════════════════════════════════════════════════════════════════════════════
+const SCRAPE_TASK_ID = "prospecting_scrape";
+
 function ModProspecting() {
   const {s,dispatch,toast}=useApp();
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState([{id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:10,active:true}]);
   const [editing,setEditing]=useState(null);
-  const [phase,setPhase]=useState("idle");
-  const [progress,setProgress]=useState(0);
-  const [schools,setSchools]=useState([]);
-  const [contacts,setContacts]=useState([]);
-  const [log,setLog]=useState([]);
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
-  const addLog=(msg,type="info")=>setLog(l=>[{id:mkId(),msg,type,ts:Date.now()},...l.slice(0,99)]);
+
+  // Load persisted task state on mount
+  const savedTask = bgTasks.getTask(SCRAPE_TASK_ID);
+  const [phase,setPhase]     = useState(savedTask?.status==="running"?"scraping":savedTask?.status==="done"?"done":"idle");
+  const [progress,setProgress] = useState(savedTask?.progress||0);
+  const [schools,setSchools] = useState(savedTask?.orgs||[]);
+  const [contacts,setContacts] = useState(savedTask?.contacts||[]);
+  const [log,setLog]         = useState(savedTask?.log||[]);
+
+  const addLog=(msg,type="info")=>{
+    const entry={id:mkId(),msg,type,ts:Date.now()};
+    setLog(l=>[entry,...l.slice(0,99)]);
+    bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
+  };
   const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
 
   const runScrape=async(area)=>{
@@ -898,60 +909,78 @@ function ModProspecting() {
     const bwtf     = area.states.some(s=>s==="MN"||s==="ND");
     const maxOrgs  = area.maxOrgs||area.maxSchools||10;
 
+    bgTasks.createTask(SCRAPE_TASK_ID, `Prospecting: ${area.name}`);
+    bgTasks.updateTask(SCRAPE_TASK_ID, { type:"scrape", progress:5, orgs:[], contacts:[] });
+
     let orgs = [];
+    let allContacts = [];
 
-    if(!isClubs) {
-      addLog("Searching for schools...");
-      const res = await aiCall(
-        `Find public high schools and school districts in ${scopeDesc} with ${area.sports.join(", ")} programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
-        {search:true,json:true,tokens:1400}
-      );
-      orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"school"}))];
-      addLog(`Found ${orgs.length} schools`,"success");
-    }
-
-    if(isClubs||isBoth) {
-      addLog("Searching for youth sports clubs...");
-      const res = await aiCall(
-        `Find youth sports clubs, travel teams, recreational leagues, and club programs in ${scopeDesc} for ${area.sports.join(", ")}. Include club teams, AAU, travel leagues, and recreational programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
-        {search:true,json:true,tokens:1400}
-      );
-      orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"club"}))];
-      addLog(`Found ${(Array.isArray(res)?res:[]).length} clubs`,"success");
-    }
-
-    const sl = orgs.slice(0,maxOrgs).map(o=>({...o,id:mkId(),status:"pending"}));
-    setSchools(sl);setProgress(25);
-    setPhase("scraping");
-
-    for(let i=0;i<sl.length;i++){
-      if(abortRef.current){addLog("Stopped");break;}
-      const sc=sl[i];
-      const isClubOrg = sc.orgType==="club";
-      setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"scraping"}:x));
-      addLog(`[${i+1}/${sl.length}] ${sc.name}, ${sc.city} (${isClubOrg?"club":"school"})`);
-      const roles = area.roles?.length
-        ? area.roles
-        : isClubOrg ? CLUB_ROLES : ["Athletic Director","Head Coach","Procurement Manager"];
-      const found=await aiCall(
-        `Find ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}. ${sc.website?"Website: "+sc.website:""} ${isClubOrg?"This is a youth sports club or league.":"Search their athletics staff directory."} Return JSON array (empty if none found): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
-        {search:true,json:true,tokens:1400}
-      );
-      if(Array.isArray(found)&&found.length>0){
-        const valid=found.filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId()}));
-        setContacts(prev=>[...prev,...valid]);
-        setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"done",count:valid.length}:x));
-        addLog(`  ✓ ${valid.length} found`,"success");
-        if(valid.some(c=>c.bwtf))dispatch("ADD_ALERT",{msg:`BWTF contacts at ${sc.name}`,action:`${valid.length} contacts — use BWTF hook`});
-      } else {
-        setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"empty",count:0}:x));
-        addLog(`  · none found`,"muted");
+    try {
+      if(!isClubs) {
+        addLog("Searching for schools...");
+        const res = await aiCall(
+          `Find public high schools and school districts in ${scopeDesc} with ${area.sports.join(", ")} programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
+          {search:true,json:true,tokens:1400}
+        );
+        orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"school"}))];
+        addLog(`Found ${orgs.length} schools`,"success");
       }
-      setProgress(25+Math.round((i+1)/sl.length*70));
-      await new Promise(r=>setTimeout(r,700));
+
+      if(isClubs||isBoth) {
+        addLog("Searching for youth sports clubs...");
+        const res = await aiCall(
+          `Find youth sports clubs, travel teams, recreational leagues, and club programs in ${scopeDesc} for ${area.sports.join(", ")}. Include club teams, AAU, travel leagues, and recreational programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
+          {search:true,json:true,tokens:1400}
+        );
+        orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"club"}))];
+        addLog(`Found ${(Array.isArray(res)?res:[]).length} clubs`,"success");
+      }
+
+      const sl = orgs.slice(0,maxOrgs).map(o=>({...o,id:mkId(),status:"pending"}));
+      setSchools(sl);setProgress(25);
+      bgTasks.updateTask(SCRAPE_TASK_ID, { progress:25, orgs:sl });
+      setPhase("scraping");
+
+      for(let i=0;i<sl.length;i++){
+        if(abortRef.current){addLog("Stopped");break;}
+        const sc=sl[i];
+        const isClubOrg = sc.orgType==="club";
+        setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"scraping"}:x));
+        addLog(`[${i+1}/${sl.length}] ${sc.name}, ${sc.city} (${isClubOrg?"club":"school"})`);
+        const roles = area.roles?.length
+          ? area.roles
+          : isClubOrg ? CLUB_ROLES : ["Athletic Director","Head Coach","Procurement Manager"];
+        const found=await aiCall(
+          `Find ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}. ${sc.website?"Website: "+sc.website:""} ${isClubOrg?"This is a youth sports club or league.":"Search their athletics staff directory."} Return JSON array (empty if none found): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
+          {search:true,json:true,tokens:1400}
+        );
+        if(Array.isArray(found)&&found.length>0){
+          const valid=found.filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId()}));
+          allContacts=[...allContacts,...valid];
+          setContacts(prev=>[...prev,...valid]);
+          bgTasks.appendContacts(SCRAPE_TASK_ID, valid);
+          setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"done",count:valid.length}:x));
+          addLog(`  ✓ ${valid.length} found`,"success");
+          if(valid.some(c=>c.bwtf))dispatch("ADD_ALERT",{msg:`BWTF contacts at ${sc.name}`,action:`${valid.length} contacts — use BWTF hook`});
+        } else {
+          setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"empty",count:0}:x));
+          addLog(`  · none found`,"muted");
+        }
+        const prog=25+Math.round((i+1)/sl.length*70);
+        setProgress(prog);
+        bgTasks.updateTask(SCRAPE_TASK_ID, { progress:prog });
+        await new Promise(r=>setTimeout(r,700));
+      }
+      setProgress(100);setPhase("done");
+      addLog(`Complete — ${allContacts.length} contacts from ${sl.length} orgs`,"success");
+      bgTasks.completeTask(SCRAPE_TASK_ID, { summary:`${allContacts.length} contacts from ${sl.length} orgs`, data:{ contacts:allContacts } });
+      dispatch("ADD_CONTACTS",allContacts);
+      toast(`${allContacts.length} contacts added to your database`,"success");
+    } catch(err) {
+      addLog(`Error: ${err.message}`,"error");
+      bgTasks.failTask(SCRAPE_TASK_ID, err.message);
+      setPhase("idle");
     }
-    setProgress(100);setPhase("done");addLog(`Complete — ${contacts.length} contacts from ${sl.length} orgs`,"success");
-    dispatch("ADD_CONTACTS",contacts);toast(`${contacts.length} contacts added to your database`,"success");
   };
 
   const exportCsv=()=>{
