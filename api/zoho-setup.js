@@ -23,6 +23,7 @@ const SCOPES = [
   "ZohoBooks.customerpayments.ALL",
   "ZohoCRM.modules.Contacts.ALL",
   "ZohoCRM.modules.Leads.ALL",
+  "ZohoCRM.modules.Deals.ALL",
   "ZohoCRM.users.READ",
 ].join(",");
 
