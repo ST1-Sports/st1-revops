@@ -107,6 +107,14 @@ const SPORT_WINDOWS = {
   "Wrestling":        "Sep–Oct",
 };
 
+function scoreTier(score) {
+  const n=score||0;
+  if(n>=100) return {label:"🔥 FIRE",color:"#C0392B",bg:"#FDECEA"};
+  if(n>=60)  return {label:"HOT",    color:"#F37321",bg:"#FEF3EC"};
+  if(n>=25)  return {label:"WARM",   color:"#1A5FA8",bg:"#E8F0FA"};
+  return           {label:"COLD",   color:"#7A7872",bg:"#F8F7F5"};
+}
+
 // ─── AI ───────────────────────────────────────────────────────────────────────
 async function aiCall(prompt, opts={}) {
   const body = {model:"claude-sonnet-4-20250514", max_tokens:opts.tokens||900,
@@ -147,6 +155,15 @@ function reducer(prev, action, payload) {
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
     case "UPDATE_CONTACT":      return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "SCORE_CONTACT": {
+      const {contactId,type,note,campaignId} = payload;
+      const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
+      return {...prev,contacts:(prev.contacts||[]).map(c=>{
+        if(c.id!==contactId)return c;
+        const act={id:mkId(),type,ts:Date.now(),note:note||"",campaignId:campaignId||""};
+        return{...c,score:Math.min(200,(c.score||0)+pts),activity:[act,...(c.activity||[])].slice(0,50)};
+      })};
+    }
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
@@ -952,7 +969,8 @@ function ModProspecting() {
   const [zohoPushing, setZohoPushing] = useState(false);
   const [zohoPushed,  setZohoPushed]  = useState(0);
   const [zohoPulling, setZohoPulling] = useState(false);
-  const [zohoPullResult, setZohoPullResult] = useState(null); // {contacts, leads, added}
+  const [zohoPullResult, setZohoPullResult] = useState(null);
+  const [enrollingContact, setEnrollingContact] = useState(null); // contactId being enrolled
 
   // Import-list state
   const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
@@ -1410,14 +1428,49 @@ function ModProspecting() {
                     ))}
                   </div>;
                 })()}
-                {/* Contact list (grouped by outreach window) */}
+                {/* Hot leads leaderboard */}
+                {(()=>{
+                  const hot=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5);
+                  if(!hot.length) return null;
+                  return(
+                    <div style={{marginBottom:14,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:7,padding:12}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>🔥 HOT LEADS — TOP SCORED</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                        {hot.map((c,i)=>{const t=scoreTier(c.score);return(
+                          <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:B.white,borderRadius:5,padding:"7px 10px",border:`1px solid ${B.border}`}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.muted,minWidth:16}}>#{i+1}</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              {(c.activity||[]).slice(0,3).map((a,ai)=>(
+                                <span key={ai} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{a.type==="replied"?"💬":a.type==="clicked"?"🖱":a.type==="opened"?"👁":a.type==="sent"?"📤":"📋"}</span>
+                              ))}
+                              <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:t.color}}>{c.score||0}</span>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 6px",borderRadius:3}}>{t.label}</span>
+                            </div>
+                          </div>
+                        );})}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Contact list */}
                 <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                  {(s.contacts||[]).slice(0,100).map(c=>(
+                  {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,100).map(c=>{
+                    const tier=scoreTier(c.score);
+                    const campaigns=s.sequences||[];
+                    return(
                     <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.priority==="high"?B.orange:c.priority==="medium"?B.blue:B.border}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                        <div>
+                        <div style={{flex:1}}>
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
                             <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed"}</span>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:tier.color,background:tier.bg,padding:"2px 5px",borderRadius:3}}>{tier.label} {c.score||0}</span>
                             {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
                             {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
                             {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
@@ -1427,14 +1480,51 @@ function ModProspecting() {
                             {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✉ {c.email}</span>}
                             {c.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</span>}
                           </div>
+                          {(c.activity||[]).length>0&&(
+                            <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                              {(c.activity||[]).slice(0,4).map((a,i)=>(
+                                <span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>
+                                  {a.type==="replied"?"💬 replied":a.type==="clicked"?"🖱 clicked":a.type==="opened"?"👁 opened":a.type==="sent"?"📤 sent":a.type==="enrolled"?"📋 enrolled":a.type}
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </div>
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                           {(c.outreachWindow||SPORT_WINDOWS[c.sport])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
+                          {campaigns.length>0&&(
+                            <div style={{marginTop:6,position:"relative"}}>
+                              {enrollingContact===c.id?(
+                                <div style={{position:"absolute",right:0,top:"100%",zIndex:10,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:180,padding:6}}>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 6px"}}>ENROLL IN CAMPAIGN</div>
+                                  {campaigns.map(seq=>(
+                                    <button key={seq.id} onClick={()=>{
+                                      const today=new Date().toISOString().slice(0,10);
+                                      const alreadyIn=seq.enrollments.some(e=>e.contactId===c.id);
+                                      if(!alreadyIn){
+                                        dispatch("UPDATE_SEQUENCE",{...seq,enrollments:[...seq.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:today,nextDate:today}]});
+                                        dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
+                                        toast(`${c.fullName||c.firstName} enrolled in ${seq.name}`,"success");
+                                      } else {
+                                        toast("Already enrolled in this campaign","warn");
+                                      }
+                                      setEnrollingContact(null);
+                                    }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,cursor:"pointer",borderRadius:3}}>
+                                      {seq.name}
+                                    </button>
+                                  ))}
+                                  <button onClick={()=>setEnrollingContact(null)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+                                </div>
+                              ):(
+                                <button onClick={()=>setEnrollingContact(c.id)} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>+ ENROLL</button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
-                  ))}
+                  );})}
                   {(s.contacts||[]).length>100&&<div style={{textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Showing 100 of {(s.contacts||[]).length} — export CSV to see all</div>}
                 </div>
               </div>
@@ -1578,6 +1668,7 @@ function ModMarketing() {
       createdAt:today,
     };
     dispatch("ADD_SEQUENCE",seq);
+    seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`}));
     setBuilding(false);setNewCamp(null);setSelSeq(seq.id);
     toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
   };
@@ -1595,6 +1686,7 @@ function ModMarketing() {
       e.contactId===contactId?{...e,step:nextStep,status:done?"done":"active",nextDate:nextDate||e.nextDate,lastContacted:today()}:e
     )};
     dispatch("UPDATE_SEQUENCE",updated);
+    dispatch("SCORE_CONTACT",{contactId,type:"sent",campaignId:seqId,note:"Touch sent"});
   };
 
   const markReplied=(seqId,contactId)=>{
@@ -1604,6 +1696,7 @@ function ModMarketing() {
       e.contactId===contactId?{...e,status:"replied"}:e
     )});
     dispatch("UPDATE_CONTACT",{id:contactId,outreachStatus:"replied"});
+    dispatch("SCORE_CONTACT",{contactId,type:"replied",campaignId:seqId,note:"Replied to campaign"});
   };
 
   const activeSeq=selSeq?(s.sequences||[]).find(s=>s.id===selSeq):null;
@@ -1758,10 +1851,11 @@ function ModMarketing() {
                       <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                           <div>
-                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2}}>
+                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
                               <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
                               <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
                               {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                              {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
                             </div>
                             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
                             {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
@@ -1771,9 +1865,15 @@ function ModMarketing() {
                             )}
                           </div>
                           {e.status==="active"&&(
-                            <div style={{display:"flex",gap:5,flexShrink:0}}>
-                              <GBtn onClick={()=>markContacted(activeSeq.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT</GBtn>
-                              <button onClick={()=>markReplied(activeSeq.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED</button>
+                            <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
+                              <div style={{display:"flex",gap:4}}>
+                                <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:activeSeq.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
+                                <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:activeSeq.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
+                              </div>
+                              <div style={{display:"flex",gap:4}}>
+                                <GBtn onClick={()=>markContacted(activeSeq.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT +15</GBtn>
+                                <button onClick={()=>markReplied(activeSeq.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED +50</button>
+                              </div>
                             </div>
                           )}
                         </div>
