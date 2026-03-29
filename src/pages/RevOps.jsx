@@ -41,6 +41,10 @@ const SEED = {
   reorders: [],
   contacts: [],
   sequences: [],
+  competeIntel: {},
+  battlecards: {},
+  prospectAreas: [],
+  agentHistory: [],
   alerts: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
@@ -57,14 +61,18 @@ function useStore() {
       if (saved) {
         const p = JSON.parse(saved);
         return {...SEED,...p,
-          deals:    Array.isArray(p.deals)    ? p.deals    : [],
-          invoices: Array.isArray(p.invoices) ? p.invoices : [],
-          rfps:     Array.isArray(p.rfps)     ? p.rfps     : [],
-          reorders: Array.isArray(p.reorders) ? p.reorders : [],
-          contacts:  Array.isArray(p.contacts)  ? p.contacts  : [],
-          sequences: Array.isArray(p.sequences) ? p.sequences : [],
-          alerts:    Array.isArray(p.alerts)    ? p.alerts    : [],
-          activity: Array.isArray(p.activity) ? p.activity : [],
+          deals:        Array.isArray(p.deals)        ? p.deals        : [],
+          invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
+          rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
+          reorders:     Array.isArray(p.reorders)     ? p.reorders     : [],
+          contacts:     Array.isArray(p.contacts)     ? p.contacts     : [],
+          sequences:    Array.isArray(p.sequences)    ? p.sequences    : [],
+          prospectAreas:Array.isArray(p.prospectAreas)? p.prospectAreas: [],
+          agentHistory: Array.isArray(p.agentHistory) ? p.agentHistory.slice(-40) : [],
+          competeIntel: p.competeIntel && typeof p.competeIntel==="object" ? p.competeIntel : {},
+          battlecards:  p.battlecards  && typeof p.battlecards ==="object" ? p.battlecards  : {},
+          alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
+          activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
         };
       }
@@ -115,6 +123,15 @@ async function aiCall(prompt, opts={}) {
   return text;
 }
 
+async function aiCallConv(messages, sys, opts={}) {
+  const r = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:opts.tokens||1400,system:sys,messages})});
+  const d = await r.json();
+  const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  if(opts.json){try{const m=text.match(/[\[{][\s\S]*[\]}]/s);return m?JSON.parse(m[0]):null;}catch{return null;}}
+  return text;
+}
+
 // ─── DISPATCH ─────────────────────────────────────────────────────────────────
 function reducer(prev, action, payload) {
   switch (action) {
@@ -129,9 +146,13 @@ function reducer(prev, action, payload) {
     case "UPDATE_REORDER":    return {...prev, reorders:prev.reorders.map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
-    case "UPDATE_CONTACT":    return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
-    case "ADD_SEQUENCE":      return {...prev, sequences:[payload,...(prev.sequences||[])]};
-    case "UPDATE_SEQUENCE":   return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
+    case "UPDATE_CONTACT":      return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
+    case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
+    case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
+    case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
+    case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
+    case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
     case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
@@ -901,9 +922,13 @@ const SCRAPE_TASK_ID = "prospecting_scrape";
 
 function ModProspecting() {
   const {s,dispatch,toast}=useApp();
+  const DEFAULT_AREA={id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:10,active:true};
   const [view,setView]=useState("areas");
-  const [areas,setAreas]=useState([{id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:10,active:true}]);
+  const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
   const [editing,setEditing]=useState(null);
+
+  // Sync areas to store whenever they change
+  useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
   const importFileRef=useRef();
@@ -1678,10 +1703,11 @@ function ModMarketing() {
 //  COMPETE
 // ════════════════════════════════════════════════════════════════════════════
 function ModCompete() {
+  const {s,dispatch}=useApp();
   const COMPS=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
   const [sel,setSel]=useState(null);
-  const [intel,setIntel]=useState({});
-  const [bc,setBc]=useState({});
+  const intel=s.competeIntel||{};
+  const bc=s.battlecards||{};
   const [running,setRunning]=useState(null);
   const [bcRunning,setBcRunning]=useState(null);
 
@@ -1689,12 +1715,12 @@ function ModCompete() {
     setSel(comp);if(intel[comp])return;
     setRunning(comp);
     const t=await aiCall(`Research ${comp} as a competitor to ST1 Sports. ${ST1}. Provide: what they focus on, strengths, weaknesses vs ST1, pricing approach, strongest states, and how ST1 can counter them. Be specific and tactical.`,{search:true});
-    setIntel(i=>({...i,[comp]:t||""}));setRunning(null);
+    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});setRunning(null);
   };
   const genBc=async(comp)=>{
     setBcRunning(comp);
     const r=await aiCall(`Sales battlecard for ST1 Sports vs ${comp}. ${ST1}. Return JSON: {"competitor":"","our_strengths":["3 items"],"their_strengths":["2 items"],"key_messages":["3 messages"],"objection_handlers":[{"objection":"","response":""}]}`,{json:true});
-    setBc(b=>({...b,[comp]:r}));setBcRunning(null);
+    dispatch("SET_BATTLECARD",{[comp]:r});setBcRunning(null);
   };
 
   return (
@@ -1750,61 +1776,165 @@ function ModCompete() {
 //  AI AGENT
 // ════════════════════════════════════════════════════════════════════════════
 function ModAgent() {
-  const {s,dispatch,cu}=useApp();
-  const [history,setHistory]=useState([]);
+  const {s,dispatch,toast,cu,setMod}=useApp();
+  const history=s.agentHistory||[];
+  const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY", typeof fn==="function"?fn(history):fn);
   const [input,setInput]=useState("");
   const [running,setRunning]=useState(false);
   const endRef=useRef(null);
+  const inputRef=useRef(null);
 
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
 
-  const send=async()=>{
-    if(!input.trim()||running) return;
-    const msg=input.trim();setInput("");
-    setHistory(h=>[...h,{role:"user",content:msg,ts:Date.now()}]);
-    setRunning(true);
+  const buildContext=()=>{
     const pipeline=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
     const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=s.deals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage));
-    const sys=`You are the senior RevOps AI agent for ST1 Sports. Expert in B2B athletic equipment sales, K-12 procurement, bid strategy, and team management.
+    const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+    const activeRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage));
+    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
+    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
+
+    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
 ${ST1}
-Current state: ${s.deals.length} deals, ${fmt$(pipeline)} pipeline, ${fmt$(ar)} AR, ${overdue.length} overdue follow-ups, ${s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)).length} active RFPs.
-Hot deals: ${s.deals.filter(d=>d.priority==="hot"&&!["Closed Won","Closed Lost"].includes(d.stage)).map(d=>d.name).join(", ")}.
-User: ${cu?.name} (${cu?.role}).
-Be specific, tactical, and concise. Flag high-intent signals with 🔥. Give real dollar amounts and timelines.`;
-    const text=await aiCall(msg,{sys,search:true,tokens:1200}).catch(e=>"Error: "+e.message);
-    setHistory(h=>[...h,{role:"assistant",content:text,ts:Date.now()}]);
-    if(text.includes("🔥")) dispatch("ADD_ALERT",{msg:"Agent flagged high intent",action:"Review agent recommendation"});
-    dispatch("LOG",{msg:`${cu?.name} used AI Agent: ${msg.slice(0,60)}`});
-    setRunning(false);
+Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
+User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
+
+=== CURRENT PIPELINE ===
+${openDeals.length} open deals, ${fmt$(pipeline)} total pipeline, ${overdue.length} overdue follow-ups
+${openDeals.slice(0,10).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
+
+=== CONTACTS DATABASE ===
+${(s.contacts||[]).length} total contacts, ${reachableContacts.length} with email
+Sports covered: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none yet"}
+${reachableContacts.slice(0,8).map(c=>`· ${c.fullName||c.firstName} — ${c.title}, ${c.school} (${c.state}) — ${c.sport||"?"} — ${c.email}`).join("\n")}
+
+=== ACTIVE CAMPAIGNS ===
+${activeCampaigns.length===0?"No active campaigns":`${activeCampaigns.map(seq=>`· "${seq.name}" — ${seq.product} — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
+
+=== OPEN RFPS ===
+${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
+
+=== AR / INVOICES ===
+${fmt$(ar)} outstanding${s.invoices.filter(i=>i.status==="overdue").length>0?` — ${s.invoices.filter(i=>i.status==="overdue").length} overdue`:""}
+
+=== CAPABILITIES ===
+You can take real actions. When appropriate, include an "actions" array in your JSON response:
+· draft_email: {type:"draft_email", to_name, to_email, subject, body, campaign_name?} — drafts a personalized outreach email
+· create_deal: {type:"create_deal", name, org, value, stage, product, contact_name?} — adds a new deal
+· flag_deal: {type:"flag_deal", deal_name, priority:"hot"|"warm"} — flags a deal
+· create_campaign: {type:"create_campaign", name, product, audience, channel} — starts a new campaign
+
+ALWAYS respond with valid JSON: {"message":"your response text","actions":[]}
+Be specific, tactical, and use real names from the data above. Flag hot signals with 🔥.`;
   };
 
-  const STARTERS=["Who should I call today?","Draft a BWTF outreach email for a MN coach","How do I counter BSN on price?","What RFPs should we prioritize this week?","Analyze our biggest deal at risk","Write a proposal intro for the IGHSAU bid"];
+  const executeAction=async(action)=>{
+    if(action.type==="draft_email"){
+      const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
+      try{await navigator.clipboard.writeText(text);}catch{}
+      toast(`Email drafted — copied to clipboard`,"success");
+      dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
+    } else if(action.type==="create_deal"){
+      dispatch("ADD_DEAL",{id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:""});
+      toast(`Deal created: ${action.name||action.org}`,"success");
+    } else if(action.type==="flag_deal"){
+      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
+      if(deal){dispatch("UPDATE_DEAL",{id:deal.id,priority:action.priority||"hot"});toast(`${deal.name} flagged as ${action.priority||"hot"}`,"success");}
+    } else if(action.type==="create_campaign"){
+      setMod("marketing");toast("Switched to Marketing — create your campaign","info");
+    }
+  };
+
+  const send=async(overrideMsg)=>{
+    const msg=(overrideMsg||input).trim();
+    if(!msg||running)return;
+    setInput("");setRunning(true);
+    const userEntry={role:"user",content:msg,ts:Date.now()};
+    const nextHistory=[...history,userEntry];
+    setHistory(nextHistory);
+
+    const sys=buildContext();
+    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content)}));
+
+    try {
+      const raw=await aiCallConv(apiMsgs,sys,{tokens:1600,json:true});
+      const message=raw?.message||raw||"Sorry, something went wrong.";
+      const actions=Array.isArray(raw?.actions)?raw.actions:[];
+      const assistantEntry={role:"assistant",content:message,actions,raw:message,ts:Date.now()};
+      setHistory(h=>[...h,assistantEntry]);
+      if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Check AI Agent"});
+      dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
+    } catch(e){
+      setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],ts:Date.now()}]);
+    }
+    setRunning(false);
+    setTimeout(()=>inputRef.current?.focus(),100);
+  };
+
+  const clearHistory=()=>{
+    dispatch("SET_AGENT_HISTORY",[]);
+    toast("Conversation cleared","info");
+  };
+
+  const STARTERS=[
+    "Who should I call or email today based on my pipeline and contacts?",
+    "Draft a cold outreach email for our highest-priority Track & Field contact",
+    "Which deals are most at risk right now and what should I do?",
+    "What's the best outreach strategy for Minnesota ADs right now?",
+    "How do I counter BSN Sports when they undercut our price?",
+    "Build me a 3-touch email sequence for Baseball coaches in Iowa",
+    "Analyze my open RFPs — which should we prioritize and why?",
+    "What product should I be pushing hardest right now based on the season?",
+  ];
 
   return (
     <div style={{padding:"22px 26px",display:"flex",flexDirection:"column",height:"calc(100vh - 46px)"}}>
-      <PH title="AI AGENT" sub="Your RevOps strategy partner — pipeline, outreach, bids, pricing"/>
-      <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,minHeight:200,display:"flex",flexDirection:"column",gap:9,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+      <PH title="REVOPS AGENT" sub="Full-context AI — drafts outreach, flags deals, drives pipeline"
+        action={history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}/>
+      <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,minHeight:200,display:"flex",flexDirection:"column",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
         {history.length===0&&(
-          <div style={{textAlign:"center",marginTop:20}}>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Ask anything about ST1 Sports strategy, pipeline, outreach, or bids</div>
-            <div style={{display:"flex",flexDirection:"column",gap:5,maxWidth:420,margin:"0 auto"}}>
-              {STARTERS.map(st=><button key={st} onClick={()=>setInput(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left"}}>{st}</button>)}
+          <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center"}}>
+            <div style={{textAlign:"center",marginBottom:18}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,letterSpacing:.3,marginBottom:6}}>RevOps Agent</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Knows your deals, contacts, campaigns, and competitors. Can draft outreach, flag deals, and take real actions.</div>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:580,margin:"0 auto",width:"100%"}}>
+              {STARTERS.map(st=>(
+                <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
+              ))}
             </div>
           </div>
         )}
         {history.map((m,i)=>(
-          <div key={i} className="fu" style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
-            <div style={{maxWidth:"82%",padding:"9px 13px",borderRadius:7,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{m.role==="user"?"You":"RevOps AI"} · {new Date(m.ts).toLocaleTimeString()}</div>
+          <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+            <div style={{maxWidth:"86%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
+            {m.actions?.length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6,maxWidth:"86%"}}>
+                {m.actions.map((a,ai)=>(
+                  <button key={ai} onClick={()=>executeAction(a)} style={{background:a.type==="draft_email"?B.greenBg:a.type==="create_deal"?B.orangeBg:a.type==="flag_deal"?B.redBg:B.blueBg,color:a.type==="draft_email"?B.green:a.type==="create_deal"?B.orange:a.type==="flag_deal"?B.red:B.blue,border:`1px solid ${a.type==="draft_email"?B.green+"40":a.type==="create_deal"?B.orange+"40":a.type==="flag_deal"?B.red+"40":B.blue+"40"}`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>
+                    {a.type==="draft_email"?"✉ COPY EMAIL":a.type==="create_deal"?"◫ CREATE DEAL":a.type==="flag_deal"?"🔥 FLAG DEAL":a.type==="create_campaign"?"✦ GO TO CAMPAIGNS":"▶ DO IT"}
+                    {a.to_name&&` — ${a.to_name}`}
+                    {a.name&&` — ${a.name}`}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?"You":"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
           </div>
         ))}
-        {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:12}}><Spin/>Thinking...</div>}
+        {running&&(
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
+              <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Analyzing your data...</span>
+            </div>
+          </div>
+        )}
         <div ref={endRef}/>
       </div>
       <div style={{display:"flex",gap:9}}>
-        <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask the RevOps agent..." style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}/>
-        <OBtn onClick={send} disabled={running||!input.trim()}>SEND →</OBtn>
+        <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, or say 'draft outreach for [name]'..." style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}/>
+        <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
       </div>
     </div>
   );
