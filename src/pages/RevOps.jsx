@@ -951,6 +951,8 @@ function ModProspecting() {
 
   const [zohoPushing, setZohoPushing] = useState(false);
   const [zohoPushed,  setZohoPushed]  = useState(0);
+  const [zohoPulling, setZohoPulling] = useState(false);
+  const [zohoPullResult, setZohoPullResult] = useState(null); // {contacts, leads, added}
 
   // Import-list state
   const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
@@ -1086,6 +1088,51 @@ function ModProspecting() {
     addLog(`✓ ${pushed}/${contactList.length} contacts pushed to Zoho CRM Leads`,"success");
     toast(`${pushed} leads added to Zoho CRM`,"success");
     setZohoPushing(false);
+  };
+
+  const pullFromZoho = async () => {
+    setZohoPulling(true); setZohoPullResult(null);
+    toast("Pulling from Zoho CRM...","info");
+    try {
+      const [contactsRes, leadsRes] = await Promise.all([
+        fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json()),
+        fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status&per_page=200",method:"GET"})}).then(r=>r.json()),
+      ]);
+      const now = Date.now();
+      const contacts = (contactsRes.data||[]).map(c=>({
+        id:"zoho_c_"+c.id,
+        firstName:c.First_Name||"", lastName:c.Last_Name||"",
+        fullName:`${c.First_Name||""} ${c.Last_Name||""}`.trim(),
+        email:c.Email||"", phone:c.Phone||"",
+        title:c.Title||"", school:c.Account_Name||"",
+        city:c.Mailing_City||"", state:c.Mailing_State||"",
+        orgType:"school", source:"zoho-crm",
+        confidence:"high", outreachStatus:"new", importedAt:now,
+      }));
+      const leads = (leadsRes.data||[]).map(l=>({
+        id:"zoho_l_"+l.id,
+        firstName:l.First_Name||"", lastName:l.Last_Name||"",
+        fullName:`${l.First_Name||""} ${l.Last_Name||""}`.trim(),
+        email:l.Email||"", phone:l.Phone||"",
+        title:l.Title||"", school:l.Company||"",
+        city:l.City||"", state:l.State||"",
+        orgType:"school", source:"zoho-crm-lead",
+        confidence:"medium",
+        outreachStatus:l.Lead_Status==="Customer"?"replied":"new",
+        importedAt:now,
+      }));
+      const all=[...contacts,...leads];
+      const existing=new Set((s.contacts||[]).map(c=>c.id));
+      const toAdd=all.filter(c=>!existing.has(c.id));
+      if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
+      setZohoPullResult({contacts:contacts.length, leads:leads.length, added:toAdd.length});
+      toast(`${toAdd.length} new contacts pulled from Zoho CRM`,"success");
+    } catch(e) {
+      toast(`Zoho pull failed: ${e.message.slice(0,80)}`,"error");
+    }
+    setZohoPulling(false);
   };
 
   const exportCsv=()=>{
@@ -1250,14 +1297,36 @@ function ModProspecting() {
 
       {view==="import"&&(
         <div>
-          {/* Upload zone */}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{(s.contacts||[]).length} contacts in database · Upload CSV or Excel from Zoho or any CRM</div>
-            <div style={{display:"flex",gap:8}}>
-              <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
-              <OBtn sm onClick={()=>importFileRef.current?.click()} disabled={importPhase==="parsing"}>
-                {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD LIST"}
+          {/* Source row: Zoho pull + CSV upload */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            {/* Zoho pull card */}
+            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.purple}`}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:2,marginBottom:8}}>PULL FROM ZOHO CRM</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
+                Pull all Contacts and Leads from your Zoho CRM instance directly into this database. New records only — existing ones won't be duplicated.
+              </div>
+              {zohoPullResult&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>
+                  ✓ {zohoPullResult.contacts} contacts + {zohoPullResult.leads} leads pulled · {zohoPullResult.added} new added
+                </div>
+              )}
+              <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling}>
+                {zohoPulling?"PULLING FROM ZOHO...":"↓ PULL ZOHO CONTACTS + LEADS"}
               </OBtn>
+            </div>
+            {/* CSV upload card */}
+            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.orange}`}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>UPLOAD A LIST</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
+                Upload a CSV or Excel export from Zoho, HubSpot, Salesforce, or any CRM. AI will normalize and categorize each contact automatically.
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
+                <OBtn sm onClick={()=>importFileRef.current?.click()} disabled={importPhase==="parsing"}>
+                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD CSV / EXCEL"}
+                </OBtn>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} in database</span>
+              </div>
             </div>
           </div>
 
