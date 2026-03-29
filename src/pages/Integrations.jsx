@@ -103,8 +103,31 @@ export default function IntegrationsHub() {
   const [slackChannelName, setSlackChannelName] = useState("#all-st1-sports");
   const [drafts, setDrafts]     = useState({});
   const [drafting, setDrafting] = useState(null);
+  const [crmSyncResult, setCrmSyncResult] = useState(null); // { contacts, deals }
+  const [crmPulling, setCrmPulling] = useState(null); // "contacts"|"deals"|null
+  const [gmailStatus, setGmailStatus] = useState(() => !!(loadStatus().gmail));
+  const [emailMessages, setEmailMessages] = useState([]);
+  const [emailOpps, setEmailOpps]   = useState([]);
+  const [emailScanning, setEmailScanning] = useState(false);
+  const [emailQuery, setEmailQuery] = useState("newer_than:14d category:primary -from:me");
 
   const addLog = useCallback((msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,99)]), []);
+
+  // ── REVOPS STORE BRIDGE ─────────────────────────────────────────────────────
+  // Write contacts or deals directly into the RevOps localStorage store
+  const REVOPS_KEY = "st1_revops_v2";
+  function pushToRevOps(key, items) {
+    try {
+      const store = JSON.parse(localStorage.getItem(REVOPS_KEY)||"{}");
+      const existing = Array.isArray(store[key]) ? store[key] : [];
+      const existingIds = new Set(existing.map(x=>x.id));
+      const toAdd = items.filter(x => x.id && !existingIds.has(x.id));
+      if (!toAdd.length) return 0;
+      store[key] = [...toAdd, ...existing];
+      localStorage.setItem(REVOPS_KEY, JSON.stringify(store));
+      return toAdd.length;
+    } catch { return 0; }
+  }
 
   // Save creds to localStorage whenever they change
   useEffect(()=>saveCreds(creds),[creds]);
@@ -235,6 +258,169 @@ Use the slack_send_message tool with channel_id="${slackChannel}". Reply with ju
     for(const inv of toSync) { await tagCRMCustomer(inv); await sleep(400); }
     addLog(`✓ CRM sync complete — ${toSync.length} contacts updated`,"success");
     setSyncing(false);
+  };
+
+  // ── PULL ZOHO CRM CONTACTS → REVOPS ────────────────────────────────────────
+  const pullCRMContacts = async () => {
+    if(!status.crm) { addLog("Connect Zoho CRM first","warn"); return; }
+    setCrmPulling("contacts");
+    addLog("Pulling contacts and leads from Zoho CRM...");
+    try {
+      const [contactsRes, leadsRes] = await Promise.all([
+        zohoAPI("crm", "/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source&per_page=200"),
+        zohoAPI("crm", "/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status&per_page=200"),
+      ]);
+      const today = new Date().toISOString().slice(0,10);
+      const contacts = (contactsRes.data||[]).map(c=>({
+        id: "zoho_c_"+c.id,
+        firstName: c.First_Name||"", lastName: c.Last_Name||"",
+        fullName: `${c.First_Name||""} ${c.Last_Name||""}`.trim(),
+        email: c.Email||"", phone: c.Phone||"",
+        title: c.Title||"", school: c.Account_Name||"",
+        city: c.Mailing_City||"", state: c.Mailing_State||"",
+        orgType:"school", source:"zoho-crm",
+        confidence:"high", outreachStatus:"new", importedAt:Date.now(),
+      }));
+      const leads = (leadsRes.data||[]).map(l=>({
+        id: "zoho_l_"+l.id,
+        firstName: l.First_Name||"", lastName: l.Last_Name||"",
+        fullName: `${l.First_Name||""} ${l.Last_Name||""}`.trim(),
+        email: l.Email||"", phone: l.Phone||"",
+        title: l.Title||"", school: l.Company||"",
+        city: l.City||"", state: l.State||"",
+        orgType:"school", source:"zoho-crm-lead",
+        confidence:"medium", outreachStatus: l.Lead_Status==="Customer"?"replied":"new",
+        importedAt: Date.now(),
+      }));
+      const all = [...contacts, ...leads];
+      const added = pushToRevOps("contacts", all);
+      setCrmSyncResult(prev=>({...(prev||{}), contacts:all.length, contactsAdded:added}));
+      addLog(`✓ Pulled ${contacts.length} contacts + ${leads.length} leads — ${added} new added to RevOps`,"success");
+    } catch(e) {
+      addLog(`CRM pull failed: ${e.message.slice(0,100)}`,"error");
+    }
+    setCrmPulling(null);
+  };
+
+  // ── PULL ZOHO CRM DEALS → REVOPS ──────────────────────────────────────────
+  const pullCRMDeals = async () => {
+    if(!status.crm) { addLog("Connect Zoho CRM first","warn"); return; }
+    setCrmPulling("deals");
+    addLog("Pulling deals from Zoho CRM...");
+    try {
+      const res = await zohoAPI("crm", "/Deals?fields=Deal_Name,Account_Name,Amount,Stage,Closing_Date,Contact_Name,Description&per_page=100");
+      const today = new Date().toISOString().slice(0,10);
+      const deals = (res.data||[]).map(d=>({
+        id: "zoho_d_"+d.id,
+        name: d.Deal_Name||d.Account_Name||"Untitled Deal",
+        school: d.Account_Name||"",
+        contact: d.Contact_Name?.name||"",
+        value: parseFloat(d.Amount)||0,
+        stage: mapZohoStage(d.Stage),
+        followUpDate: d.Closing_Date||"",
+        product: d.Description?.slice(0,60)||"",
+        priority: "warm",
+        createdAt: today,
+        source:"zoho-crm",
+      }));
+      const added = pushToRevOps("deals", deals);
+      setCrmSyncResult(prev=>({...(prev||{}), deals:deals.length, dealsAdded:added}));
+      addLog(`✓ Pulled ${deals.length} deals — ${added} new added to RevOps`,"success");
+    } catch(e) {
+      addLog(`CRM deals pull failed: ${e.message.slice(0,100)}`,"error");
+    }
+    setCrmPulling(null);
+  };
+
+  function mapZohoStage(s) {
+    const m = {"Qualification":"Quoted","Value Proposition":"Quoted","Needs Analysis":"Follow-Up 1","Proposal/Price Quote":"Follow-Up 2","Id. Decision Makers":"Negotiating","Perception Analysis":"Negotiating","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
+    return m[s]||"Quoted";
+  }
+
+  // ── PUSH REVOPS DEAL → ZOHO CRM ───────────────────────────────────────────
+  const pushDealToCRM = async (deal) => {
+    if(!status.crm) { addLog("Connect Zoho CRM first","warn"); return; }
+    addLog(`Pushing "${deal.name}" to Zoho CRM...`);
+    try {
+      await zohoAPI("crm", "/Deals", "POST", { data:[{
+        Deal_Name: deal.name, Account_Name: deal.school||"",
+        Amount: deal.value||0, Stage: "Qualification",
+        Closing_Date: deal.followUpDate||new Date(Date.now()+30*86400000).toISOString().slice(0,10),
+        Description: deal.product||"",
+      }]});
+      addLog(`✓ Deal pushed to Zoho CRM`,"success");
+    } catch(e) {
+      addLog(`CRM push: ${e.message.slice(0,80)}`,"error");
+    }
+  };
+
+  // ── EMAIL SCAN ─────────────────────────────────────────────────────────────
+  const testGmail = async () => {
+    setTesting("gmail"); addLog("Testing Gmail connection...");
+    try {
+      const r = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:1})});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      setGmailStatus(true);
+      saveStatus({...loadStatus(), gmail:true});
+      setStatus(s=>({...s,gmail:true}));
+      addLog("✓ Gmail connected","success");
+    } catch(e) {
+      addLog(`Gmail: ${e.message.slice(0,100)}`,"error");
+    }
+    setTesting(null);
+  };
+
+  const scanEmailInbox = async () => {
+    setEmailScanning(true); setEmailOpps([]); setEmailMessages([]);
+    addLog("Fetching recent emails from Gmail...");
+    try {
+      const r = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:40,query:emailQuery})});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      const msgs = d.messages||[];
+      setEmailMessages(msgs);
+      addLog(`Fetched ${msgs.length} emails — analyzing for orders...`);
+      if(!msgs.length) { setEmailScanning(false); return; }
+
+      // Send to Claude for order detection
+      const claudeR = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        model:"claude-sonnet-4-20250514", max_tokens:1500,
+        system:"You detect B2B sales opportunities for ST1 Sports, an athletic equipment company in Iowa. Identify emails that are quote requests, purchase orders, RFQ/RFP inquiries, or customer order emails. Ignore marketing, spam, notifications.",
+        messages:[{role:"user",content:
+          `Analyze these emails for order/sales opportunities. For each that might be an opportunity, extract structured data.\n\nEmails:\n${msgs.map(m=>`ID:${m.id}\nFrom: ${m.from}\nSubject: ${m.subject}\nPreview: ${m.snippet}`).join("\n\n")}\n\n`+
+          `Return JSON array (only emails with isOpportunity:true): [{"emailId":"","isOpportunity":true,"confidence":"high|medium|low","customerName":"","org":"","product":"what they want","estimatedValue":null,"dealName":"suggested deal name","summary":"one-line summary","from":"","subject":""}]`
+        }]
+      })});
+      const cd = await claudeR.json();
+      const text=(cd.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const m=text.match(/\[[\s\S]*\]/);
+      const opps = m ? JSON.parse(m[0]) : [];
+      setEmailOpps(opps.filter(o=>o.isOpportunity));
+      addLog(`✓ Found ${opps.filter(o=>o.isOpportunity).length} potential opportunities in ${msgs.length} emails`,"success");
+    } catch(e) {
+      addLog(`Email scan: ${e.message.slice(0,100)}`,"error");
+    }
+    setEmailScanning(false);
+  };
+
+  const createDealFromEmail = (opp) => {
+    const deal = {
+      id: "email_"+uid(),
+      name: opp.dealName||opp.org||opp.customerName||"Email Lead",
+      school: opp.org||"",
+      contact: opp.customerName||"",
+      value: parseFloat(opp.estimatedValue)||0,
+      stage: "Quoted",
+      product: opp.product||"",
+      priority: opp.confidence==="high"?"hot":"warm",
+      createdAt: new Date().toISOString().slice(0,10),
+      followUpDate: "",
+      source: "email-scan",
+    };
+    const added = pushToRevOps("deals", [deal]);
+    addLog(`✓ Deal created: "${deal.name}"${added?" — added to RevOps":" (already exists)"}`, "success");
+    setEmailOpps(prev=>prev.map(o=>o.emailId===opp.emailId?{...o,created:true}:o));
   };
 
   // ── DRAFT INVOICE REMINDER ──────────────────────────────────────────────────
@@ -386,10 +572,11 @@ Channel: ${slackChannelName}`);
         {/* Live connection status */}
         <div style={{display:"flex",gap:18,alignItems:"center"}}>
           {[
-            ["Slack",    status.slack,    "#4A154B"],
-            ["Zoho Books",status.books,   "#E42527"],
-            ["Zoho CRM", status.crm,      "#E42527"],
-            ["WooCommerce",status.woo,    "#7F54B3"],
+            ["Slack",       status.slack,  "#4A154B"],
+            ["Zoho Books",  status.books,  "#E42527"],
+            ["Zoho CRM",    status.crm,    "#E42527"],
+            ["Gmail",       gmailStatus,   "#EA4335"],
+            ["WooCommerce", status.woo,    "#7F54B3"],
           ].map(([l,ok,c])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
               <div style={{width:7,height:7,borderRadius:"50%",background:ok?B.green:B.muted}}/>
@@ -401,7 +588,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["woo","WooCommerce"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["email","Email Scanner"],["woo","WooCommerce"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -674,6 +861,38 @@ Channel: ${slackChannelName}`);
                 ))}
               </div>
 
+              {/* CRM Sync — pull contacts + deals */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`3px solid ${B.purple}`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:2,marginBottom:12}}>SYNC FROM ZOHO CRM → REVOPS</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+                  Pull your Zoho CRM contacts, leads, and deals directly into the RevOps prospecting database and deal pipeline. New records only — existing ones won't be overwritten.
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  <div style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>Contacts + Leads</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10,lineHeight:1.5}}>Pulls all CRM Contacts and Leads into your RevOps contact database with email, phone, title, and organization.</div>
+                    {crmSyncResult?.contacts!=null&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>✓ {crmSyncResult.contacts} pulled, {crmSyncResult.contactsAdded} new added</div>}
+                    <OBtn sm onClick={pullCRMContacts} disabled={crmPulling==="contacts"||!status.crm} color={B.purple}>
+                      {crmPulling==="contacts"?"PULLING...":"↓ PULL CONTACTS"}
+                    </OBtn>
+                  </div>
+                  <div style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>Deals / Opportunities</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10,lineHeight:1.5}}>Pulls open Zoho CRM Deals into RevOps deal pipeline, mapped to the closest matching stage.</div>
+                    {crmSyncResult?.deals!=null&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>✓ {crmSyncResult.deals} pulled, {crmSyncResult.dealsAdded} new added</div>}
+                    <OBtn sm onClick={pullCRMDeals} disabled={crmPulling==="deals"||!status.crm} color={B.purple}>
+                      {crmPulling==="deals"?"PULLING...":"↓ PULL DEALS"}
+                    </OBtn>
+                  </div>
+                </div>
+                {!status.crm&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>⚠ Connect Zoho CRM first using the test connection button above</div>}
+                {(crmSyncResult?.contactsAdded||0)+(crmSyncResult?.dealsAdded||0)>0&&(
+                  <div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+                    Go to RevOps → Prospecting → Contact DB to see imported contacts, or RevOps → Deals to see imported deals.
+                  </div>
+                )}
+              </div>
+
               {/* Live invoices table */}
               <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,overflow:"hidden"}}>
                 <div style={{padding:"11px 14px",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -713,6 +932,163 @@ Channel: ${slackChannelName}`);
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* ── EMAIL SCANNER ── */}
+          {tab==="email"&&(
+            <div className="fu">
+              <div style={{marginBottom:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>EMAIL SCANNER</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>AI scans your inbox for orders, quotes, and RFQs — creates deals automatically</div>
+                <div style={{width:32,height:3,background:"#EA4335",marginTop:7,borderRadius:2}}/>
+              </div>
+
+              {/* Gmail setup card */}
+              <ConnCard id="gmail" title="Gmail" sub="Read-only inbox access via OAuth" color="#EA4335" icon="📬" connected={gmailStatus}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:10}}>
+                  {gmailStatus
+                    ? "Gmail is connected. ST1 RevOps can read your inbox to find order and quote emails."
+                    : "Connect Gmail to let ST1 RevOps scan for customer orders, quote requests, and RFQs."}
+                </div>
+                {!gmailStatus&&(
+                  <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:12,marginBottom:10,fontSize:11}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>ONE-TIME SETUP</div>
+                    {[
+                      ["1","Go to console.cloud.google.com → create or select a project"],
+                      ["2","Enable Gmail API: APIs & Services → Library → search Gmail → Enable"],
+                      ["3","Create OAuth credentials: APIs & Services → Credentials → Create Credentials → OAuth client ID → Web application"],
+                      ["4","Add Authorized Redirect URI: https://YOUR-VERCEL-DOMAIN/api/gmail-setup"],
+                      ["5","Add GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET to Vercel env vars"],
+                      ["6","Visit /api/gmail-setup on your deployed app and click Connect Gmail"],
+                      ["7","Copy GMAIL_REFRESH_TOKEN into Vercel env vars, then redeploy"],
+                    ].map(([n,step])=>(
+                      <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span>
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{step}</span>
+                      </div>
+                    ))}
+                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                      For OAuth consent screen: set to "Internal" (Google Workspace) or "External" and add your email as a test user.
+                    </div>
+                  </div>
+                )}
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <OBtn onClick={testGmail} disabled={testing==="gmail"} color="#EA4335">
+                    {testing==="gmail"?"TESTING...":gmailStatus?"✓ RECONNECT":"TEST CONNECTION"}
+                  </OBtn>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                    Env vars needed: GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
+                  </div>
+                </div>
+              </ConnCard>
+
+              {/* Scanner controls */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginTop:14,borderLeft:`3px solid #EA4335`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#EA4335",letterSpacing:2,marginBottom:12}}>SCAN INBOX FOR OPPORTUNITIES</div>
+                <div style={{display:"flex",gap:10,marginBottom:12,alignItems:"flex-end"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>GMAIL SEARCH QUERY</div>
+                    <input value={emailQuery} onChange={e=>setEmailQuery(e.target.value)}
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"monospace"}}/>
+                  </div>
+                  <OBtn onClick={scanEmailInbox} disabled={emailScanning||!gmailStatus} color="#EA4335" style={{flexShrink:0}}>
+                    {emailScanning?"SCANNING...":"SCAN INBOX"}
+                  </OBtn>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  {["newer_than:14d category:primary -from:me","subject:(quote OR RFQ OR order OR PO) newer_than:30d","from:(@k12 OR @school OR @district) newer_than:14d"].map(q=>(
+                    <button key={q} onClick={()=>setEmailQuery(q)}
+                      style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
+                      {q.slice(0,30)}...
+                    </button>
+                  ))}
+                </div>
+                {!gmailStatus&&(
+                  <div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>
+                    ⚠ Connect Gmail first using the setup card above
+                  </div>
+                )}
+              </div>
+
+              {/* Results */}
+              {emailScanning&&(
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginTop:14,textAlign:"center"}}>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.muted,marginBottom:6}}>SCANNING INBOX...</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+                    {emailMessages.length>0?`Fetched ${emailMessages.length} emails — analyzing with AI...`:"Fetching emails from Gmail..."}
+                  </div>
+                </div>
+              )}
+
+              {!emailScanning&&emailOpps.length>0&&(
+                <div style={{marginTop:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>
+                      {emailOpps.length} OPPORTUNIT{emailOpps.length===1?"Y":"IES"} FOUND
+                    </div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                      from {emailMessages.length} emails scanned
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                    {emailOpps.map((opp,i)=>{
+                      const confColor=opp.confidence==="high"?B.green:opp.confidence==="medium"?B.yellow:B.muted;
+                      const confBg=opp.confidence==="high"?B.greenBg:opp.confidence==="medium"?B.yellowBg:B.surface;
+                      return(
+                        <div key={opp.emailId||i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,borderLeft:`3px solid ${confColor}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                            <div style={{flex:1}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:confColor,background:confBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>
+                                  {opp.confidence?.toUpperCase()||"MEDIUM"} CONFIDENCE
+                                </span>
+                                {opp.estimatedValue&&(
+                                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$(opp.estimatedValue)}</span>
+                                )}
+                              </div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:2}}>{opp.dealName||opp.org||"Untitled Lead"}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:4}}>{opp.from}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,fontStyle:"italic"}}>{opp.summary}</div>
+                              {opp.product&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Product/service: {opp.product}</div>}
+                            </div>
+                            <div style={{flexShrink:0,marginLeft:12}}>
+                              {opp.created
+                                ?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"4px 8px",borderRadius:4,display:"block",textAlign:"center"}}>✓ DEAL CREATED</span>
+                                :<OBtn sm onClick={()=>createDealFromEmail(opp)} color="#EA4335">CREATE DEAL</OBtn>
+                              }
+                            </div>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,background:B.surface,borderRadius:4,padding:"5px 8px"}}>
+                            Subject: {opp.subject}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>
+                    Created deals appear in RevOps → Deal Manager
+                  </div>
+                </div>
+              )}
+
+              {!emailScanning&&emailMessages.length>0&&emailOpps.length===0&&(
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:24,marginTop:14,textAlign:"center"}}>
+                  <div style={{fontSize:28,marginBottom:8}}>✓</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.muted,marginBottom:4}}>NO OPPORTUNITIES DETECTED</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Scanned {emailMessages.length} emails — no order or quote requests found matching the criteria.</div>
+                </div>
+              )}
+
+              {!emailScanning&&emailMessages.length===0&&!gmailStatus&&(
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,padding:32,marginTop:14,textAlign:"center"}}>
+                  <div style={{fontSize:36,marginBottom:12}}>📬</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.muted,marginBottom:6}}>CONNECT GMAIL TO GET STARTED</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,maxWidth:360,margin:"0 auto"}}>
+                    Once connected, ST1 RevOps will scan your inbox with AI and automatically identify quote requests, purchase orders, and sales opportunities — turning them into deals in one click.
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
