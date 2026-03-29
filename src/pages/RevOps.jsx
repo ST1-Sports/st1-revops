@@ -46,6 +46,7 @@ const SEED = {
   prospectAreas: [],
   agentHistory: [],
   alerts: [],
+  orders: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
 };
@@ -71,6 +72,7 @@ function useStore() {
           agentHistory: Array.isArray(p.agentHistory) ? p.agentHistory.slice(-40) : [],
           competeIntel: p.competeIntel && typeof p.competeIntel==="object" ? p.competeIntel : {},
           battlecards:  p.battlecards  && typeof p.battlecards ==="object" ? p.battlecards  : {},
+          orders:       Array.isArray(p.orders)       ? p.orders       : [],
           alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
@@ -158,12 +160,20 @@ function reducer(prev, action, payload) {
     case "SCORE_CONTACT": {
       const {contactId,type,note,campaignId} = payload;
       const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
+      const BOT_WIN=30*60*1000; // 30-min dedup window for opens/clicks
       return {...prev,contacts:(prev.contacts||[]).map(c=>{
         if(c.id!==contactId)return c;
+        // Bot/dedup filter: same event type+campaign within window = ignore
+        if(["opened","clicked"].includes(type)){
+          const dup=(c.activity||[]).find(a=>a.type===type&&a.campaignId===campaignId&&(Date.now()-a.ts)<BOT_WIN);
+          if(dup) return c;
+        }
         const act={id:mkId(),type,ts:Date.now(),note:note||"",campaignId:campaignId||""};
         return{...c,score:Math.min(200,(c.score||0)+pts),activity:[act,...(c.activity||[])].slice(0,50)};
       })};
     }
+    case "ADD_ORDER":           return {...prev, orders:[payload,...(prev.orders||[])]};
+    case "UPDATE_ORDER":        return {...prev, orders:(prev.orders||[]).map(o=>o.id===payload.id?{...o,...payload}:o)};
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
@@ -447,15 +457,20 @@ function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{backgr
 // ════════════════════════════════════════════════════════════════════════════
 //  BRIEFING
 // ════════════════════════════════════════════════════════════════════════════
+const ORDER_STAGES = ["Order Received","Placed with Vendor","Shipped","Invoiced"];
+
 function ModBriefing() {
   const {s,dispatch,cu,setMod}=useApp();
   const [advice,setAdvice]=useState("");
   const [loadAdv,setLoadAdv]=useState(false);
+  const [addingOrder,setAddingOrder]=useState(false);
+  const [oForm,setOForm]=useState({name:"",contact:"",school:"",value:"",invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:"",dealId:"",source:"manual"});
 
   const isOwner=cu?.role==="owner";
   const myDeals=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
   const myInv  =isOwner?s.invoices:s.invoices.filter(i=>i.assignee===cu?.id);
   const myRfps =isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
+  const orders =s.orders||[];
 
   const overdueDeals=myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0);
   const dueDeals    =myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)>=0&&dUntil(d.followUpDate)<=1);
@@ -464,15 +479,32 @@ function ModBriefing() {
   const pos         =myDeals.filter(d=>d.stage==="PO Received");
   const pipeline    =myDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
   const ar          =myInv.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+  const inFlightOrders=orders.filter(o=>o.stage!=="Invoiced");
+  const hotLeads=[...(s.contacts||[])].filter(c=>(c.score||0)>=60).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
 
   const getAdvice=async()=>{
     setLoadAdv(true);
     const t=await aiCall(`Daily sales coaching for Matt Stone at ST1 Sports.
 ${ST1}
-Situation right now: ${overdueDeals.length} overdue follow-ups (${fmt$(overdueDeals.reduce((a,d)=>a+d.value,0))}), ${overdueInv.length} overdue invoices (${fmt$(overdueInv.reduce((a,i)=>a+(i.balance||0),0))}), ${rfpsDue.length} RFPs due this week, ${pos.length} POs to fulfill. Pipeline: ${fmt$(pipeline)}. AR: ${fmt$(ar)}.
+Situation right now: ${overdueDeals.length} overdue follow-ups (${fmt$(overdueDeals.reduce((a,d)=>a+d.value,0))}), ${overdueInv.length} overdue invoices, ${rfpsDue.length} RFPs due this week, ${pos.length} POs to fulfill, ${inFlightOrders.length} orders in flight, ${hotLeads.length} hot leads.
+Pipeline: ${fmt$(pipeline)}. AR: ${fmt$(ar)}.
 Top deals: ${myDeals.filter(d=>d.priority==="hot"&&!["Closed Won","Closed Lost"].includes(d.stage)).slice(0,3).map(d=>d.name).join(", ")}.
 Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`);
     setAdvice(t||"");setLoadAdv(false);
+  };
+
+  const addOrder=()=>{
+    if(!oForm.name) return;
+    const o={...oForm,id:mkId(),stage:"Order Received",createdAt:today(),value:Number(oForm.value||0)};
+    dispatch("ADD_ORDER",o);
+    setAddingOrder(false);setOForm({name:"",contact:"",school:"",value:"",invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:"",dealId:"",source:"manual"});
+    // Also promote any linked PO deal
+    if(oForm.dealId) dispatch("UPDATE_DEAL",{id:oForm.dealId,stage:"Closed Won"});
+  };
+
+  const advanceOrder=(o)=>{
+    const idx=ORDER_STAGES.indexOf(o.stage);
+    if(idx<ORDER_STAGES.length-1) dispatch("UPDATE_ORDER",{id:o.id,stage:ORDER_STAGES[idx+1]});
   };
 
   const Sec=({label,col,n,children})=>n===0?null:<div style={{marginBottom:16}}><div style={{display:"flex",alignItems:"center",gap:7,marginBottom:8}}><div style={{width:7,height:7,borderRadius:2,background:col,flexShrink:0}}/><Lbl c={col}>{label} ({n})</Lbl></div>{children}</div>;
@@ -488,6 +520,8 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
     </div>
   );
 
+  const stageColor={"Order Received":B.blue,"Placed with Vendor":B.purple,"Shipped":B.orange,"Invoiced":B.green};
+
   return (
     <div style={{padding:"22px 26px"}}>
       <div style={{marginBottom:20}}>
@@ -496,11 +530,111 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
         <div style={{width:34,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:11,marginBottom:20}}>
+      {/* KPI row */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
         <KCard l="Open Pipeline"  v={fmt$(pipeline)} c={B.orange} onClick={()=>setMod("deals")}/>
         <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.red} onClick={()=>setMod("invoicing")}/>
+        <KCard l="Orders In Flight" v={inFlightOrders.length} c={B.blue}/>
+        <KCard l="Hot Leads" v={hotLeads.length} c={B.green} onClick={()=>setMod("prospecting")}/>
         <KCard l="Actions Needed" v={overdueDeals.length+overdueInv.length+rfpsDue.length} c={overdueDeals.length>0?B.red:B.yellow}/>
-        <KCard l="Hot Deals" v={myDeals.filter(d=>d.priority==="hot"&&!["Closed Won","Closed Lost"].includes(d.stage)).length} c={B.green} onClick={()=>setMod("deals")}/>
+      </div>
+
+      {/* ORDER TRACKER */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:18}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>ORDER FULFILLMENT TRACKER</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Track every order from receipt through invoicing · admin.st1sports.com</div>
+          </div>
+          <div style={{display:"flex",gap:7}}>
+            {pos.length>0&&<OBtn sm color={B.teal} onClick={()=>{
+              pos.forEach(d=>{
+                const exists=orders.some(o=>o.dealId===d.id);
+                if(!exists) dispatch("ADD_ORDER",{id:mkId(),name:d.name,contact:d.contact,school:d.school,value:d.value,stage:"Order Received",dealId:d.id,source:"po",createdAt:today(),invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:""});
+              });
+            }}>↓ IMPORT {pos.length} PO{pos.length!==1?"s":""}</OBtn>}
+            <OBtn sm onClick={()=>setAddingOrder(true)}>+ NEW ORDER</OBtn>
+          </div>
+        </div>
+
+        {/* New order form */}
+        {addingOrder&&(
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,marginBottom:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+              {[["Order / Customer Name","name"],["Contact","contact"],["School / Org","school"]].map(([l,k])=>(
+                <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input value={oForm[k]} onChange={e=>setOForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+              ))}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
+              {[["Value ($)","value"],["Invoice #","invoiceNumber"],["Est. Ship Date","estimatedShip"],["Vendor Notes","vendorNotes"]].map(([l,k])=>(
+                <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input value={oForm[k]} onChange={e=>setOForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+              ))}
+            </div>
+            {pos.length>0&&(
+              <div style={{marginBottom:8}}>
+                <Lbl s={{marginBottom:3}}>Link to PO Deal</Lbl>
+                <select value={oForm.dealId} onChange={e=>setOForm(f=>({...f,dealId:e.target.value,name:f.name||pos.find(d=>d.id===e.target.value)?.name||f.name}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}>
+                  <option value="">— no link —</option>
+                  {pos.map(d=><option key={d.id} value={d.id}>{d.name} ({fmt$(d.value)})</option>)}
+                </select>
+              </div>
+            )}
+            <div style={{display:"flex",gap:7}}>
+              <OBtn sm onClick={addOrder} disabled={!oForm.name}>CREATE ORDER</OBtn>
+              <GBtn onClick={()=>setAddingOrder(false)} style={{fontSize:10}}>CANCEL</GBtn>
+            </div>
+          </div>
+        )}
+
+        {/* Stage columns */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+          {ORDER_STAGES.map(stage=>{
+            const stOrders=orders.filter(o=>o.stage===stage);
+            const col=stageColor[stage]||B.muted;
+            return(
+              <div key={stage} style={{background:B.surface,borderRadius:6,padding:10,borderTop:`3px solid ${col}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,letterSpacing:1.5}}>{stage.toUpperCase()}</div>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:col}}>{stOrders.length}</span>
+                </div>
+                {stOrders.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"12px 0"}}>—</div>}
+                {stOrders.map(o=>{
+                  const isLast=stage==="Invoiced";
+                  const nextStage=ORDER_STAGES[ORDER_STAGES.indexOf(stage)+1];
+                  return(
+                    <div key={o.id} style={{background:B.white,borderRadius:5,padding:"8px 10px",marginBottom:6,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:2}}>{o.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:4}}>{o.contact&&`${o.contact} · `}{fmt$(o.value)}</div>
+                      {o.invoiceNumber&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginBottom:2}}>INV: {o.invoiceNumber}</div>}
+                      {o.trackingNumber&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TRK: {o.trackingNumber}</div>}
+                      {o.estimatedShip&&stage!=="Shipped"&&stage!=="Invoiced"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:4}}>Est. ship: {o.estimatedShip}</div>}
+                      {!isLast&&(
+                        <div style={{display:"flex",gap:4,marginTop:4}}>
+                          <button onClick={()=>advanceOrder(o)} style={{background:col,color:B.white,border:"none",borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.2,cursor:"pointer",flex:1}}>→ {nextStage?.split(" ")[0]?.toUpperCase()}</button>
+                          {stage==="Shipped"&&!o.invoiceNumber&&(
+                            <button onClick={()=>{const n=prompt("Invoice number:");if(n)dispatch("UPDATE_ORDER",{id:o.id,invoiceNumber:n});}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 6px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>INV#</button>
+                          )}
+                        </div>
+                      )}
+                      {isLast&&!o.invoiceNumber&&(
+                        <button onClick={()=>{const n=prompt("Invoice number:");if(n)dispatch("UPDATE_ORDER",{id:o.id,invoiceNumber:n});}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",marginTop:4,width:"100%"}}>+ ADD INVOICE #</button>
+                      )}
+                      {stage==="Shipped"&&(
+                        <input placeholder="Tracking #" value={o.trackingNumber||""} onChange={e=>dispatch("UPDATE_ORDER",{id:o.id,trackingNumber:e.target.value})}
+                          style={{width:"100%",marginTop:4,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}/>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+        {orders.length===0&&!addingOrder&&(
+          <div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+            No orders yet · Create manually, or click "Import POs" when deals reach PO Received stage
+          </div>
+        )}
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16}}>
@@ -524,22 +658,71 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
               </div>
             );})}
           </Sec>
-          {pos.length>0&&<Sec label="POs TO FULFILL" col={B.teal} n={pos.length}>
-            {pos.map(d=><Row key={d.id} d={d.name} sub={d.notes?.slice(0,50)} val={fmt$(d.value)} col={B.teal} go={()=>dispatch("UPDATE_DEAL",{id:d.id,stage:"Closed Won"})} label="FULFILL ✓"/>)}
-          </Sec>}
-          {overdueDeals.length===0&&dueDeals.length===0&&overdueInv.length===0&&rfpsDue.length===0&&pos.length===0&&(
+          {overdueDeals.length===0&&dueDeals.length===0&&overdueInv.length===0&&rfpsDue.length===0&&(
             <div style={{textAlign:"center",padding:"40px 0"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Nothing urgent. Check pipeline for proactive opportunities.</div></div>
           )}
         </div>
 
         <div>
+          {/* AI Coach */}
           <div className="card" style={{padding:14,marginBottom:12}}>
             <Lbl s={{marginBottom:9}}>AI Coach — Today's Priorities</Lbl>
-            {!advice&&!loadAdv&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:9,lineHeight:1.6}}>Get a prioritized action plan based on your pipeline, invoices, and deadlines.</div><OBtn onClick={getAdvice} style={{width:"100%"}}>✦ GET TODAY'S PLAN</OBtn></div>}
+            {!advice&&!loadAdv&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:9,lineHeight:1.6}}>Get a prioritized action plan based on your pipeline, invoices, orders, and hot leads.</div><OBtn onClick={getAdvice} style={{width:"100%"}}>✦ GET TODAY'S PLAN</OBtn></div>}
             {loadAdv&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow}}><Spin/>Analyzing...</div>}
             {advice&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:8}}>{advice}</div><GBtn onClick={getAdvice} style={{width:"100%",fontSize:10}}>↺ REFRESH</GBtn></div>}
           </div>
-          <div className="card" style={{padding:14,marginBottom:12}}>
+
+          {/* Hot leads */}
+          {hotLeads.length>0&&(
+            <div className="card" style={{padding:14,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <Lbl>🔥 HOT LEADS</Lbl>
+                <button onClick={()=>setMod("prospecting")} style={{background:"none",border:"none",color:B.orange,fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>SEE ALL →</button>
+              </div>
+              {hotLeads.map(c=>{const t=scoreTier(c.score);return(
+                <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                  </div>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:t.color}}>{c.score}</span>
+                </div>
+              );})}
+            </div>
+          )}
+
+          {/* Campaign pulse */}
+          {(s.sequences||[]).length>0&&(
+            <div className="card" style={{padding:14,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <Lbl>CAMPAIGN PULSE</Lbl>
+                <button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:B.orange,fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>MANAGE →</button>
+              </div>
+              {(s.sequences||[]).slice(0,4).map(seq=>{
+                const active=seq.enrollments.filter(e=>e.status==="active").length;
+                const replied=seq.enrollments.filter(e=>e.status==="replied").length;
+                const pct=seq.enrollments.length>0?Math.round((replied/seq.enrollments.length)*100):0;
+                return(
+                  <div key={seq.id} style={{marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{seq.name}</div>
+                      <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:replied>0?B.green:B.muted}}>{pct}%</span>
+                    </div>
+                    <div style={{height:4,background:B.border,borderRadius:2,marginBottom:4}}>
+                      <div style={{height:"100%",width:`${pct}%`,background:B.green,borderRadius:2,transition:"width .4s"}}/>
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue}}>{active} active</span>
+                      {replied>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>{replied} replied</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Win rate */}
+          <div className="card" style={{padding:14}}>
             <Lbl s={{marginBottom:10}}>Win Rate by Product</Lbl>
             {(()=>{
               const wonDeals = s.deals.filter(d=>d.stage==="Closed Won");
@@ -563,20 +746,9 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
                   <div style={{height:5,background:B.border,borderRadius:3}}>
                     <div style={{height:"100%",width:`${Math.round(rev/maxRev*100)}%`,background:rate>=60?B.green:rate>=40?B.orange:B.red,borderRadius:3,transition:"width .4s"}}/>
                   </div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{fmt$(rev)} won</div>
                 </div>
               ));
             })()}
-          </div>
-          <div className="card" style={{padding:14}}>
-            <Lbl s={{marginBottom:9}}>Recent Activity</Lbl>
-            {s.activity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Activity appears as you use the platform</div>}
-            {s.activity.slice(0,8).map(a=>{const u=USERS.find(x=>x.id===a.userId);return(
-              <div key={a.id} style={{display:"flex",gap:7,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
-                {u&&<div style={{width:18,height:18,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:7,color:B.white}}>{u.initials}</span></div>}
-                <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{dAgo(new Date(a.ts).toISOString().slice(0,10))===0?"Today":dAgo(new Date(a.ts).toISOString().slice(0,10))+"d ago"}</div></div>
-              </div>
-            );})}
           </div>
         </div>
       </div>
