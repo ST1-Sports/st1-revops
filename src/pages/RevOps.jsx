@@ -172,6 +172,14 @@ const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota (BWTF), North Dakota (BWTF). Acquired Bruce Whiting Track & Field. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
+const US_REGIONS = {
+  "Midwest":       {states:["IA","MN","WI","MO","IL","IN","MI","OH","ND","SD","NE","KS"],color:"#1A5FA8"},
+  "Southeast":     {states:["FL","GA","TN","AL","MS","SC","NC","VA","KY","AR","LA"],color:"#1E8F4E"},
+  "Southwest":     {states:["TX","OK","NM","AZ"],color:"#C77800"},
+  "Mountain West": {states:["CO","UT","NV","ID","MT","WY"],color:"#F37321"},
+  "West Coast":    {states:["CA","WA","OR"],color:"#6B3FA0"},
+  "Northeast":     {states:["NY","PA","NJ","CT","MA","MD","DE","NH","VT","ME","RI"],color:"#C0392B"},
+};
 const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleyball","Timing Systems","Custom Team Stores","Apparel","Competition Spikes","Cross Country","Other"];
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
@@ -922,7 +930,7 @@ const SCRAPE_TASK_ID = "prospecting_scrape";
 
 function ModProspecting() {
   const {s,dispatch,toast}=useApp();
-  const DEFAULT_AREA={id:mkId(),name:"Iowa Track & Field ADs",states:["IA"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:10,active:true};
+  const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
   const [editing,setEditing]=useState(null);
@@ -941,6 +949,9 @@ function ModProspecting() {
   const [contacts,setContacts] = useState(savedTask?.contacts||[]);
   const [log,setLog]         = useState(savedTask?.log||[]);
 
+  const [zohoPushing, setZohoPushing] = useState(false);
+  const [zohoPushed,  setZohoPushed]  = useState(0);
+
   // Import-list state
   const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
   const [importRows,setImportRows]   = useState([]);
@@ -958,9 +969,13 @@ function ModProspecting() {
     abortRef.current=false;setPhase("finding");
     const isClubs  = area.orgType==="clubs";
     const isBoth   = area.orgType==="both";
-    const scopeDesc= `the state${area.states.length>1?"s":""} of ${area.states.join(" and ")}`;
-    const bwtf     = area.states.some(s=>s==="MN"||s==="ND");
-    const maxOrgs  = area.maxOrgs||area.maxSchools||10;
+    const regionLabel = (area.regions||[]).length ? area.regions.join(" & ")+" region" : "";
+    const stateList   = area.states||[];
+    const scopeDesc   = regionLabel
+      ? `the ${regionLabel}${stateList.length ? ` (${stateList.join(", ")})` : ""}`
+      : stateList.length ? `the states of ${stateList.join(", ")}` : "the United States";
+    const bwtf     = stateList.some(st=>st==="MN"||st==="ND");
+    const maxOrgs  = area.maxOrgs||area.maxSchools||15;
 
     bgTasks.createTask(SCRAPE_TASK_ID, `Prospecting: ${area.name}`);
     bgTasks.updateTask(SCRAPE_TASK_ID, { type:"scrape", progress:5, orgs:[], contacts:[] });
@@ -972,8 +987,8 @@ function ModProspecting() {
       if(!isClubs) {
         addLog("Searching for schools...");
         const res = await aiCall(
-          `Find public high schools and school districts in ${scopeDesc} with ${area.sports.join(", ")} programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
-          {search:true,json:true,tokens:1400}
+          `Search for real high schools and school districts with strong ${area.sports.join(" / ")} programs in ${scopeDesc}. Spread across different states in the region. Target competitive programs known for state/regional athletics, larger districts (500+ enrollment). Search "[state] high school [sport] state champions", "[state] NFHS member schools", and official district websites. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs} — mix of states): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
+          {search:true,json:true,tokens:1600}
         );
         orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"school"}))];
         addLog(`Found ${orgs.length} schools`,"success");
@@ -982,8 +997,8 @@ function ModProspecting() {
       if(isClubs||isBoth) {
         addLog("Searching for youth sports clubs...");
         const res = await aiCall(
-          `Find youth sports clubs, travel teams, recreational leagues, and club programs in ${scopeDesc} for ${area.sports.join(", ")}. Include club teams, AAU, travel leagues, and recreational programs. Use web search. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
-          {search:true,json:true,tokens:1400}
+          `Search for real youth sports clubs, travel teams, and leagues for ${area.sports.join(" / ")} in ${scopeDesc}. Include AAU programs, club travel teams, recreational leagues with equipment purchasing budgets. Spread across different states. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
+          {search:true,json:true,tokens:1600}
         );
         orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"club"}))];
         addLog(`Found ${(Array.isArray(res)?res:[]).length} clubs`,"success");
@@ -1004,8 +1019,8 @@ function ModProspecting() {
           ? area.roles
           : isClubOrg ? CLUB_ROLES : ["Athletic Director","Head Coach","Procurement Manager"];
         const found=await aiCall(
-          `Find ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}. ${sc.website?"Website: "+sc.website:""} ${isClubOrg?"This is a youth sports club or league.":"Search their athletics staff directory."} Return JSON array (empty if none found): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
-          {search:true,json:true,tokens:1400}
+          `Find real ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}${sc.website?" — website: "+sc.website:""}. ${isClubOrg?"Search their club/league website staff page.":"Search their school athletics staff directory page and district website — look for /athletics/staff or /directory."} Search: "${sc.name} ${roles[0]} email contact". Email format is usually firstname.lastname@district.org or first@schoolname.edu. Return JSON array (ONLY verified real contacts — return empty array [] if you cannot confirm the person exists): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"website|directory|search","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
+          {search:true,json:true,tokens:1600}
         );
         if(Array.isArray(found)&&found.length>0){
           const valid=found.filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId()}));
@@ -1034,6 +1049,43 @@ function ModProspecting() {
       bgTasks.failTask(SCRAPE_TASK_ID, err.message);
       setPhase("idle");
     }
+  };
+
+  const pushToZohoLeads = async (contactList) => {
+    if(!contactList.length){ toast("No contacts to push","warn"); return; }
+    setZohoPushing(true); setZohoPushed(0);
+    addLog(`Pushing ${contactList.length} contacts to Zoho CRM Leads...`);
+    let pushed=0;
+    for(let i=0;i<contactList.length;i+=10){
+      const batch=contactList.slice(i,i+10);
+      try {
+        await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:
+            batch.map(c=>({
+              First_Name: c.firstName||(c.fullName||"").split(" ")[0]||"",
+              Last_Name:  c.lastName ||(c.fullName||"").split(" ").slice(1).join(" ")||c.fullName||"Unknown",
+              Email:      c.email||"",
+              Phone:      c.phone||"",
+              Title:      c.title||"",
+              Company:    c.school||"",
+              City:       c.city||"",
+              State:      c.state||"",
+              Lead_Source:"ST1 RevOps Prospecting",
+              Lead_Status:"Not Contacted",
+              Description:`Sport: ${c.sport||""}. Source: ${c.source||"prospecting"}. Confidence: ${c.confidence||"medium"}.`,
+            }))
+          }})
+        });
+        pushed+=batch.length;
+        setZohoPushed(pushed);
+      } catch(e) {
+        addLog(`Zoho batch error: ${e.message.slice(0,60)}`,"warn");
+      }
+      await new Promise(r=>setTimeout(r,400));
+    }
+    addLog(`✓ ${pushed}/${contactList.length} contacts pushed to Zoho CRM Leads`,"success");
+    toast(`${pushed} leads added to Zoho CRM`,"success");
+    setZohoPushing(false);
   };
 
   const exportCsv=()=>{
@@ -1133,14 +1185,36 @@ function ModProspecting() {
                         ))}
                       </div>
                     </div>
-                    {[["States",STATES_LIST,"states"],["Sports",SPORTS_LIST,"sports"]].map(([l,opts,k])=>(
-                      <div key={k} style={{marginBottom:10}}>
-                        <Lbl s={{marginBottom:5}}>{l}</Lbl>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                          {opts.map(o=><button key={o} onClick={()=>setAreas(as=>as.map(a=>a.id===area.id?{...a,[k]:tog(a[k]||[],o)}:a))} style={{background:(area[k]||[]).includes(o)?`${B.orange}15`:B.white,color:(area[k]||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(area[k]||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
-                        </div>
+                    <div style={{marginBottom:10}}>
+                      <Lbl s={{marginBottom:5}}>REGION (NATIONWIDE)</Lbl>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:5}}>
+                        {Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{
+                          const sel=(area.regions||[]).includes(r);
+                          return(
+                            <button key={r} onClick={()=>setAreas(as=>as.map(a=>{
+                              if(a.id!==area.id)return a;
+                              const cur=a.regions||[];
+                              const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];
+                              const newStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];
+                              return{...a,regions:newRegions,states:newStates};
+                            }))} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400}}>
+                              {r} <span style={{fontSize:9,opacity:.7}}>({rs.length})</span>
+                            </button>
+                          );
+                        })}
                       </div>
-                    ))}
+                      {(area.regions||[]).length>0&&(
+                        <div style={{fontSize:9,color:B.muted,lineHeight:1.6,padding:"3px 6px",background:B.surface,borderRadius:3}}>
+                          States included: {(area.states||[]).join(", ")||"none"}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{marginBottom:10}}>
+                      <Lbl s={{marginBottom:5}}>SPORTS</Lbl>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {SPORTS_LIST.map(o=><button key={o} onClick={()=>setAreas(as=>as.map(a=>a.id===area.id?{...a,sports:tog(a.sports||[],o)}:a))} style={{background:(area.sports||[]).includes(o)?`${B.orange}15`:B.white,color:(area.sports||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(area.sports||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+                      </div>
+                    </div>
                     <div style={{marginBottom:10}}>
                       <Lbl s={{marginBottom:5}}>Roles</Lbl>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -1158,7 +1232,8 @@ function ModProspecting() {
                       <GBtn onClick={()=>setEditing(area.id)} style={{fontSize:9,padding:"3px 8px"}}>EDIT</GBtn>
                     </div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:7}}>
-                      {(area.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}
+                      {(area.regions||[]).map(r=>{const c=US_REGIONS[r]?.color||B.orange;return<span key={r} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:c,background:c+"18",padding:"2px 7px",borderRadius:3}}>{r}</span>;})}
+                      {!(area.regions||[]).length&&(area.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}
                       {(area.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{sp}</span>)}
                     </div>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
@@ -1308,6 +1383,7 @@ function ModProspecting() {
               <div style={{display:"flex",gap:7}}>
                 {(phase==="finding"||phase==="scraping")&&<GBtn onClick={()=>abortRef.current=true} style={{fontSize:10,padding:"4px 8px",color:B.red}}>⏹ STOP</GBtn>}
                 {contacts.length>0&&<OBtn sm onClick={exportCsv}>↓ EXPORT CSV</OBtn>}
+                {contacts.length>0&&<OBtn sm color={B.purple} onClick={()=>pushToZohoLeads(contacts)} disabled={zohoPushing}>{zohoPushing?`PUSHING ${zohoPushed}/${contacts.length}...`:`↑ PUSH TO ZOHO (${contacts.length})`}</OBtn>}
               </div>
             </div>
             {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
