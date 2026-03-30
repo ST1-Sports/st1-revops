@@ -87,7 +87,7 @@ async function claudeCall(body) {
 }
 
 // Claude API — PDF doc (falls back to text extraction if PDFs are too large)
-const MAX_TEXT_CHARS = 60000; // ~15k tokens — keep well under Claude's context limit
+const MAX_TEXT_CHARS = 140000; // ~35k tokens — covers full athletic supply bid doc
 
 // Robust JSON extraction — tries multiple strategies
 function extractJSON(raw) {
@@ -107,7 +107,12 @@ function extractJSON(raw) {
   return null;
 }
 
-async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null) {
+async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null, textOverride=null) {
+  // If pre-extracted text is provided, skip PDF processing
+  if(textOverride !== null) {
+    const tp = `[PDF content — ${textOverride.length.toLocaleString()} chars]\n\n${textOverride}\n\n---\n\n${prompt}`;
+    return await claudeText(tp, sys, json);
+  }
   const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a, 0);
   let text;
   if(totalB64Bytes > MAX_B64_BYTES) {
@@ -206,6 +211,7 @@ export default function RFPAutomation() {
   const [shippingRule, setShippingRule] = useState(null); // {included,separate,language,notes}
   const [items,      setItems]      = useState([]);
   const [coverLetter,setCoverLetter]= useState("");
+  const [complianceFlags, setComplianceFlags] = useState([]);
 
   // UI
   const [log,        setLog]        = useState([]);
@@ -268,8 +274,27 @@ export default function RFPAutomation() {
 
     try {
 
+    // ── PRE-EXTRACT: Extract PDF text once for large PDFs ─────────────────
+    let extractedText = null;
+    if(willExtract) {
+      addLog("Extracting PDF text (one-time)...");
+      const parts = await Promise.all(pdfFiles.map(async(f,i)=>{
+        const raw = f.arrayBuffer || await toArrayBuffer(f.file);
+        const buf = raw.slice(0);
+        const t = await extractPdfText(buf);
+        addLog(`  Extracted ${t.length.toLocaleString()} chars from ${f.name}`);
+        return pdfFiles.length>1 ? `=== DOCUMENT ${i+1} ===\n${t}` : t;
+      }));
+      extractedText = parts.join("\n\n");
+      addLog(`  Full document: ${extractedText.length.toLocaleString()} chars`);
+    }
+    // For metadata/shipping/compliance: first 50k (cover page, terms)
+    // For line items: last 110k (products are at end of bid docs)
+    const earlyText  = extractedText ? extractedText.slice(0, 50000) : null;
+    const itemsText  = extractedText ? extractedText.slice(-110000) : null;
+
     // ── STEP 1: Extract RFP metadata ─────────────────────────────────────
-    addLog("Step 1/4 — Parsing bid requirements and metadata...");
+    addLog("Step 1/5 — Parsing bid requirements and metadata...");
     const meta = await claudePDF(pdfFiles,
 `You are analyzing ${pdfFiles.length > 1 ? `${pdfFiles.length} documents` : "a bid document"} for ST1 Sports athletic equipment supplier.
 ${ST1}
@@ -299,16 +324,16 @@ Extract all bid metadata from these documents. Return JSON:
   "documentDescriptions": ["what each document covers"],
   "specialRequirements": ["any special requirements"],
   "notes": "other important details"
-}`, "You are a procurement specialist for an athletic equipment supplier.", true, addLog);
+}`, "You are a procurement specialist for an athletic equipment supplier.", true, addLog, earlyText);
 
     if(!meta) { addLog("Could not parse RFP metadata — check PDFs and retry","error"); setPhase("upload"); return; }
     setRfpMeta(meta);
-    setProgress(20);
+    setProgress(15);
     addLog(`✓ ${meta.title||"RFP"} — ${meta.issuer||""} ${meta.state||""}`,"success");
     if(meta.dueDate) addLog(`  Due: ${meta.dueDate} · Submit via: ${meta.submissionMethod||"see spec"}`);
 
-    // ── STEP 2: SHIPPING DETECTION — critical ────────────────────────────
-    addLog("Step 2/4 — Detecting shipping / freight rules...");
+    // ── STEP 2: SHIPPING DETECTION ───────────────────────────────────────
+    addLog("Step 2/5 — Detecting shipping / freight rules...");
     const shipping = await claudePDF(pdfFiles,
 `CRITICAL: Analyze these bid documents carefully for shipping/freight pricing rules.
 Look for language like:
@@ -333,10 +358,10 @@ Return JSON:
 }
 
 If you cannot find any explicit shipping language, set certainty to low and make your best inference.`,
-    "", true);
+    "", true, null, earlyText);
 
     setShippingRule(shipping);
-    setProgress(35);
+    setProgress(28);
     if(shipping) {
       addLog(
         shipping.shippingIncluded
@@ -350,46 +375,89 @@ If you cannot find any explicit shipping language, set certainty to low and make
       setShippingRule({ shippingIncluded:true, certainty:"low", freightRule:"Could not determine — assumed included", notes:"Review spec manually" });
     }
 
-    // ── STEP 3: Extract all line items ───────────────────────────────────
-    addLog("Step 3/4 — Extracting all line items and product specifications...");
+    // ── STEP 3: COMPLIANCE FLAGS ─────────────────────────────────────────
+    addLog("Step 3/5 — Checking compliance requirements...");
+    const rawFlags = await claudePDF(pdfFiles,
+`Analyze this bid document for compliance requirements that could affect ST1 Sports — a Colorado-based LLC bidding in ${meta?.state||"another state"}.
+
+Look for ALL of the following:
+1. State business registration — must vendor be registered in ${meta?.state||"the issuing state"}?
+2. Foreign corporation registration — out-of-state business filing requirement?
+3. Notarized signatures — any signatures require notarization?
+4. Bid bond — dollar amount or percentage required?
+5. Performance bond or payment bond?
+6. State-specific business licenses or contractor licenses?
+7. Prevailing wage requirements?
+8. Immigration/employment affidavit (NJ, others require this)?
+9. In-state preference — do in-state vendors get scoring advantage?
+10. Minority/Women/Disadvantaged Business Enterprise (MBE/WBE/DBE) requirements?
+11. Any requirement that explicitly excludes or disadvantages out-of-state businesses?
+12. Insurance requirements (COI, general liability, workers comp minimums)?
+
+Return JSON array — one object per flag found (include ALL found, even if ST1 likely qualifies):
+[{
+  "type": "state_registration|foreign_corp|notary|bid_bond|performance_bond|license|prevailing_wage|immigration|in_state_preference|mbe_wbe|insurance|other",
+  "severity": "blocker|warning|info",
+  "title": "short descriptive title",
+  "requirement": "what is specifically required",
+  "exactLanguage": "exact quote from spec (50-150 chars)",
+  "st1Impact": "how this affects a Colorado LLC bidding here",
+  "canBid": true,
+  "action": "what ST1 needs to do (e.g. register as foreign LLC, get notary, etc.)"
+}]
+
+If none found, return empty array [].`,
+    "You are a compliance specialist for a small business bidding on government contracts.", true, null, earlyText);
+
+    const flags = Array.isArray(rawFlags) ? rawFlags : [];
+    setComplianceFlags(flags);
+    setProgress(42);
+    const blockers = flags.filter(f=>f.severity==="blocker");
+    const warnings = flags.filter(f=>f.severity==="warning");
+    if(flags.length===0) addLog("✓ No major compliance flags found","success");
+    else addLog(`✓ Compliance: ${blockers.length} blocker${blockers.length!==1?"s":""}, ${warnings.length} warning${warnings.length!==1?"s":""}${blockers.length>0?" — review before bidding":""}`, blockers.length>0?"warn":"success");
+
+    // ── STEP 4: Extract all line items ───────────────────────────────────
+    addLog("Step 4/5 — Extracting all line items and product specifications...");
     const rawItems = await claudePDF(pdfFiles,
 `Extract EVERY product line item from these bid documents for ST1 Sports.
 Include ALL items even if we might not carry them — mark canBid:false for those.
 
-Return a JSON array:
+ST1 Sports carries: track & field equipment (Blazer/Gill Athletics), baseballs/softballs (Diamond/Pro-Nine), footballs/basketballs/volleyballs/soccer (Wilson/Molten), batting helmets/catcher gear/protective equipment (All-Star/EvoShield), bats (DeMarini/Louisville Slugger/Rawlings), timing systems (FinishLynx/Ultrak/Seiko), athletic apparel, field maintenance equipment. We do NOT carry: gymnasium flooring, weight room equipment, swim equipment, wrestling mats, uniforms/clothing printing.
+
+Return a JSON array — include EVERY line item, numbered sequentially:
 [{
   "lineNum": "line number or ID as shown in document",
-  "category": "product category",
+  "category": "product category (e.g. Baseball, Football, Track & Field, Volleyball)",
   "description": "full product description exactly as written",
-  "brand": "specified brand if any",
+  "brand": "specified brand if any (null if not specified)",
   "partNumber": "part number or catalog number if given",
   "unit": "each|pair|set|dozen|case|etc",
-  "qtyRequested": quantity as number or 0,
+  "qtyRequested": quantity as number or 0 if not specified,
   "specifications": "key technical specs",
   "substituteAllowed": true or false,
-  "canBid": true or false based on whether ST1 Sports likely carries this (Blazer/Gill/Diamond/Wilson/Molten/All-Star/Pro-Nine/FinishLynx/Molten/EvoShield/DeMarini/Louisville Slugger),
-  "st1Brand": "our brand that would supply this item",
-  "noBidReason": "reason if canBid is false"
+  "canBid": true or false based on ST1 product list above,
+  "st1Brand": "our brand that would supply this (e.g. Diamond, Blazer, Wilson)",
+  "noBidReason": "reason if canBid is false, null otherwise"
 }]
 
-Extract from ALL documents. If the pricing spreadsheet is included, match line items to spec rows.`,
-    "Return ONLY valid JSON array.", true);
+IMPORTANT: Extract from the PRODUCT LISTING section of the document. There may be 50-200+ line items. Get them ALL.`,
+    "Return ONLY valid JSON array.", true, null, itemsText);
 
     const itemList = Array.isArray(rawItems) ? rawItems : [];
     const withState = itemList.map((item,i) => ({
       ...item, id:uid(), idx:i+1,
-      // Pricing fields — to be filled
       dealerCost:null, ourPrice:null, freight:null, finalPrice:null,
       margin:20, totalLine:null,
       confidence:null, priceNotes:"", approved:false, declined:false,
       substituteDesc:"",
     }));
     setItems(withState);
-    setProgress(55);
+    setProgress(58);
     addLog(`✓ ${withState.length} line items extracted (${withState.filter(i=>i.canBid!==false).length} biddable)`,"success");
 
-    // ── STEP 4: Auto-price all biddable items ────────────────────────────
-    addLog("Step 4/4 — Auto-pricing biddable items...");
+    // ── STEP 5: Auto-price all biddable items ────────────────────────────
+    addLog("Step 5/5 — Auto-pricing biddable items...");
     const biddable = withState.filter(i=>i.canBid!==false);
     const shippingIn = shipping?.shippingIncluded !== false; // default to included
     let updated = [...withState];
