@@ -4744,55 +4744,10 @@ function ModAds() {
   // Post to Social
   const [showSocialPanel, setShowSocialPanel] = useState(false);
   const [socialCaption, setSocialCaption] = useState("");
-  const [socialPortals, setSocialPortals] = useState([]);
-  const [socialChannels, setSocialChannels] = useState([]);
-  const [socialPortalId, setSocialPortalId] = useState("");
-  const [socialSelChannels, setSocialSelChannels] = useState([]);
-  const [socialLoading, setSocialLoading] = useState(false);
-  const [socialPosting, setSocialPosting] = useState(false);
-  const [socialResult, setSocialResult] = useState(null);
 
-  const openSocialPanel = async () => {
+  const openSocialPanel = () => {
     setShowSocialPanel(true);
-    setSocialResult(null);
     setSocialCaption([adHeadline, adSub, adCta ? `👉 ${adCta}` : "", "#ST1Sports #Athletics #TrackAndField"].filter(Boolean).join("\n\n"));
-    if (socialPortals.length) return; // already loaded
-    setSocialLoading(true);
-    try {
-      const r = await fetch("/api/zoho-social", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"list_portals"}) });
-      const data = await r.json();
-      if (data.portals?.length) {
-        setSocialPortals(data.portals);
-        const pid = data.portals[0].id;
-        setSocialPortalId(pid);
-        const cr = await fetch("/api/zoho-social", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"list_channels",portalId:pid}) });
-        const cd = await cr.json();
-        setSocialChannels(cd.channels || []);
-      }
-    } catch { toast("Could not load social channels", "error"); }
-    setSocialLoading(false);
-  };
-
-  const submitSocialPost = async () => {
-    if (!socialPortalId || !socialSelChannels.length) { toast("Select at least one channel","error"); return; }
-    setSocialPosting(true);
-    setSocialResult(null);
-    try {
-      const r = await fetch("/api/zoho-social", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ action:"create_post", portalId: socialPortalId, channelIds: socialSelChannels, message: socialCaption, imageUrl: adImg||undefined }),
-      });
-      const data = await r.json();
-      if (data.ok) {
-        setSocialResult({ ok:true, postId: data.postId });
-        toast(`Posted to ${socialSelChannels.length} channel(s)!`, "success");
-      } else {
-        setSocialResult({ ok:false, error: data.error });
-        toast(data.error || "Post failed", "error");
-      }
-    } catch { toast("Post failed","error"); }
-    setSocialPosting(false);
   };
 
   const loadCopyIntoCreator = (copy) => {
@@ -5405,53 +5360,57 @@ function ModAds() {
             {showSocialPanel&&(
               <div className="card" style={{padding:16,marginTop:12,borderTop:`3px solid ${B.purple}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>POST TO ZOHO SOCIAL</div>
-                  <button onClick={()=>{setShowSocialPanel(false);setSocialResult(null);}} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>DISTRIBUTE TO SOCIAL</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Copy caption · download image · open platform composer</div>
+                  </div>
+                  <button onClick={()=>setShowSocialPanel(false)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
                 </div>
 
-                {socialLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10}}>Loading connected channels…</div>}
-
-                {!socialLoading&&socialPortals.length===0&&(
-                  <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"10px 12px",marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-                    Zoho Social not connected. Go to <a href="/integrations" style={{color:B.blue}}>Integrations → Marketing</a> and test the Social connection first.
+                {/* Caption editor */}
+                <div style={{marginBottom:12}}>
+                  <Lbl s={{marginBottom:4}}>CAPTION</Lbl>
+                  <textarea value={socialCaption} onChange={e=>setSocialCaption(e.target.value)} rows={4}
+                    style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{socialCaption.length}/2200 chars</div>
+                    <button onClick={()=>{navigator.clipboard.writeText(socialCaption);toast("Caption copied!","success");}}
+                      style={{background:"none",border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"3px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",letterSpacing:.5}}>
+                      ⎘ COPY CAPTION
+                    </button>
                   </div>
-                )}
+                </div>
 
-                {socialChannels.length>0&&(
-                  <div style={{marginBottom:12}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>SELECT CHANNELS</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {socialChannels.map(ch=>{
-                        const sel = socialSelChannels.includes(ch.id);
-                        const nColors = {Facebook:"#1877F2",Instagram:"#E1306C",Twitter:"#1DA1F2",LinkedIn:"#0A66C2",YouTube:"#FF0000"};
-                        const c = nColors[ch.network]||B.muted;
-                        return (
-                          <button key={ch.id} onClick={()=>setSocialSelChannels(s=>sel?s.filter(x=>x!==ch.id):[...s,ch.id])} style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,letterSpacing:.5,display:"block"}}>{ch.network}</span>
-                            {ch.name}
-                            {sel&&<span style={{color:c,marginLeft:4}}>✓</span>}
-                          </button>
-                        );
-                      })}
+                {/* Platform launch buttons */}
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>OPEN PLATFORM COMPOSER</div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+                  {[
+                    {label:"𝕏 Twitter/X",   color:"#000000", url:()=>`https://twitter.com/intent/tweet?text=${encodeURIComponent(socialCaption.slice(0,280))}`},
+                    {label:"in LinkedIn",   color:"#0A66C2", url:()=>`https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent(socialCaption.slice(0,3000))}`},
+                    {label:"f Facebook",    color:"#1877F2", url:()=>`https://www.facebook.com/`},
+                    {label:"📷 Instagram",  color:"#E1306C", url:()=>`https://www.instagram.com/`},
+                  ].map(({label,color,url})=>(
+                    <button key={label} onClick={()=>{navigator.clipboard.writeText(socialCaption);toast("Caption copied — paste it in the composer!","success");window.open(url(),"_blank");}}
+                      style={{background:`${color}10`,color,border:`1px solid ${color}40`,borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer",whiteSpace:"nowrap"}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Download image */}
+                {adImg&&(
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
+                    <img src={adImg} alt="" style={{width:48,height:48,objectFit:"cover",borderRadius:4}}/>
+                    <div style={{flex:1}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>Ad image ready</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>Download and attach when posting to Instagram or Facebook</div>
                     </div>
+                    <a href={adImg} download="st1-ad.png"
+                      style={{background:B.purple,color:B.white,borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",letterSpacing:.5}}>
+                      ↓ DOWNLOAD
+                    </a>
                   </div>
                 )}
-
-                <div style={{marginBottom:10}}>
-                  <Lbl s={{marginBottom:4}}>Caption</Lbl>
-                  <textarea value={socialCaption} onChange={e=>setSocialCaption(e.target.value)} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:3}}>
-                    {socialCaption.length}/2200 chars · {adImg?"Image attached ✓":"No image — set one in the Product Image section above"}
-                  </div>
-                </div>
-
-                <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                  <button onClick={submitSocialPost} disabled={socialPosting||!socialSelChannels.length||!socialCaption.trim()} style={{background:B.purple,color:B.white,border:"none",borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}>
-                    {socialPosting?"POSTING...":"📣 POST NOW"}
-                  </button>
-                  {socialResult?.ok&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✓ Posted! ID: {socialResult.postId||"n/a"}</span>}
-                  {socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✗ {socialResult.error.slice(0,100)}</span>}
-                </div>
               </div>
             )}
 
