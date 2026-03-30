@@ -1664,6 +1664,7 @@ Channel: ${slackChannelName}`);
 function AyrsharePanel({addLog}) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [option, setOption] = useState("make"); // "make" | "ayrshare"
 
   const testConnection = async () => {
     setTesting(true);
@@ -1675,15 +1676,15 @@ function AyrsharePanel({addLog}) {
       });
       const data = await r.json();
       if (data.ok) {
-        setTestResult({ok:true, user: data.user});
-        addLog("Ayrshare connected ✓","success");
+        setTestResult({ok:true, backend: data.backend, user: data.user});
+        addLog(`Social publishing connected via ${data.backend} ✓`,"success");
         try {
           const st = JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");
           localStorage.setItem("st1_integrations_status_v1", JSON.stringify({...st, social:true}));
         } catch {}
       } else {
         setTestResult({ok:false, error: data.error});
-        addLog(`Ayrshare: ${data.error}`,"error");
+        addLog(`Social: ${data.error}`,"error");
       }
     } catch(e) { setTestResult({ok:false, error:e.message}); }
     setTesting(false);
@@ -1694,7 +1695,7 @@ function AyrsharePanel({addLog}) {
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
         <div>
           <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post to Twitter/X, LinkedIn, Instagram, Facebook, TikTok — from the Ad Creator</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok from the Ad Creator</div>
         </div>
         <button onClick={testConnection} disabled={testing}
           style={{background:testing?B.surface:B.purple,color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
@@ -1704,10 +1705,8 @@ function AyrsharePanel({addLog}) {
 
       {testResult?.ok&&(
         <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
-          ✓ <strong>Connected</strong> — Ayrshare API key is working.
-          {testResult.user?.activeSocialAccounts?.length>0&&(
-            <span> Platforms: {testResult.user.activeSocialAccounts.join(", ")}</span>
-          )}
+          ✓ <strong>Connected</strong> via {testResult.backend}.
+          {testResult.user?.activeSocialAccounts?.length>0&&<span> Platforms: {testResult.user.activeSocialAccounts.join(", ")}</span>}
         </div>
       )}
       {testResult?.ok===false&&(
@@ -1716,19 +1715,47 @@ function AyrsharePanel({addLog}) {
         </div>
       )}
 
-      <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
-        <strong>Setup (2 minutes):</strong>
-        <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2}}>
-          <li>Create a free account at <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>app.ayrshare.com</a></li>
-          <li>Connect your social accounts in Ayrshare (Twitter, LinkedIn, Instagram, Facebook, TikTok)</li>
-          <li>Copy your <strong>API Key</strong> from Ayrshare dashboard → Settings</li>
-          <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to your Vercel environment variables</li>
-          <li>Redeploy, then click <strong>Test Connection</strong> above</li>
-        </ol>
-        <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-          Once connected, go to <strong>Ad Engine → Ad Creator → POST TO SOCIAL</strong> to post ads directly to all platforms with scheduling, stories, and ad manager links.
-        </div>
+      {/* Option tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {[["make","⭐ Make — $9/mo (recommended)"],["ayrshare","Ayrshare — $29/mo"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setOption(id)}
+            style={{background:option===id?B.purple:B.surface,color:option===id?B.white:B.muted,border:`1px solid ${option===id?B.purple:B.border}`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer",fontWeight:option===id?600:400}}>
+            {label}
+          </button>
+        ))}
       </div>
+
+      {option==="make"&&(
+        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
+          <strong>Make setup (~5 min):</strong>
+          <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2.2}}>
+            <li>Sign up at <a href="https://www.make.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>make.com</a> — free trial, then $9/mo Core plan</li>
+            <li>Create a new <strong>Scenario</strong></li>
+            <li>Add a <strong>Webhooks → Custom webhook</strong> trigger — copy the webhook URL</li>
+            <li>Add modules for each platform: <em>Facebook Pages → Create a Post</em>, <em>Instagram → Create a Photo Post</em>, <em>LinkedIn → Create a Share</em>, etc.</li>
+            <li>Map these fields from the webhook: <code style={{background:"#eee",padding:"1px 4px",borderRadius:2}}>post</code> → message, <code style={{background:"#eee",padding:"1px 4px",borderRadius:2}}>mediaUrls[0]</code> → image URL</li>
+            <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>MAKE_WEBHOOK_URL</code> to Vercel env vars, redeploy, then Test Connection</li>
+          </ol>
+          <div style={{marginTop:8,background:"#e8f0fa",borderRadius:4,padding:"8px 10px",fontSize:10,color:B.blue}}>
+            💡 Make handles all the platform OAuth for you — just connect your accounts in the Make modules. No separate app registrations needed.
+          </div>
+        </div>
+      )}
+
+      {option==="ayrshare"&&(
+        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
+          <strong>Ayrshare setup:</strong>
+          <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2.2}}>
+            <li>Sign up at <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>app.ayrshare.com</a> — use the <strong>Starter plan ($29/mo)</strong>, not Business ($149)</li>
+            <li>Connect your social accounts in Ayrshare dashboard</li>
+            <li>Copy your <strong>API Key</strong> from Settings</li>
+            <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to Vercel env vars, redeploy, then Test Connection</li>
+          </ol>
+          <div style={{marginTop:8,background:"#fff3cd",borderRadius:4,padding:"8px 10px",fontSize:10,color:"#7a4f00"}}>
+            ⚠ The free Ayrshare plan adds "[Sent with Free Plan]" to every post. Use a paid plan to avoid this.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

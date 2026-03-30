@@ -5455,6 +5455,15 @@ function ModAds() {
                     <button onClick={()=>setAdImg(ideoResult.imageUrl)} style={{background:adImg===ideoResult.imageUrl?B.orange:B.orangeBg,color:adImg===ideoResult.imageUrl?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
                       {adImg===ideoResult.imageUrl?"✓ IN USE":"USE IN AD"}
                     </button>
+                    <button onClick={()=>{
+                      setAdImg(ideoResult.imageUrl);
+                      const parts=[adHeadline,adSub,adCta?`👉 ${adCta}`:"","#ST1Sports #Athletics #TrackAndField"].filter(Boolean);
+                      setSocialCaption(parts.join("\n\n"));
+                      setShowSocialPanel(true);
+                      setSocialResult(null);
+                    }} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>
+                      📣 POST THIS
+                    </button>
                     <button onClick={()=>setAdImg("")} style={{background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textAlign:"left"}}>Clear image</button>
                   </div>
                 </div>
