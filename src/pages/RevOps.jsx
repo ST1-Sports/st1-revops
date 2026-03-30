@@ -338,10 +338,8 @@ export default function App() {
   }, []);
 
   const cu = USERS.find(u=>u.id===s.currentUserId);
-  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef};
-
-  // ── AUTO-SYNC every 6 hours ─────────────────────────────────────────────────
   const crmSyncRef = useRef(null);
+  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef};
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
