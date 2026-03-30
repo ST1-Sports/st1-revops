@@ -266,10 +266,14 @@ function reducer(prev, action, payload) {
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
-const RFP_STAGES  = ["Received","Reviewing","Pricing","Building Response","Submitted","Won","Lost","No Bid"];
+const RFP_STAGES  = ["New", "In Process", "Bid", "No Bid"];
 const DSC = {Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
-const RSC = {Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,"No Bid":B.muted};
+const RSC = {
+  "New":B.blue,"In Process":B.orange,"Bid":B.green,"No Bid":B.muted,
+  // legacy stage names kept for backward compat
+  Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
+};
 const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{c:B.purple,bg:B.purpleBg},partial:{c:B.yellow,bg:B.yellowBg},paid:{c:B.green,bg:B.greenBg},overdue:{c:B.red,bg:B.redBg}};
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
@@ -288,7 +292,7 @@ const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator"
 function urgentCount(s) {
   return s.deals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
     + s.invoices.filter(i=>i.status==="overdue").length
-    + s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
+    + s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -370,7 +374,7 @@ export default function App() {
     {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
     {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
     {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:s.invoices.filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -630,7 +634,7 @@ function ModBriefing() {
   const overdueDeals=myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0);
   const dueDeals    =myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)>=0&&dUntil(d.followUpDate)<=1);
   const overdueInv  =myInv.filter(i=>i.status==="overdue");
-  const rfpsDue     =myRfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7);
+  const rfpsDue     =myRfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7);
   const pos         =myDeals.filter(d=>d.stage==="PO Received");
   const pipeline    =myDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
   const ar          =myInv.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
@@ -1865,7 +1869,8 @@ function ModRFP() {
 
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"/>
+      <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"
+        action={<a href="/rfp" style={{background:B.orange,color:B.white,borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,textDecoration:"none",display:"inline-block"}}>+ NEW RFP →</a>}/>
       <div style={{display:"grid",gridTemplateColumns:sel_r?"1fr 350px":"1fr",gap:13}}>
         <div>
           {rfps.map(r=>{const d=dUntil(r.dueDate);const dn=r.checklist?.filter(c=>c.done).length||0;const tn=r.checklist?.length||1;return(
@@ -1880,7 +1885,7 @@ function ModRFP() {
                 </div>
                 <div style={{textAlign:"right",flexShrink:0,marginLeft:9}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(r.value)}</div>
-                  {r.dueDate&&!["Won","Lost","No Bid"].includes(r.stage)&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:d<=3?B.red:d<=7?B.yellow:B.muted,letterSpacing:.3}}>{d<0?`${Math.abs(d)}d OVER`:`${d}d LEFT`}</div>}
+                  {r.dueDate&&!["No Bid","Lost","Won"].includes(r.stage)&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:d<=3?B.red:d<=7?B.yellow:B.muted,letterSpacing:.3}}>{d<0?`${Math.abs(d)}d OVER`:`${d}d LEFT`}</div>}
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:7}}>
@@ -4979,7 +4984,7 @@ function ModAgent() {
     const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
     const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
     const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage));
+    const activeRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
     const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
     const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
     const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
@@ -5205,7 +5210,7 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
   const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
   const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)).slice(0,3);
+  const openRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
