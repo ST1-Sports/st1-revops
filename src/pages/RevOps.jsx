@@ -327,15 +327,27 @@ export default function App() {
         if(mapped.length) dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
       } catch{}
     };
+    const fetchAllPages=async(baseEndpoint)=>{
+      let all=[],page=1;
+      while(true){
+        const sep=baseEndpoint.includes("?")?"&":"?";
+        const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+        const batch=res.data||[];
+        all=[...all,...batch];
+        if(!res.info?.more_records||batch.length<200) break;
+        page++;
+      }
+      return all;
+    };
     const syncContacts=async()=>{
       if(s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
       try {
-        const [cr,lr]=await Promise.all([
-          fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json()),
-          fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time&per_page=200",method:"GET"})}).then(r=>r.json()),
+        const [contactRows,leadRows]=await Promise.all([
+          fetchAllPages("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source"),
+          fetchAllPages("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time"),
         ]);
         const now=Date.now();
-        const contacts=(cr.data||[]).map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+        const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
         const existing=new Set((s.contacts||[]).map(c=>c.id));
         const toAdd=contacts.filter(c=>!existing.has(c.id));
         if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
@@ -2421,15 +2433,33 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
+  // Fetch all pages from a Zoho CRM endpoint (handles 200/page limit)
+  const zohoFetchAll = async (baseEndpoint, onProgress) => {
+    let all = []; let page = 1;
+    while(true) {
+      const sep = baseEndpoint.includes("?")?"&":"?";
+      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+      const batch = res.data||[];
+      all = [...all,...batch];
+      if(onProgress) onProgress(all.length);
+      if(!res.info?.more_records || batch.length<200) break;
+      page++;
+    }
+    return all;
+  };
+
   const pullFromZoho = async () => {
     setZohoPulling(true); setZohoPullResult(null);
-    toast("Pulling from Zoho CRM...","info");
+    toast("Pulling from Zoho CRM — fetching all records...","info");
     try {
-      const [contactsRes, leadsRes] = await Promise.all([
-        fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source,Last_Activity_Time,Modified_Time&per_page=200",method:"GET"})}).then(r=>r.json()),
-        fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Modified_Time,Created_Time,Description,Converted&per_page=200",method:"GET"})}).then(r=>r.json()),
+      // Fetch contacts and leads with full pagination
+      setZohoPullResult({contacts:0,leads:0,added:0,updated:0,loading:true});
+      const [contactRows, leadRows] = await Promise.all([
+        zohoFetchAll("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source,Last_Activity_Time,Modified_Time",
+          n=>setZohoPullResult(r=>({...r,contacts:n}))),
+        zohoFetchAll("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Modified_Time,Created_Time,Description,Converted",
+          n=>setZohoPullResult(r=>({...r,leads:n}))),
       ]);
       const now = Date.now();
       const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
@@ -2454,7 +2484,8 @@ function ModProspecting() {
         const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
         return {score:Math.min(200,score),activity:acts,priority};
       };
-      const contacts = (contactsRes.data||[]).map(c=>({
+      toast(`Found ${contactRows.length} contacts + ${leadRows.length} leads — importing...`,"info");
+      const contacts = contactRows.map(c=>({
         id:"zoho_c_"+c.id,
         firstName:zs(c.First_Name), lastName:zs(c.Last_Name),
         fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),
@@ -2465,7 +2496,7 @@ function ModProspecting() {
         zohoSource:zs(c.Lead_Source),
         confidence:"high", outreachStatus:"new", importedAt:now,
       }));
-      const leads = (leadsRes.data||[]).map(l=>{
+      const leads = leadRows.map(l=>{
         const {score,activity,priority}=scoreLeadFromZoho(l);
         return {
           id:"zoho_l_"+l.id,
@@ -2503,12 +2534,12 @@ function ModProspecting() {
     setRescoring(true);
     toast("Rescoring leads from Zoho activity...","info");
     try {
-      const leadsRes=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json());
+      const leadRows=await zohoFetchAll("/Leads?fields=First_Name,Last_Name,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Lead_Source");
+      toast(`Rescoring ${leadRows.length} leads...`,"info");
       const now=Date.now();
       const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
       let updated=0;
-      (leadsRes.data||[]).forEach(l=>{
+      leadRows.forEach(l=>{
         const id="zoho_l_"+l.id;
         const existing=(s.contacts||[]).find(c=>c.id===id);
         if(!existing) return;
@@ -2715,8 +2746,11 @@ function ModProspecting() {
                 Pulls Contacts and Leads from Zoho CRM. Leads are auto-scored from their Zoho activity: call count, chat count, lead status, last activity date, and lead source.
               </div>
               {zohoPullResult&&(
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>
-                  ✓ {zohoPullResult.contacts} contacts · {zohoPullResult.leads} leads · {zohoPullResult.added} new added{zohoPullResult.updated?` · ${zohoPullResult.updated} updated`:""}
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:zohoPullResult.loading?B.orange:B.green,marginBottom:8}}>
+                  {zohoPullResult.loading
+                    ? `⟳ Fetching… ${zohoPullResult.contacts||0} contacts · ${zohoPullResult.leads||0} leads so far`
+                    : `✓ ${zohoPullResult.contacts} contacts · ${zohoPullResult.leads} leads · ${zohoPullResult.added} new · ${zohoPullResult.updated||0} updated`
+                  }
                 </div>
               )}
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
