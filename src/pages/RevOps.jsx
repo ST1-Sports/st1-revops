@@ -296,7 +296,7 @@ export default function App() {
     {id:"briefing",    icon:"◈", label:"Briefing",       badge:urgentCount(s)},
     {id:"revenue",     icon:"↑", label:"Revenue"},
     {id:"deals",       icon:"◫", label:"Deals"},
-    {id:"quotes",      icon:"▤", label:"Quotes"},
+    {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
     {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
     {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:s.invoices.filter(i=>i.status==="overdue").length},
     {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
@@ -432,7 +432,6 @@ export default function App() {
             {mod==="briefing"    && <ModBriefing/>}
             {mod==="revenue"     && <ModRevenue/>}
             {mod==="deals"       && <ModDeals/>}
-            {mod==="quotes"      && <ModQuotes/>}
             {mod==="orders"      && <ModOrders/>}
             {mod==="rfp"         && <ModRFP/>}
             {mod==="invoicing"   && <ModInvoicing/>}
@@ -3818,7 +3817,7 @@ function ModAds() {
     setSyncing(true);
     try {
       const data = await adFetch("/products", { method:"POST" });
-      toast(data.error ? data.error : `Synced ${data.synced} products`), data.error ? "error" : "success";
+      toast(data.error ? data.error : `Synced ${data.synced} products`, data.error ? "error" : "success");
       if (!data.error) loadProducts();
     } catch { toast("Sync failed","error"); }
     setSyncing(false);
