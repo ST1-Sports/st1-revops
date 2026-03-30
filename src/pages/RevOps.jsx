@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext, Component } from "react";
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component } from "react";
 import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
