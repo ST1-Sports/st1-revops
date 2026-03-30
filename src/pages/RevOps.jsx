@@ -2404,6 +2404,90 @@ function ModAds() {
   const [prodLoading, setProdLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
+  // Ad Creator
+  const previewTimerRef = useRef(null);
+  const [adTpl, setAdTpl] = useState("bold");
+  const [adSz, setAdSz] = useState("square");
+  const [adHeadline, setAdHeadline] = useState("TRAIN HARDER. WIN MORE.");
+  const [adSub, setAdSub] = useState("");
+  const [adCta, setAdCta] = useState("SHOP NOW");
+  const [adBadge, setAdBadge] = useState("");
+  const [adBg, setAdBg] = useState("#0A0A0A");
+  const [adTc, setAdTc] = useState("#FFFFFF");
+  const [adAc, setAdAc] = useState("#F37321");
+  const [adLogo, setAdLogo] = useState(true);
+  const [adImg, setAdImg] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("/api/adengine/render-ad?tpl=bold&sz=square&headline=TRAIN+HARDER.+WIN+MORE.&cta=SHOP+NOW&bg=%230A0A0A&tc=%23FFFFFF&ac=%23F37321");
+  const [ideoPrompt, setIdeoPrompt] = useState("");
+  const [ideoStyle, setIdeoStyle] = useState("REALISTIC");
+  const [ideoRunning, setIdeoRunning] = useState(false);
+  const [ideoResult, setIdeoResult] = useState(null);
+  const [downloadRunning, setDownloadRunning] = useState(false);
+  const [creatorCopyIdx, setCreatorCopyIdx] = useState(0);
+
+  useEffect(() => {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
+    previewTimerRef.current = setTimeout(() => {
+      const p = new URLSearchParams();
+      p.set("tpl", adTpl);
+      p.set("sz", adSz);
+      p.set("headline", adHeadline || "YOUR HEADLINE");
+      if (adSub) p.set("sub", adSub);
+      if (adCta) p.set("cta", adCta);
+      if (adBadge) p.set("badge", adBadge);
+      p.set("bg", adBg);
+      p.set("tc", adTc);
+      p.set("ac", adAc);
+      p.set("logo", adLogo ? "true" : "false");
+      if (adImg) p.set("img", adImg);
+      setPreviewUrl(`/api/adengine/render-ad?${p.toString()}`);
+    }, 600);
+    return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current); };
+  }, [adTpl, adSz, adHeadline, adSub, adCta, adBadge, adBg, adTc, adAc, adLogo, adImg]);
+
+  const generateIdeogramImage = async () => {
+    if (!ideoPrompt.trim()) { toast("Enter a product description first", "error"); return; }
+    setIdeoRunning(true);
+    setIdeoResult(null);
+    try {
+      const data = await adFetch("/generate-product-image", {
+        method: "POST",
+        body: { prompt: ideoPrompt, style: ideoStyle, sizeKey: adSz, campaignId: selCamp?.id },
+      });
+      if (data.imageUrl) {
+        setIdeoResult({ imageUrl: data.imageUrl, assetId: data.asset?.id });
+        toast("Image generated!", "success");
+      } else { toast(data.error || "Image gen failed", "error"); }
+    } catch { toast("Image gen failed", "error"); }
+    setIdeoRunning(false);
+  };
+
+  const downloadAd = async () => {
+    if (!previewUrl) return;
+    setDownloadRunning(true);
+    try {
+      const res = await fetch(previewUrl);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `st1-ad-${adTpl}-${adSz}-${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast("Download failed", "error"); }
+    setDownloadRunning(false);
+  };
+
+  const loadCopyIntoCreator = (copy) => {
+    if (!copy) return;
+    if (copy.headline) setAdHeadline(copy.headline.toUpperCase());
+    if (copy.subheadline) setAdSub(copy.subheadline);
+    if (copy.cta) setAdCta(copy.cta.toUpperCase());
+    if (copy.badge) setAdBadge(copy.badge.toUpperCase());
+    setTab("creator");
+    toast("Copy loaded into Ad Creator", "success");
+  };
+
   const loadCampaigns = async () => {
     setCampLoading(true);
     try {
@@ -2486,12 +2570,12 @@ function ModAds() {
     setGenImgRunning(true);
     setLastImg(null);
     try {
-      const data = await adFetch("/generate-images", {
+      const data = await adFetch("/generate-product-image", {
         method:"POST",
-        body:{ campaignId:selCamp.id, productName:imgProdName||undefined, imageStyle:imgStyle, sceneStyle:imgScene },
+        body:{ campaignId:selCamp.id, prompt:imgProdName||`${selCamp.name} product photo`, style:imgStyle, sizeKey:imgScene||"square" },
       });
-      if (data.asset) {
-        setLastImg({ url: data.imageUrl, assetId: data.asset.id });
+      if (data.imageUrl) {
+        setLastImg({ url: data.imageUrl, assetId: data.asset?.id });
         toast("Image generated","success");
         loadCampaignDetail(selCamp.id);
       } else {
@@ -2526,7 +2610,7 @@ function ModAds() {
     <div style={{padding:"22px 26px"}}>
       <PH title="AD ENGINE" sub="Product campaigns, AI image generation, Meta ad copy, and asset management"/>
       <div style={{display:"flex",gap:7,marginBottom:18}}>
-        {[["campaigns","Campaigns"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
+        {[["campaigns","Campaigns"],["creator","Ad Creator"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
         ))}
       </div>
@@ -2670,33 +2754,35 @@ function ModAds() {
                   </OBtn>
                 </div>
 
-                {/* Generate image */}
+                {/* Generate image — Ideogram */}
                 <div className="card" style={{padding:14,marginBottom:14}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE IMAGE (gpt-image-1)</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE PRODUCT IMAGE (Ideogram AI)</div>
+                  <div style={{marginBottom:8}}>
+                    <Lbl s={{marginBottom:3}}>Describe the product / scene</Lbl>
+                    <textarea value={imgProdName} onChange={e=>setImgProdName(e.target.value)} rows={2} placeholder="e.g. Aluminum hurdle with bright orange uprights on a professional track, cinematic lighting" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
                     <div>
-                      <Lbl s={{marginBottom:3}}>Product Name</Lbl>
-                      <input value={imgProdName} onChange={e=>setImgProdName(e.target.value)} placeholder="e.g. Blazer Hurdle H-28" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-                    </div>
-                    <div>
-                      <Lbl s={{marginBottom:3}}>Image Style</Lbl>
+                      <Lbl s={{marginBottom:3}}>Style</Lbl>
                       <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-                        {AD_IMG_STYLES.map(s=><option key={s} value={s}>{s.replace("_"," ")}</option>)}
+                        {["REALISTIC","DESIGN","GENERAL","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
                       </select>
                     </div>
                     <div>
-                      <Lbl s={{marginBottom:3}}>Scene</Lbl>
+                      <Lbl s={{marginBottom:3}}>Size</Lbl>
                       <select value={imgScene} onChange={e=>setImgScene(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-                        {AD_SCENE_STYLES.map(s=><option key={s}>{s}</option>)}
+                        <option value="square">Square 1:1</option>
+                        <option value="landscape">Landscape 16:9</option>
+                        <option value="story">Story 9:16</option>
                       </select>
                     </div>
                   </div>
                   <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
                     <OBtn onClick={generateImage} disabled={genImgRunning}>
-                      {genImgRunning?"✦ GENERATING IMAGE...":"✦ GENERATE IMAGE"}
+                      {genImgRunning?"✦ GENERATING...":"✦ GENERATE IMAGE"}
                     </OBtn>
                     {lastImg&&(
-                      <a href={lastImg.url} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,alignSelf:"center"}}>View last image ↗</a>
+                      <button onClick={()=>{setAdImg(lastImg.url);setTab("creator");toast("Image loaded into Ad Creator","success");}} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>USE IN AD CREATOR →</button>
                     )}
                   </div>
                   {lastImg&&(
@@ -2716,7 +2802,10 @@ function ModAds() {
                           <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5}}>
                             {c.product?.name||`Copy #${i+1}`}
                           </span>
-                          {c.badge&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"1px 5px",borderRadius:2}}>{c.badge}</span>}
+                          <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                            {c.badge&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"1px 5px",borderRadius:2}}>{c.badge}</span>}
+                            <button onClick={()=>loadCopyIntoCreator(c)} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>→ AD CREATOR</button>
+                          </div>
                         </div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{c.headline}</div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{c.subheadline} {c.cta&&`· CTA: ${c.cta}`}</div>
@@ -2780,6 +2869,184 @@ function ModAds() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── AD CREATOR ─────────────────────────────────────────────────────────── */}
+      {tab==="creator"&&(
+        <div style={{display:"grid",gridTemplateColumns:"340px 1fr",gap:20,alignItems:"start"}}>
+
+          {/* Left: controls */}
+          <div style={{display:"flex",flexDirection:"column",gap:12}}>
+
+            {/* Template picker */}
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>TEMPLATE</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+                {[["bold","Bold — Dark + Headline"],["clean","Clean — Centered"],["split","Split — Copy | Image"],["overlay","Overlay — Full Bleed"]].map(([id,label])=>(
+                  <button key={id} onClick={()=>setAdTpl(id)} style={{background:adTpl===id?B.orange:B.surface,color:adTpl===id?B.white:B.text,border:`1px solid ${adTpl===id?B.orange:B.border}`,borderRadius:5,padding:"8px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:adTpl===id?700:400,cursor:"pointer",textAlign:"left"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:.5,marginBottom:2}}>{id.toUpperCase()}</div>
+                    <div style={{fontSize:9,opacity:.7}}>{label.split("—")[1].trim()}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Size picker */}
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>SIZE</div>
+              <div style={{display:"flex",gap:6}}>
+                {[["square","1:1","1080×1080"],["landscape","16:9","1200×628"],["story","9:16","1080×1920"]].map(([id,ratio,dims])=>(
+                  <button key={id} onClick={()=>setAdSz(id)} style={{flex:1,background:adSz===id?B.orange:B.surface,color:adSz===id?B.white:B.text,border:`1px solid ${adSz===id?B.orange:B.border}`,borderRadius:5,padding:"8px 6px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",textAlign:"center"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,letterSpacing:.5,marginBottom:1}}>{ratio}</div>
+                    <div style={{fontSize:8,opacity:.65}}>{dims}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Text fields */}
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>AD TEXT</div>
+              {selCamp&&(selCamp.copies||[]).length>0&&(
+                <div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
+                  <select value={creatorCopyIdx} onChange={e=>setCreatorCopyIdx(Number(e.target.value))} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:10}}>
+                    {(selCamp.copies||[]).map((c,i)=><option key={c.id} value={i}>{c.product?.name||`Copy #${i+1}`} — {c.headline?.slice(0,30)}</option>)}
+                  </select>
+                  <button onClick={()=>loadCopyIntoCreator(selCamp.copies[creatorCopyIdx])} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"5px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>LOAD</button>
+                </div>
+              )}
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <div>
+                  <Lbl s={{marginBottom:3}}>Headline</Lbl>
+                  <input value={adHeadline} onChange={e=>setAdHeadline(e.target.value)} placeholder="TRAIN HARDER. WIN MORE." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:3}}>Subheadline</Lbl>
+                  <input value={adSub} onChange={e=>setAdSub(e.target.value)} placeholder="Supporting copy (optional)" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <div>
+                    <Lbl s={{marginBottom:3}}>CTA Button</Lbl>
+                    <input value={adCta} onChange={e=>setAdCta(e.target.value)} placeholder="SHOP NOW" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:3}}>Badge</Lbl>
+                    <input value={adBadge} onChange={e=>setAdBadge(e.target.value)} placeholder="NEW · SALE · FREE SHIP" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Colors + logo */}
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>COLORS</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {[["Background","adBg",adBg,setAdBg],["Text Color","adTc",adTc,setAdTc],["Accent Color","adAc",adAc,setAdAc]].map(([label,,val,setter])=>(
+                  <div key={label} style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,width:90,flexShrink:0}}>{label}</div>
+                    <input type="color" value={val} onChange={e=>setter(e.target.value)} style={{width:32,height:28,border:`1px solid ${B.border}`,borderRadius:4,cursor:"pointer",padding:2,background:B.surface}}/>
+                    <input value={val} onChange={e=>setter(e.target.value)} maxLength={7} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace"}}/>
+                    <div style={{width:22,height:22,borderRadius:4,background:val,border:`1px solid ${B.border}`,flexShrink:0}}/>
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
+                <input type="checkbox" id="adlogo" checked={adLogo} onChange={e=>setAdLogo(e.target.checked)} style={{width:14,height:14,cursor:"pointer"}}/>
+                <label htmlFor="adlogo" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,cursor:"pointer"}}>Show ST1 SPORTS logo</label>
+              </div>
+              <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,width:"100%",marginBottom:2}}>PRESETS</div>
+                {[["Dark",["#0A0A0A","#FFFFFF","#F37321"]],["Light",["#FFFFFF","#0A0A0A","#F37321"]],["Navy",["#0B1A3E","#FFFFFF","#F37321"]],["Forest",["#1A3A2A","#FFFFFF","#4CAF50"]]].map(([name,[bg,tc,ac]])=>(
+                  <button key={name} onClick={()=>{setAdBg(bg);setAdTc(tc);setAdAc(ac);}} style={{background:bg,color:tc,border:`2px solid ${ac}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{name}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Image source */}
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>PRODUCT IMAGE (Ideogram AI)</div>
+              <textarea value={ideoPrompt} onChange={e=>setIdeoPrompt(e.target.value)} rows={3} placeholder="Describe what the image should show… e.g. 'Aluminum track hurdle on an Olympic running track, cinematic lighting, product photo'" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:8}}/>
+              <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                <select value={ideoStyle} onChange={e=>setIdeoStyle(e.target.value)} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                  {["REALISTIC","DESIGN","GENERAL","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
+                </select>
+                <OBtn onClick={generateIdeogramImage} disabled={ideoRunning} style={{flexShrink:0}}>
+                  {ideoRunning?"GENERATING...":"✦ GENERATE"}
+                </OBtn>
+              </div>
+              {ideoResult&&(
+                <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                  <img src={ideoResult.imageUrl} alt="Generated" style={{width:80,height:80,objectFit:"cover",borderRadius:6,border:`1px solid ${B.border}`,flexShrink:0}}/>
+                  <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                    <button onClick={()=>setAdImg(ideoResult.imageUrl)} style={{background:adImg===ideoResult.imageUrl?B.orange:B.orangeBg,color:adImg===ideoResult.imageUrl?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
+                      {adImg===ideoResult.imageUrl?"✓ IN USE":"USE IN AD"}
+                    </button>
+                    <button onClick={()=>setAdImg("")} style={{background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textAlign:"left"}}>Clear image</button>
+                  </div>
+                </div>
+              )}
+              <div style={{marginTop:10}}>
+                <Lbl s={{marginBottom:3}}>Or paste any image URL</Lbl>
+                <input value={adImg} onChange={e=>setAdImg(e.target.value)} placeholder="https://…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:10,fontFamily:"monospace"}}/>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Right: live preview */}
+          <div style={{position:"sticky",top:20}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>LIVE PREVIEW</div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <a href={previewUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"none"}}>Open full size ↗</a>
+                <OBtn onClick={downloadAd} disabled={downloadRunning} style={{padding:"6px 14px"}}>
+                  {downloadRunning?"DOWNLOADING...":"⬇ DOWNLOAD PNG"}
+                </OBtn>
+              </div>
+            </div>
+
+            <div style={{background:"#111",borderRadius:10,padding:12,display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
+              {previewUrl?(
+                <img
+                  key={previewUrl}
+                  src={previewUrl}
+                  alt="Ad preview"
+                  style={{
+                    maxWidth:"100%",
+                    maxHeight: adSz==="story" ? 600 : adSz==="landscape" ? 340 : 460,
+                    borderRadius:6,
+                    objectFit:"contain",
+                    display:"block",
+                  }}
+                />
+              ):(
+                <div style={{color:"#555",fontFamily:"'Lexend',sans-serif",fontSize:11}}>Preview loading…</div>
+              )}
+            </div>
+
+            <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center"}}>
+              Preview updates automatically · {adTpl.toUpperCase()} template · {adSz === "square" ? "1080×1080" : adSz === "landscape" ? "1200×628" : "1080×1920"}
+            </div>
+
+            {/* Quick text presets */}
+            <div className="card" style={{padding:12,marginTop:12}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>QUICK COPY PRESETS</div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {[
+                  ["Track & Field","BUILT FOR CHAMPIONS","Competition-grade equipment for serious athletes","SHOP NOW","NEW"],
+                  ["School Sports","EQUIP YOUR TEAM","ST1 Sports — trusted by coaches nationwide","GET A QUOTE",""],
+                  ["Hurdles","CLEAR EVERY BAR","Professional hurdles. Championship results.","SHOP HURDLES",""],
+                  ["Sale","LIMITED TIME OFFER","Save big on top-rated athletic equipment","SAVE NOW","SALE"],
+                ].map(([name,h,s,c,b])=>(
+                  <button key={name} onClick={()=>{setAdHeadline(h);setAdSub(s);setAdCta(c);setAdBadge(b);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",textAlign:"left",color:B.text}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>{name}</span> — {h}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
         </div>
       )}
 
