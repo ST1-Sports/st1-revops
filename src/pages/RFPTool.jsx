@@ -50,10 +50,9 @@ const toArrayBuffer = file => new Promise((res,rej)=>{
 // Extract plain text from a PDF using pdfjs-dist (browser build)
 async function extractPdfText(arrayBuffer) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-    "pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url
-  ).href;
-  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  // Disable web worker — run in main thread to avoid ArrayBuffer transfer/detach issues
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "";
+  const pdf = await pdfjsLib.getDocument({data: new Uint8Array(arrayBuffer)}).promise;
   const parts = [];
   for(let i=1; i<=pdf.numPages; i++) {
     const page = await pdf.getPage(i);
