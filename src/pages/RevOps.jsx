@@ -4993,6 +4993,28 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
       if(d.sent){
         toast(`Email sent to ${action.to_name||action.to_email}`,"success");
         dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
+
+        // AUTO: score the contact for email sent
+        const contact=(s.contacts||[]).find(c=>c.email===action.to_email);
+        if(contact){
+          dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
+        }
+
+        // AUTO: set a 3-day follow-up on any matching deal if none set
+        const nameParts=(action.to_name||"").toLowerCase().split(" ");
+        const matchDeal=(s.deals||[]).find(d=>{
+          const dn=(d.name||"").toLowerCase();
+          return nameParts.some(p=>p.length>2&&dn.includes(p))||
+                 (contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));
+        });
+        if(matchDeal&&!matchDeal.followUpDate){
+          const follow3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
+          dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:follow3});
+          toast(`Follow-up auto-set for ${follow3}`,"info");
+        }
+
+        // AUTO: ask agent what's next — triggers auto-log + schedule_followup
+        setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
       } else {
         toast(d.error||"Send failed","error");
       }
@@ -5026,6 +5048,26 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
       setHistory(h=>[...h,assistantEntry]);
       if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Check AI Agent"});
       dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
+
+      // AUTO-EXECUTE safe actions silently (no button click needed)
+      actions.forEach(a=>{
+        if(a.type==="schedule_followup"){
+          const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(deal){
+            dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:a.date,...(a.note?{notes:(deal.notes?deal.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});
+            toast(`📅 Auto: follow-up set ${a.date} — ${deal.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}
+          }
+        }
+        if(a.type==="log_note"){
+          const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(deal){
+            dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+`${today()}: ${a.note}`});
+            toast(`📝 Auto: note logged — ${deal.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:a.note})});}catch{}
+          }
+        }
+      });
     } catch(e){
       setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
     }
