@@ -72,6 +72,7 @@ const SEED = {
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
+  brandAssets: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -102,6 +103,7 @@ function useStore() {
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
           company:      {...SEED.company,...(p.company||{})},
+          brandAssets:  Array.isArray(p.brandAssets)  ? p.brandAssets  : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -260,9 +262,11 @@ function reducer(prev, action, payload) {
     case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
-    case "SAVE_INTEGRATIONS": return {...prev, integrations:{...prev.integrations,...payload}};
-    case "SAVE_COMPANY":      return {...prev, company:{...prev.company,...payload}};
-    case "RESET":             return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company};
+    case "SAVE_INTEGRATIONS":   return {...prev, integrations:{...prev.integrations,...payload}};
+    case "SAVE_COMPANY":        return {...prev, company:{...prev.company,...payload}};
+    case "ADD_BRAND_ASSET":     return {...prev, brandAssets:[...( prev.brandAssets||[]),payload]};
+    case "DELETE_BRAND_ASSET":  return {...prev, brandAssets:(prev.brandAssets||[]).filter(a=>a.id!==payload)};
+    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[]};
     default:                  return prev;
   }
 }
@@ -4157,10 +4161,10 @@ function adFetch(path, opts={}) {
 // ── CLIENT-SIDE AD PREVIEW TEMPLATES ─────────────────────────────────────────
 const AD_PV_SIZES = { square:{w:1080,h:1080}, landscape:{w:1200,h:628}, story:{w:1080,h:1920} };
 
-function AdPreview({ tpl, sz, headline, sub, cta, badge, img, bg, tc, ac, logo, maxH=460 }) {
+function AdPreview({ tpl, sz, headline, sub, cta, badge, img, bg, tc, ac, logo, logoUrl, maxH=460 }) {
   const {w,h} = AD_PV_SIZES[sz]||AD_PV_SIZES.square;
   const scale = Math.min(maxH/h, 520/w, 1);
-  const props = {headline,sub,cta,badge,img,bg,tc,ac,w,h,logo};
+  const props = {headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl};
   const inner = tpl==="clean"?<_AdClean {...props}/>:tpl==="split"?<_AdSplit {...props}/>:tpl==="overlay"?<_AdOverlay {...props}/>:<_AdBold {...props}/>;
   return (
     <div style={{width:Math.round(w*scale),height:Math.round(h*scale),overflow:"hidden",borderRadius:6,flexShrink:0,position:"relative"}}>
@@ -4170,14 +4174,14 @@ function AdPreview({ tpl, sz, headline, sub, cta, badge, img, bg, tc, ac, logo, 
     </div>
   );
 }
-function _AdLogo({ac,logo}){return logo?<div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:26,background:ac,borderRadius:2}}/><div style={{fontSize:17,fontWeight:900,color:ac,letterSpacing:3,fontFamily:"system-ui"}}>ST1 SPORTS</div></div>:null;}
-function _AdBold({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo}){const p=Math.round(h*.055);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:Math.round(h*.042)}}><_AdLogo ac={ac} logo={logo}/>{badge&&<div style={{background:ac,color:"#fff",padding:"7px 18px",borderRadius:4,fontSize:16,fontWeight:800,letterSpacing:1}}>{badge.toUpperCase()}</div>}</div><div style={{display:"flex",flex:1,alignItems:"center",gap:Math.round(w*.05)}}><div style={{display:"flex",flexDirection:"column",flex:img?1.1:1,gap:20}}><div style={{fontSize:Math.round(h*.076),fontWeight:900,color:tc,lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.028),color:tc+"BB",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.042)}px`,borderRadius:7,fontSize:Math.round(h*.028),fontWeight:800,marginTop:10}}>{cta}</div>}</div>{img&&<div style={{flex:.9,display:"flex",justifyContent:"center",alignItems:"center"}}><img src={img} style={{width:Math.round(w*.38),height:Math.round(h*.57),objectFit:"contain",borderRadius:16}}/></div>}</div></div>);}
-function _AdClean({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo}){const p=Math.round(h*.06);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box",alignItems:"center",justifyContent:"center"}}>{logo&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:Math.round(h*.035)}}><div style={{width:5,height:24,background:ac,borderRadius:2}}/><div style={{fontSize:16,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>}{img&&<img src={img} style={{width:Math.round(w*.52),height:Math.round(h*.44),objectFit:"contain",borderRadius:14,marginBottom:Math.round(h*.038)}}/>}{badge&&<div style={{background:ac,color:"#fff",padding:"6px 16px",borderRadius:4,fontSize:14,fontWeight:800,marginBottom:16}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.066),fontWeight:900,color:tc,lineHeight:1.08,letterSpacing:-.5,textAlign:"center",marginBottom:16}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.025),color:tc+"99",lineHeight:1.55,textAlign:"center",maxWidth:Math.round(w*.76),marginBottom:22}}>{sub}</div>}{cta&&<div style={{background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.052)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:Math.round(h*.045)}}>ST1SPORTS.COM</div></div>);}
-function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo}){const p=Math.round(h*.06);return(<div style={{display:"flex",background:bg,width:"100%",height:"100%",fontFamily:"system-ui"}}><div style={{display:"flex",flexDirection:"column",flex:1,padding:p,justifyContent:"center",gap:18}}>{logo&&<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>}{badge&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:"6px 14px",borderRadius:4,fontSize:13,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.074),fontWeight:900,color:tc,lineHeight:1.06,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.026),color:tc+"AA",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.04)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800,marginTop:8}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:"auto"}}>ST1SPORTS.COM</div></div><div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",background:`${ac}0F`,borderLeft:`4px solid ${ac}`}}>{img?<img src={img} style={{width:Math.round(w*.41),height:Math.round(h*.66),objectFit:"contain",borderRadius:10}}/>:<div style={{fontSize:18,color:tc+"33",fontWeight:700,letterSpacing:2}}>PRODUCT IMAGE</div>}</div></div>);}
-function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
+function _AdLogo({ac,logo,logoUrl}){if(!logo)return null;if(logoUrl)return <img src={logoUrl} style={{maxHeight:36,maxWidth:140,objectFit:"contain"}} alt="Logo"/>;return <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:26,background:ac,borderRadius:2}}/><div style={{fontSize:17,fontWeight:900,color:ac,letterSpacing:3,fontFamily:"system-ui"}}>ST1 SPORTS</div></div>;}
+function _AdBold({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.055);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:Math.round(h*.042)}}><_AdLogo ac={ac} logo={logo} logoUrl={logoUrl}/>{badge&&<div style={{background:ac,color:"#fff",padding:"7px 18px",borderRadius:4,fontSize:16,fontWeight:800,letterSpacing:1}}>{badge.toUpperCase()}</div>}</div><div style={{display:"flex",flex:1,alignItems:"center",gap:Math.round(w*.05)}}><div style={{display:"flex",flexDirection:"column",flex:img?1.1:1,gap:20}}><div style={{fontSize:Math.round(h*.076),fontWeight:900,color:tc,lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.028),color:tc+"BB",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.042)}px`,borderRadius:7,fontSize:Math.round(h*.028),fontWeight:800,marginTop:10}}>{cta}</div>}</div>{img&&<div style={{flex:.9,display:"flex",justifyContent:"center",alignItems:"center"}}><img src={img} style={{width:Math.round(w*.38),height:Math.round(h*.57),objectFit:"contain",borderRadius:16}}/></div>}</div></div>);}
+function _AdClean({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box",alignItems:"center",justifyContent:"center"}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:40,maxWidth:160,objectFit:"contain",marginBottom:Math.round(h*.035)}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:Math.round(h*.035)}}><div style={{width:5,height:24,background:ac,borderRadius:2}}/><div style={{fontSize:16,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{img&&<img src={img} style={{width:Math.round(w*.52),height:Math.round(h*.44),objectFit:"contain",borderRadius:14,marginBottom:Math.round(h*.038)}}/>}{badge&&<div style={{background:ac,color:"#fff",padding:"6px 16px",borderRadius:4,fontSize:14,fontWeight:800,marginBottom:16}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.066),fontWeight:900,color:tc,lineHeight:1.08,letterSpacing:-.5,textAlign:"center",marginBottom:16}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.025),color:tc+"99",lineHeight:1.55,textAlign:"center",maxWidth:Math.round(w*.76),marginBottom:22}}>{sub}</div>}{cta&&<div style={{background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.052)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:Math.round(h*.045)}}>ST1SPORTS.COM</div></div>);}
+function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",background:bg,width:"100%",height:"100%",fontFamily:"system-ui"}}><div style={{display:"flex",flexDirection:"column",flex:1,padding:p,justifyContent:"center",gap:18}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:34,maxWidth:130,objectFit:"contain",marginBottom:6}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:"6px 14px",borderRadius:4,fontSize:13,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.074),fontWeight:900,color:tc,lineHeight:1.06,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.026),color:tc+"AA",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.04)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800,marginTop:8}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:"auto"}}>ST1SPORTS.COM</div></div><div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",background:`${ac}0F`,borderLeft:`4px solid ${ac}`}}>{img?<img src={img} style={{width:Math.round(w*.41),height:Math.round(h*.66),objectFit:"contain",borderRadius:10}}/>:<div style={{fontSize:18,color:tc+"33",fontWeight:700,letterSpacing:2}}>PRODUCT IMAGE</div>}</div></div>);}
+function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&(logoUrl?<img src={logoUrl} style={{position:"absolute",top:py,left:px,maxHeight:32,maxWidth:120,objectFit:"contain"}} alt="Logo"/>:<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
 
 function ModAds() {
-  const {toast} = useApp();
+  const {s, dispatch, toast} = useApp();
   const [tab, setTab] = useState("campaigns");
 
   // Campaign list
@@ -4237,6 +4241,8 @@ function ModAds() {
   const [ideoResult, setIdeoResult] = useState(null);
   const [downloadRunning, setDownloadRunning] = useState(false);
   const [creatorCopyIdx, setCreatorCopyIdx] = useState(0);
+  const [adLogoUrl, setAdLogoUrl] = useState(""); // uploaded brand logo for live preview
+  const brandAssetRef = useRef();
 
   useEffect(() => {
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
@@ -4840,7 +4846,7 @@ function ModAds() {
               </div>
               <div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
                 <input type="checkbox" id="adlogo" checked={adLogo} onChange={e=>setAdLogo(e.target.checked)} style={{width:14,height:14,cursor:"pointer"}}/>
-                <label htmlFor="adlogo" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,cursor:"pointer"}}>Show ST1 SPORTS logo</label>
+                <label htmlFor="adlogo" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,cursor:"pointer"}}>{adLogoUrl?"Show brand logo ✓":"Show brand logo (upload below)"}</label>
               </div>
               <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,width:"100%",marginBottom:2}}>PRESETS</div>
@@ -4848,6 +4854,53 @@ function ModAds() {
                   <button key={name} onClick={()=>{setAdBg(bg);setAdTc(tc);setAdAc(ac);}} style={{background:bg,color:tc,border:`2px solid ${ac}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{name}</button>
                 ))}
               </div>
+            </div>
+
+            {/* Brand Assets */}
+            <div className="card" style={{padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>BRAND ASSETS</div>
+                <button onClick={()=>brandAssetRef.current?.click()} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.5}}>+ UPLOAD</button>
+                <input ref={brandAssetRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={async e=>{
+                  const files=[...e.target.files];
+                  for(const f of files){
+                    const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
+                    const isLogo=/logo/i.test(f.name);
+                    dispatch("ADD_BRAND_ASSET",{id:mkId(),name:f.name,url:dataUrl,type:isLogo?"logo":"asset",createdAt:new Date().toISOString().slice(0,10)});
+                  }
+                  e.target.value="";
+                  toast(`Uploaded ${files.length} asset${files.length>1?"s":""}!`,"success");
+                }}/>
+              </div>
+              {(s.brandAssets||[]).length===0&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>No assets yet — upload logos, product shots, or brand images</div>
+              )}
+              {(s.brandAssets||[]).length>0&&(
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+                  {(s.brandAssets||[]).map(a=>{
+                    const isLogoSel=adLogoUrl===a.url;
+                    const isImgSel=adImg===a.url;
+                    return(
+                      <div key={a.id} style={{position:"relative",borderRadius:6,overflow:"hidden",border:`2px solid ${isLogoSel?B.orange:isImgSel?B.blue:B.border}`,background:B.surface}}>
+                        <img src={a.url} alt={a.name} style={{width:"100%",height:56,objectFit:"contain",display:"block",background:"#111",padding:4}}/>
+                        <div style={{padding:"3px 4px"}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name.replace(/\.[^.]+$/,"")}</div>
+                          <div style={{display:"flex",gap:3,marginTop:3,flexWrap:"wrap"}}>
+                            <button onClick={()=>{setAdLogoUrl(isLogoSel?"":a.url);if(!isLogoSel)setAdLogo(true);}} style={{background:isLogoSel?B.orange:B.orangeBg,color:isLogoSel?B.white:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"2px 4px",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>LOGO</button>
+                            <button onClick={()=>setAdImg(isImgSel?"":a.url)} style={{background:isImgSel?B.blue:B.blueBg,color:isImgSel?B.white:B.blue,border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 4px",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>IMG</button>
+                            <button onClick={()=>{if(adLogoUrl===a.url)setAdLogoUrl("");if(adImg===a.url)setAdImg("");dispatch("DELETE_BRAND_ASSET",a.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:8,cursor:"pointer",padding:"2px 3px",marginLeft:"auto"}}>✕</button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {(s.brandAssets||[]).length>0&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:8}}>
+                  Click <span style={{color:B.orange}}>LOGO</span> to use as brand logo · <span style={{color:B.blue}}>IMG</span> to use as background/product image
+                </div>
+              )}
             </div>
 
             {/* Image source */}
@@ -4897,7 +4950,7 @@ function ModAds() {
             </div>
 
             <div style={{background:"#111",borderRadius:10,padding:12,display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
-              <AdPreview tpl={adTpl} sz={adSz} headline={adHeadline||"YOUR HEADLINE"} sub={adSub} cta={adCta} badge={adBadge} img={adImg} bg={adBg} tc={adTc} ac={adAc} logo={adLogo} maxH={adSz==="story"?560:adSz==="landscape"?320:440}/>
+              <AdPreview tpl={adTpl} sz={adSz} headline={adHeadline||"YOUR HEADLINE"} sub={adSub} cta={adCta} badge={adBadge} img={adImg} bg={adBg} tc={adTc} ac={adAc} logo={adLogo} logoUrl={adLogoUrl} maxH={adSz==="story"?560:adSz==="landscape"?320:440}/>
             </div>
 
             <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center"}}>
