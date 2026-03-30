@@ -3779,6 +3779,7 @@ function ModMarketing() {
   const [previewModal,setPreviewModal] = useState(null); // {contact,touch}
   const [sending, setSending] = useState(false);
   const [checkingReplies, setCheckingReplies] = useState(false);
+  const [checkingOpens, setCheckingOpens] = useState(false);
 
   // ── Actual Gmail send for one enrollment ─────────────────────────────────────
   const sendOneEmail = async (seq, enroll) => {
@@ -3787,15 +3788,22 @@ function ModMarketing() {
     const touch = seq.touches[enroll.step];
     if (!touch) return {ok:false,reason:"no touch"};
     const co = s.company||{};
-    const sig = co.name ? `\n\n—\n${co.ownerName||co.name}\n${co.email||""}\n${co.phone||""}`.trim() : "";
-    const subject = mergeTags(touch.subject,c) || `Following up — ${seq.product}`;
-    const body    = mergeTags(touch.body,c) + sig;
+    const sigParts=[co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
+    const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
+    const subject=mergeTags(touch.subject,c)||`Following up — ${seq.product}`;
+    const plainBody=mergeTags(touch.body,c)+sigText;
+    // Embed tracking pixel in HTML version of the email
+    const eid=`${seq.id}~${enroll.contactId}~${enroll.step}`;
+    const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;
+    const esc=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const htmlLines=plainBody.split("\n").map(l=>l.trim()?`<p style="margin:0 0 10px 0">${esc(l)}</p>`:"<br>").join("");
+    const htmlBody=`<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}<img src="${trackUrl}" width="1" height="1" style="display:none" alt=""></body></html>`;
     try {
-      const r = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body})});
-      const d = await r.json();
-      return d.sent ? {ok:true} : {ok:false,reason:d.error||"send failed"};
-    } catch(err){ return {ok:false,reason:err.message}; }
+      const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body:plainBody,htmlBody})});
+      const d=await r.json();
+      return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
+    }catch(err){return {ok:false,reason:err.message};}
   };
 
   // ── Send all due emails for one campaign ─────────────────────────────────────
@@ -3860,6 +3868,35 @@ function ModMarketing() {
       toast(found>0?`Found ${found} repl${found!==1?"ies":"y"}!`:"No new replies detected",found>0?"success":"info");
     }catch(err){toast("Reply check failed: "+err.message,"error");}
     setCheckingReplies(false);
+  };
+
+  // ── Check Postgres for email opens (tracking pixel fires when email opened) ──
+  const checkOpens = async (seqId) => {
+    const seq=(s.sequences||[]).find(seq=>seq.id===seqId);
+    if(!seq)return;
+    setCheckingOpens(true);
+    try{
+      const r=await fetch(`/api/track/open?list=1&seqId=${encodeURIComponent(seqId)}`);
+      const data=await r.json();
+      // Group by contactId → latest openedAt
+      const openMap={};
+      (data.opens||[]).forEach(o=>{
+        if(!openMap[o.contactId]||o.openedAt>openMap[o.contactId]) openMap[o.contactId]=o.openedAt;
+      });
+      let found=0;
+      const updatedEnrollments=seq.enrollments.map(e=>{
+        const openedAt=openMap[e.contactId];
+        if(openedAt&&!e.openedAt){
+          dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:seqId,note:"Opened email (tracked)"});
+          found++;
+          return {...e,openedAt};
+        }
+        return e;
+      });
+      if(found>0) dispatch("UPDATE_SEQUENCE",{...seq,enrollments:updatedEnrollments});
+      toast(found>0?`${found} contact${found!==1?"s":""}  opened an email!`:"No new opens detected",found>0?"success":"info");
+    }catch(err){toast("Open check failed: "+err.message,"error");}
+    setCheckingOpens(false);
   };
 
   const openTouchEdit=(idx)=>{
@@ -4036,9 +4073,10 @@ function ModMarketing() {
                 const repliedN=enrs.filter(e=>e.status==="replied").length;
                 const doneN=enrs.filter(e=>e.status==="done").length;
                 const activeN=enrs.filter(e=>e.status==="active").length;
+                const openedN=enrs.filter(e=>e.openedAt).length;
                 return(
                   <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
                       <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
                         <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
@@ -4053,9 +4091,13 @@ function ModMarketing() {
                             style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
                             {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
                           </button>
-                          <button onClick={()=>checkReplies(activeSeq.id)} disabled={checkingReplies}
+                          <button onClick={()=>checkReplies(activeSeq.id)} disabled={checkingReplies||checkingOpens}
                             style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingReplies?"CHECKING...":"↻ CHECK REPLIES"}
+                            {checkingReplies?"CHECKING...":"↻ REPLIES"}
+                          </button>
+                          <button onClick={()=>checkOpens(activeSeq.id)} disabled={checkingOpens||checkingReplies}
+                            style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                            {checkingOpens?"CHECKING...":"👁 OPENS"}
                           </button>
                         </>
                       );

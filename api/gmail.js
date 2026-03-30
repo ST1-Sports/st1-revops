@@ -79,7 +79,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, cc, replyToMessageId } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
@@ -152,14 +152,15 @@ export default async function handler(req, res) {
       if (!emailBody) return res.status(400).json({ error: "body required" });
 
       const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
+      const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
       const lines = [
         `To: ${toHeader}`,
         ...(cc ? [`Cc: ${cc}`] : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
-        `Content-Type: text/plain; charset=UTF-8`,
+        `Content-Type: ${contentType}`,
         ``,
-        emailBody,
+        htmlBody || emailBody,
       ];
 
       // If replying to an existing thread, fetch the thread ID + references
