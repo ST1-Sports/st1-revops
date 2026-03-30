@@ -2302,7 +2302,8 @@ function ModProspecting() {
   const [importRows,setImportRows]   = useState([]);
   const [importSel,setImportSel]     = useState(new Set());
   const [enrollingContact,setEnrollingContact] = useState(null);
-  const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"
+  const [flaggingContact,setFlaggingContact] = useState(null);
+  const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -2838,8 +2839,8 @@ function ModProspecting() {
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>YOUR CONTACT DATABASE ({(s.contacts||[]).length})</div>
               <div style={{display:"flex",gap:4}}>
-                {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>setDbFilter(v)} style={{background:dbFilter===v?B.blue:B.white,color:dbFilter===v?B.white:B.muted,border:`1px solid ${dbFilter===v?B.blue:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
+                {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"],["dead","⊘ DEAD"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setDbFilter(v)} style={{background:dbFilter===v?(v==="dead"?B.red:B.blue):B.white,color:dbFilter===v?B.white:v==="dead"?B.red:B.muted,border:`1px solid ${dbFilter===v?(v==="dead"?B.red:B.blue):v==="dead"?`${B.red}40`:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
             </div>
@@ -2899,6 +2900,9 @@ function ModProspecting() {
                 {/* Contact list */}
                 <div style={{display:"flex",flexDirection:"column",gap:5}}>
                   {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).filter(c=>{
+                    const isDead=!!c.deadStatus;
+                    if(dbFilter==="dead") return isDead;
+                    if(isDead) return false;
                     const inv=findCustomerInvoice(c,s.invoices||[]);
                     if(dbFilter==="customers") return !!inv;
                     if(dbFilter==="leads") return !inv;
@@ -2919,6 +2923,7 @@ function ModProspecting() {
                             {c.zohoStatus&&c.zohoStatus!=="new"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:`${B.purple}15`,padding:"2px 5px",borderRadius:3}}>{c.zohoStatus.toUpperCase()}</span>}
                             {c.zohoSource&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 5px",borderRadius:3}}>{c.zohoSource}</span>}
                             {custInvoice&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#1a7f37",background:"#d8f3dc",padding:"2px 5px",borderRadius:3}} title={`Invoice: ${custInvoice.number||custInvoice.id}`}>✓ CUSTOMER</span>}
+                            {c.deadStatus&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,background:B.redBg,padding:"2px 5px",borderRadius:3}}>⊘ {c.deadStatus.replace(/_/g," ").toUpperCase()}</span>}
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
                           <div style={{display:"flex",gap:10,marginTop:2}}>
@@ -2946,6 +2951,30 @@ function ModProspecting() {
                             dispatch("SET_AGENT_DRAFT",draft);
                             setMod("agent");
                           }} style={{marginTop:5,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",display:"block",width:"100%",textAlign:"center"}}>→ AGENT</button>
+                          <div style={{marginTop:5,position:"relative"}}>
+                            {flaggingContact===c.id?(
+                              <div style={{position:"absolute",right:0,top:"100%",zIndex:20,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:160,padding:6}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 6px"}}>FLAG AS</div>
+                                {[["not_interested","Not Interested"],["wrong_contact","Wrong Contact"],["junk","Junk / Spam"]].map(([val,label])=>(
+                                  <button key={val} onClick={()=>{
+                                    dispatch("UPDATE_CONTACT",{id:c.id,deadStatus:val});
+                                    setFlaggingContact(null);
+                                    toast(`${c.fullName||c.firstName||c.lastName} flagged as ${label}`,"info");
+                                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,cursor:"pointer",borderRadius:3}}>{label}</button>
+                                ))}
+                                {c.deadStatus&&(
+                                  <button onClick={()=>{
+                                    dispatch("UPDATE_CONTACT",{id:c.id,deadStatus:null});
+                                    setFlaggingContact(null);
+                                    toast(`${c.fullName||c.firstName||c.lastName} restored`,"success");
+                                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,cursor:"pointer",borderRadius:3}}>↩ Restore</button>
+                                )}
+                                <button onClick={()=>setFlaggingContact(null)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+                              </div>
+                            ):(
+                              <button onClick={()=>setFlaggingContact(c.id)} style={{background:"none",color:c.deadStatus?B.red:B.muted,border:`1px solid ${c.deadStatus?B.red+"40":B.border}`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>⊘ {c.deadStatus?c.deadStatus.replace(/_/g," ").toUpperCase():"FLAG DEAD"}</button>
+                            )}
+                          </div>
                           {campaigns.length>0&&(
                             <div style={{marginTop:6,position:"relative"}}>
                               {enrollingContact===c.id?(
