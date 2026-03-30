@@ -757,7 +757,7 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
                 <div key={c.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
                   <div>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
                   </div>
                   <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:t.color}}>{c.score}</span>
                 </div>
@@ -1444,10 +1444,10 @@ function ModQuotes() {
   const removeLine=(id)=>setLineItems(ls=>ls.filter(l=>l.id!==id));
   const updLine=(id,field,val)=>setLineItems(ls=>ls.map(l=>l.id===id?{...l,[field]:val}:l));
   const fillContact=(c)=>{
-    setCustomer({name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),email:c.email||"",school:c.school||"",phone:c.phone||"",address:""});
+    setCustomer({name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),email:c.email||"",school:(typeof c.school==="string"?c.school:c.school?.name||""),phone:c.phone||"",address:""});
     setContactQ("");
   };
-  const contactMatches=(s.contacts||[]).filter(c=>contactQ&&((c.fullName||c.firstName||"").toLowerCase().includes(contactQ.toLowerCase())||c.school?.toLowerCase().includes(contactQ.toLowerCase()))).slice(0,6);
+  const contactMatches=(s.contacts||[]).filter(c=>contactQ&&((c.fullName||c.firstName||"").toLowerCase().includes(contactQ.toLowerCase())||(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase().includes(contactQ.toLowerCase()))).slice(0,6);
 
   const saveQuote=async(sendEmail=false)=>{
     if(!customer.name&&!customer.school){toast("Customer name required","error");return;}
@@ -1513,7 +1513,7 @@ function ModQuotes() {
                     {contactMatches.map(c=>(
                       <div key={c.id} onClick={()=>fillContact(c)} style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
                         <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
-                        <div style={{color:B.muted,fontSize:10}}>{c.title} — {c.school} · {c.email||"no email"}</div>
+                        <div style={{color:B.muted,fontSize:10}}>{typeof c.title==="string"?c.title:c.title?.name||""} — {typeof c.school==="string"?c.school:c.school?.name||""} · {c.email||"no email"}</div>
                       </div>
                     ))}
                   </div>
@@ -2298,23 +2298,24 @@ function ModProspecting() {
           body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status&per_page=200",method:"GET"})}).then(r=>r.json()),
       ]);
       const now = Date.now();
+      const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
       const contacts = (contactsRes.data||[]).map(c=>({
         id:"zoho_c_"+c.id,
-        firstName:c.First_Name||"", lastName:c.Last_Name||"",
-        fullName:`${c.First_Name||""} ${c.Last_Name||""}`.trim(),
-        email:c.Email||"", phone:c.Phone||"",
-        title:c.Title||"", school:c.Account_Name||"",
-        city:c.Mailing_City||"", state:c.Mailing_State||"",
+        firstName:zs(c.First_Name), lastName:zs(c.Last_Name),
+        fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),
+        email:zs(c.Email), phone:zs(c.Phone),
+        title:zs(c.Title), school:zs(c.Account_Name),
+        city:zs(c.Mailing_City), state:zs(c.Mailing_State),
         orgType:"school", source:"zoho-crm",
         confidence:"high", outreachStatus:"new", importedAt:now,
       }));
       const leads = (leadsRes.data||[]).map(l=>({
         id:"zoho_l_"+l.id,
-        firstName:l.First_Name||"", lastName:l.Last_Name||"",
-        fullName:`${l.First_Name||""} ${l.Last_Name||""}`.trim(),
-        email:l.Email||"", phone:l.Phone||"",
-        title:l.Title||"", school:l.Company||"",
-        city:l.City||"", state:l.State||"",
+        firstName:zs(l.First_Name), lastName:zs(l.Last_Name),
+        fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),
+        email:zs(l.Email), phone:zs(l.Phone),
+        title:zs(l.Title), school:zs(l.Company),
+        city:zs(l.City), state:zs(l.State),
         orgType:"school", source:"zoho-crm-lead",
         confidence:"medium",
         outreachStatus:l.Lead_Status==="Customer"?"replied":"new",
@@ -2560,8 +2561,8 @@ function ModProspecting() {
                           <div style={{color:B.muted,fontSize:10}}>{c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
                         </td>
                         <td style={{padding:"6px 10px"}}>
-                          <div style={{color:B.text}}>{c.title||"—"}</div>
-                          <div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
+                          <div style={{color:B.text}}>{(typeof c.title==="string"?c.title:c.title?.name||"")||"—"}</div>
+                          <div style={{color:B.muted,fontSize:10}}>{typeof c.school==="string"?c.school:c.school?.name||""}</div>
                         </td>
                         <td style={{padding:"6px 10px",color:c.email?B.green:B.muted}}>{c.email||"—"}</td>
                         <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
@@ -2623,7 +2624,7 @@ function ModProspecting() {
                               <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.muted,minWidth:16}}>#{i+1}</span>
                               <div>
                                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName}</div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
                               </div>
                             </div>
                             <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -2652,10 +2653,10 @@ function ModProspecting() {
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
                             <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed"}</span>
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:tier.color,background:tier.bg,padding:"2px 5px",borderRadius:3}}>{tier.label} {c.score||0}</span>
-                            {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                            {c.sport&&(typeof c.sport==="string"?c.sport:c.sport?.name||"")!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
                             {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
                           </div>
-                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
                           <div style={{display:"flex",gap:10,marginTop:2}}>
                             {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✉ {c.email}</span>}
                             {c.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</span>}
@@ -2671,7 +2672,7 @@ function ModProspecting() {
                           )}
                         </div>
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
-                          {(c.outreachWindow||SPORT_WINDOWS[c.sport])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]}</div>}
+                          {((typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{(typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
                           {campaigns.length>0&&(
                             <div style={{marginTop:6,position:"relative"}}>
@@ -2742,7 +2743,7 @@ function ModProspecting() {
                         <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName+" "+(c.lastName||"")}</span>
                         {c.orgType==="club"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>CLUB</span>}
                       </div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city}, {c.state}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city}, {c.state}</div>
                       {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginTop:2}}>✉ {c.email}</div>}
                       {c.phone&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</div>}
                     </div>
@@ -3073,7 +3074,7 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
                   </div>
                   <div style={{flex:1}}>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.state}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.state}</div>
                   </div>
                   <div style={{textAlign:"right",flexShrink:0}}>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</div>
@@ -3430,7 +3431,7 @@ function ModMarketing() {
                               {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
                               {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
                             </div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
                             {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
                             {touch&&e.status==="active"&&(
                               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>
@@ -4890,7 +4891,7 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
               {topContacts.map(c=>(
                 <div key={c.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:1}}>{c.fullName||c.firstName}</div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.3}}>{(c.title||"").split(" ").slice(0,3).join(" ")}{c.state?` · ${c.state}`:""}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.3}}>{(typeof c.title==="string"?c.title:c.title?.name||"").split(" ").slice(0,3).join(" ")}{c.state?` · ${c.state}`:""}</div>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.orange,marginTop:2}}>{c.score||0} pts</div>
                 </div>
               ))}
