@@ -63,6 +63,9 @@ const SEED = {
   prospectAreas: [],
   agentHistory: [],
   agentDraft: "",
+  lastBriefDate: null,
+  pendingBriefActions: [],
+  contactsLastSync: null,
   alerts: [],
   orders: [],
   templates: [],
@@ -98,6 +101,9 @@ function useStore() {
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
           invoiceLastSync: p.invoiceLastSync||null,
+          contactsLastSync: p.contactsLastSync||null,
+          lastBriefDate: p.lastBriefDate||null,
+          pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
         };
       }
     } catch {}
@@ -246,6 +252,9 @@ function reducer(prev, action, payload) {
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
     case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
+    case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
+    case "DISMISS_BRIEF_ACTION":return {...prev, pendingBriefActions:(prev.pendingBriefActions||[]).filter((_,i)=>i!==payload)};
+    case "SET_CONTACTS_LAST_SYNC": return {...prev, contactsLastSync:payload};
     case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
@@ -303,6 +312,40 @@ export default function App() {
 
   const cu = USERS.find(u=>u.id===s.currentUserId);
   const ctx = {s, dispatch, toast, cu, mod, setMod};
+
+  // ── AUTO-SYNC every 6 hours ─────────────────────────────────────────────────
+  useEffect(()=>{
+    if(!s.currentUserId) return;
+    const SIX_H=6*60*60*1000;
+    const STAT_MAP={sent:"sent",viewed:"sent",overdue:"overdue",paid:"paid",partially_paid:"partial",draft:"draft",void:"void"};
+    const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
+    const syncInvoices=async()=>{
+      if(s.invoiceLastSync&&Date.now()-s.invoiceLastSync<SIX_H) return;
+      try {
+        const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"books",endpoint:"/invoices?per_page=200&sort_column=date&sort_order=D",method:"GET"})}).then(r=>r.json());
+        const mapped=(res.invoices||[]).map(zi=>({id:"zoho_"+zi.invoice_id,zohoId:zi.invoice_id,number:zi.invoice_number||"",customer:zi.customer_name,customerId:zi.customer_id,status:STAT_MAP[zi.status]||zi.status,date:zi.date,dueDate:zi.due_date,total:zi.total||0,balance:zi.balance||0,items:(zi.line_items||[]).map(li=>({name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total})),source:"zoho"}));
+        if(mapped.length) dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
+      } catch{}
+    };
+    const syncContacts=async()=>{
+      if(s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
+      try {
+        const [cr,lr]=await Promise.all([
+          fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json()),
+          fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time&per_page=200",method:"GET"})}).then(r=>r.json()),
+        ]);
+        const now=Date.now();
+        const contacts=(cr.data||[]).map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+        const existing=new Set((s.contacts||[]).map(c=>c.id));
+        const toAdd=contacts.filter(c=>!existing.has(c.id));
+        if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
+        dispatch("SET_CONTACTS_LAST_SYNC",now);
+      } catch{}
+    };
+    syncInvoices(); syncContacts();
+    const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
+    return()=>clearInterval(iv);
+  },[s.currentUserId]);
 
   if (!s.currentUserId) return <Login dispatch={dispatch}/>;
 
@@ -582,16 +625,49 @@ function ModBriefing() {
   const inFlightOrders=orders.filter(o=>o.stage!=="Invoiced");
   const hotLeads=[...(s.contacts||[])].filter(c=>(c.score||0)>=60).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
 
-  const getAdvice=async()=>{
-    setLoadAdv(true);
-    const t=await aiCall(`Daily sales coaching for Matt Stone at ST1 Sports.
+  const todayStr=today();
+  const briefReady=s.lastBriefDate===todayStr&&(s.pendingBriefActions||[]).length>0;
+
+  const generateBrief=async(silent=false)=>{
+    if(!silent) setLoadAdv(true);
+    try {
+      const topLeads=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,8);
+      const openDeals=myDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+      const prompt=`You are the ST1 Sports AI sales agent. Generate today's morning brief as a JSON object.
 ${ST1}
-Situation right now: ${overdueDeals.length} overdue follow-ups (${fmt$(overdueDeals.reduce((a,d)=>a+d.value,0))}), ${overdueInv.length} overdue invoices, ${rfpsDue.length} RFPs due this week, ${pos.length} POs to fulfill, ${inFlightOrders.length} orders in flight, ${hotLeads.length} hot leads.
-Pipeline: ${fmt$(pipeline)}. AR: ${fmt$(ar)}.
-Top deals: ${myDeals.filter(d=>d.priority==="hot"&&!["Closed Won","Closed Lost"].includes(d.stage)).slice(0,3).map(d=>d.name).join(", ")}.
-Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`);
-    setAdvice(t||"");setLoadAdv(false);
+Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}
+Rep: ${cu?.name||"Matt"} (${cu?.role||"owner"})
+
+PIPELINE: ${openDeals.length} open deals, ${fmt$(openDeals.reduce((a,d)=>a+d.value,0))}, ${overdueDeals.length} overdue
+TOP LEADS: ${topLeads.map(c=>`${c.fullName||c.firstName} (${c.score}pts, ${c.zohoStatus||c.outreachStatus}, ${typeof c.school==="string"?c.school:c.school?.name||""}, ${c.email||"no email"})`).join("; ")||"none"}
+HOT DEALS: ${myDeals.filter(d=>d.priority==="hot"&&!["Closed Won","Closed Lost"].includes(d.stage)).map(d=>`${d.name} ${fmt$(d.value)}`).join(", ")||"none"}
+OVERDUE: ${overdueDeals.map(d=>`${d.name} ${Math.abs(dUntil(d.followUpDate))}d`).join(", ")||"none"}
+AR OVERDUE: ${overdueInv.length} invoices, ${fmt$(overdueInv.reduce((a,i)=>a+(i.balance||0),0))}
+
+Return ONLY valid JSON with this exact shape (no markdown, no explanation):
+{"message":"2 sentence summary of today's situation","actions":[{"label":"Short title","description":"One sentence explaining the action","type":"draft_email|flag_deal|schedule_followup|open_module","payload":{...},"impact":"$X or description"}]}
+Give 4-6 specific, actionable recommendations. For draft_email include to_name, to_email (if known), subject, body. For flag_deal include deal_name and priority. For schedule_followup include deal_name and date. For open_module include module name.`;
+      const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:[{role:"user",content:prompt}],localContext:{deals:s.deals,contacts:s.contacts||[],invoices:s.invoices,sequences:s.sequences||[]}})});
+      if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      const raw=await r.json();
+      let parsed;
+      try { parsed=typeof raw.message==="object"?raw.message:JSON.parse(raw.message); } catch { parsed=raw; }
+      const actions=Array.isArray(parsed?.actions)?parsed.actions:(Array.isArray(raw?.actions)?raw.actions:[]);
+      const msg=parsed?.message||raw?.message||"";
+      if(actions.length>0){
+        dispatch("SET_BRIEF",{actions,date:todayStr});
+        if(typeof msg==="string") setAdvice(msg);
+      }
+    } catch(e){ if(!silent) setAdvice("Unable to generate brief — check AI Agent settings."); }
+    setLoadAdv(false);
   };
+
+  // Auto-generate brief once per day on mount
+  useEffect(()=>{
+    if(s.lastBriefDate!==todayStr){
+      generateBrief(true);
+    }
+  },[]);
 
   const addOrder=()=>{
     if(!oForm.name) return;
@@ -754,12 +830,53 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
         </div>
 
         <div>
-          {/* AI Coach */}
+          {/* Morning Brief — Approval Cards */}
           <div className="card" style={{padding:14,marginBottom:12}}>
-            <Lbl s={{marginBottom:9}}>AI Coach — Today's Priorities</Lbl>
-            {!advice&&!loadAdv&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:9,lineHeight:1.6}}>Get a prioritized action plan based on your pipeline, invoices, orders, and hot leads.</div><OBtn onClick={getAdvice} style={{width:"100%"}}>✦ GET TODAY'S PLAN</OBtn></div>}
-            {loadAdv&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow}}><Spin/>Analyzing...</div>}
-            {advice&&<div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:8}}>{advice}</div><GBtn onClick={getAdvice} style={{width:"100%",fontSize:10}}>↺ REFRESH</GBtn></div>}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <Lbl>✦ TODAY'S RECOMMENDATIONS</Lbl>
+              <button onClick={()=>generateBrief(false)} disabled={loadAdv} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",opacity:loadAdv?.5:1}}>↺ REFRESH</button>
+            </div>
+            {loadAdv&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.yellow,padding:"12px 0"}}><Spin/>Generating your brief...</div>}
+            {!loadAdv&&advice&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:12,padding:"8px 10px",background:B.surface,borderRadius:5}}>{advice}</div>}
+            {!loadAdv&&(s.pendingBriefActions||[]).length===0&&!advice&&(
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"16px 0"}}>Generating today's brief…</div>
+            )}
+            {(s.pendingBriefActions||[]).map((act,i)=>(
+              <div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:2}}>{act.label}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.5}}>{act.description}</div>
+                    {act.impact&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:.5,marginTop:4}}>{act.impact}</div>}
+                  </div>
+                  <button onClick={()=>dispatch("DISMISS_BRIEF_ACTION",i)} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",marginLeft:8,lineHeight:1}}>×</button>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>{
+                    const p=act.payload||{};
+                    if(act.type==="draft_email"){
+                      dispatch("SET_AGENT_DRAFT",`Draft an outreach email to ${p.to_name||act.label}${p.to_email?` (${p.to_email})`:""}. ${p.subject?`Subject: ${p.subject}.`:""} ${p.body?`Context: ${p.body}`:""}`.trim());
+                      setMod("agent");
+                    } else if(act.type==="flag_deal"){
+                      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase()===p.deal_name?.toLowerCase());
+                      if(deal) dispatch("UPDATE_DEAL",{...deal,priority:p.priority||"hot"});
+                      dispatch("DISMISS_BRIEF_ACTION",i);
+                    } else if(act.type==="schedule_followup"){
+                      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase()===p.deal_name?.toLowerCase());
+                      if(deal) dispatch("UPDATE_DEAL",{...deal,followUpDate:p.date||todayStr});
+                      dispatch("DISMISS_BRIEF_ACTION",i);
+                    } else if(act.type==="open_module"){
+                      setMod(p.module||"agent");
+                      dispatch("DISMISS_BRIEF_ACTION",i);
+                    } else {
+                      dispatch("SET_AGENT_DRAFT",`${act.label}: ${act.description}`);
+                      setMod("agent");
+                    }
+                  }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.4,cursor:"pointer",flex:1}}>✓ APPROVE</button>
+                  <button onClick={()=>dispatch("DISMISS_BRIEF_ACTION",i)} style={{background:B.surface,color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>SKIP</button>
+                </div>
+              </div>
+            ))}
           </div>
 
           {/* Hot leads */}
@@ -2372,6 +2489,7 @@ function ModProspecting() {
       const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
       if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
       toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
+      dispatch("SET_CONTACTS_LAST_SYNC",now);
       setZohoPullResult({contacts:contacts.length, leads:leads.length, added:toAdd.length, updated:toUpdate.length});
       toast(`${toAdd.length} new · ${toUpdate.length} updated from Zoho CRM`,"success");
     } catch(e) {
