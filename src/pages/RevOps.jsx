@@ -70,7 +70,7 @@ const SEED = {
   orders: [],
   templates: [],
   activity: [],
-  integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
+  integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
   brandAssets: [],
 };
@@ -6129,12 +6129,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 // ════════════════════════════════════════════════════════════════════════════
 function ModAlerts() {
   const {s,dispatch,toast}=useApp();
-  const [channel,setChannel]=useState(s.integrations.slackChannel||"#sales-alerts");
+  const [channel,setChannel]=useState(s.integrations.slackChannel||"C0AQ7CMB01X");
   const [sending,setSending]=useState(false);
   const pending=s.alerts.filter(a=>!a.sent);
 
   const sendToSlack=async(msg)=>{
-    const ch=channel||"#sales-alerts";
+    const ch=channel||"C0AQ7CMB01X";
     try{
       const r=await fetch("/api/claude",{
         method:"POST",headers:{"Content-Type":"application/json"},
