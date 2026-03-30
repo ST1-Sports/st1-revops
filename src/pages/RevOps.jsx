@@ -62,6 +62,7 @@ const SEED = {
   battlecards: {},
   prospectAreas: [],
   agentHistory: [],
+  agentDraft: "",
   alerts: [],
   orders: [],
   templates: [],
@@ -152,6 +153,20 @@ const SPORT_WINDOWS = {
   "Wrestling":        "Sep–Oct",
 };
 
+// Returns matching invoice if contact appears to be an existing customer
+function findCustomerInvoice(c, invoices) {
+  if(!invoices?.length) return null;
+  const name=(c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()).toLowerCase();
+  const school=(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase();
+  return (invoices).find(inv=>{
+    const ic=(inv.customer||"").toLowerCase();
+    if(!ic) return false;
+    if(school.length>4&&(ic.includes(school)||school.includes(ic))) return true;
+    if(name.length>3&&ic===name) return true;
+    return false;
+  })||null;
+}
+
 function scoreTier(score) {
   const n=score||0;
   if(n>=100) return {label:"🔥 FIRE",color:"#C0392B",bg:"#FDECEA"};
@@ -230,6 +245,7 @@ function reducer(prev, action, payload) {
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
+    case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
     case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
@@ -2127,7 +2143,7 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
 const SCRAPE_TASK_ID = "prospecting_scrape";
 
 function ModProspecting() {
-  const {s,dispatch,toast}=useApp();
+  const {s,dispatch,toast,setMod}=useApp();
   const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
@@ -2157,6 +2173,7 @@ function ModProspecting() {
   const [importRows,setImportRows]   = useState([]);
   const [importSel,setImportSel]     = useState(new Set());
   const [enrollingContact,setEnrollingContact] = useState(null);
+  const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -2587,7 +2604,14 @@ function ModProspecting() {
 
           {/* Contact database */}
           <div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>YOUR CONTACT DATABASE ({(s.contacts||[]).length})</div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>YOUR CONTACT DATABASE ({(s.contacts||[]).length})</div>
+              <div style={{display:"flex",gap:4}}>
+                {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setDbFilter(v)} style={{background:dbFilter===v?B.blue:B.white,color:dbFilter===v?B.white:B.muted,border:`1px solid ${dbFilter===v?B.blue:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
+                ))}
+              </div>
+            </div>
             {(s.contacts||[]).length===0&&importPhase==="idle"&&(
               <div className="card" style={{padding:30,textAlign:"center"}}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:8}}>No contacts yet</div>
@@ -2643,9 +2667,15 @@ function ModProspecting() {
 
                 {/* Contact list */}
                 <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                  {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,100).map(c=>{
+                  {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).filter(c=>{
+                    const inv=findCustomerInvoice(c,s.invoices||[]);
+                    if(dbFilter==="customers") return !!inv;
+                    if(dbFilter==="leads") return !inv;
+                    return true;
+                  }).slice(0,100).map(c=>{
                     const tier=scoreTier(c.score);
                     const campaigns=s.sequences||[];
+                    const custInvoice=findCustomerInvoice(c,s.invoices||[]);
                     return(
                     <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.priority==="high"?B.orange:c.priority==="medium"?B.blue:B.border}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -2655,6 +2685,7 @@ function ModProspecting() {
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:tier.color,background:tier.bg,padding:"2px 5px",borderRadius:3}}>{tier.label} {c.score||0}</span>
                             {c.sport&&(typeof c.sport==="string"?c.sport:c.sport?.name||"")!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
                             {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
+                            {custInvoice&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#1a7f37",background:"#d8f3dc",padding:"2px 5px",borderRadius:3}} title={`Invoice: ${custInvoice.number||custInvoice.id}`}>✓ CUSTOMER</span>}
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
                           <div style={{display:"flex",gap:10,marginTop:2}}>
@@ -2674,6 +2705,14 @@ function ModProspecting() {
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                           {((typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{(typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
+                          <button onClick={()=>{
+                            const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                            const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                            const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+                            const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
+                            dispatch("SET_AGENT_DRAFT",draft);
+                            setMod("agent");
+                          }} style={{marginTop:5,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",display:"block",width:"100%",textAlign:"center"}}>→ AGENT</button>
                           {campaigns.length>0&&(
                             <div style={{marginTop:6,position:"relative"}}>
                               {enrollingContact===c.id?(
@@ -4541,6 +4580,9 @@ function ModAgent() {
   const inputRef=useRef(null);
 
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
+  useEffect(()=>{
+    if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
+  },[s.agentDraft]);
 
   const buildContext=()=>{
     const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
