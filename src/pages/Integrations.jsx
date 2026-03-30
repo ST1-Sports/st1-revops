@@ -99,8 +99,8 @@ export default function IntegrationsHub() {
   const [products,setProducts]  = useState(DEMO_PRODUCTS);
   const [wooOrders,setWooOrders]= useState([]);
   const [syncing, setSyncing]   = useState(false);
-  const [slackChannel, setSlackChannel] = useState("C09F64RK0MN"); // #all-st1-sports
-  const [slackChannelName, setSlackChannelName] = useState("#all-st1-sports");
+  const [slackChannel, setSlackChannel] = useState("C0AQ7CMB01X"); // #sales
+  const [slackChannelName, setSlackChannelName] = useState("#sales");
   const [drafts, setDrafts]     = useState({});
   const [drafting, setDrafting] = useState(null);
   const [crmSyncResult, setCrmSyncResult] = useState(null); // { contacts, deals }
