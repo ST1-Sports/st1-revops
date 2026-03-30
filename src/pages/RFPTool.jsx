@@ -85,6 +85,8 @@ async function claudeCall(body) {
 }
 
 // Claude API — PDF doc (falls back to text extraction if PDFs are too large)
+const MAX_TEXT_CHARS = 60000; // ~15k tokens — keep well under Claude's context limit
+
 async function claudePDF(pdfFiles, prompt, sys="", json=false) {
   // Check total base64 size
   const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a, 0);
@@ -96,9 +98,9 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false) {
       const t = await extractPdfText(buf);
       return pdfFiles.length>1 ? `=== DOCUMENT ${i+1} ===\n${t}` : t;
     }));
-    const fullText = extractedParts.join("\n\n");
-    const textPrompt = `[PDF text extracted from ${pdfFiles.length} document(s)]\n\n${fullText}\n\n---\n\n${prompt}`;
-    text = await claudeText(textPrompt, sys, false);
+    const fullText = extractedParts.join("\n\n").slice(0, MAX_TEXT_CHARS);
+    const textPrompt = `[PDF text extracted from ${pdfFiles.length} document(s) — truncated to ${MAX_TEXT_CHARS} chars]\n\n${fullText}\n\n---\n\n${prompt}`;
+    text = await claudeText(textPrompt, sys, json);
   } else {
     const content = [
       ...pdfFiles.map(f=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:f.b64} })),
@@ -114,7 +116,7 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false) {
 
 // Claude API — text only
 async function claudeText(prompt, sys="", json=false) {
-  const body = { model:CLAUDE_MODEL, max_tokens:1600,
+  const body = { model:CLAUDE_MODEL, max_tokens:3000,
     system: sys + (json?"\n\nReturn ONLY valid JSON. No markdown fences.":""),
     messages:[{role:"user",content:prompt}] };
   const text = await claudeCall(body);
