@@ -196,6 +196,27 @@ function buildOutputCSV(originalCsvText, items) {
   return out.join("\n");
 }
 
+// ── RevOps store helpers (RFPTool is a standalone route — read/write localStorage directly) ──
+const REVOPS_STORE = "st1_revops_v2";
+
+function lsReadRfps() {
+  try { const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}"); return Array.isArray(p.rfps)?p.rfps:[]; }
+  catch { return []; }
+}
+function lsSaveRfp(record) {
+  try {
+    const raw=localStorage.getItem(REVOPS_STORE)||"{}";
+    const store=JSON.parse(raw);
+    const rfps=Array.isArray(store.rfps)?store.rfps:[];
+    const idx=rfps.findIndex(r=>r.id===record.id);
+    if(idx>=0) rfps[idx]={...rfps[idx],...record};
+    else rfps.unshift(record);
+    localStorage.setItem(REVOPS_STORE,JSON.stringify({...store,rfps}));
+  } catch(e) { console.warn("lsSaveRfp",e); }
+}
+
+const RFP_STATUS_LABELS=[["New",B.blue],["In Process",B.orange],["Bid",B.green],["No Bid",B.muted]];
+
 // ════════════════════════════════════════════════════════════════════════════
 export default function RFPAutomation() {
   // Files
@@ -214,6 +235,10 @@ export default function RFPAutomation() {
   const [coverLetter,setCoverLetter]= useState("");
   const [complianceFlags, setComplianceFlags] = useState([]);
 
+  // RFP tracker record (persisted to RevOps store via localStorage)
+  const [rfpRecordId, setRfpRecordId] = useState(null);
+  const [rfpStatus,   setRfpStatus]   = useState("New");
+
   // UI
   const [log,        setLog]        = useState([]);
   const [progress,   setProgress]   = useState(0);
@@ -229,6 +254,12 @@ export default function RFPAutomation() {
 
   const addLog = (msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,149)]);
 
+  // ── RFP TRACKER HELPERS ───────────────────────────────────────────────────
+  const changeStatus = (status, recordId=rfpRecordId) => {
+    setRfpStatus(status);
+    if(recordId) lsSaveRfp({id:recordId, stage:status});
+  };
+
   // ── FILE HANDLERS ─────────────────────────────────────────────────────────
   const handlePDFs = async e => {
     const files = Array.from(e.target.files);
@@ -237,7 +268,21 @@ export default function RFPAutomation() {
       const [b64, arrayBuffer] = await Promise.all([toBase64(f), toArrayBuffer(f)]);
       return { name:f.name, size:f.size, b64, arrayBuffer, file:f };
     }));
-    setPdfFiles(prev=>[...prev,...loaded]);
+    setPdfFiles(prev=>{
+      const updated=[...prev,...loaded];
+      // Create/update stub RFP record immediately so it shows in the tracker
+      const stubId=rfpRecordId||uid();
+      if(!rfpRecordId) setRfpRecordId(stubId);
+      lsSaveRfp({
+        id:stubId, stage:rfpStatus,
+        title:loaded[0]?.name.replace(/\.pdf$/i,"")||"Pending analysis",
+        bidId:"", issuer:"", state:"", dueDate:"",
+        value:0, checklist:[],
+        files:updated.map(f=>f.name),
+        source:"rfp-tool", createdAt:new Date().toISOString().slice(0,10),
+      });
+      return updated;
+    });
     loaded.forEach(f=>addLog(`✓ ${f.name} (${(f.size/1024).toFixed(0)}KB)`,"success"));
   };
 
@@ -331,6 +376,20 @@ Extract all bid metadata from these documents. Return JSON:
     setRfpMeta(meta);
     setProgress(15);
     addLog(`✓ ${meta.title||"RFP"} — ${meta.issuer||""} ${meta.state||""}`,"success");
+    // ── Persist to RevOps RFP tracker ───────────────────────────────────────
+    const trackId = rfpRecordId || uid();
+    if(!rfpRecordId) setRfpRecordId(trackId);
+    const newStatus = rfpStatus==="New" ? "In Process" : rfpStatus;
+    setRfpStatus(newStatus);
+    lsSaveRfp({
+      id:trackId, stage:newStatus,
+      title:meta.title||pdfFiles[0]?.name.replace(/\.pdf$/i,"")||"RFP",
+      bidId:meta.bidId||"", issuer:meta.issuer||"", state:meta.state||"",
+      dueDate:meta.dueDate||"", value:0,
+      checklist: (meta.requiredDocuments||[]).map(d=>({id:uid(),item:d,done:false})),
+      files:pdfFiles.map(f=>f.name),
+      source:"rfp-tool", createdAt:new Date().toISOString().slice(0,10),
+    });
     if(meta.dueDate) addLog(`  Due: ${meta.dueDate} · Submit via: ${meta.submissionMethod||"see spec"}`);
 
     // ── STEP 2: SHIPPING DETECTION ───────────────────────────────────────
@@ -519,6 +578,9 @@ ${ST1}
     setPhase("review");
     addLog(`━━ COMPLETE ━━ Ready for your review and approval`,"success");
     addLog(`  Bid items: ${updated.filter(i=>i.canBid!==false).length} · No-bid: ${updated.filter(i=>i.canBid===false).length}`,"success");
+    // ── Update estimated value in tracker ───────────────────────────────────
+    const estValue = updated.filter(i=>i.canBid!==false).reduce((s,i)=>(i.finalPrice||0)*(i.qtyRequested||1)+s,0);
+    if(rfpRecordId) lsSaveRfp({id:rfpRecordId, value:Math.round(estValue)});
 
     } catch(err) {
       addLog(`✗ Analysis failed: ${err.message}`,"error");
@@ -803,6 +865,20 @@ ${ST1}
                 </div>
               </div>
 
+              {/* BID STATUS — visible once PDFs are loaded */}
+              {pdfFiles.length>0&&(
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,flexShrink:0}}>BID STATUS</span>
+                  {RFP_STATUS_LABELS.map(([label,color])=>(
+                    <button key={label} onClick={()=>changeStatus(label)}
+                      style={{background:rfpStatus===label?color:B.surface,color:rfpStatus===label?B.white:B.muted,border:`1px solid ${rfpStatus===label?color:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>
+                      {label}
+                    </button>
+                  ))}
+                  {rfpRecordId&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginLeft:4}}>✓ Tracked in RFP tab</span>}
+                </div>
+              )}
+
               <button onClick={runAnalysis} disabled={!pdfFiles.length}
                 style={{background:pdfFiles.length?B.orange:B.border,color:pdfFiles.length?B.white:B.muted,border:"none",borderRadius:6,padding:"13px 32px",fontFamily:"'Russo One',sans-serif",fontSize:14,letterSpacing:1,cursor:pdfFiles.length?"pointer":"not-allowed"}}>
                 {pdfFiles.length?`⊕ ANALYZE ${pdfFiles.length} DOCUMENT${pdfFiles.length>1?"S":""} & BUILD RESPONSE`:"UPLOAD AT LEAST ONE PDF TO CONTINUE"}
@@ -886,6 +962,17 @@ ${ST1}
 
               {/* RFP summary */}
               <div className="card" style={{marginBottom:14,borderTop:`3px solid ${B.orange}`}}>
+                {/* Bid status bar */}
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:12,paddingBottom:10,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,flexShrink:0}}>BID STATUS</span>
+                  {RFP_STATUS_LABELS.map(([label,color])=>(
+                    <button key={label} onClick={()=>changeStatus(label)}
+                      style={{background:rfpStatus===label?color:B.surface,color:rfpStatus===label?B.white:B.muted,border:`1px solid ${rfpStatus===label?color:B.border}`,borderRadius:4,padding:"5px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>
+                      {label}
+                    </button>
+                  ))}
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginLeft:4}}>✓ Tracked in RFP tab</span>
+                </div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                   <div>
                     <div style={{fontFamily:"'Russo One',sans-serif",fontSize:17,color:B.black,letterSpacing:.3,marginBottom:3}}>{rfpMeta.title}</div>
