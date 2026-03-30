@@ -75,30 +75,8 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Image generation failed: ${e.message}` });
   }
 
-  // Optional S3 upload
-  let fileKey = `data:${Date.now()}`;
-  let imageUrl = null;
-  const s3Bucket = process.env.AWS_BUCKET || process.env.S3_BUCKET;
-
-  if (s3Bucket && process.env.AWS_ACCESS_KEY_ID) {
-    try {
-      const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
-      const region = process.env.AWS_REGION || 'us-east-1';
-      const s3 = new S3Client({ region });
-      const assetId = Math.random().toString(36).slice(2, 9);
-      fileKey = `adengine/campaigns/${campaignId}/assets/${assetId}.png`;
-      await s3.send(new PutObjectCommand({
-        Bucket: s3Bucket,
-        Key: fileKey,
-        Body: Buffer.from(imageB64, 'base64'),
-        ContentType: 'image/png',
-      }));
-      imageUrl = `https://${s3Bucket}.s3.${region}.amazonaws.com/${fileKey}`;
-    } catch (e) {
-      console.error('S3 upload failed, storing inline:', e.message);
-    }
-  }
-
+  // Store base64 directly in the database (no external storage needed)
+  const fileKey = `inline:${Date.now()}`;
   const [w, h] = size.split('x').map(Number);
   const asset = await prisma.asset.create({
     data: {
@@ -116,13 +94,13 @@ export default async function handler(req, res) {
         prompt: imagePrompt,
         model: 'gpt-image-1',
         size,
-        ...(imageUrl ? { url: imageUrl } : { b64: imageB64 }),
+        b64: imageB64,
       },
     },
   });
 
   return res.status(201).json({
     asset,
-    imageUrl: imageUrl || `data:image/png;base64,${imageB64}`,
+    imageUrl: `data:image/png;base64,${imageB64}`,
   });
 }

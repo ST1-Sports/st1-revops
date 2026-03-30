@@ -36,17 +36,6 @@ export default async function handler(req, res) {
     const asset = await prisma.asset.findUnique({ where: { id } });
     if (!asset) return res.status(404).json({ error: 'Not found' });
 
-    // If stored in S3, optionally delete (requires AWS creds)
-    if (asset.metadata?.url && process.env.AWS_BUCKET && process.env.AWS_ACCESS_KEY_ID) {
-      try {
-        const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3');
-        const s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
-        await s3.send(new DeleteObjectCommand({ Bucket: process.env.AWS_BUCKET, Key: asset.fileKey }));
-      } catch (e) {
-        console.error('S3 delete failed:', e.message);
-      }
-    }
-
     await prisma.asset.delete({ where: { id } });
     return res.json({ ok: true });
   }
