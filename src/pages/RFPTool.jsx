@@ -47,30 +47,45 @@ const toText = file => new Promise((res,rej)=>{
   const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file);
 });
 
+const CLAUDE_MODEL = "claude-sonnet-4-6";
+const CLAUDE_TIMEOUT = 55000; // 55s client timeout (vercel fn is 60s)
+
+async function claudeCall(body) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=>ctrl.abort(), CLAUDE_TIMEOUT);
+  try {
+    const r = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body),signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!r.ok) { const e=await r.json().catch(()=>({})); throw new Error(e.error||`HTTP ${r.status}`); }
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    return (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  } catch(e) {
+    clearTimeout(timer);
+    if(e.name==="AbortError") throw new Error("Request timed out — PDF may be too large or Claude API is slow. Try again.");
+    throw e;
+  }
+}
+
 // Claude API — PDF doc
 async function claudePDF(pdfB64Array, prompt, sys="", json=false) {
   const content = [
     ...pdfB64Array.map(b64=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:b64} })),
     { type:"text", text: json ? prompt+"\n\nReturn ONLY valid JSON. No markdown fences." : prompt }
   ];
-  const body = { model:"claude-sonnet-4-20250514", max_tokens:1600,
-    messages:[{role:"user",content}] };
+  const body = { model:CLAUDE_MODEL, max_tokens:2000, messages:[{role:"user",content}] };
   if(sys) body.system = sys;
-  const r = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const d = await r.json();
-  const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  const text = await claudeCall(body);
   if(!json) return text;
   try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
 }
 
 // Claude API — text only
 async function claudeText(prompt, sys="", json=false) {
-  const body = { model:"claude-sonnet-4-20250514", max_tokens:1400,
+  const body = { model:CLAUDE_MODEL, max_tokens:1600,
     system: sys + (json?"\n\nReturn ONLY valid JSON. No markdown fences.":""),
     messages:[{role:"user",content:prompt}] };
-  const r = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  const d = await r.json();
-  const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  const text = await claudeCall(body);
   if(!json) return text;
   try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
 }
@@ -188,7 +203,11 @@ export default function RFPAutomation() {
     abortRef.current = false;
 
     const b64s = pdfFiles.map(f=>f.b64);
-    addLog(`Analyzing ${pdfFiles.length} PDF document${pdfFiles.length>1?"s":""}...`);
+    const totalSizeMB = pdfFiles.reduce((a,f)=>a+(f.b64?.length||0)*0.75/1024/1024,0);
+    addLog(`Analyzing ${pdfFiles.length} PDF document${pdfFiles.length>1?"s":""} (${totalSizeMB.toFixed(1)} MB)...`);
+    if(totalSizeMB>15) addLog("⚠ Large PDF — each step may take 30-50 seconds","warn");
+
+    try {
 
     // ── STEP 1: Extract RFP metadata ─────────────────────────────────────
     addLog("Step 1/4 — Parsing bid requirements and metadata...");
@@ -372,6 +391,12 @@ ${ST1}
     setPhase("review");
     addLog(`━━ COMPLETE ━━ Ready for your review and approval`,"success");
     addLog(`  Bid items: ${updated.filter(i=>i.canBid!==false).length} · No-bid: ${updated.filter(i=>i.canBid===false).length}`,"success");
+
+    } catch(err) {
+      addLog(`✗ Analysis failed: ${err.message}`,"error");
+      addLog("Check your ANTHROPIC_KEY env var and try again. If the PDF is very large, try splitting it.","warn");
+      setPhase("upload");
+    }
   };
 
   // ── ITEM EDITING ──────────────────────────────────────────────────────────
