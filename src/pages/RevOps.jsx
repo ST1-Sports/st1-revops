@@ -1,6 +1,23 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext, Component } from "react";
 import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
+
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+class ErrBound extends Component {
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err) return(
+      <div style={{padding:32,fontFamily:"monospace",background:"#fff8f8",border:"1px solid #f99",borderRadius:8,margin:24}}>
+        <div style={{fontWeight:700,color:"#c00",marginBottom:8}}>Render error — please report this message:</div>
+        <pre style={{fontSize:12,color:"#333",whiteSpace:"pre-wrap"}}>{this.state.err?.message}</pre>
+        <pre style={{fontSize:10,color:"#999",marginTop:8,whiteSpace:"pre-wrap"}}>{this.state.err?.stack?.split("\n").slice(0,6).join("\n")}</pre>
+        <button onClick={()=>this.setState({err:null})} style={{marginTop:12,padding:"6px 14px",background:"#f37321",color:"#fff",border:"none",borderRadius:4,cursor:"pointer"}}>Retry</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -288,8 +305,7 @@ export default function App() {
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
     {id:"outreach",    icon:"✉", label:"Outreach"},
     {id:"templates",   icon:"≈", label:"Email Templates"},
-    {id:"marketing",   icon:"✦", label:"Campaigns"},
-    {id:"ads",         icon:"⬛", label:"Ad Engine"},
+    {id:"marketing",   icon:"✦", label:"Campaigns & Ads"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"agent",       icon:"AI",label:"AI Agent"},
@@ -412,6 +428,7 @@ export default function App() {
           </header>
 
           <main style={{flex:1,overflowY:"auto",background:B.pageBg}}>
+            <ErrBound key={mod}>
             {mod==="briefing"    && <ModBriefing/>}
             {mod==="revenue"     && <ModRevenue/>}
             {mod==="deals"       && <ModDeals/>}
@@ -424,12 +441,12 @@ export default function App() {
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="outreach"    && <ModBatchOutreach/>}
             {mod==="templates"   && <ModTemplates/>}
-            {mod==="ads"         && <ModAds/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
             {mod==="activity"    && <ModActivity/>}
             {mod==="settings"    && <ModSettings/>}
+            </ErrBound>
           </main>
         </div>
 
@@ -3143,6 +3160,7 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
 
 function ModMarketing() {
   const {s,dispatch,toast}=useApp();
+  const [section,setSection]=useState("email"); // "email" | "ads"
   const [tab,setTab]=useState("campaigns");
   const [product,setProduct]=useState("Track & Field Equipment");
   const [audience,setAudience]=useState("Athletic Director");
@@ -3252,7 +3270,17 @@ function ModMarketing() {
 
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="MARKETING STUDIO" sub="Campaigns, outreach sequences, and AI copy generation"/>
+      <PH title="CAMPAIGNS & AD ENGINE" sub="Email outreach sequences, AI copy, and ad creative"/>
+      {/* Top-level section toggle */}
+      <div style={{display:"flex",gap:0,marginBottom:18,background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",width:"fit-content"}}>
+        {[["email","✉ EMAIL CAMPAIGNS"],["ads","⬛ AD ENGINE"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setSection(id)} style={{background:section===id?B.orange:"transparent",color:section===id?B.white:B.muted,border:"none",padding:"8px 20px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+
+      {section==="ads"&&<ModAds/>}
+
+      {section==="email"&&<>
       <div style={{display:"flex",gap:7,marginBottom:18,flexWrap:"wrap"}}>
         {[["campaigns","Campaigns"],["copy","Copy Generator"],["strategy","Strategy"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
@@ -3486,6 +3514,7 @@ function ModMarketing() {
           </div>
         </div>
       )}
+      </>}
     </div>
   );
 }
