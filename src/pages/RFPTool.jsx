@@ -87,19 +87,36 @@ async function claudeCall(body) {
 // Claude API — PDF doc (falls back to text extraction if PDFs are too large)
 const MAX_TEXT_CHARS = 60000; // ~15k tokens — keep well under Claude's context limit
 
-async function claudePDF(pdfFiles, prompt, sys="", json=false) {
-  // Check total base64 size
+// Robust JSON extraction — tries multiple strategies
+function extractJSON(raw) {
+  if(!raw) return null;
+  const text = raw.trim();
+  // 1. Direct parse
+  try { return JSON.parse(text); } catch {}
+  // 2. Markdown code fence ```json ... ```
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if(fenced) try { return JSON.parse(fenced[1].trim()); } catch {}
+  // 3. First { ... last }
+  const b0 = text.indexOf('{'), b1 = text.lastIndexOf('}');
+  if(b0 !== -1 && b1 > b0) try { return JSON.parse(text.slice(b0, b1+1)); } catch {}
+  // 4. First [ ... last ]
+  const a0 = text.indexOf('['), a1 = text.lastIndexOf(']');
+  if(a0 !== -1 && a1 > a0) try { return JSON.parse(text.slice(a0, a1+1)); } catch {}
+  return null;
+}
+
+async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null) {
   const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a, 0);
   let text;
   if(totalB64Bytes > MAX_B64_BYTES) {
-    // Extract text from all PDFs and send as text prompt
     const extractedParts = await Promise.all(pdfFiles.map(async(f,i)=>{
       const buf = f.arrayBuffer || await toArrayBuffer(f.file);
       const t = await extractPdfText(buf);
+      if(_logFn) _logFn(`  Extracted ${t.length.toLocaleString()} chars from ${f.name}`);
       return pdfFiles.length>1 ? `=== DOCUMENT ${i+1} ===\n${t}` : t;
     }));
     const fullText = extractedParts.join("\n\n").slice(0, MAX_TEXT_CHARS);
-    const textPrompt = `[PDF text extracted from ${pdfFiles.length} document(s) — truncated to ${MAX_TEXT_CHARS} chars]\n\n${fullText}\n\n---\n\n${prompt}`;
+    const textPrompt = `[PDF text extracted — ${fullText.length} chars]\n\n${fullText}\n\n---\n\n${prompt}`;
     text = await claudeText(textPrompt, sys, json);
   } else {
     const content = [
@@ -111,7 +128,9 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false) {
     text = await claudeCall(body);
   }
   if(!json) return text;
-  try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
+  const parsed = extractJSON(text);
+  if(!parsed && _logFn) _logFn(`  Claude response (first 300): ${(text||"").slice(0,300)}`,"warn");
+  return parsed;
 }
 
 // Claude API — text only
@@ -121,7 +140,7 @@ async function claudeText(prompt, sys="", json=false) {
     messages:[{role:"user",content:prompt}] };
   const text = await claudeCall(body);
   if(!json) return text;
-  try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
+  return extractJSON(text);
 }
 
 // Write pricing back into uploaded CSV/spreadsheet text
@@ -276,7 +295,7 @@ Extract all bid metadata from these documents. Return JSON:
   "documentDescriptions": ["what each document covers"],
   "specialRequirements": ["any special requirements"],
   "notes": "other important details"
-}`, "You are a procurement specialist for an athletic equipment supplier.", true);
+}`, "You are a procurement specialist for an athletic equipment supplier.", true, addLog);
 
     if(!meta) { addLog("Could not parse RFP metadata — check PDFs and retry","error"); setPhase("upload"); return; }
     setRfpMeta(meta);
