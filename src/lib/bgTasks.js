@@ -8,6 +8,7 @@
  */
 
 const _tasks = {};
+let _persistTimer = null;
 
 // ── Hydrate from localStorage on module load ──────────────────────────────────
 try {
@@ -19,8 +20,17 @@ try {
   });
 } catch {}
 
-function _persist() {
-  try { localStorage.setItem('st1_bg_tasks_v2', JSON.stringify(_tasks)); } catch {}
+function _persist(immediate = false) {
+  if (immediate) {
+    if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
+    try { localStorage.setItem('st1_bg_tasks_v2', JSON.stringify(_tasks)); } catch {}
+    return;
+  }
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    try { localStorage.setItem('st1_bg_tasks_v2', JSON.stringify(_tasks)); } catch {}
+  }, 500);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -35,14 +45,14 @@ export function createTask(id, label) {
     preview:     null,
     startedAt:   Date.now(),
   };
-  _persist();
+  _persist(true);
   return _tasks[id];
 }
 
 export function updateTask(id, updates) {
   if (!_tasks[id]) return;
   Object.assign(_tasks[id], updates);
-  _persist();
+  _persist(true);
 }
 
 export function appendLog(id, msg, type = 'info') {
@@ -63,7 +73,7 @@ export function completeTask(id, { summary, data } = {}) {
   _tasks[id].completedAt = Date.now();
   if (summary) _tasks[id].summary = summary;
   if (data !== undefined) _tasks[id].data = data;
-  _persist();
+  _persist(true);
   window.dispatchEvent(new CustomEvent('st1:task:done', { detail: { ..._tasks[id] } }));
 }
 
@@ -71,7 +81,7 @@ export function failTask(id, errorMsg) {
   if (!_tasks[id]) return;
   _tasks[id].status  = 'error';
   _tasks[id].summary = errorMsg;
-  _persist();
+  _persist(true);
   window.dispatchEvent(new CustomEvent('st1:task:done', { detail: { ..._tasks[id] } }));
 }
 
@@ -81,5 +91,5 @@ export function getTask(id) {
 
 export function clearTask(id) {
   delete _tasks[id];
-  _persist();
+  _persist(true);
 }

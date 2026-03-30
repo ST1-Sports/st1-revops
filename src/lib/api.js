@@ -70,8 +70,14 @@ export async function aiCall(prompt, opts = {}) {
 
   if (!opts.json) return text
 
+  // Try full parse first (model returned clean JSON), then extract embedded JSON
+  try { return JSON.parse(text.trim()) } catch {}
   try {
-    const m = text.match(/[\[{][\s\S]*[\]}]/s)
+    const obj = text.match(/\{[\s\S]*\}/)
+    const arr = text.match(/\[[\s\S]*\]/)
+    const m = obj && arr
+      ? (text.indexOf('{') < text.indexOf('[') ? obj : arr)
+      : (obj || arr)
     return m ? JSON.parse(m[0]) : null
   } catch {
     return null

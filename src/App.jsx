@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react'
+import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 
 // Main app shell (deals, briefing, invoicing, reorder, prospecting, etc.)
@@ -46,8 +46,13 @@ const TASK_ROUTES = {
 function BgNotifications() {
   const [toasts, setToasts] = useState([])
   const navigate = useNavigate()
+  const timers = useRef({})
 
   const dismiss = useCallback((id) => {
+    if (timers.current[id]) {
+      clearTimeout(timers.current[id])
+      delete timers.current[id]
+    }
     setToasts(t => t.filter(x => x.id !== id))
   }, [])
 
@@ -66,10 +71,13 @@ function BgNotifications() {
       }
       setToasts(t => [toast, ...t.slice(0, 4)])
       // Auto-dismiss after 12 seconds
-      setTimeout(() => dismiss(toast.id), 12000)
+      timers.current[toast.id] = setTimeout(() => dismiss(toast.id), 12000)
     }
     window.addEventListener('st1:task:done', handler)
-    return () => window.removeEventListener('st1:task:done', handler)
+    return () => {
+      window.removeEventListener('st1:task:done', handler)
+      Object.values(timers.current).forEach(clearTimeout)
+    }
   }, [dismiss])
 
   if (!toasts.length) return null

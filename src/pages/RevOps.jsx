@@ -56,6 +56,7 @@ const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
 
 function useStore() {
+  const saveTimer = useRef(null);
   const [s, setRaw] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE);
@@ -85,7 +86,10 @@ function useStore() {
   const set = useCallback((fn) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
-      try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      saveTimer.current = setTimeout(() => {
+        try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
+      }, 300);
       return next;
     });
   }, []);
