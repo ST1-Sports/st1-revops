@@ -27,13 +27,13 @@ export default async function handler(req, res) {
 
   // ── SYNC FROM WOOCOMMERCE ────────────────────────────────────────────────────
   if (req.method === 'POST') {
-    const wcUrl   = process.env.WC_URL;
+    const wcUrl   = (process.env.WC_URL || "").replace(/\/+$/, "");
     const wcKey   = process.env.WC_KEY;
     const wcSecret= process.env.WC_SECRET;
 
     if (!wcUrl || !wcKey || !wcSecret) {
       return res.status(400).json({
-        error: 'WooCommerce credentials not configured. Set WC_URL, WC_KEY, WC_SECRET env vars.',
+        error: `WooCommerce credentials not configured. Missing: ${[!wcUrl&&"WC_URL",!wcKey&&"WC_KEY",!wcSecret&&"WC_SECRET"].filter(Boolean).join(", ")}`,
       });
     }
 
@@ -45,7 +45,10 @@ export default async function handler(req, res) {
         `${wcUrl}/wp-json/wc/v3/products?per_page=100&page=${page}&status=publish`,
         { headers: { Authorization: auth } }
       );
-      if (!r.ok) break;
+      if (!r.ok) {
+        const errText = await r.text().catch(()=>"");
+        return res.json({ ok: false, synced, errors, wcError: `HTTP ${r.status}: ${errText.slice(0,200)}` });
+      }
       const products = await r.json();
       if (!Array.isArray(products) || products.length === 0) break;
 
