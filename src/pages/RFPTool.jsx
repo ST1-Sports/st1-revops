@@ -112,7 +112,8 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null) {
   let text;
   if(totalB64Bytes > MAX_B64_BYTES) {
     const extractedParts = await Promise.all(pdfFiles.map(async(f,i)=>{
-      const buf = f.arrayBuffer || await toArrayBuffer(f.file);
+      const raw = f.arrayBuffer || await toArrayBuffer(f.file);
+      const buf = raw.slice(0); // copy so pdfjs worker doesn't detach the stored original
       const t = await extractPdfText(buf);
       if(_logFn) _logFn(`  Extracted ${t.length.toLocaleString()} chars from ${f.name}`);
       return pdfFiles.length>1 ? `=== DOCUMENT ${i+1} ===\n${t}` : t;
