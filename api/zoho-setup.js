@@ -3,21 +3,12 @@
  *
  * One-time OAuth setup helper.
  *
- * !! IMPORTANT — Complete Step 0 in Zoho API Console BEFORE clicking Authorize !!
- *
- * Step 0 — Configure your Zoho API Console app (one-time):
- *   1. Go to https://api-console.zoho.com/
- *   2. Click your existing app (or create a new "Server-based Applications" one)
- *   3. Click "Edit" → open the "Scopes" tab
- *   4. Search for and add ALL of the following services + scopes:
- *        Zoho Books:     invoices.ALL, contacts.ALL, customerpayments.ALL, estimates.ALL, items.ALL
- *        Zoho CRM:       modules.Contacts.ALL, modules.Leads.ALL, modules.Deals.ALL, users.READ
- *        Zoho Campaigns: campaign.ALL, contact.ALL
- *        Zoho Social:    portals.ALL, message.ALL
- *   5. Save the app.  Redirect URI must be: https://revops.st1sports.com/api/zoho-setup
- *
  * Step 1 — GET /api/zoho-setup → click Authorize button
- * Step 2 — Copy the refresh_token into Vercel env var ZOHO_REFRESH_TOKEN, then redeploy
+ * Step 2 — Copy the refresh_token into Vercel env var ZOHO_REFRESH_TOKEN
+ * Step 3 — Redeploy Vercel project so the new token takes effect
+ *
+ * NOTE: Zoho Social is NOT included — it's a separate paid product with its own
+ * OAuth that cannot be bundled here. Social posting uses direct platform links instead.
  */
 
 const SCOPES = [
@@ -35,9 +26,6 @@ const SCOPES = [
   // Zoho Campaigns
   "ZohoCampaigns.campaign.ALL",
   "ZohoCampaigns.contact.ALL",
-  // Zoho Social
-  "ZohoSocial.portals.ALL",
-  "ZohoSocial.message.ALL",
 ].join(",");
 
 export default async function handler(req, res) {
@@ -109,9 +97,8 @@ export default async function handler(req, res) {
   if (oauthError) {
     return res.status(400).send(page("Authorization Denied", `
       <p style="color:red">Zoho returned: ${oauthError}</p>
-      <p>If you see <strong>"Invalid OAuth Scope"</strong>, you need to add the missing product scopes
-      to your app at <a href="https://api-console.zoho.com/" target="_blank">api-console.zoho.com</a>
-      before authorizing. See Step 0 at the top of this page.</p>
+      <p>If you see <strong>"Invalid OAuth Scope"</strong>, one of the requested scopes is not available
+      on your Zoho account. Make sure Zoho Books, CRM, and Campaigns are active in your Zoho subscription.</p>
       <p><a href="/api/zoho-setup">← Try again</a></p>
     `));
   }
@@ -134,36 +121,14 @@ export default async function handler(req, res) {
 
   return res.status(200).send(page("Connect Zoho to ST1 RevOps", `
 
-    <div style="margin-bottom:28px;padding:18px;background:#fff3cd;border:2px solid #f0ad00;border-radius:8px">
-      <div style="font-size:15px;font-weight:700;color:#7a4f00;margin-bottom:12px">⚠ Complete Step 0 in Zoho API Console FIRST</div>
-      <p style="color:#5a3a00;margin:0 0 10px">
-        Before clicking Authorize, your Zoho API Console app must have <strong>all four products</strong> enabled.
-        If any product is missing, Zoho will show "Invalid OAuth Scope."
-      </p>
-      <ol style="color:#5a3a00;margin:0;padding-left:20px;line-height:2">
-        <li>Go to <a href="https://api-console.zoho.com/" target="_blank" style="color:#c47a00;font-weight:700">api-console.zoho.com</a></li>
-        <li>Open your app → click <strong>Edit</strong> → <strong>Scopes</strong> tab</li>
-        <li>Add <strong>Zoho Books</strong>, <strong>Zoho CRM</strong>, <strong>Zoho Campaigns</strong>, and <strong>Zoho Social</strong></li>
-        <li>For each, enable the <strong>ALL</strong> permission level on the scopes listed below</li>
-        <li>Save, then come back here and click Authorize</li>
-      </ol>
-    </div>
-
     <div style="margin-bottom:24px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
-      <strong>Scopes being requested (all must be enabled in API Console):</strong>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px">
-        ${[
-          ["Zoho Books","ZohoBooks.invoices.ALL, contacts.ALL, customerpayments.ALL, estimates.ALL, items.ALL"],
-          ["Zoho CRM","ZohoCRM.modules.Contacts.ALL, Leads.ALL, Deals.ALL, users.READ"],
-          ["Zoho Campaigns","ZohoCampaigns.campaign.ALL, contact.ALL"],
-          ["Zoho Social","ZohoSocial.portals.ALL, message.ALL"],
-        ].map(([product, scopes]) => `
-          <div style="padding:8px;background:white;border:1px solid #e8e8e8;border-radius:4px">
-            <div style="font-weight:700;font-size:11px;color:#f37321;margin-bottom:3px">${product}</div>
-            <div style="font-size:11px;color:#555;font-family:monospace">${scopes}</div>
-          </div>
-        `).join("")}
-      </div>
+      <strong>Permissions being requested:</strong>
+      <ul style="margin:10px 0 0;padding-left:20px;line-height:2">
+        <li><strong>Zoho Books</strong> — invoices, contacts, payments, estimates, items</li>
+        <li><strong>Zoho CRM</strong> — Contacts, Leads, Deals (read/write)</li>
+        <li><strong>Zoho Campaigns</strong> — mailing lists, subscribers, campaigns</li>
+      </ul>
+      <p style="margin:10px 0 0;color:#888;font-size:12px">Social media posting uses direct platform links — no Zoho Social subscription needed.</p>
     </div>
 
     <a href="${authUrl}" style="
@@ -171,8 +136,18 @@ export default async function handler(req, res) {
       padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px;
     ">Authorize with Zoho →</a>
 
+    <div style="margin-top:20px;padding:14px;background:#e8f0fa;border:1px solid #1a5fa840;border-radius:6px;font-size:13px">
+      <strong>After authorizing:</strong>
+      <ol style="margin:8px 0 0;padding-left:20px;line-height:2">
+        <li>Copy the <strong>ZOHO_REFRESH_TOKEN</strong> value shown on the next screen</li>
+        <li>Go to Vercel → your project → Settings → Environment Variables</li>
+        <li>Update <strong>ZOHO_REFRESH_TOKEN</strong> with the new value</li>
+        <li><strong>Redeploy</strong> the project — the new token won't take effect until you redeploy</li>
+      </ol>
+    </div>
+
     <p style="margin-top:16px;font-size:12px;color:#888">
-      Redirect URI registered in your app: <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px">${redirectUri}</code>
+      Redirect URI: <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px">${redirectUri}</code>
     </p>
   `));
 }

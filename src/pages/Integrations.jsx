@@ -1355,96 +1355,8 @@ Channel: ${slackChannelName}`);
                 )}
               </div>
 
-              {/* ── ZOHO SOCIAL ─────────────────────────────────────────────── */}
-              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #E42527`}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                  <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>ZOHO SOCIAL</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post ads and content directly to Facebook, Instagram, LinkedIn, Twitter/X</div>
-                  </div>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    {status.social
-                      ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3}}>✓ CONNECTED</span>
-                      : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:3}}>NOT CONNECTED</span>}
-                    <button onClick={testSocial} disabled={testing==="social"} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
-                      {testing==="social"?"TESTING...":"TEST CONNECTION"}
-                    </button>
-                  </div>
-                </div>
-
-                {!status.social && (
-                  <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-                    <strong>Setup:</strong> Re-run <a href="/api/zoho-setup" style={{color:B.blue}}>/api/zoho-setup</a> to authorize <code>ZohoSocial.account.ALL</code>. Also make sure your Facebook, Instagram, LinkedIn, or Twitter accounts are connected in <a href="https://social.zoho.com" target="_blank" rel="noreferrer" style={{color:B.blue}}>Zoho Social</a>.
-                  </div>
-                )}
-
-                {status.social && (
-                  <div>
-                    {/* Portal selector */}
-                    {socialPortals.length > 1 && (
-                      <div style={{marginBottom:12}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>PORTAL</div>
-                        <div style={{display:"flex",gap:6}}>
-                          {socialPortals.map(p=>(
-                            <button key={p.id} onClick={()=>{setSelectedPortalId(p.id);loadSocialChannels(p.id);}} style={{background:selectedPortalId===p.id?B.orange:B.surface,color:selectedPortalId===p.id?B.white:B.text,border:`1px solid ${selectedPortalId===p.id?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p.name}</button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Connected channels */}
-                    <div style={{marginBottom:14}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>CONNECTED CHANNELS</div>
-                      {socialLoading ? (
-                        <div style={{color:B.muted,fontSize:11,fontFamily:"'Lexend',sans-serif"}}>Loading channels…</div>
-                      ) : socialChannels.length === 0 ? (
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No channels found. Connect social accounts in Zoho Social first.</div>
-                      ) : (
-                        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                          {socialChannels.map(ch=>{
-                            const sel = testPostChannels.includes(ch.id);
-                            const networkColors = {Facebook:"#1877F2",Instagram:"#E1306C",Twitter:"#1DA1F2",LinkedIn:"#0A66C2",YouTube:"#FF0000"};
-                            const c = networkColors[ch.network] || B.muted;
-                            return (
-                              <button key={ch.id} onClick={()=>setTestPostChannels(s=>sel?s.filter(x=>x!==ch.id):[...s,ch.id])} style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"8px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:80}}>
-                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,color:c}}>{ch.network}</div>
-                                <div style={{fontSize:11}}>{ch.name}</div>
-                                {sel && <div style={{fontSize:9,color:c}}>✓ selected</div>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Post composer */}
-                    <div style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>POST COMPOSER</div>
-                      <textarea
-                        value={testPostMsg}
-                        onChange={e=>setTestPostMsg(e.target.value)}
-                        rows={3}
-                        style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:10}}
-                      />
-                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <button
-                          onClick={postToSocial}
-                          disabled={socialPosting||!testPostChannels.length||!testPostMsg.trim()}
-                          style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}
-                        >
-                          {socialPosting?"POSTING...":"POST TO SELECTED CHANNELS"}
-                        </button>
-                        {testPostChannels.length===0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Select channels above</span>}
-                        {socialPostResult?.ok && <span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✓ Posted! ID: {socialPostResult.postId||"n/a"}</span>}
-                        {socialPostResult?.error && <span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✗ {socialPostResult.error.slice(0,80)}</span>}
-                      </div>
-                      <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                        Tip: Go to the <strong>Ad Engine → Ad Creator</strong> tab to generate a polished ad image, then use "Post to Social" there to post the rendered ad directly.
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* ── SOCIAL PUBLISHING ───────────────────────────────────────── */}
+              <SocialPublishPanel addLog={addLog}/>
 
             </div>
           )}
@@ -1743,6 +1655,83 @@ Channel: ${slackChannelName}`);
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DIRECT SOCIAL PUBLISHING ─────────────────────────────────────────────────
+function SocialPublishPanel({addLog}) {
+  const [caption, setCaption] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const copyCaption = () => {
+    if (!caption.trim()) return;
+    navigator.clipboard.writeText(caption).then(()=>{
+      setCopied(true);
+      setTimeout(()=>setCopied(false), 2000);
+      addLog("Caption copied to clipboard","success");
+    });
+  };
+
+  const openPlatform = (platform) => {
+    copyCaption();
+    const urls = {
+      twitter:  `https://twitter.com/intent/tweet?text=${encodeURIComponent((caption||"").slice(0,280))}`,
+      linkedin: `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent((caption||"").slice(0,3000))}`,
+      facebook: "https://www.facebook.com/",
+      instagram: "https://www.instagram.com/",
+    };
+    window.open(urls[platform], "_blank");
+    addLog(`Opened ${platform} — caption copied, paste it in the composer`,"info");
+  };
+
+  const PLATFORMS = [
+    {id:"twitter",  label:"𝕏 Twitter/X", color:"#000000", note:"Caption auto-fills in tweet box"},
+    {id:"linkedin", label:"LinkedIn",     color:"#0A66C2", note:"Caption auto-fills in post composer"},
+    {id:"facebook", label:"Facebook",     color:"#1877F2", note:"Caption copied — paste in your post"},
+    {id:"instagram",label:"Instagram",    color:"#E1306C", note:"Caption copied — paste in your post"},
+  ];
+
+  return (
+    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #E1306C`}}>
+      <div style={{marginBottom:14}}>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post ads and content to Facebook, Instagram, LinkedIn, Twitter/X · no extra subscription needed</div>
+      </div>
+
+      {/* Caption composer */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>CAPTION</div>
+        <textarea
+          value={caption}
+          onChange={e=>setCaption(e.target.value)}
+          rows={4}
+          placeholder="Write your post caption here — or go to Ad Engine → Ad Creator and click 'Post to Social' to auto-fill from your ad"
+          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}
+        />
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:4}}>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{caption.length} chars</div>
+          <button onClick={copyCaption} disabled={!caption.trim()}
+            style={{background:copied?B.green:B.surface,color:copied?B.white:B.text,border:`1px solid ${copied?B.green:B.border}`,borderRadius:4,padding:"4px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",letterSpacing:.5,transition:"background .15s"}}>
+            {copied?"✓ COPIED":"⎘ COPY"}
+          </button>
+        </div>
+      </div>
+
+      {/* Platform buttons */}
+      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>OPEN PLATFORM COMPOSER</div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        {PLATFORMS.map(({id,label,color,note})=>(
+          <button key={id} onClick={()=>openPlatform(id)} disabled={!caption.trim()}
+            style={{background:caption.trim()?`${color}0d`:"#f8f8f8",color:caption.trim()?color:B.muted,border:`1px solid ${caption.trim()?color+"40":B.border}`,borderRadius:6,padding:"10px 14px",textAlign:"left",cursor:caption.trim()?"pointer":"default",transition:"background .15s"}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:700,marginBottom:2}}>{label} ↗</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:caption.trim()?color+"aa":B.muted}}>{note}</div>
+          </button>
+        ))}
+      </div>
+      <div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+        Twitter/X and LinkedIn pre-fill the caption in the composer. For Facebook and Instagram, the caption is copied to your clipboard — just paste it. Download your ad image from Ad Engine to attach it.
       </div>
     </div>
   );
