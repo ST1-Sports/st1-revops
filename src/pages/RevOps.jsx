@@ -47,6 +47,7 @@ const SEED = {
   agentHistory: [],
   alerts: [],
   orders: [],
+  templates: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
 };
@@ -74,6 +75,7 @@ function useStore() {
           competeIntel: p.competeIntel && typeof p.competeIntel==="object" ? p.competeIntel : {},
           battlecards:  p.battlecards  && typeof p.battlecards ==="object" ? p.battlecards  : {},
           orders:       Array.isArray(p.orders)       ? p.orders       : [],
+          templates:    Array.isArray(p.templates)    ? p.templates    : [],
           alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
@@ -201,6 +203,10 @@ function reducer(prev, action, payload) {
     }
     case "ADD_ORDER":           return {...prev, orders:[payload,...(prev.orders||[])]};
     case "UPDATE_ORDER":        return {...prev, orders:(prev.orders||[]).map(o=>o.id===payload.id?{...o,...payload}:o)};
+    case "DEL_ORDER":           return {...prev, orders:(prev.orders||[]).filter(o=>o.id!==payload)};
+    case "ADD_TEMPLATE":        return {...prev, templates:[payload,...(prev.templates||[])]};
+    case "UPDATE_TEMPLATE":     return {...prev, templates:(prev.templates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
+    case "DEL_TEMPLATE":        return {...prev, templates:(prev.templates||[]).filter(t=>t.id!==payload)};
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
@@ -269,13 +275,17 @@ export default function App() {
 
   const NAV = [
     {id:"briefing",   icon:"◈", label:"Daily Briefing",  badge:urgentCount(s)},
+    {id:"revenue",    icon:"↑", label:"Revenue"},
     {id:"deals",      icon:"◫", label:"Deal Manager"},
     {id:"quotes",     icon:"▤", label:"Quote Builder"},
+    {id:"orders",     icon:"⊡", label:"Orders",          badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
     {id:"rfp",        icon:"⊘", label:"RFP / Bids",      badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     {id:"invoicing",  icon:"▲", label:"Invoices & AR",   badge:s.invoices.filter(i=>i.status==="overdue").length},
     {id:"reorder",    icon:"↺", label:"Reorder Engine",  badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"prospecting",icon:"⊕", label:"Prospecting"},
     {id:"marketing",  icon:"✦", label:"Marketing"},
+    {id:"outreach",   icon:"✉", label:"Batch Outreach"},
+    {id:"templates",  icon:"≈", label:"Email Templates"},
     {id:"ads",        icon:"⬛", label:"Ad Engine"},
     {id:"compete",    icon:"⊗", label:"Competitors"},
     {id:"agent",      icon:"AI",label:"AI Agent"},
@@ -388,13 +398,17 @@ export default function App() {
 
           <main style={{flex:1,overflowY:"auto",background:B.pageBg}}>
             {mod==="briefing"    && <ModBriefing/>}
+            {mod==="revenue"     && <ModRevenue/>}
             {mod==="deals"       && <ModDeals/>}
             {mod==="quotes"      && <ModQuotes/>}
+            {mod==="orders"      && <ModOrders/>}
             {mod==="rfp"         && <ModRFP/>}
             {mod==="invoicing"   && <ModInvoicing/>}
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
+            {mod==="outreach"    && <ModBatchOutreach/>}
+            {mod==="templates"   && <ModTemplates/>}
             {mod==="ads"         && <ModAds/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
@@ -488,7 +502,7 @@ function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{backgr
 // ════════════════════════════════════════════════════════════════════════════
 //  BRIEFING
 // ════════════════════════════════════════════════════════════════════════════
-const ORDER_STAGES = ["Order Received","Placed with Vendor","Shipped","Invoiced"];
+const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 
 function ModBriefing() {
   const {s,dispatch,cu,setMod}=useApp();
@@ -551,7 +565,7 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
     </div>
   );
 
-  const stageColor={"Order Received":B.blue,"Placed with Vendor":B.purple,"Shipped":B.orange,"Invoiced":B.green};
+  const stageColor={"Order Received":B.blue,"Order Placed":B.purple,"Invoiced":B.green};
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -638,21 +652,11 @@ Give 3-4 specific actions ranked by revenue impact. Under 120 words. Be direct.`
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:4}}>{o.contact&&`${o.contact} · `}{fmt$(o.value)}</div>
                       {o.invoiceNumber&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginBottom:2}}>INV: {o.invoiceNumber}</div>}
                       {o.trackingNumber&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TRK: {o.trackingNumber}</div>}
-                      {o.estimatedShip&&stage!=="Shipped"&&stage!=="Invoiced"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:4}}>Est. ship: {o.estimatedShip}</div>}
                       {!isLast&&(
-                        <div style={{display:"flex",gap:4,marginTop:4}}>
-                          <button onClick={()=>advanceOrder(o)} style={{background:col,color:B.white,border:"none",borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.2,cursor:"pointer",flex:1}}>→ {nextStage?.split(" ")[0]?.toUpperCase()}</button>
-                          {stage==="Shipped"&&!o.invoiceNumber&&(
-                            <button onClick={()=>{const n=prompt("Invoice number:");if(n)dispatch("UPDATE_ORDER",{id:o.id,invoiceNumber:n});}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 6px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>INV#</button>
-                          )}
-                        </div>
+                        <button onClick={()=>advanceOrder(o)} style={{background:col,color:B.white,border:"none",borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.2,cursor:"pointer",width:"100%",marginTop:4}}>→ {nextStage?.toUpperCase()}</button>
                       )}
-                      {isLast&&!o.invoiceNumber&&(
-                        <button onClick={()=>{const n=prompt("Invoice number:");if(n)dispatch("UPDATE_ORDER",{id:o.id,invoiceNumber:n});}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",marginTop:4,width:"100%"}}>+ ADD INVOICE #</button>
-                      )}
-                      {stage==="Shipped"&&(
-                        <input placeholder="Tracking #" value={o.trackingNumber||""} onChange={e=>dispatch("UPDATE_ORDER",{id:o.id,trackingNumber:e.target.value})}
-                          style={{width:"100%",marginTop:4,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"3px 6px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}/>
+                      {isLast&&!o.zohoInvoiceId&&(
+                        <button onClick={()=>setMod("orders")} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",marginTop:4,width:"100%"}}>OPEN IN ORDERS →</button>
                       )}
                     </div>
                   );
@@ -928,6 +932,397 @@ Under 80 words. Include subject line. Warm tone.`);
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  REVENUE DASHBOARD
+// ════════════════════════════════════════════════════════════════════════════
+function ModRevenue() {
+  const {s,setMod}=useApp();
+  const deals=s.deals||[];
+  const won=deals.filter(d=>d.stage==="Closed Won");
+  const open=deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const lost=deals.filter(d=>d.stage==="Closed Lost");
+
+  const pipeline=open.reduce((a,d)=>a+(d.value||0),0);
+  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
+  const arTotal=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+
+  // Won by month (last 12 months)
+  const now=new Date();
+  const months=Array.from({length:6},(_,i)=>{
+    const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
+    return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};
+  });
+  const wonByMonth=months.map(m=>{
+    const mWon=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));
+    return{...m,count:mWon.length,value:mWon.reduce((a,d)=>a+(d.value||0),0)};
+  });
+  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
+
+  // Pipeline by stage
+  const stageGroups={};
+  open.forEach(d=>{stageGroups[d.stage]=(stageGroups[d.stage]||[]).concat(d);});
+  const stageSummary=Object.entries(stageGroups).map(([stage,ds])=>({stage,count:ds.length,value:ds.reduce((a,d)=>a+(d.value||0),0)})).sort((a,b)=>b.value-a.value);
+
+  // Top products
+  const prodMap={};
+  [...won,...open].forEach(d=>{if(d.product){prodMap[d.product]=(prodMap[d.product]||0)+(d.value||0);}});
+  const topProducts=Object.entries(prodMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
+
+  // Conversion rate
+  const totalClosed=won.length+lost.length;
+  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
+  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+
+  return(
+    <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
+      <PH title="REVENUE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
+
+      {/* KPIs */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
+        <KCard l="Open Pipeline"   v={fmt$(pipeline)} c={B.orange}/>
+        <KCard l="Total Won"       v={fmt$(wonTotal)}  c={B.green}/>
+        <KCard l="AR Outstanding"  v={fmt$(arTotal)}   c={B.red}/>
+        <KCard l="Win Rate"        v={`${convRate}%`}  c={B.blue}/>
+        <KCard l="Avg Deal Size"   v={fmt$(avgDeal)}   c={B.purple}/>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+        {/* Won by Month chart */}
+        <div className="card" style={{padding:16}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>WON REVENUE — LAST 6 MONTHS</div>
+          <div style={{display:"flex",alignItems:"flex-end",gap:8,height:120,marginBottom:8}}>
+            {wonByMonth.map(m=>(
+              <div key={m.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center"}}>{m.value>0?fmt$(m.value).replace("$","$"):""}</div>
+                <div style={{width:"100%",background:m.value>0?B.orange:B.border,borderRadius:"3px 3px 0 0",height:m.value>0?`${Math.max(6,Math.round((m.value/maxMonthVal)*80))}px`:"4px",transition:"height .3s"}}/>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center",whiteSpace:"nowrap"}}>{m.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>
+            {won.length} won deals · avg {fmt$(avgDeal)}
+          </div>
+        </div>
+
+        {/* Pipeline by stage */}
+        <div className="card" style={{padding:16}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>PIPELINE BY STAGE</div>
+          {stageSummary.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>No open deals</div>}
+          {stageSummary.map(({stage,count,value})=>{
+            const pct=pipeline>0?Math.round((value/pipeline)*100):0;
+            const sc={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal};
+            const col=sc[stage]||B.muted;
+            return(
+              <div key={stage} style={{marginBottom:10}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage} <span style={{color:B.muted}}>({count})</span></span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(value)}</span>
+                </div>
+                <div style={{background:B.border,borderRadius:4,height:6,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",background:col,borderRadius:4,transition:"width .4s"}}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        {/* Top products */}
+        <div className="card" style={{padding:16}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>TOP PRODUCTS BY PIPELINE VALUE</div>
+          {topProducts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>Tag deals with product categories to see data</div>}
+          {topProducts.map(([prod,val],i)=>(
+            <div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+              <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.muted,minWidth:16}}>{i+1}</span>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{prod}</span>
+              </div>
+              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.green}}>{fmt$(val)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Orders in flight + AR */}
+        <div className="card" style={{padding:16}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>ORDERS & AR SNAPSHOT</div>
+          {ORDER_STAGES.map(stage=>{
+            const cnt=(s.orders||[]).filter(o=>o.stage===stage).length;
+            const val=(s.orders||[]).filter(o=>o.stage===stage).reduce((a,o)=>a+(o.value||0),0);
+            const col={"Order Received":B.blue,"Order Placed":B.purple,"Invoiced":B.green}[stage]||B.muted;
+            return(
+              <div key={stage} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}} onClick={()=>setMod("orders")}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:col}}/>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{stage}</span>
+                </div>
+                <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{cnt} orders</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(val)}</span>
+                </div>
+              </div>
+            );
+          })}
+          <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>Total AR Outstanding</span>
+            <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.red}}>{fmt$(arTotal)}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ORDER MANAGER
+// ════════════════════════════════════════════════════════════════════════════
+function ModOrders() {
+  const {s,dispatch,toast}=useApp();
+  const orders=s.orders||[];
+  const [view,setView]=useState("kanban"); // "kanban"|"scan"
+  const [scanning,setScanning]=useState(false);
+  const [emailProposals,setEmailProposals]=useState([]);
+  const [creating,setCreating]=useState(null); // proposal being converted
+  const [oForm,setOForm]=useState({name:"",contact:"",email:"",school:"",value:"",notes:"",source:"manual",items:[]});
+  const [addingManual,setAddingManual]=useState(false);
+  const [invoicing,setInvoicing]=useState(null); // orderId being invoiced
+
+  const stageCol={"Order Received":B.blue,"Order Placed":B.purple,"Invoiced":B.green};
+
+  const advanceOrder=async(o)=>{
+    const idx=ORDER_STAGES.indexOf(o.stage);
+    if(idx>=ORDER_STAGES.length-1)return;
+    const nextStage=ORDER_STAGES[idx+1];
+    dispatch("UPDATE_ORDER",{id:o.id,stage:nextStage,updatedAt:today()});
+    toast(`${o.name} → ${nextStage}`,"success");
+    dispatch("LOG",{msg:`Order "${o.name}" advanced to ${nextStage}`});
+    // When reaching Invoiced: push to Zoho Books
+    if(nextStage==="Invoiced"){
+      setInvoicing(o.id);
+      try{
+        const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          service:"books",endpoint:"/invoices",method:"POST",
+          body:{
+            customer_name:o.school||o.contact||o.name,
+            date:today(),
+            due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
+            line_items:o.items?.length>0
+              ?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0}))
+              :[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
+            notes:`Order #${o.id.slice(-6).toUpperCase()} — created via ST1 RevOps.`,
+            terms:"Due within 30 days.",
+          }
+        })});
+        const d=await r.json();
+        if(d.invoice?.invoice_id||d.invoice_id){
+          const invId=d.invoice?.invoice_id||d.invoice_id;
+          const invNum=d.invoice?.invoice_number||d.invoice_number||invId;
+          dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:invId,invoiceNumber:invNum});
+          toast(`✓ Zoho Books invoice created: ${invNum}`,"success");
+        }else{
+          toast("Order invoiced · Zoho Books not fully connected","info");
+        }
+      }catch(e){toast(`Invoice sync failed: ${e.message.slice(0,60)}`,"error");}
+      setInvoicing(null);
+    }
+  };
+
+  const scanEmail=async()=>{
+    setScanning(true);setEmailProposals([]);setView("scan");
+    try{
+      const listRes=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"list",query:"subject:(order purchase equipment quote interested buying need buy request proposal) newer_than:60d category:primary",maxResults:15})});
+      const {messages=[]}=await listRes.json();
+      if(!messages.length){toast("No order emails found in inbox","info");setScanning(false);return;}
+      // Fetch full bodies (limit 10)
+      const bodies=await Promise.all(messages.slice(0,10).map(m=>
+        fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"get",messageId:m.id})}).then(r=>r.json()).catch(()=>null)
+      ));
+      const valid=bodies.filter(Boolean);
+      const prompt=`You are reviewing emails for ST1 Sports (athletic equipment). Identify emails where a customer wants to BUY equipment or is placing/requesting an order.
+
+Emails:
+${valid.map(e=>`---\nID: ${e.id}\nFrom: ${e.from}\nSubject: ${e.subject}\nBody: ${(e.body||e.snippet||"").slice(0,500)}`).join("\n")}
+
+For each email that is a purchase request or order, return JSON array:
+[{"email_id":"","customer_name":"","customer_email":"","school":"","items_mentioned":"","estimated_value":0,"urgency":"high|medium|low","summary":"1 sentence"}]
+
+Only include actual purchase requests. Return [] if none found.`;
+      const raw=await aiCall(prompt,{json:true,tokens:2000});
+      const proposals=Array.isArray(raw)?raw:[];
+      setEmailProposals(proposals);
+      if(!proposals.length)toast("No purchase emails identified","info");
+      else toast(`${proposals.length} potential order${proposals.length!==1?"s":""} found`,"success");
+    }catch(e){toast(`Scan failed: ${e.message.slice(0,80)}`,"error");}
+    setScanning(false);
+  };
+
+  const createFromEmail=(p)=>{
+    const o={id:mkId(),name:p.school?`${p.school} — ${p.items_mentioned||"Equipment"}`:p.customer_name,
+      contact:p.customer_name,email:p.customer_email||"",school:p.school||"",
+      value:p.estimated_value||0,notes:p.summary||"",stage:"Order Received",
+      source:"email",emailId:p.email_id,createdAt:today(),items:[]};
+    dispatch("ADD_ORDER",o);
+    dispatch("LOG",{msg:`Order created from email: ${o.name}`});
+    setEmailProposals(ep=>ep.filter(x=>x.email_id!==p.email_id));
+    toast(`Order created: ${o.name}`,"success");
+  };
+
+  const createManualOrder=()=>{
+    if(!oForm.name){toast("Order name required","error");return;}
+    const o={...oForm,id:mkId(),stage:"Order Received",createdAt:today(),updatedAt:today(),value:Number(oForm.value)||0};
+    dispatch("ADD_ORDER",o);
+    dispatch("LOG",{msg:`Manual order created: ${o.name}`});
+    toast("Order created","success");
+    setOForm({name:"",contact:"",email:"",school:"",value:"",notes:"",source:"manual",items:[]});
+    setAddingManual(false);
+  };
+
+  const URGENCY_C={high:B.red,medium:B.orange,low:B.muted};
+
+  return(
+    <div style={{padding:"22px 26px",height:"calc(100vh - 46px)",overflowY:"auto"}}>
+      <PH title="ORDER MANAGER" sub="Track orders from receipt through invoicing → auto-syncs to Zoho Books"
+        action={<div style={{display:"flex",gap:7}}>
+          <button onClick={scanEmail} disabled={scanning} style={{background:scanning?B.surface:B.blue,color:scanning?B.muted:B.white,border:`1px solid ${scanning?B.border:B.blue}`,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
+            {scanning?"🔍 SCANNING EMAIL...":"📧 SCAN EMAIL FOR ORDERS"}
+          </button>
+          <button onClick={()=>{setView("kanban");setAddingManual(true);}} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.4}}>+ NEW ORDER</button>
+          {view==="scan"&&<button onClick={()=>setView("kanban")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← BACK</button>}
+        </div>}/>
+
+      {/* Manual create form */}
+      {addingManual&&(
+        <div className="card" style={{padding:16,marginBottom:14,borderTop:`3px solid ${B.orange}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>NEW ORDER</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+            {[["Order / Customer Name *","name"],["Contact Person","contact"],["School / Org","school"],["Email","email"],["Value ($)","value"],["Notes","notes"]].map(([l,k])=>(
+              <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
+                <input value={oForm[k]} onChange={e=>setOForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:7}}>
+            <OBtn sm onClick={createManualOrder} disabled={!oForm.name}>CREATE ORDER</OBtn>
+            <GBtn onClick={()=>setAddingManual(false)} style={{fontSize:10}}>CANCEL</GBtn>
+          </div>
+        </div>
+      )}
+
+      {/* Email scan results */}
+      {view==="scan"&&(
+        <div>
+          {scanning&&<div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}><Spin/> Scanning Gmail for purchase emails...</div>}
+          {!scanning&&emailProposals.length===0&&(
+            <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+              No purchase emails found.<br/>Try adjusting the scan — emails with order/purchase keywords in the last 60 days are checked.
+              <br/><br/><button onClick={()=>setView("kanban")} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← BACK TO KANBAN</button>
+            </div>
+          )}
+          {emailProposals.length>0&&(
+            <div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>{emailProposals.length} purchase email{emailProposals.length!==1?"s":""} detected — click to create orders</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {emailProposals.map((p,i)=>(
+                  <div key={i} className="card" style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${URGENCY_C[p.urgency]||B.muted}`}}>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:4}}>
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{p.customer_name}</span>
+                        {p.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>· {p.school}</span>}
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:URGENCY_C[p.urgency]||B.muted,background:`${URGENCY_C[p.urgency]||B.muted}18`,padding:"1px 6px",borderRadius:8,letterSpacing:.4}}>{(p.urgency||"medium").toUpperCase()}</span>
+                      </div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:2}}>{p.summary}</div>
+                      {p.items_mentioned&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>Items: {p.items_mentioned}</div>}
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",marginLeft:16,flexShrink:0}}>
+                      {p.estimated_value>0&&<span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(p.estimated_value)}</span>}
+                      <OBtn sm onClick={()=>createFromEmail(p)}>+ CREATE ORDER</OBtn>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Kanban */}
+      {view==="kanban"&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+          {ORDER_STAGES.map(stage=>{
+            const stOrders=orders.filter(o=>o.stage===stage);
+            const col=stageCol[stage]||B.muted;
+            const stVal=stOrders.reduce((a,o)=>a+(o.value||0),0);
+            return(
+              <div key={stage} style={{background:B.surface,borderRadius:8,padding:12,borderTop:`3px solid ${col}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,letterSpacing:1.5}}>{stage.toUpperCase()}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{fmt$(stVal)}</div>
+                  </div>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:col}}>{stOrders.length}</span>
+                </div>
+                {stOrders.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"20px 0"}}>—</div>}
+                {stOrders.map(o=>{
+                  const isLast=stage==="Invoiced";
+                  const nextStage=ORDER_STAGES[ORDER_STAGES.indexOf(stage)+1];
+                  return(
+                    <div key={o.id} style={{background:B.white,borderRadius:6,padding:"10px 12px",marginBottom:8,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,flex:1,lineHeight:1.4}}>{o.name}</div>
+                        <button onClick={()=>dispatch("DEL_ORDER",o.id)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:14,padding:0,marginLeft:6,lineHeight:1,opacity:.5}}>×</button>
+                      </div>
+                      {o.contact&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{o.contact}{o.school?` · ${o.school}`:""}</div>}
+                      {o.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,marginBottom:2}}>{o.email}</div>}
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(o.value)}</span>
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{o.createdAt}</span>
+                      </div>
+                      {o.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6,lineHeight:1.5,borderTop:`1px solid ${B.border}`,paddingTop:6}}>{o.notes.slice(0,80)}{o.notes.length>80?"…":""}</div>}
+                      {o.invoiceNumber&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginBottom:4}}>✓ INVOICE: {o.invoiceNumber}</div>}
+                      {o.source==="email"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>📧 FROM EMAIL</div>}
+                      {!isLast&&(
+                        <button onClick={()=>advanceOrder(o)} disabled={invoicing===o.id} style={{background:col,color:B.white,border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",width:"100%",letterSpacing:.3,opacity:invoicing===o.id?.6:1}}>
+                          {invoicing===o.id?"SYNCING...":"→ "+nextStage?.toUpperCase()}
+                        </button>
+                      )}
+                      {isLast&&!o.zohoInvoiceId&&(
+                        <button onClick={async()=>{
+                          setInvoicing(o.id);
+                          try{
+                            const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+                              service:"books",endpoint:"/invoices",method:"POST",
+                              body:{customer_name:o.school||o.contact||o.name,date:today(),due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
+                                line_items:o.items?.length>0?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0})):[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
+                                notes:`Order from ST1 RevOps.`,terms:"Due within 30 days."}
+                            })});
+                            const d=await r.json();
+                            if(d.invoice?.invoice_id){dispatch("UPDATE_ORDER",{id:o.id,zohoInvoiceId:d.invoice.invoice_id,invoiceNumber:d.invoice.invoice_number});toast(`✓ Zoho invoice: ${d.invoice.invoice_number}`,"success");}
+                            else toast("Zoho Books not connected — invoice not created","info");
+                          }catch(e){toast(`Invoice error: ${e.message}`,"error");}
+                          setInvoicing(null);
+                        }} disabled={invoicing===o.id} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",width:"100%",marginTop:4}}>
+                          {invoicing===o.id?"CREATING...":"✓ CREATE ZOHO INVOICE"}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {view==="kanban"&&orders.length===0&&!addingManual&&(
+        <div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+          No orders yet. Scan your email for purchase requests or create manually.
+        </div>
+      )}
     </div>
   );
 }
@@ -2329,6 +2724,388 @@ function ModProspecting() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  EMAIL TEMPLATES
+// ════════════════════════════════════════════════════════════════════════════
+const DEFAULT_TEMPLATES=[
+  {id:"tpl_intro",name:"Cold Intro — Track & Field",tags:["cold","t&f"],subject:"ST1 Sports — Equipment for {{school}} T&F Program",body:`Hi {{name}},
+
+I wanted to reach out about ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
+
+We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and I personally handle every order.
+
+Would it be worth a quick 10-minute call to see if we can help {{school}} this season?
+
+Best,
+Matt Stone
+ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
+  {id:"tpl_fu1",name:"Follow-Up 1 — After Quote",tags:["followup","quote"],subject:"Re: ST1 Sports Quote — {{school}}",body:`Hi {{name}},
+
+Just following up on the quote I sent over. Did you get a chance to review it?
+
+Happy to adjust quantities, add items, or answer any questions. We can also split the order across two POs if that's easier for your budget cycle.
+
+Best,
+Matt Stone
+ST1 Sports | matt@st1sports.com | 719-256-0275`},
+  {id:"tpl_fu2",name:"Follow-Up 2 — Final Check-in",tags:["followup"],subject:"Quick check-in — {{school}} equipment",body:`Hi {{name}},
+
+I don't want to be a pest, so this will be my last follow-up for now. If the timing isn't right or you've gone a different direction, no worries at all — just let me know so I can close this out on my end.
+
+If you're still interested, I can hold current pricing for one more week.
+
+Best,
+Matt Stone
+ST1 Sports | 719-256-0275`},
+  {id:"tpl_po",name:"PO Confirmation",tags:["order","confirmation"],subject:"ST1 Sports — Order Confirmation for {{school}}",body:`Hi {{name}},
+
+Thank you for your order! Here's a summary:
+
+{{items}}
+
+Estimated ship date: {{ship_date}}
+Tracking will be emailed once shipped.
+
+Questions? Reply here or call me directly at 719-256-0275.
+
+Matt Stone
+ST1 Sports | matt@st1sports.com | st1sports.com`},
+  {id:"tpl_winback",name:"Win-Back — Lapsed Customer",tags:["winback","cold"],subject:"It's been a while — new equipment for {{school}}?",body:`Hi {{name}},
+
+It's Matt from ST1 Sports — it's been a while since we last worked together, and I wanted to check in.
+
+We've added some new items this season, and I'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
+
+Best,
+Matt Stone
+ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
+];
+
+function ModTemplates() {
+  const {s,dispatch,toast}=useApp();
+  const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
+  const [sel,setSel]=useState(allTemplates[0]?.id||null);
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState({name:"",subject:"",body:"",tags:[]});
+  const [tagInput,setTagInput]=useState("");
+
+  const current=allTemplates.find(t=>t.id===sel);
+  const isDefault=DEFAULT_TEMPLATES.some(t=>t.id===sel);
+
+  const startNew=()=>{setForm({name:"",subject:"",body:"",tags:[]});setEditing(true);setSel(null);};
+  const startEdit=()=>{if(!current||isDefault)return;setForm({name:current.name,subject:current.subject,body:current.body,tags:current.tags||[]});setEditing(true);};
+  const cancelEdit=()=>{setEditing(false);if(allTemplates.length)setSel(allTemplates[0].id);};
+
+  const saveTemplate=()=>{
+    if(!form.name||!form.subject||!form.body){toast("Name, subject and body required","error");return;}
+    if(sel&&!isDefault){
+      dispatch("UPDATE_TEMPLATE",{id:sel,...form});toast("Template updated","success");
+    } else {
+      const t={id:mkId(),...form};dispatch("ADD_TEMPLATE",t);setSel(t.id);toast("Template saved","success");
+    }
+    setEditing(false);
+  };
+
+  const copyTemplate=(t)=>{
+    navigator.clipboard.writeText(`Subject: ${t.subject}\n\n${t.body}`).catch(()=>{});
+    toast("Template copied to clipboard","success");
+  };
+
+  return(
+    <div style={{padding:"22px 26px",height:"calc(100vh - 46px)",overflowY:"hidden",display:"flex",flexDirection:"column"}}>
+      <PH title="EMAIL TEMPLATES" sub="Reusable outreach templates — use in agent, batch outreach, or deals"
+        action={<OBtn sm onClick={startNew}>+ NEW TEMPLATE</OBtn>}/>
+      <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14,flex:1,overflow:"hidden",marginTop:4}}>
+        {/* List */}
+        <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+          {allTemplates.map(t=>(
+            <div key={t.id} onClick={()=>{setSel(t.id);setEditing(false);}} style={{padding:"9px 12px",borderRadius:6,cursor:"pointer",background:sel===t.id?B.orangeBg:B.white,border:`1px solid ${sel===t.id?B.orange:B.border}`,borderLeft:`3px solid ${sel===t.id?B.orange:B.border}`}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:sel===t.id?500:400,lineHeight:1.3}}>{t.name}</div>
+              {t.tags?.length>0&&<div style={{display:"flex",gap:3,flexWrap:"wrap",marginTop:4}}>
+                {t.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:8,letterSpacing:.3}}>{tag}</span>)}
+              </div>}
+            </div>
+          ))}
+        </div>
+        {/* Content */}
+        <div style={{overflowY:"auto"}}>
+          {editing?(
+            <div className="card" style={{padding:16}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                <div><Lbl s={{marginBottom:4}}>TEMPLATE NAME</Lbl><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                <div><Lbl s={{marginBottom:4}}>TAGS (comma-separated)</Lbl>
+                  <input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean);}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>SUBJECT LINE</Lbl><input value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+              <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>BODY <span style={{color:B.muted,fontWeight:400}}>— use {"{{name}}"}, {"{{school}}"}, {"{{items}}"} as placeholders</span></Lbl>
+                <textarea value={form.body} onChange={e=>setForm(f=>({...f,body:e.target.value}))} rows={14} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.7}}/>
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <OBtn onClick={saveTemplate}>SAVE TEMPLATE</OBtn>
+                <GBtn onClick={cancelEdit}>CANCEL</GBtn>
+              </div>
+            </div>
+          ):current?(
+            <div>
+              <div className="card" style={{padding:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginBottom:4}}>{current.name}</div>
+                    {current.tags?.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                      {current.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:8,letterSpacing:.3}}>{tag}</span>)}
+                    </div>}
+                  </div>
+                  <div style={{display:"flex",gap:7}}>
+                    <button onClick={()=>copyTemplate(current)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>📋 COPY</button>
+                    {!isDefault&&<button onClick={startEdit} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>EDIT</button>}
+                    {!isDefault&&<button onClick={()=>{dispatch("DEL_TEMPLATE",sel);setSel(allTemplates[0]?.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>DEL</button>}
+                  </div>
+                </div>
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Subject: {current.subject}</div>
+                <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.7,margin:0,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>{current.body}</pre>
+                {isDefault&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Built-in template — create a custom copy to edit it.</div>}
+              </div>
+            </div>
+          ):<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Select a template</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  BATCH OUTREACH
+// ════════════════════════════════════════════════════════════════════════════
+function ModBatchOutreach() {
+  const {s,dispatch,toast}=useApp();
+  const contacts=s.contacts||[];
+  const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
+
+  const [sportFilter,setSportFilter]=useState("");
+  const [stateFilter,setStateFilter]=useState("");
+  const [scoreFilter,setScoreFilter]=useState(0);
+  const [noEmailFilter,setNoEmailFilter]=useState(false);
+  const [selContacts,setSelContacts]=useState(new Set());
+  const [tplId,setTplId]=useState(allTemplates[0]?.id||"");
+  const [drafts,setDrafts]=useState([]); // [{id, contact, subject, body, status}]
+  const [writing,setWriting]=useState(false);
+  const [sending,setSending]=useState(false);
+  const [sentCount,setSentCount]=useState(0);
+
+  const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
+  const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
+
+  const filtered=contacts.filter(c=>{
+    if(!c.email)return false;
+    if(noEmailFilter&&c.outreachStatus==="replied")return false;
+    if(sportFilter&&c.sport!==sportFilter)return false;
+    if(stateFilter&&c.state!==stateFilter)return false;
+    if((c.score||0)<scoreFilter)return false;
+    return true;
+  });
+
+  const togSel=(id)=>setSelContacts(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n;});
+  const selAll=()=>setSelContacts(new Set(filtered.map(c=>c.id)));
+  const selNone=()=>setSelContacts(new Set());
+
+  const selectedList=filtered.filter(c=>selContacts.has(c.id));
+
+  const buildDrafts=async()=>{
+    if(!selectedList.length){toast("Select contacts first","error");return;}
+    const tpl=allTemplates.find(t=>t.id===tplId);
+    if(!tpl){toast("Select a template","error");return;}
+    setWriting(true);
+    setDrafts([]);
+    // For small batches, use template directly; for larger use AI personalization
+    const useAI=selectedList.length<=20;
+    if(useAI){
+      const prompt=`You are writing personalized emails for ST1 Sports (athletic equipment) for ${selectedList.length} recipients.
+
+Template:
+Subject: ${tpl.subject}
+Body: ${tpl.body}
+
+Recipients:
+${selectedList.map((c,i)=>`${i+1}. ${c.fullName||[c.firstName,c.lastName].filter(Boolean).join(" ")} | ${c.title||"coach"} | ${c.school||""} | ${c.state||""} | Sport: ${c.sport||"general"}`).join("\n")}
+
+For each recipient personalize the subject and body by filling in {{name}}, {{school}}, and adding 1 specific sentence relevant to their sport/role.
+Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matching the list above.`;
+      const raw=await aiCall(prompt,{json:true,tokens:4000});
+      if(Array.isArray(raw)){
+        setDrafts(raw.map((r,i)=>{
+          const c=selectedList[i];
+          return{id:mkId(),contactId:c.id,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),toEmail:c.email,subject:r.subject||tpl.subject,body:r.body||tpl.body,status:"draft"};
+        }));
+      } else {
+        // Fallback: template-fill for each
+        setDrafts(selectedList.map(c=>{
+          const name=c.fullName||c.firstName||"Coach";
+          const school=c.school||"your school";
+          return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};
+        }));
+      }
+    } else {
+      setDrafts(selectedList.map(c=>{
+        const name=c.fullName||c.firstName||"Coach";
+        const school=c.school||"your school";
+        return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};
+      }));
+    }
+    setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
+  };
+
+  const sendAll=async()=>{
+    const toSend=drafts.filter(d=>d.status==="draft");
+    if(!toSend.length){toast("No drafts to send","error");return;}
+    setSending(true);setSentCount(0);
+    let sent=0;
+    for(const d of toSend){
+      try{
+        setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sending"}:x));
+        const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:d.toEmail,to_name:d.contactName,subject:d.subject,body:d.body})});
+        const res=await r.json();
+        if(res.sent){
+          setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sent"}:x));
+          dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"contacted",lastOutreach:today()});
+          dispatch("LOG",{msg:`Batch email sent to ${d.contactName} <${d.toEmail}>`});
+          sent++;setSentCount(sent);
+        }else{
+          setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));
+        }
+        await new Promise(r=>setTimeout(r,300)); // rate limit
+      }catch(e){
+        setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:e.message}:x));
+      }
+    }
+    setSending(false);toast(`${sent}/${toSend.length} emails sent`,"success");
+  };
+
+  const updDraft=(id,field,val)=>setDrafts(ds=>ds.map(d=>d.id===id?{...d,[field]:val}:d));
+
+  return(
+    <div style={{padding:"22px 26px",height:"calc(100vh - 46px)",overflowY:"auto"}}>
+      <PH title="BATCH OUTREACH" sub="Filter contacts, AI-personalize emails, send to many at once via Gmail"/>
+
+      {drafts.length===0?(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:16}}>
+          {/* Filters + contact list */}
+          <div>
+            <div className="card" style={{padding:14,marginBottom:12}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>FILTER CONTACTS</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:10}}>
+                <div><Lbl s={{marginBottom:3}}>SPORT</Lbl>
+                  <select value={sportFilter} onChange={e=>setSportFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                    <option value="">All sports</option>
+                    {sports.map(sp=><option key={sp}>{sp}</option>)}
+                  </select>
+                </div>
+                <div><Lbl s={{marginBottom:3}}>STATE</Lbl>
+                  <select value={stateFilter} onChange={e=>setStateFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                    <option value="">All states</option>
+                    {states.map(st=><option key={st}>{st}</option>)}
+                  </select>
+                </div>
+                <div><Lbl s={{marginBottom:3}}>MIN SCORE</Lbl>
+                  <input type="number" min="0" max="200" value={scoreFilter} onChange={e=>setScoreFilter(Number(e.target.value)||0)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{filtered.length} contacts match · {selContacts.size} selected</div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={selAll} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>SELECT ALL</button>
+                  <button onClick={selNone} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLEAR</button>
+                </div>
+              </div>
+            </div>
+            <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+              {filtered.slice(0,100).map(c=>(
+                <div key={c.id} onClick={()=>togSel(c.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 12px",borderRadius:6,cursor:"pointer",background:selContacts.has(c.id)?B.orangeBg:B.white,border:`1px solid ${selContacts.has(c.id)?B.orange:B.border}`}}>
+                  <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${selContacts.has(c.id)?B.orange:B.border}`,background:selContacts.has(c.id)?B.orange:"none",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {selContacts.has(c.id)&&<span style={{color:B.white,fontSize:10,lineHeight:1}}>✓</span>}
+                  </div>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.state}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</div>
+                    {(c.score||0)>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>{c.score}pts</div>}
+                  </div>
+                </div>
+              ))}
+              {filtered.length===0&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts match. Adjust filters or import contacts first.</div>}
+            </div>
+          </div>
+
+          {/* Template picker + action */}
+          <div>
+            <div className="card" style={{padding:14,marginBottom:12}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>SELECT TEMPLATE</div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {allTemplates.map(t=>(
+                  <div key={t.id} onClick={()=>setTplId(t.id)} style={{padding:"8px 10px",borderRadius:5,cursor:"pointer",background:tplId===t.id?B.orangeBg:B.white,border:`1px solid ${tplId===t.id?B.orange:B.border}`}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:tplId===t.id?500:400}}>{t.name}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.subject}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:14}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:12}}>
+                {selContacts.size} contacts selected · AI will personalize each email with their name and school.
+              </div>
+              <OBtn onClick={buildDrafts} disabled={writing||selContacts.size===0} style={{width:"100%",marginBottom:7}}>
+                {writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}
+              </OBtn>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
+            </div>
+          </div>
+        </div>
+      ):(
+        /* Draft review table */
+        <div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+              {drafts.length} drafts · {drafts.filter(d=>d.status==="sent").length} sent · {drafts.filter(d=>d.status==="failed").length} failed
+              {sending&&<span style={{color:B.orange,marginLeft:8}}>Sending {sentCount}/{drafts.filter(d=>d.status!=="sent").length}...</span>}
+            </div>
+            <div style={{display:"flex",gap:7}}>
+              <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
+              <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>
+                {sending?"SENDING...":"✉ SEND ALL DRAFTS"}
+              </button>
+            </div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {drafts.map(d=>{
+              const STATUS_C={draft:B.muted,sending:B.orange,sent:B.green,failed:B.red};
+              return(
+                <div key={d.id} className="card" style={{padding:14,borderLeft:`3px solid ${STATUS_C[d.status]||B.muted}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.contactName} <span style={{color:B.muted,fontWeight:400}}>· {d.toEmail}</span></div>
+                    </div>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:STATUS_C[d.status],background:`${STATUS_C[d.status]}18`,padding:"2px 7px",borderRadius:8,letterSpacing:.5,flexShrink:0}}>{d.status.toUpperCase()}</span>
+                  </div>
+                  {d.status==="draft"&&(
+                    <div>
+                      <input value={d.subject} onChange={e=>updDraft(d.id,"subject",e.target.value)} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:5}}/>
+                      <textarea value={d.body} onChange={e=>updDraft(d.id,"body",e.target.value)} rows={5} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                    </div>
+                  )}
+                  {d.status==="sent"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Sent successfully</div>}
+                  {d.status==="failed"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>✗ {d.error||"Send failed"}</div>}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
