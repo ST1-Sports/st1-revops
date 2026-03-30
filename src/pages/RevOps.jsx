@@ -2378,7 +2378,7 @@ function ModProspecting() {
           {search:true,json:true,tokens:1600}
         );
         if(Array.isArray(found)&&found.length>0){
-          const valid=found.filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId()}));
+          const valid=found.filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId(),source:"scraped"}));
           allContacts=[...allContacts,...valid];
           setContacts(prev=>[...prev,...valid]);
           bgTasks.appendContacts(SCRAPE_TASK_ID, valid);
@@ -2948,7 +2948,16 @@ function ModProspecting() {
               </div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
                 {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"],["scraped","◈ SCRAPED"],["dead","⊘ DEAD"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>{setDbFilter(v);setBulkSel(new Set());}} style={{background:dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):B.white,color:dbFilter===v?B.white:v==="dead"?B.red:v==="scraped"?B.purple:B.muted,border:`1px solid ${dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):v==="dead"?`${B.red}40`:v==="scraped"?`${B.purple}40`:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
+                  <button key={v} onClick={()=>{
+                    setDbFilter(v);
+                    if(v==="scraped"){
+                      // Auto-select all scraped contacts so bulk enroll is one more click
+                      const scrapedIds=new Set((s.contacts||[]).filter(c=>!c.deadStatus&&(c.source==="scraped"||["website","directory","search"].includes(c.source))).map(c=>c.id));
+                      setBulkSel(scrapedIds);
+                    } else {
+                      setBulkSel(new Set());
+                    }
+                  }} style={{background:dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):B.white,color:dbFilter===v?B.white:v==="dead"?B.red:v==="scraped"?B.purple:B.muted,border:`1px solid ${dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):v==="dead"?`${B.red}40`:v==="scraped"?`${B.purple}40`:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
             </div>
@@ -3005,13 +3014,73 @@ function ModProspecting() {
                   );
                 })()}
 
+                {/* Scraped leads action panel */}
+                {dbFilter==="scraped"&&(()=>{
+                  const allScraped=(s.contacts||[]).filter(c=>!c.deadStatus&&(c.source==="scraped"||["website","directory","search"].includes(c.source)));
+                  const enrolled=new Set((s.sequences||[]).flatMap(seq=>(seq.enrollments||[]).map(e=>e.contactId)));
+                  const unenrolled=allScraped.filter(c=>!enrolled.has(c.id));
+                  if(allScraped.length===0) return null;
+                  return(
+                    <div style={{background:`${B.purple}10`,border:`1px solid ${B.purple}30`,borderRadius:7,padding:"12px 14px",marginBottom:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:.5,marginBottom:3}}>◈ SCRAPED LEADS</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                            <strong>{allScraped.length}</strong> total · <strong style={{color:unenrolled.length?B.orange:B.green}}>{unenrolled.length}</strong> not yet in any campaign
+                          </div>
+                        </div>
+                        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                          <button onClick={()=>{
+                            const ids=new Set(unenrolled.map(c=>c.id));
+                            setBulkSel(ids);
+                          }} style={{background:B.white,color:B.purple,border:`1px solid ${B.purple}40`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>
+                            ☐ SELECT UNENROLLED ({unenrolled.length})
+                          </button>
+                          <div style={{position:"relative"}}>
+                            <button onClick={()=>setBulkEnrolling(v=>!v)} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>
+                              ⊕ ENROLL ALL UNENROLLED ▾
+                            </button>
+                            {bulkEnrolling&&(
+                              <div style={{position:"absolute",right:0,top:"100%",zIndex:30,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.14)",minWidth:200,padding:6}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 6px"}}>ENROLL {unenrolled.length} UNENROLLED IN</div>
+                                {(s.sequences||[]).map(seq=>(
+                                  <button key={seq.id} onClick={()=>{
+                                    const todayStr=new Date().toISOString().slice(0,10);
+                                    let count=0;
+                                    const updated={...seq,enrollments:[...(seq.enrollments||[])]};
+                                    unenrolled.forEach(c=>{
+                                      if(!updated.enrollments.some(e=>e.contactId===c.id)){
+                                        updated.enrollments.push({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr});
+                                        dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
+                                        count++;
+                                      }
+                                    });
+                                    dispatch("UPDATE_SEQUENCE",updated);
+                                    setBulkEnrolling(false);
+                                    toast(`${count} scraped contacts enrolled in "${seq.name}"`,count>0?"success":"warn");
+                                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"7px 10px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,cursor:"pointer",borderRadius:3}}>
+                                    <div style={{fontWeight:500}}>{seq.name}</div>
+                                    <div style={{fontSize:9,color:B.muted,marginTop:1}}>{(seq.enrollments||[]).length} already enrolled</div>
+                                  </button>
+                                ))}
+                                {(s.sequences||[]).length===0&&<div style={{padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet — create one in Email Sequences</div>}
+                                <button onClick={()=>setBulkEnrolling(false)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Contact list */}
                 <div style={{display:"flex",flexDirection:"column",gap:5}}>
                   {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).filter(c=>{
                     const isDead=!!c.deadStatus;
                     if(dbFilter==="dead") return isDead;
                     if(isDead) return false;
-                    const isScraped=["website","directory","search"].includes(c.source);
+                    const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);
                     if(dbFilter==="scraped") return isScraped;
                     const inv=findCustomerInvoice(c,s.invoices||[]);
                     if(dbFilter==="customers") return !!inv;
@@ -3035,6 +3104,8 @@ function ModProspecting() {
                             {c.zohoStatus&&c.zohoStatus!=="new"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:`${B.purple}15`,padding:"2px 5px",borderRadius:3}}>{c.zohoStatus.toUpperCase()}</span>}
                             {c.zohoSource&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 5px",borderRadius:3}}>{c.zohoSource}</span>}
                             {custInvoice&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#1a7f37",background:"#d8f3dc",padding:"2px 5px",borderRadius:3}} title={`Invoice: ${custInvoice.number||custInvoice.id}`}>✓ CUSTOMER</span>}
+                            {(c.source==="scraped"||["website","directory","search"].includes(c.source))&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 5px",borderRadius:3}}>◈ SCRAPED</span>}
+                            {c.source==="apollo"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.teal,background:B.tealBg,padding:"2px 5px",borderRadius:3}}>◎ APOLLO</span>}
                             {c.deadStatus&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,background:B.redBg,padding:"2px 5px",borderRadius:3}}>⊘ {c.deadStatus.replace(/_/g," ").toUpperCase()}</span>}
                             {c.emailBounced&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,padding:"2px 5px",borderRadius:3}}>✉✗ BOUNCED</span>}
                           </div>
