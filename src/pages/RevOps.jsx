@@ -338,9 +338,10 @@ export default function App() {
   }, []);
 
   const cu = USERS.find(u=>u.id===s.currentUserId);
-  const ctx = {s, dispatch, toast, cu, mod, setMod};
+  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef};
 
   // ── AUTO-SYNC every 6 hours ─────────────────────────────────────────────────
+  const crmSyncRef = useRef(null);
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
@@ -366,8 +367,8 @@ export default function App() {
       }
       return all;
     };
-    const syncContacts=async()=>{
-      if(s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
+    const syncContacts=async(force=false)=>{
+      if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
       try {
         const [contactRows,leadRows]=await Promise.all([
           fetchAllPages("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source"),
@@ -375,12 +376,18 @@ export default function App() {
         ]);
         const now=Date.now();
         const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+        const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
         const existing=new Set((s.contacts||[]).map(c=>c.id));
-        const toAdd=contacts.filter(c=>!existing.has(c.id));
+        const toAdd=[...contacts,...leads].filter(c=>!existing.has(c.id));
         if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
         dispatch("SET_CONTACTS_LAST_SYNC",now);
-      } catch{}
+        if(force) toast(`Synced ${toAdd.length} new record(s) from Zoho CRM`,"success");
+      } catch(e){
+        console.error("CRM sync failed:",e);
+        if(force) toast(`CRM sync failed: ${e.message}`,"error");
+      }
     };
+    crmSyncRef.current = syncContacts;
     syncInvoices(); syncContacts();
     const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
     return()=>clearInterval(iv);
@@ -2498,7 +2505,14 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
 const SCRAPE_TASK_ID = "prospecting_scrape";
 
 function ModProspecting() {
-  const {s,dispatch,toast,setMod}=useApp();
+  const {s,dispatch,toast,setMod,crmSyncRef}=useApp();
+  const [crmSyncing, setCrmSyncing] = useState(false);
+  const forceCrmSync = async () => {
+    if (!crmSyncRef?.current) { toast("Sync not ready","error"); return; }
+    setCrmSyncing(true);
+    await crmSyncRef.current(true);
+    setCrmSyncing(false);
+  };
   const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
@@ -3167,7 +3181,11 @@ function ModProspecting() {
                   </div>
                 )}
               </div>
-              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
+                <button onClick={forceCrmSync} disabled={crmSyncing}
+                  style={{background:crmSyncing?B.surface:B.orangeBg,color:crmSyncing?B.muted:B.orange,border:`1px solid ${crmSyncing?B.border:B.orange}40`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer",marginRight:6}}>
+                  {crmSyncing?"SYNCING…":"⟳ SYNC ZOHO CRM"}
+                </button>
                 {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"],["scraped","◈ SCRAPED"],["dead","⊘ DEAD"]].map(([v,l])=>(
                   <button key={v} onClick={()=>{
                     setDbFilter(v);
@@ -3185,8 +3203,14 @@ function ModProspecting() {
             {(s.contacts||[]).length===0&&importPhase==="idle"&&(
               <div className="card" style={{padding:30,textAlign:"center"}}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:8}}>No contacts yet</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Upload a CSV/Excel export from Zoho CRM, or run a scrape from your Focus Areas</div>
-                <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CONTACT LIST</OBtn>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Sync from Zoho CRM, upload a CSV/Excel export, or run a scrape from your Focus Areas</div>
+                <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+                  <button onClick={forceCrmSync} disabled={crmSyncing}
+                    style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>
+                    {crmSyncing?"SYNCING…":"⟳ SYNC FROM ZOHO CRM"}
+                  </button>
+                  <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CONTACT LIST</OBtn>
+                </div>
               </div>
             )}
             {(s.contacts||[]).length>0&&(
