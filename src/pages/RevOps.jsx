@@ -639,6 +639,7 @@ function ModBriefing() {
   const [addingOrder,setAddingOrder]=useState(false);
   const [oForm,setOForm]=useState({name:"",contact:"",school:"",value:"",invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:"",dealId:"",source:"manual"});
   const [sending,setSending]=useState(false);
+  const [quickPrompt,setQuickPrompt]=useState("");
 
   const isOwner=cu?.role==="owner";
   const myDeals=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
@@ -803,6 +804,14 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
         <div style={{width:34,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
       </div>
 
+      {/* AI quick prompt */}
+      <form onSubmit={e=>{e.preventDefault();const q=quickPrompt.trim();if(q){dispatch("SET_AGENT_DRAFT",q);setQuickPrompt("");setMod("agent");}}} style={{display:"flex",gap:8,marginBottom:16}}>
+        <input value={quickPrompt} onChange={e=>setQuickPrompt(e.target.value)}
+          placeholder="Ask AI anything — e.g. 'Draft a follow-up for overdue deals' or 'Write a cold email for track coaches'"
+          style={{flex:1,background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",fontSize:12,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none"}}/>
+        <button type="submit" disabled={!quickPrompt.trim()} style={{background:quickPrompt.trim()?B.orange:"#ccc",color:B.white,border:"none",borderRadius:6,padding:"10px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:quickPrompt.trim()?"pointer":"default",whiteSpace:"nowrap"}}>✦ ASK AI →</button>
+      </form>
+
       {/* KPI row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
         <KCard l="Open Pipeline"  v={fmt$(pipeline)} c={B.orange} onClick={()=>setMod("deals")}/>
@@ -926,13 +935,13 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
           </div>
         ):(
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-            {/* Campaign table */}
-            <div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto auto auto auto",gap:"4px 10px",alignItems:"center",marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${B.border}`}}>
-                {["CAMPAIGN","ENRL","SENT","OPEN","REPL","DONE","DUE"].map(h=>(
-                  <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>
-                ))}
-              </div>
+            {/* Campaign table — single shared grid for aligned columns */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 42px 42px 42px 42px 42px 52px",gap:"0 8px",alignItems:"center"}}>
+              {/* Header row */}
+              {["CAMPAIGN","ENRL","SENT","OPEN","REPL","DONE","DUE"].map(h=>(
+                <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,paddingBottom:6,borderBottom:`1px solid ${B.border}`,textAlign:h==="CAMPAIGN"?"left":"center"}}>{h}</div>
+              ))}
+              {/* Data rows — display:contents makes cells direct grid children */}
               {seqs.map(seq=>{
                 const enrs=seq.enrollments||[];
                 const sentN=enrs.reduce((n,e)=>n+(e.step||0),0);
@@ -943,23 +952,23 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
                 const openPct=enrs.length>0?Math.round(openN/enrs.length*100):0;
                 const replPct=enrs.length>0?Math.round(replN/enrs.length*100):0;
                 return(
-                  <div key={seq.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto auto auto auto",gap:"4px 10px",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${B.border}`}}>
-                    <div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:180}}>{seq.name}</div>
+                  <React.Fragment key={seq.id}>
+                    <div style={{paddingTop:7,paddingBottom:7,borderBottom:`1px solid ${B.border}`}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{seq.name}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{seq.product} · {seq.touches?.length||0} touches</div>
-                      <div style={{display:"flex",gap:4,marginTop:3}}>
+                      <div style={{display:"flex",gap:4,marginTop:3,alignItems:"center"}}>
                         <div style={{height:3,width:Math.round(openPct*0.7),background:B.teal,borderRadius:2,minWidth:2}}/>
                         <div style={{height:3,width:Math.round(replPct*0.7),background:B.green,borderRadius:2,minWidth:0}}/>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{openPct}% open · {replPct}% reply</div>
                       </div>
                     </div>
                     {[enrs.length,sentN,openN,replN,doneN].map((v,i)=>(
-                      <div key={i} style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:[B.blue,B.purple,B.teal,B.green,B.muted][i],textAlign:"center"}}>{v}</div>
+                      <div key={i} style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:[B.blue,B.purple,B.teal,B.green,B.muted][i],textAlign:"center",paddingTop:7,paddingBottom:7,borderBottom:`1px solid ${B.border}`}}>{v}</div>
                     ))}
-                    <div style={{textAlign:"center"}}>
+                    <div style={{textAlign:"center",paddingTop:7,paddingBottom:7,borderBottom:`1px solid ${B.border}`}}>
                       {dueN>0?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:B.green,padding:"2px 6px",borderRadius:3,whiteSpace:"nowrap"}}>▶ {dueN}</span>:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>—</span>}
                     </div>
-                  </div>
+                  </React.Fragment>
                 );
               })}
             </div>
