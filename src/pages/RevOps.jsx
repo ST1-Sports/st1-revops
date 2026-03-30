@@ -73,6 +73,8 @@ const SEED = {
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
   brandAssets: [],
+  savedAds: [],
+  socialPosts: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -104,6 +106,8 @@ function useStore() {
           integrations: {...SEED.integrations,...(p.integrations||{})},
           company:      {...SEED.company,...(p.company||{})},
           brandAssets:  Array.isArray(p.brandAssets)  ? p.brandAssets  : [],
+          savedAds:     Array.isArray(p.savedAds)     ? p.savedAds     : [],
+          socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -266,7 +270,12 @@ function reducer(prev, action, payload) {
     case "SAVE_COMPANY":        return {...prev, company:{...prev.company,...payload}};
     case "ADD_BRAND_ASSET":     return {...prev, brandAssets:[...( prev.brandAssets||[]),payload]};
     case "DELETE_BRAND_ASSET":  return {...prev, brandAssets:(prev.brandAssets||[]).filter(a=>a.id!==payload)};
-    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[]};
+    case "ADD_SAVED_AD":        return {...prev, savedAds:[payload,...(prev.savedAds||[])]};
+    case "DELETE_SAVED_AD":     return {...prev, savedAds:(prev.savedAds||[]).filter(a=>a.id!==payload)};
+    case "ADD_SOCIAL_POST":     return {...prev, socialPosts:[...(prev.socialPosts||[]),payload]};
+    case "UPDATE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).map(p=>p.id===payload.id?{...p,...payload}:p)};
+    case "DELETE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).filter(p=>p.id!==payload)};
+    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
     default:                  return prev;
   }
 }
@@ -4761,6 +4770,28 @@ function ModAds() {
   const [socialLoading, setSocialLoading] = useState(false);
   const [socialPosting, setSocialPosting] = useState(false);
   const [socialResult, setSocialResult] = useState(null);
+  const [copyGenRunning, setCopyGenRunning] = useState(false);
+  const [generatedCopies, setGeneratedCopies] = useState(null); // {twitter,linkedin,instagram,facebook}
+
+  const generatePlatformCopy = async () => {
+    setCopyGenRunning(true);
+    setGeneratedCopies(null);
+    try {
+      const context = [adHeadline&&`Headline: ${adHeadline}`, adSub&&`Subheadline: ${adSub}`, adCta&&`CTA: ${adCta}`, adBadge&&`Badge: ${adBadge}`].filter(Boolean).join("\n");
+      const r = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-haiku-4-5-20251001", max_tokens:600,
+          messages:[{role:"user",content:`Generate social media captions for this ad from ST1 Sports (athletic equipment company):\n\n${context}\n\nRespond ONLY with valid JSON:\n{"twitter":"<280 chars, punchy, 1-2 hashtags>","linkedin":"<professional, 2-3 sentences, no hashtags>","instagram":"<engaging, 3-4 sentences, 6-8 hashtags>","facebook":"<conversational, 2-3 sentences, 1-2 hashtags>"}`}]
+        })
+      });
+      const d = await r.json();
+      const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) setGeneratedCopies(JSON.parse(match[0]));
+    } catch { toast("Copy generation failed","error"); }
+    setCopyGenRunning(false);
+  };
 
   const openSocialPanel = async () => {
     setShowSocialPanel(true);
@@ -4959,7 +4990,7 @@ function ModAds() {
           } catch { return null; }
         })()}/>
       <div style={{display:"flex",gap:7,marginBottom:18}}>
-        {[["campaigns","Campaigns"],["creator","Ad Creator"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
+        {[["campaigns","Campaigns"],["creator","Ad Creator"],["saved","Saved Ads"],["calendar","Social Calendar"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
         ))}
       </div>
@@ -5399,6 +5430,13 @@ function ModAds() {
                 <OBtn onClick={downloadAd} disabled={downloadRunning} style={{padding:"6px 14px"}}>
                   {downloadRunning?"DOWNLOADING...":"⬇ DOWNLOAD PNG"}
                 </OBtn>
+                <button onClick={()=>{
+                  const name=adHeadline||"Untitled Ad";
+                  dispatch("ADD_SAVED_AD",{id:mkId(),name,tpl:adTpl,sz:adSz,headline:adHeadline,sub:adSub,cta:adCta,badge:adBadge,bg:adBg,tc:adTc,ac:adAc,logo:adLogo,logoUrl:adLogoUrl,img:adImg,createdAt:today()});
+                  toast(`"${name}" saved!`,"success");
+                }} style={{background:B.white,color:B.green,border:`1px solid ${B.green}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
+                  ✦ SAVE AD
+                </button>
                 <button onClick={openSocialPanel} style={{background:showSocialPanel?`${B.purple}14`:B.white,color:B.purple,border:`1px solid ${B.purple}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
                   📣 POST TO SOCIAL
                 </button>
@@ -5428,21 +5466,11 @@ function ModAds() {
                   <div>
                     <div style={{background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"12px 14px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.7}}>
                       <strong>Zoho Social not connected yet.</strong><br/>
-                      To enable one-click posting, go to <a href="/api/zoho-setup" target="_blank" style={{color:"#c47a00",fontWeight:700}}>api/zoho-setup</a> and re-authorize
-                      after adding <strong>Zoho Social</strong> scopes to your app at <a href="https://api-console.zoho.com/" target="_blank" style={{color:"#c47a00",fontWeight:700}}>api-console.zoho.com</a>.
-                      <br/>In the meantime, use the quick-post buttons below.
+                      Go to <a href="/api/zoho-social-setup" target="_blank" style={{color:"#c47a00",fontWeight:700}}>api/zoho-social-setup</a> to authorize Zoho Social separately (it uses its own OAuth token). Once connected, you'll be able to pick channels and post directly. In the meantime, use the quick-post buttons below.
                     </div>
-                    {/* Manual fallback */}
-                    <div style={{marginBottom:10}}>
-                      <Lbl s={{marginBottom:4}}>CAPTION</Lbl>
-                      <textarea value={socialCaption} onChange={e=>setSocialCaption(e.target.value)} rows={3}
-                        style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
-                      <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{socialCaption.length} chars</div>
-                        <button onClick={()=>{navigator.clipboard.writeText(socialCaption);toast("Copied!","success");}} style={{background:"none",border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"3px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>⎘ COPY</button>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                    {/* Caption + copy gen */}
+                    <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
+                    <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:8}}>
                       {[
                         {label:"𝕏 Post",color:"#000",url:`https://twitter.com/intent/tweet?text=${encodeURIComponent((socialCaption||"").slice(0,280))}`},
                         {label:"LinkedIn",color:"#0A66C2",url:`https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent((socialCaption||"").slice(0,3000))}`},
@@ -5480,9 +5508,7 @@ function ModAds() {
                       </div>
                     </div>
                     <div style={{marginBottom:10}}>
-                      <Lbl s={{marginBottom:4}}>Caption</Lbl>
-                      <textarea value={socialCaption} onChange={e=>setSocialCaption(e.target.value)} rows={4}
-                        style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                      <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:3}}>{socialCaption.length}/2200 · {adImg?"Image attached ✓":"no image"}</div>
                     </div>
                     <div style={{display:"flex",gap:10,alignItems:"center"}}>
@@ -5552,8 +5578,218 @@ function ModAds() {
       )}
 
       {/* ── ASSETS ─────────────────────────────────────────────────────────────── */}
+      {tab==="saved"&&(
+        <SavedAdsPanel
+          savedAds={s.savedAds||[]}
+          onLoad={ad=>{setAdTpl(ad.tpl||"bold");setAdSz(ad.sz||"square");setAdHeadline(ad.headline||"");setAdSub(ad.sub||"");setAdCta(ad.cta||"");setAdBadge(ad.badge||"");setAdBg(ad.bg||"#0A0A0A");setAdTc(ad.tc||"#FFFFFF");setAdAc(ad.ac||"#F37321");setAdLogo(ad.logo!==false);setAdLogoUrl(ad.logoUrl||"");setAdImg(ad.img||"");setTab("creator");toast(`Loaded "${ad.name}"`, "success");}}
+          onDelete={id=>dispatch("DELETE_SAVED_AD",id)}
+        />
+      )}
+
+      {tab==="calendar"&&(
+        <SocialCalendar
+          posts={s.socialPosts||[]}
+          onAdd={post=>dispatch("ADD_SOCIAL_POST",{id:mkId(),createdAt:today(),...post})}
+          onUpdate={post=>dispatch("UPDATE_SOCIAL_POST",post)}
+          onDelete={id=>dispatch("DELETE_SOCIAL_POST",id)}
+          toast={toast}
+        />
+      )}
+
       {tab==="assets"&&(
         <AssetGallery toast={toast}/>
+      )}
+    </div>
+  );
+}
+
+// ─── CAPTION EDITOR + AI COPY GENERATOR ───────────────────────────────────────
+function CaptionEditor({caption, onCaption, onGenerate, generating, generatedCopies, toast}) {
+  const NETS = [{id:"twitter",label:"𝕏",color:"#000"},{id:"linkedin",label:"in",color:"#0A66C2"},{id:"instagram",label:"IG",color:"#E1306C"},{id:"facebook",label:"f",color:"#1877F2"}];
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+        <Lbl>CAPTION</Lbl>
+        <button onClick={onGenerate} disabled={generating} style={{background:generating?B.surface:B.orange,color:generating?B.muted:B.white,border:"none",borderRadius:4,padding:"4px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:generating?"default":"pointer",letterSpacing:.5}}>
+          {generating?"GENERATING…":"✦ AI COPY"}
+        </button>
+      </div>
+      <textarea value={caption} onChange={e=>onCaption(e.target.value)} rows={3}
+        style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{caption.length} chars</div>
+        <button onClick={()=>{navigator.clipboard.writeText(caption);toast("Copied!","success");}} style={{background:"none",border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"3px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>⎘ COPY</button>
+      </div>
+      {generatedCopies&&(
+        <div style={{marginTop:10,background:B.surface,borderRadius:6,padding:10,border:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>AI GENERATED — click to use</div>
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {NETS.map(({id,label,color})=>generatedCopies[id]&&(
+              <div key={id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 9px",background:B.white,borderRadius:5,border:`1px solid ${B.border}`,cursor:"pointer"}}
+                onClick={()=>{onCaption(generatedCopies[id]);toast(`${label} copy loaded`,"success");}}>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color,minWidth:18,fontWeight:700}}>{label}</span>
+                <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{generatedCopies[id].slice(0,180)}{generatedCopies[id].length>180?"…":""}</div>
+                <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(generatedCopies[id]);toast("Copied!","success");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",flexShrink:0,padding:0}}>⎘</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SAVED ADS PANEL ──────────────────────────────────────────────────────────
+function SavedAdsPanel({savedAds, onLoad, onDelete}) {
+  if (!savedAds.length) return (
+    <div className="card" style={{padding:24,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+      No saved ads yet — design an ad in the Ad Creator and click <strong>✦ SAVE AD</strong> to save it here.
+    </div>
+  );
+  const SZ_LABELS = {square:"1080×1080",landscape:"1200×628",story:"1080×1920"};
+  return (
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
+      {savedAds.map(ad=>(
+        <div key={ad.id} className="card" style={{padding:0,overflow:"hidden"}}>
+          {/* Mini preview */}
+          <div style={{height:120,background:ad.bg||"#0A0A0A",display:"flex",alignItems:"center",justifyContent:"center",padding:12,position:"relative"}}>
+            <div style={{fontFamily:"system-ui",fontWeight:900,color:ad.tc||"#fff",fontSize:18,lineHeight:1.1,textAlign:"center",maxWidth:"90%",overflow:"hidden"}}>{(ad.headline||"").slice(0,40)}</div>
+            {ad.badge&&<div style={{position:"absolute",top:8,right:8,background:ad.ac||"#F37321",color:"#fff",fontSize:9,fontWeight:800,padding:"3px 7px",borderRadius:3}}>{ad.badge}</div>}
+          </div>
+          <div style={{padding:"10px 12px"}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ad.name}</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:8}}>{(ad.tpl||"bold").toUpperCase()} · {SZ_LABELS[ad.sz]||ad.sz} · {ad.createdAt}</div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>onLoad(ad)} style={{flex:1,background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>LOAD</button>
+              <button onClick={()=>{if(window.confirm("Delete this saved ad?"))onDelete(ad.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:4,padding:"6px 10px",fontSize:10,cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── SOCIAL CALENDAR ──────────────────────────────────────────────────────────
+function SocialCalendar({posts, onAdd, onUpdate, onDelete, toast}) {
+  const today2 = new Date();
+  const [viewYear, setViewYear] = useState(today2.getFullYear());
+  const [viewMonth, setViewMonth] = useState(today2.getMonth());
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",status:"draft"});
+
+  const NET_COLORS = {twitter:"#000",linkedin:"#0A66C2",instagram:"#E1306C",facebook:"#1877F2"};
+  const NET_LABELS = {twitter:"𝕏",linkedin:"in",instagram:"IG",facebook:"f"};
+
+  const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
+  const todayStr = today2.toISOString().slice(0,10);
+
+  const openNew = (dateStr) => {
+    setEditing(null);
+    setForm({date:dateStr||"",time:"09:00",platforms:[],caption:"",imageUrl:"",status:"draft"});
+    setShowForm(true);
+  };
+  const openEdit = (post) => {
+    setEditing(post.id);
+    setForm({date:post.date||"",time:post.time||"09:00",platforms:post.platforms||[],caption:post.caption||"",imageUrl:post.imageUrl||"",status:post.status||"draft"});
+    setShowForm(true);
+  };
+  const save = () => {
+    if (!form.date||!form.caption.trim()) { toast("Date and caption required","error"); return; }
+    if (editing) onUpdate({id:editing,...form});
+    else onAdd(form);
+    setShowForm(false);
+  };
+  const toggleNet = (n) => setForm(f=>({...f,platforms:f.platforms.includes(n)?f.platforms.filter(x=>x!==n):[...f.platforms,n]}));
+
+  const monthName = new Date(viewYear,viewMonth).toLocaleString("en-US",{month:"long",year:"numeric"});
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <button onClick={()=>{let m=viewMonth-1,y=viewYear;if(m<0){m=11;y--;}setViewMonth(m);setViewYear(y);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12}}>‹</button>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,minWidth:160,textAlign:"center"}}>{monthName.toUpperCase()}</div>
+          <button onClick={()=>{let m=viewMonth+1,y=viewYear;if(m>11){m=0;y++;}setViewMonth(m);setViewYear(y);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12}}>›</button>
+        </div>
+        <OBtn sm onClick={()=>openNew(todayStr)}>+ NEW POST</OBtn>
+      </div>
+
+      {/* Calendar grid */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,background:B.border,borderRadius:8,overflow:"hidden",marginBottom:16}}>
+        {["SUN","MON","TUE","WED","THU","FRI","SAT"].map(d=>(
+          <div key={d} style={{background:B.surface,padding:"6px 0",textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{d}</div>
+        ))}
+        {Array.from({length:firstDay}).map((_,i)=>(
+          <div key={`e${i}`} style={{background:B.surface,minHeight:80}}/>
+        ))}
+        {Array.from({length:daysInMonth}).map((_,i)=>{
+          const d = i+1;
+          const dateStr = `${viewYear}-${String(viewMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+          const dayPosts = posts.filter(p=>p.date===dateStr);
+          const isToday = dateStr===todayStr;
+          return (
+            <div key={d} onClick={()=>openNew(dateStr)} style={{background:B.white,minHeight:80,padding:6,cursor:"pointer",position:"relative"}}
+              onMouseEnter={e=>e.currentTarget.style.background=B.surface} onMouseLeave={e=>e.currentTarget.style.background=B.white}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:4,display:"inline-block",
+                ...(isToday?{background:B.orange,color:B.white,borderRadius:"50%",width:20,height:20,lineHeight:"20px",textAlign:"center",fontSize:10}:{})}}>{d}</div>
+              <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                {dayPosts.map(p=>(
+                  <div key={p.id} onClick={e=>{e.stopPropagation();openEdit(p);}}
+                    style={{background:p.status==="published"?B.greenBg:p.status==="scheduled"?B.blueBg:B.orangeBg,borderRadius:3,padding:"2px 5px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:p.status==="published"?B.green:p.status==="scheduled"?B.blue:B.orange,cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {(p.platforms||[]).map(n=><span key={n} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:NET_COLORS[n],marginRight:2}}>{NET_LABELS[n]}</span>)}
+                    {p.caption.slice(0,25)}{p.caption.length>25?"…":""}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Post form modal */}
+      {showForm&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowForm(false)}>
+          <div style={{background:B.white,borderRadius:10,padding:22,width:480,maxHeight:"85vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{editing?"EDIT POST":"NEW POST"}</div>
+              <button onClick={()=>setShowForm(false)} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:B.muted}}>✕</button>
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+              <div><Lbl s={{marginBottom:3}}>DATE</Lbl><input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/></div>
+              <div><Lbl s={{marginBottom:3}}>TIME</Lbl><input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/></div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <Lbl s={{marginBottom:6}}>PLATFORMS</Lbl>
+              <div style={{display:"flex",gap:7}}>
+                {Object.entries(NET_LABELS).map(([id,label])=>{
+                  const sel=form.platforms.includes(id);
+                  const c=NET_COLORS[id];
+                  return <button key={id} onClick={()=>toggleNet(id)} style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}>{label}</button>;
+                })}
+              </div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <Lbl s={{marginBottom:3}}>CAPTION</Lbl>
+              <textarea value={form.caption} onChange={e=>setForm(f=>({...f,caption:e.target.value}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
+            </div>
+            <div style={{marginBottom:14}}>
+              <Lbl s={{marginBottom:3}}>STATUS</Lbl>
+              <div style={{display:"flex",gap:7}}>
+                {[["draft","Draft",B.orange],["scheduled","Scheduled",B.blue],["published","Published",B.green]].map(([v,l,c])=>(
+                  <button key={v} onClick={()=>setForm(f=>({...f,status:v}))} style={{flex:1,background:form.status===v?`${c}14`:B.surface,color:form.status===v?c:B.muted,border:`1px solid ${form.status===v?c:B.border}`,borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer"}}>{l.toUpperCase()}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <OBtn onClick={save} style={{flex:1}}>{editing?"SAVE CHANGES":"CREATE POST"}</OBtn>
+              {editing&&<button onClick={()=>{if(window.confirm("Delete this post?"))onDelete(editing);setShowForm(false);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"8px 14px",fontSize:11,cursor:"pointer"}}>Delete</button>}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -6154,7 +6390,7 @@ function ModAlerts() {
     const alert=s.alerts.find(a=>a.id===id);
     if(!alert)return;
     setSending(true);
-    const msg=`🔥 ST1 RevOps Alert\n${alert.msg}${alert.action?`\n→ ${alert.action}`:""}`;
+    const msg=`<@U09F64R5QBA> 🔥 *ST1 RevOps Alert*\n${alert.msg}${alert.action?`\n→ ${alert.action}`:""}`;
     const ok=await sendToSlack(msg);
     dispatch("DISMISS_ALERT",id);
     dispatch("LOG",{msg:`Alert ${ok?"sent to":"queued for"} Slack ${channel}`});

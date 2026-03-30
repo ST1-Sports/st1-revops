@@ -4,9 +4,9 @@
  * Proxy for Zoho Social API — post content/ads to connected social channels.
  * Same OAuth credentials as api/zoho.js; requires ZohoSocial scopes.
  *
- * Required env vars: ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN
- * Additional scope: ZohoSocial.account.ALL
- * (run /api/zoho-setup again if you haven't added this scope yet)
+ * Required env vars: ZOHO_SOCIAL_CLIENT_ID, ZOHO_SOCIAL_CLIENT_SECRET, ZOHO_SOCIAL_REFRESH_TOKEN
+ *   (fall back to ZOHO_CLIENT_ID / ZOHO_CLIENT_SECRET / ZOHO_REFRESH_TOKEN if Social-specific ones aren't set)
+ * Run /api/zoho-social-setup to obtain ZOHO_SOCIAL_REFRESH_TOKEN.
  *
  * Actions:
  *   list_portals   — list Zoho Social portals (workspaces)
@@ -15,12 +15,11 @@
  *   list_posts     — recent posts for a portal { portalId, range? }
  */
 
-import { getZohoToken } from './_lib/zoho-token.js';
+import { getZohoSocialToken } from './_lib/zoho-social-token.js';
 import { setCors } from './_lib/cors.js';
 
 const BASE = "https://social.zoho.com/api/v1";
 
-// Zoho Social uses a separate token scope — same refresh token but different service
 export default async function handler(req, res) {
   setCors(res, "POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -31,9 +30,9 @@ export default async function handler(req, res) {
 
   let token;
   try {
-    token = await getZohoToken();
+    token = await getZohoSocialToken();
   } catch (err) {
-    return res.status(500).json({ error: err.message, setup: "/api/zoho-setup" });
+    return res.status(500).json({ error: err.message, setup: "/api/zoho-social-setup" });
   }
 
   const headers = {
