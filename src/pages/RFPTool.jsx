@@ -65,8 +65,9 @@ async function extractPdfText(arrayBuffer) {
   return parts.join("\n\n");
 }
 
-const CLAUDE_MODEL = "claude-sonnet-4-6";
-const CLAUDE_TIMEOUT = 55000; // 55s client timeout (vercel fn is 60s)
+const CLAUDE_MODEL      = "claude-sonnet-4-6";
+const CLAUDE_FAST_MODEL = "claude-haiku-4-5-20251001"; // steps 1-4: extraction (fast + cheap)
+const CLAUDE_TIMEOUT = 110000; // 110s client timeout (vercel fn is 120s)
 const MAX_B64_BYTES = 3 * 1024 * 1024; // 3 MB base64 threshold (~4 MB raw PDF)
 
 async function claudeCall(body) {
@@ -107,11 +108,11 @@ function extractJSON(raw) {
   return null;
 }
 
-async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null, textOverride=null) {
+async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null, textOverride=null, model=CLAUDE_FAST_MODEL) {
   // If pre-extracted text is provided, skip PDF processing
   if(textOverride !== null) {
     const tp = `[PDF content — ${textOverride.length.toLocaleString()} chars]\n\n${textOverride}\n\n---\n\n${prompt}`;
-    return await claudeText(tp, sys, json);
+    return await claudeText(tp, sys, json, model);
   }
   const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a, 0);
   let text;
@@ -126,13 +127,13 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null, text
     const fullText = extractedParts.join("\n\n").slice(0, MAX_TEXT_CHARS);
     const textPrompt = `[PDF text extracted — ${fullText.length} chars]\n\n${fullText}\n\n---\n\n${prompt}`;
     // claudeText already handles JSON parsing — return directly
-    return await claudeText(textPrompt, sys, json);
+    return await claudeText(textPrompt, sys, json, model);
   } else {
     const content = [
       ...pdfFiles.map(f=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:f.b64} })),
       { type:"text", text: json ? prompt+"\n\nReturn ONLY valid JSON. No markdown fences." : prompt }
     ];
-    const body = { model:CLAUDE_MODEL, max_tokens:2000, messages:[{role:"user",content}] };
+    const body = { model, max_tokens:2000, messages:[{role:"user",content}] };
     if(sys) body.system = sys;
     text = await claudeCall(body);
   }
@@ -143,8 +144,8 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null, text
 }
 
 // Claude API — text only
-async function claudeText(prompt, sys="", json=false) {
-  const body = { model:CLAUDE_MODEL, max_tokens:3000,
+async function claudeText(prompt, sys="", json=false, model=CLAUDE_FAST_MODEL) {
+  const body = { model, max_tokens:3000,
     system: sys + (json?"\n\nReturn ONLY valid JSON. No markdown fences.":""),
     messages:[{role:"user",content:prompt}] };
   const text = await claudeCall(body);
@@ -490,7 +491,7 @@ Return JSON array — one object per item in the same order:
   "priceNotes": "brief source/rationale",
   "substituteDesc": "if substituting, describe our product"
 }]`,
-      "", true);
+      "", true, CLAUDE_MODEL); // use Sonnet for pricing — needs stronger reasoning
 
       if(Array.isArray(result)) {
         result.forEach(p => {
