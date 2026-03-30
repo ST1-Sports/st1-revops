@@ -436,11 +436,19 @@ function Login({dispatch}) {
   const [sel,setSel]=useState(null);
   const [pin,setPin]=useState("");
   const [shake,setShake]=useState(false);
-  const PINS={matt:"1234",rep2:"2345",rep3:"3456"};
-  const doLogin=()=>{
-    if(!sel) return;
-    if(PINS[sel.id]===pin){dispatch("LOGIN",sel.id);}
-    else{setPin("");setShake(true);setTimeout(()=>setShake(false),500);}
+  const [loading,setLoading]=useState(false);
+  const doLogin=async()=>{
+    if(!sel||pin.length<4) return;
+    setLoading(true);
+    try {
+      const r=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:sel.id,pin})});
+      if(r.ok){dispatch("LOGIN",sel.id);}
+      else{setPin("");setShake(true);setTimeout(()=>setShake(false),500);}
+    } catch {
+      setPin("");setShake(true);setTimeout(()=>setShake(false),500);
+    } finally {
+      setLoading(false);
+    }
   };
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
@@ -474,13 +482,13 @@ function Login({dispatch}) {
           <div className={shake?"shk fu":"fu"} style={{marginBottom:14}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>PIN</div>
             <input type="password" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}
-              placeholder={`Demo: ${sel.id==="matt"?"1234":sel.id==="rep2"?"2345":"3456"}`} maxLength={4}
+              placeholder="••••" maxLength={4}
               style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:15,letterSpacing:6,textAlign:"center"}}/>
           </div>
         )}
-        <button onClick={doLogin} disabled={!sel||pin.length<4}
+        <button onClick={doLogin} disabled={!sel||pin.length<4||loading}
           style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
-          SIGN IN →
+          {loading?"CHECKING…":"SIGN IN →"}
         </button>
       </div>
     </div>
