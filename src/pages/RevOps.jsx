@@ -2140,6 +2140,7 @@ function ModProspecting() {
   const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
   const [importRows,setImportRows]   = useState([]);
   const [importSel,setImportSel]     = useState(new Set());
+  const [enrollingContact,setEnrollingContact] = useState(null);
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -2664,7 +2665,7 @@ function ModProspecting() {
                                   {campaigns.map(seq=>(
                                     <button key={seq.id} onClick={()=>{
                                       const today=new Date().toISOString().slice(0,10);
-                                      const alreadyIn=seq.enrollments.some(e=>e.contactId===c.id);
+                                      const alreadyIn=(seq.enrollments||[]).some(e=>e.contactId===c.id);
                                       if(!alreadyIn){
                                         dispatch("UPDATE_SEQUENCE",{...seq,enrollments:[...seq.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:today,nextDate:today}]});
                                         dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});

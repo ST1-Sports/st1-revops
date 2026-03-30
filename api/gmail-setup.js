@@ -24,7 +24,7 @@ export default async function handler(req, res) {
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
   const host         = req.headers.host || "";
   const proto        = host.includes("localhost") ? "http" : "https";
-  const redirectUri  = `${proto}://${host}/api/gmail-setup`;
+  const redirectUri  = process.env.GMAIL_REDIRECT_URI || `${proto}://${host}/api/gmail-setup`;
 
   const { code, error: oauthError } = req.query || {};
 
