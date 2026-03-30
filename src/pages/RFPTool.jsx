@@ -119,7 +119,8 @@ async function claudePDF(pdfFiles, prompt, sys="", json=false, _logFn=null) {
     }));
     const fullText = extractedParts.join("\n\n").slice(0, MAX_TEXT_CHARS);
     const textPrompt = `[PDF text extracted — ${fullText.length} chars]\n\n${fullText}\n\n---\n\n${prompt}`;
-    text = await claudeText(textPrompt, sys, json);
+    // claudeText already handles JSON parsing — return directly
+    return await claudeText(textPrompt, sys, json);
   } else {
     const content = [
       ...pdfFiles.map(f=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:f.b64} })),
