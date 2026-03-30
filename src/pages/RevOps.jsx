@@ -2310,12 +2310,33 @@ function ModProspecting() {
     try {
       const [contactsRes, leadsRes] = await Promise.all([
         fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json()),
+          body:JSON.stringify({service:"crm",endpoint:"/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source,Last_Activity_Time,Modified_Time&per_page=200",method:"GET"})}).then(r=>r.json()),
         fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status&per_page=200",method:"GET"})}).then(r=>r.json()),
+          body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Modified_Time,Created_Time,Description,Converted&per_page=200",method:"GET"})}).then(r=>r.json()),
       ]);
       const now = Date.now();
       const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
+      const scoreLeadFromZoho = (l) => {
+        let score=0; const acts=[];
+        const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
+        const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
+        if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
+        const calls=Number(l.No_of_Calls)||0;
+        if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
+        const chats=Number(l.No_of_Chats)||0;
+        if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
+        if(l.Last_Activity_Time){
+          const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);
+          const recency=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;
+          score+=recency;
+          acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});
+        }
+        const src=zs(l.Lead_Source);
+        if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
+        const rating=zs(l.Rating);
+        const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
+        return {score:Math.min(200,score),activity:acts,priority};
+      };
       const contacts = (contactsRes.data||[]).map(c=>({
         id:"zoho_c_"+c.id,
         firstName:zs(c.First_Name), lastName:zs(c.Last_Name),
@@ -2324,30 +2345,83 @@ function ModProspecting() {
         title:zs(c.Title), school:zs(c.Account_Name),
         city:zs(c.Mailing_City), state:zs(c.Mailing_State),
         orgType:"school", source:"zoho-crm",
+        zohoSource:zs(c.Lead_Source),
         confidence:"high", outreachStatus:"new", importedAt:now,
       }));
-      const leads = (leadsRes.data||[]).map(l=>({
-        id:"zoho_l_"+l.id,
-        firstName:zs(l.First_Name), lastName:zs(l.Last_Name),
-        fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),
-        email:zs(l.Email), phone:zs(l.Phone),
-        title:zs(l.Title), school:zs(l.Company),
-        city:zs(l.City), state:zs(l.State),
-        orgType:"school", source:"zoho-crm-lead",
-        confidence:"medium",
-        outreachStatus:l.Lead_Status==="Customer"?"replied":"new",
-        importedAt:now,
-      }));
+      const leads = (leadsRes.data||[]).map(l=>{
+        const {score,activity,priority}=scoreLeadFromZoho(l);
+        return {
+          id:"zoho_l_"+l.id,
+          firstName:zs(l.First_Name), lastName:zs(l.Last_Name),
+          fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),
+          email:zs(l.Email), phone:zs(l.Phone),
+          title:zs(l.Title), school:zs(l.Company),
+          city:zs(l.City), state:zs(l.State),
+          orgType:"school", source:"zoho-crm-lead",
+          zohoStatus:zs(l.Lead_Status), zohoSource:zs(l.Lead_Source),
+          zohoRating:zs(l.Rating), zohoId:l.id,
+          confidence:"medium", priority,
+          outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",
+          score, activity, importedAt:now,
+        };
+      });
       const all=[...contacts,...leads];
       const existing=new Set((s.contacts||[]).map(c=>c.id));
       const toAdd=all.filter(c=>!existing.has(c.id));
+      // Update existing leads with fresh Zoho data
+      const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
       if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
-      setZohoPullResult({contacts:contacts.length, leads:leads.length, added:toAdd.length});
-      toast(`${toAdd.length} new contacts pulled from Zoho CRM`,"success");
+      toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
+      setZohoPullResult({contacts:contacts.length, leads:leads.length, added:toAdd.length, updated:toUpdate.length});
+      toast(`${toAdd.length} new · ${toUpdate.length} updated from Zoho CRM`,"success");
     } catch(e) {
       toast(`Zoho pull failed: ${e.message.slice(0,80)}`,"error");
     }
     setZohoPulling(false);
+  };
+
+  const [rescoring,setRescoring]=useState(false);
+  const rescoreFromZoho = async() => {
+    setRescoring(true);
+    toast("Rescoring leads from Zoho activity...","info");
+    try {
+      const leadsRes=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service:"crm",endpoint:"/Leads?fields=First_Name,Last_Name,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Lead_Source&per_page=200",method:"GET"})}).then(r=>r.json());
+      const now=Date.now();
+      const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
+      let updated=0;
+      (leadsRes.data||[]).forEach(l=>{
+        const id="zoho_l_"+l.id;
+        const existing=(s.contacts||[]).find(c=>c.id===id);
+        if(!existing) return;
+        let score=0; const acts=[];
+        const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
+        const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
+        if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
+        const calls=Number(l.No_of_Calls)||0;
+        if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
+        const chats=Number(l.No_of_Chats)||0;
+        if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
+        if(l.Last_Activity_Time){
+          const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);
+          const recency=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;
+          score+=recency;
+          acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});
+        }
+        const src=zs(l.Lead_Source);
+        if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
+        const rating=zs(l.Rating);
+        const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
+        const manualActs=(existing.activity||[]).filter(a=>a.campaignId!=="zoho");
+        const manualScore=(existing.score||0)-((existing.activity||[]).filter(a=>a.campaignId==="zoho").length*10);
+        dispatch("UPDATE_CONTACT",{id,score:Math.min(200,Math.max(0,manualScore)+score),activity:[...acts,...manualActs].slice(0,50),priority,zohoStatus:st,zohoRating:rating,outreachStatus:st==="Customer"?"replied":st==="Contacted"?"contacted":"new"});
+        updated++;
+      });
+      toast(`Rescored ${updated} leads from Zoho activity`,"success");
+    } catch(e){
+      toast(`Rescore failed: ${e.message.slice(0,80)}`,"error");
+    }
+    setRescoring(false);
   };
 
   const exportCsv=()=>{
@@ -2520,16 +2594,21 @@ function ModProspecting() {
             <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.purple}`}}>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:2,marginBottom:8}}>PULL FROM ZOHO CRM</div>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Pull all Contacts and Leads from your Zoho CRM instance directly into this database. New records only — existing ones won't be duplicated.
+                Pulls Contacts and Leads from Zoho CRM. Leads are auto-scored from their Zoho activity: call count, chat count, lead status, last activity date, and lead source.
               </div>
               {zohoPullResult&&(
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>
-                  ✓ {zohoPullResult.contacts} contacts + {zohoPullResult.leads} leads pulled · {zohoPullResult.added} new added
+                  ✓ {zohoPullResult.contacts} contacts · {zohoPullResult.leads} leads · {zohoPullResult.added} new added{zohoPullResult.updated?` · ${zohoPullResult.updated} updated`:""}
                 </div>
               )}
-              <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling}>
-                {zohoPulling?"PULLING FROM ZOHO...":"↓ PULL ZOHO CONTACTS + LEADS"}
-              </OBtn>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||rescoring}>
+                  {zohoPulling?"PULLING...":"↓ PULL ZOHO CONTACTS + LEADS"}
+                </OBtn>
+                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling}>
+                  {rescoring?"RESCORING...":"↺ RESCORE FROM ZOHO ACTIVITY"}
+                </OBtn>
+              </div>
             </div>
             {/* CSV upload card */}
             <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.orange}`}}>
@@ -2685,6 +2764,8 @@ function ModProspecting() {
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:tier.color,background:tier.bg,padding:"2px 5px",borderRadius:3}}>{tier.label} {c.score||0}</span>
                             {c.sport&&(typeof c.sport==="string"?c.sport:c.sport?.name||"")!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
                             {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
+                            {c.zohoStatus&&c.zohoStatus!=="new"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:`${B.purple}15`,padding:"2px 5px",borderRadius:3}}>{c.zohoStatus.toUpperCase()}</span>}
+                            {c.zohoSource&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 5px",borderRadius:3}}>{c.zohoSource}</span>}
                             {custInvoice&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#1a7f37",background:"#d8f3dc",padding:"2px 5px",borderRadius:3}} title={`Invoice: ${custInvoice.number||custInvoice.id}`}>✓ CUSTOMER</span>}
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
