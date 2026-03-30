@@ -200,7 +200,7 @@ const DSC = {Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotia
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
 const RSC = {Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,"No Bid":B.muted};
 const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{c:B.purple,bg:B.purpleBg},partial:{c:B.yellow,bg:B.yellowBg},paid:{c:B.green,bg:B.greenBg},overdue:{c:B.red,bg:B.redBg}};
-const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota (BWTF), North Dakota (BWTF). Acquired Bruce Whiting Track & Field. Sells to K-12 school districts, ADs, coaches.`;
+const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
 const US_REGIONS = {
@@ -801,7 +801,6 @@ function ModDeals() {
 Deal: ${sel_d.name} | Contact: ${sel_d.contact} at ${sel_d.school}, ${sel_d.state}
 Stage: ${sel_d.stage} | Value: ${fmt$(sel_d.value)} | Notes: ${sel_d.notes}
 Recent touches: ${(sel_d.touchHistory||[]).slice(-2).map(t=>t.note).join("; ")}
-${(sel_d.state==="MN"||sel_d.state==="ND")?"BWTF territory — use Bruce Whiting acquisition as hook.":""}
 Under 80 words. Include subject line. Warm tone.`);
     setDraft(t||"");setDrafting(false);
   };
@@ -844,7 +843,6 @@ Under 80 words. Include subject line. Warm tone.`);
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
                     <Pill v={d.stage} sc={DSC} bc={DBG}/>
-                    {(d.state==="MN"||d.state==="ND")&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
                   </div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact} · {d.school} · {d.state}</div>
                   <div style={{display:"flex",gap:7,marginTop:3,alignItems:"center"}}>
@@ -1075,7 +1073,6 @@ function ModReorder() {
     const t=await aiCall(`Write a short seasonal reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 School: ${r.school} | Contact: ${r.contact}, ${r.state} | Sport: ${r.sport}
 Last order: ${fmtD(r.lastOrderDate)} — ${r.lastItems?.join(", ")} — ${fmt$(r.lastOrderValue)}
-${r.state==="MN"||r.state==="ND"?"Use BWTF/Bruce Whiting connection.":""}
 Under 80 words. Reference exact last order. Ask if they need to restock. Warm tone.`);
     setDrafts(d=>({...d,[r.id]:t||""}));setDrafting(null);
   };
@@ -1170,7 +1167,6 @@ function ModProspecting() {
     const scopeDesc   = regionLabel
       ? `the ${regionLabel}${stateList.length ? ` (${stateList.join(", ")})` : ""}`
       : stateList.length ? `the states of ${stateList.join(", ")}` : "the United States";
-    const bwtf     = stateList.some(st=>st==="MN"||st==="ND");
     const maxOrgs  = area.maxOrgs||area.maxSchools||15;
 
     bgTasks.createTask(SCRAPE_TASK_ID, `Prospecting: ${area.name}`);
@@ -1183,7 +1179,7 @@ function ModProspecting() {
       if(!isClubs) {
         addLog("Searching for schools...");
         const res = await aiCall(
-          `Search for real high schools and school districts with strong ${area.sports.join(" / ")} programs in ${scopeDesc}. Spread across different states in the region. Target competitive programs known for state/regional athletics, larger districts (500+ enrollment). Search "[state] high school [sport] state champions", "[state] NFHS member schools", and official district websites. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs} — mix of states): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school","bwtf":${bwtf}}]`,
+          `Search for real high schools and school districts with strong ${area.sports.join(" / ")} programs in ${scopeDesc}. Spread across different states in the region. Target competitive programs known for state/regional athletics, larger districts (500+ enrollment). Search "[state] high school [sport] state champions", "[state] NFHS member schools", and official district websites. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs} — mix of states): [{"name":"","district":"","city":"","state":"","website":"","orgType":"school"}]`,
           {search:true,json:true,tokens:1600}
         );
         orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"school"}))];
@@ -1193,7 +1189,7 @@ function ModProspecting() {
       if(isClubs||isBoth) {
         addLog("Searching for youth sports clubs...");
         const res = await aiCall(
-          `Search for real youth sports clubs, travel teams, and leagues for ${area.sports.join(" / ")} in ${scopeDesc}. Include AAU programs, club travel teams, recreational leagues with equipment purchasing budgets. Spread across different states. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club","bwtf":${bwtf}}]`,
+          `Search for real youth sports clubs, travel teams, and leagues for ${area.sports.join(" / ")} in ${scopeDesc}. Include AAU programs, club travel teams, recreational leagues with equipment purchasing budgets. Spread across different states. Return JSON array (max ${isBoth?Math.ceil(maxOrgs/2):maxOrgs}): [{"name":"","city":"","state":"","website":"","orgType":"club"}]`,
           {search:true,json:true,tokens:1600}
         );
         orgs = [...orgs,...(Array.isArray(res)?res:[]).map(o=>({...o,orgType:"club"}))];
@@ -1215,7 +1211,7 @@ function ModProspecting() {
           ? area.roles
           : isClubOrg ? CLUB_ROLES : ["Athletic Director","Head Coach","Procurement Manager"];
         const found=await aiCall(
-          `Find real ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}${sc.website?" — website: "+sc.website:""}. ${isClubOrg?"Search their club/league website staff page.":"Search their school athletics staff directory page and district website — look for /athletics/staff or /directory."} Search: "${sc.name} ${roles[0]} email contact". Email format is usually firstname.lastname@district.org or first@schoolname.edu. Return JSON array (ONLY verified real contacts — return empty array [] if you cannot confirm the person exists): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"website|directory|search","confidence":"high|medium|low","bwtf":${sc.bwtf||false}}]`,
+          `Find real ${roles.join(", ")} contacts at ${sc.name} in ${sc.city}, ${sc.state}${sc.website?" — website: "+sc.website:""}. ${isClubOrg?"Search their club/league website staff page.":"Search their school athletics staff directory page and district website — look for /athletics/staff or /directory."} Search: "${sc.name} ${roles[0]} email contact". Email format is usually firstname.lastname@district.org or first@schoolname.edu. Return JSON array (ONLY verified real contacts — return empty array [] if you cannot confirm the person exists): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${sc.name}","orgType":"${sc.orgType||"school"}","city":"${sc.city}","state":"${sc.state}","email":"","phone":"","source":"website|directory|search","confidence":"high|medium|low"}]`,
           {search:true,json:true,tokens:1600}
         );
         if(Array.isArray(found)&&found.length>0){
@@ -1225,7 +1221,6 @@ function ModProspecting() {
           bgTasks.appendContacts(SCRAPE_TASK_ID, valid);
           setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"done",count:valid.length}:x));
           addLog(`  ✓ ${valid.length} found`,"success");
-          if(valid.some(c=>c.bwtf))dispatch("ADD_ALERT",{msg:`BWTF contacts at ${sc.name}`,action:`${valid.length} contacts — use BWTF hook`});
         } else {
           setSchools(ss=>ss.map(x=>x.id===sc.id?{...x,status:"empty",count:0}:x));
           addLog(`  · none found`,"muted");
@@ -1330,8 +1325,8 @@ function ModProspecting() {
   };
 
   const exportCsv=()=>{
-    const h=["firstName","lastName","fullName","title","orgName","orgType","city","state","email","phone","source","confidence","bwtf"];
-    const r=contacts.map(c=>[c.firstName||"",c.lastName||"",c.fullName||"",c.title||"",c.school||"",c.orgType||"school",c.city||"",c.state||"",c.email||"",c.phone||"",c.source||"",c.confidence||"",c.bwtf?"BWTF":""].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
+    const h=["firstName","lastName","fullName","title","orgName","orgType","city","state","email","phone","source","confidence"];
+    const r=contacts.map(c=>[c.firstName||"",c.lastName||"",c.fullName||"",c.title||"",c.school||"",c.orgType||"school",c.city||"",c.state||"",c.email||"",c.phone||"",c.source||"",c.confidence||""].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
     const csv=[h.join(","),...r].join("\n");
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
   };
@@ -1353,7 +1348,7 @@ function ModProspecting() {
         `For each data row extract: firstName, lastName, fullName, email, phone, title (job role/position), school (org/company name), city, state (2-letter), `+
         `orgType (school|club|district|company), sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
         `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
-        `tags (array: include "BWTF" if MN or ND state, "multi-sport" if multiple sports implied, "club-director" if club org director, etc.), `+
+        `tags (array: include "multi-sport" if multiple sports implied, "club-director" if club org director, etc.), `+
         `outreachWindow (best 2-month window to reach out for purchasing decisions based on their sport — e.g. "Nov–Jan" for T&F). `+
         `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. `+
         `Skip blank rows and header rows. Use empty string for unknown fields.`,
@@ -1365,7 +1360,6 @@ function ModProspecting() {
           id:mkId(),
           confidence:"medium",
           outreachStatus:"new",
-          bwtf:!!(c.tags||[]).includes("BWTF")||(c.state==="MN"||c.state==="ND"),
           importedAt:Date.now(),
         }));
         setImportRows(mapped);
@@ -1568,7 +1562,6 @@ function ModProspecting() {
                         <td style={{padding:"6px 10px"}}>
                           <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
                             {(c.tags||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>{t}</span>)}
-                            {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
                           </div>
                         </td>
                       </tr>
@@ -1594,7 +1587,7 @@ function ModProspecting() {
                 {/* Summary stats */}
                 {(()=>{
                   const ct=s.contacts||[];
-                  const stats=[[ct.length,"Total"],[ct.filter(c=>c.email).length,"With Email"],[ct.filter(c=>c.priority==="high").length,"High Priority"],[ct.filter(c=>c.bwtf).length,"BWTF"],[[...new Set(ct.map(c=>c.sport).filter(Boolean))].length,"Sports"]];
+                  const stats=[[ct.length,"Total"],[ct.filter(c=>c.email).length,"With Email"],[ct.filter(c=>c.priority==="high").length,"High Priority"],[[...new Set(ct.map(c=>c.sport).filter(Boolean))].length,"Sports"]];
                   return <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(120px,1fr))",gap:8,marginBottom:14}}>
                     {stats.map(([v,l])=>(
                       <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 10px",textAlign:"center"}}>
@@ -1648,7 +1641,6 @@ function ModProspecting() {
                             <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed"}</span>
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:tier.color,background:tier.bg,padding:"2px 5px",borderRadius:3}}>{tier.label} {c.score||0}</span>
                             {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
-                            {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
                             {c.outreachStatus==="replied"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>REPLIED</span>}
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
@@ -1721,8 +1713,8 @@ function ModProspecting() {
                 {contacts.length>0&&<OBtn sm color={B.purple} onClick={()=>pushToZohoLeads(contacts)} disabled={zohoPushing}>{zohoPushing?`PUSHING ${zohoPushed}/${contacts.length}...`:`↑ PUSH TO ZOHO (${contacts.length})`}</OBtn>}
               </div>
             </div>
-            {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:12}}>
-              {[[contacts.length,"Contacts",B.orange],[contacts.filter(c=>c.email).length,"With Email",B.green],[contacts.filter(c=>c.orgType==="club").length,"Clubs",B.blue],[contacts.filter(c=>c.bwtf).length,"BWTF",B.orange]].map(([v,l,c])=>(
+            {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+              {[[contacts.length,"Contacts",B.orange],[contacts.filter(c=>c.email).length,"With Email",B.green],[contacts.filter(c=>c.orgType==="club").length,"Clubs",B.blue]].map(([v,l,c])=>(
                 <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 10px",borderTop:`2px solid ${c}`,textAlign:"center"}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:c}}>{v}</div>
                   <Lbl s={{marginTop:2}}>{l}</Lbl>
@@ -1737,7 +1729,6 @@ function ModProspecting() {
                       <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:2}}>
                         <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||c.firstName+" "+(c.lastName||"")}</span>
                         {c.orgType==="club"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>CLUB</span>}
-                        {c.bwtf&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>BWTF</span>}
                       </div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.title} · {c.school} · {c.city}, {c.state}</div>
                       {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginTop:2}}>✉ {c.email}</div>}
@@ -1958,7 +1949,7 @@ function ModMarketing() {
               </div>
               <div style={{marginBottom:12}}>
                 <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
-                <textarea value={newCamp.ctx} onChange={e=>setNewCamp(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, BWTF angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+                <textarea value={newCamp.ctx} onChange={e=>setNewCamp(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
               </div>
               <div style={{marginBottom:14}}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
@@ -2202,66 +2193,90 @@ function ModAgent() {
   const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY", typeof fn==="function"?fn(history):fn);
   const [input,setInput]=useState("");
   const [running,setRunning]=useState(false);
+  const [expandedEmail,setExpandedEmail]=useState(null);
   const endRef=useRef(null);
   const inputRef=useRef(null);
 
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
 
   const buildContext=()=>{
-    const pipeline=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
-    const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
     const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
+    const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
     const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+    const hot=openDeals.filter(d=>d.priority==="hot");
     const activeRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage));
     const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
     const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
+    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
+    const recentActivity=(s.activity||[]).slice(-5);
+    const competitors=Object.keys(s.competeIntel||{});
 
     return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
 
-=== CURRENT PIPELINE ===
-${openDeals.length} open deals, ${fmt$(pipeline)} total pipeline, ${overdue.length} overdue follow-ups
-${openDeals.slice(0,10).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
+=== PIPELINE ===
+${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
+${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
 
-=== CONTACTS DATABASE ===
-${(s.contacts||[]).length} total contacts, ${reachableContacts.length} with email
-Sports covered: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none yet"}
-${reachableContacts.slice(0,8).map(c=>`· ${c.fullName||c.firstName} — ${c.title}, ${c.school} (${c.state}) — ${c.sport||"?"} — ${c.email}`).join("\n")}
+=== TOP CONTACTS (by lead score) ===
+${topContacts.length===0?"No scored contacts":`${topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}`}
+${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
 
 === ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"No active campaigns":`${activeCampaigns.map(seq=>`· "${seq.name}" — ${seq.product} — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
+${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
 
 === OPEN RFPS ===
 ${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
 
-=== AR / INVOICES ===
+=== AR ===
 ${fmt$(ar)} outstanding${s.invoices.filter(i=>i.status==="overdue").length>0?` — ${s.invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-=== CAPABILITIES ===
-You can take real actions. When appropriate, include an "actions" array in your JSON response:
-· draft_email: {type:"draft_email", to_name, to_email, subject, body, campaign_name?} — drafts a personalized outreach email
-· create_deal: {type:"create_deal", name, org, value, stage, product, contact_name?} — adds a new deal
-· flag_deal: {type:"flag_deal", deal_name, priority:"hot"|"warm"} — flags a deal
-· create_campaign: {type:"create_campaign", name, product, audience, channel} — starts a new campaign
+${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
+=== ACTIONS YOU CAN TAKE ===
+Include an "actions" array when taking real action:
+· draft_email: {type:"draft_email",to_name,to_email,subject,body}
+· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
+· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
+· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
+· log_note: {type:"log_note",deal_name,note}
+· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
+· create_campaign: {type:"create_campaign",name,product,audience,channel}
 
-ALWAYS respond with valid JSON: {"message":"your response text","actions":[]}
-Be specific, tactical, and use real names from the data above. Flag hot signals with 🔥.`;
+Also include "suggestions": 3 short follow-up questions the user might want to ask next.
+
+ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
+Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   };
 
-  const executeAction=async(action)=>{
+  const copyEmail=(action)=>{
+    const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
+    try{navigator.clipboard.writeText(text);}catch{}
+    toast("Email copied to clipboard","success");
+    dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
+  };
+
+  const executeAction=(action,msgIdx,actionIdx)=>{
     if(action.type==="draft_email"){
-      const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
-      try{await navigator.clipboard.writeText(text);}catch{}
-      toast(`Email drafted — copied to clipboard`,"success");
-      dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
+      const key=`${msgIdx}_${actionIdx}`;
+      setExpandedEmail(e=>e===key?null:key);
     } else if(action.type==="create_deal"){
       dispatch("ADD_DEAL",{id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:""});
       toast(`Deal created: ${action.name||action.org}`,"success");
     } else if(action.type==="flag_deal"){
       const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
       if(deal){dispatch("UPDATE_DEAL",{id:deal.id,priority:action.priority||"hot"});toast(`${deal.name} flagged as ${action.priority||"hot"}`,"success");}
+    } else if(action.type==="schedule_followup"){
+      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
+      if(deal){dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:action.date,...(action.note?{notes:(deal.notes?deal.notes+"\n":"")+action.note}:{})});toast(`Follow-up set for ${deal.name}: ${action.date}`,"success");}
+    } else if(action.type==="log_note"){
+      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
+      if(deal){dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+action.note});toast(`Note logged on ${deal.name}`,"success");}
+    } else if(action.type==="add_contact"){
+      dispatch("ADD_CONTACTS",[{id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()}]);
+      toast(`Contact added: ${action.firstName} ${action.lastName}`,"success");
     } else if(action.type==="create_campaign"){
       setMod("marketing");toast("Switched to Marketing — create your campaign","info");
     }
@@ -2274,88 +2289,205 @@ Be specific, tactical, and use real names from the data above. Flag hot signals 
     const userEntry={role:"user",content:msg,ts:Date.now()};
     const nextHistory=[...history,userEntry];
     setHistory(nextHistory);
-
     const sys=buildContext();
     const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content)}));
-
     try {
-      const raw=await aiCallConv(apiMsgs,sys,{tokens:1600,json:true});
+      const raw=await aiCallConv(apiMsgs,sys,{tokens:2000,json:true});
       const message=raw?.message||raw||"Sorry, something went wrong.";
       const actions=Array.isArray(raw?.actions)?raw.actions:[];
-      const assistantEntry={role:"assistant",content:message,actions,raw:message,ts:Date.now()};
+      const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
+      const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,ts:Date.now()};
       setHistory(h=>[...h,assistantEntry]);
       if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Check AI Agent"});
       dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
     } catch(e){
-      setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],ts:Date.now()}]);
+      setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
     }
     setRunning(false);
     setTimeout(()=>inputRef.current?.focus(),100);
   };
 
-  const clearHistory=()=>{
-    dispatch("SET_AGENT_HISTORY",[]);
-    toast("Conversation cleared","info");
-  };
+  const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
+
+  // Sidebar data
+  const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
+  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
+  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
+  const openRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)).slice(0,3);
+
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS"};
 
   const STARTERS=[
-    "Who should I call or email today based on my pipeline and contacts?",
-    "Draft a cold outreach email for our highest-priority Track & Field contact",
-    "Which deals are most at risk right now and what should I do?",
-    "What's the best outreach strategy for Minnesota ADs right now?",
-    "How do I counter BSN Sports when they undercut our price?",
-    "Build me a 3-touch email sequence for Baseball coaches in Iowa",
-    "Analyze my open RFPs — which should we prioritize and why?",
-    "What product should I be pushing hardest right now based on the season?",
+    "Who should I call or email today?",
+    "Draft outreach for my highest-priority contact",
+    "Which deals are most at risk right now?",
+    "How do I counter BSN Sports on pricing?",
+    "Build a 3-touch sequence for Baseball coaches in Iowa",
+    "Analyze my open RFPs — what should I prioritize?",
+    "What product should I push hardest this season?",
+    "Who hasn't heard from us in 30+ days?",
   ];
 
   return (
-    <div style={{padding:"22px 26px",display:"flex",flexDirection:"column",height:"calc(100vh - 46px)"}}>
-      <PH title="REVOPS AGENT" sub="Full-context AI — drafts outreach, flags deals, drives pipeline"
-        action={history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}/>
-      <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,minHeight:200,display:"flex",flexDirection:"column",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
-        {history.length===0&&(
-          <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center"}}>
-            <div style={{textAlign:"center",marginBottom:18}}>
-              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,letterSpacing:.3,marginBottom:6}}>RevOps Agent</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Knows your deals, contacts, campaigns, and competitors. Can draft outreach, flag deals, and take real actions.</div>
+    <div style={{display:"flex",height:"calc(100vh - 46px)"}}>
+
+      {/* ── Main chat ── */}
+      <div style={{flex:1,padding:"22px 26px",display:"flex",flexDirection:"column",minWidth:0}}>
+        <PH title="REVOPS AGENT" sub="Full-context AI — drafts outreach, flags deals, takes real actions"
+          action={history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}/>
+
+        <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,display:"flex",flexDirection:"column",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+          {history.length===0&&(
+            <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center"}}>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,letterSpacing:.3,marginBottom:6}}>RevOps Agent</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Knows your deals, contacts, campaigns, and competitors. Drafts outreach, flags deals, schedules follow-ups.</div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:520,margin:"0 auto",width:"100%"}}>
+                {STARTERS.map(st=>(
+                  <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
+                ))}
+              </div>
             </div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:580,margin:"0 auto",width:"100%"}}>
-              {STARTERS.map(st=>(
-                <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
+          )}
+
+          {history.map((m,msgIdx)=>(
+            <div key={msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
+
+              {/* Actions */}
+              {m.actions?.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
+                  {m.actions.map((a,ai)=>{
+                    if(a.type==="draft_email"){
+                      const key=`${msgIdx}_${ai}`;
+                      const expanded=expandedEmail===key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.greenBg,borderBottom:expanded?`1px solid ${B.green}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✉</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>{a.to_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{a.subject}</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              <button onClick={()=>copyEmail(a)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋 COPY</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    const col=ACTION_COLORS[a.type]||{c:B.muted,bg:B.surface};
+                    return(
+                      <button key={ai} onClick={()=>executeAction(a,msgIdx,ai)} style={{background:col.bg,color:col.c,border:`1px solid ${col.c}40`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",textAlign:"left"}}>
+                        {ACTION_LABELS[a.type]||"▶ DO IT"}
+                        {a.deal_name&&` — ${a.deal_name}`}{a.name&&` — ${a.name}`}{a.to_name&&` — ${a.to_name}`}
+                        {a.date&&` (${a.date})`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Follow-up suggestions */}
+              {m.role==="assistant"&&m.suggestions?.length>0&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,maxWidth:"88%"}}>
+                  {m.suggestions.map((sg,si)=>(
+                    <button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:20,padding:"4px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1}}>→ {sg}</button>
+                  ))}
+                </div>
+              )}
+
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?"You":"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
+            </div>
+          ))}
+
+          {running&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
+                <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Thinking...</span>
+              </div>
+            </div>
+          )}
+          <div ref={endRef}/>
+        </div>
+
+        <div style={{display:"flex",gap:9}}>
+          <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..." style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}/>
+          <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
+        </div>
+      </div>
+
+      {/* ── Context sidebar ── */}
+      <div style={{width:220,borderLeft:`1px solid ${B.border}`,background:B.surface,padding:"22px 14px",display:"flex",flexDirection:"column",gap:18,overflowY:"auto",flexShrink:0}}>
+        {/* Pipeline */}
+        <div>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>PIPELINE</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange,marginBottom:1}}>{fmt$(pipeline)}</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{openDeals.length} open deal{openDeals.length!==1?"s":""}</div>
+        </div>
+
+        {/* Overdue */}
+        {overdueDeals.length>0&&(
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:1.5,marginBottom:8}}>OVERDUE ({overdueDeals.length})</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {overdueDeals.map(d=>(
+                <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderLeft:`3px solid ${B.red}`,borderRadius:5,padding:"7px 9px"}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2}}>{d.name}</div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>{Math.abs(dUntil(d.followUpDate))}d OVERDUE</div>
+                </div>
               ))}
             </div>
           </div>
         )}
-        {history.map((m,i)=>(
-          <div key={i} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
-            <div style={{maxWidth:"86%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
-            {m.actions?.length>0&&(
-              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6,maxWidth:"86%"}}>
-                {m.actions.map((a,ai)=>(
-                  <button key={ai} onClick={()=>executeAction(a)} style={{background:a.type==="draft_email"?B.greenBg:a.type==="create_deal"?B.orangeBg:a.type==="flag_deal"?B.redBg:B.blueBg,color:a.type==="draft_email"?B.green:a.type==="create_deal"?B.orange:a.type==="flag_deal"?B.red:B.blue,border:`1px solid ${a.type==="draft_email"?B.green+"40":a.type==="create_deal"?B.orange+"40":a.type==="flag_deal"?B.red+"40":B.blue+"40"}`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>
-                    {a.type==="draft_email"?"✉ COPY EMAIL":a.type==="create_deal"?"◫ CREATE DEAL":a.type==="flag_deal"?"🔥 FLAG DEAL":a.type==="create_campaign"?"✦ GO TO CAMPAIGNS":"▶ DO IT"}
-                    {a.to_name&&` — ${a.to_name}`}
-                    {a.name&&` — ${a.name}`}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?"You":"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
-          </div>
-        ))}
-        {running&&(
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
-              <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Analyzing your data...</span>
+
+        {/* Hot contacts */}
+        {topContacts.length>0&&(
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT CONTACTS</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {topContacts.map(c=>(
+                <div key={c.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:1}}>{c.fullName||c.firstName}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.3}}>{(c.title||"").split(" ").slice(0,3).join(" ")}{c.state?` · ${c.state}`:""}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.orange,marginTop:2}}>{c.score||0} pts</div>
+                </div>
+              ))}
             </div>
           </div>
         )}
-        <div ref={endRef}/>
-      </div>
-      <div style={{display:"flex",gap:9}}>
-        <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, or say 'draft outreach for [name]'..." style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}/>
-        <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
+
+        {/* Open RFPs */}
+        {openRfps.length>0&&(
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>OPEN RFPS</div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {openRfps.map(r=>(
+                <div key={r.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2}}>{r.name}</div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:RSC[r.stage]||B.muted}}>{r.stage}{r.dueDate?` · due ${r.dueDate}`:""}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!openDeals.length&&!topContacts.length&&!openRfps.length&&(
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Add deals and contacts to see live context here.</div>
+        )}
       </div>
     </div>
   );

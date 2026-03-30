@@ -17,7 +17,7 @@ const B = {
 
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa.
 K-12 school districts, ADs, coaches, procurement managers.
-Acquired Bruce Whiting Track & Field (BWTF) — MN and ND territory.
+Markets: Iowa, Colorado, Minnesota, North Dakota.
 Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, EvoShield, FinishLynx, Pro-Nine, Ultrak, Seiko.
 Owner: Matt Stone · matt@st1sports.com · 719-256-0275 · st1sports.com`;
 
@@ -359,13 +359,11 @@ Return JSON array — one object per item in the same order:
 
     // Generate cover letter
     addLog("Building cover letter...");
-    const bwtf = ["MN","ND","Minnesota","North Dakota"].includes(meta?.state);
     const totalBid = updated.filter(i=>i.canBid!==false).reduce((s,i)=>(i.finalPrice||0)*(i.qtyRequested||1)+s,0);
     const letter = await claudeText(
 `Write a professional bid cover letter from Matt Stone at ST1 Sports.
 RFP: ${meta?.title} | Bid ID: ${meta?.bidId} | Issuer: ${meta?.issuer}, ${meta?.state}
 Due: ${meta?.dueDate} | Bidding ${updated.filter(i=>i.canBid!==false).length} of ${updated.length} items | Est. value: $${totalBid.toLocaleString()}
-${bwtf?"NOTE: Use BWTF/Bruce Whiting acquisition as a relationship hook for this MN/ND territory bid.":""}
 ${ST1}
 3-4 paragraphs. Professional. Mention delivery capability, references available, competitive pricing. End with Matt Stone | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setCoverLetter(letter);

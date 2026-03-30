@@ -18,8 +18,7 @@ const B = {
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa.
 Owner: Matt Stone · matt@st1sports.com · 719-256-0275
 Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine, Ultrak, Seiko.
-Acquired Bruce Whiting Track & Field (BWTF) — strong brand recognition in Minnesota and North Dakota.
-Current markets: Iowa (primary), Colorado (active), Minnesota and North Dakota (BWTF acquisition).
+Current markets: Iowa (primary), Colorado (active), Minnesota, North Dakota.
 Typical customers: K-12 school districts, athletic directors, head coaches, procurement managers.
 Revenue drivers: T&F equipment, competition spikes, baseball/softball gear, timing systems, custom team stores.
 Average deal size: $800–$12,000. Bid deals: $10,000–$100,000+.`;
@@ -111,7 +110,6 @@ export default function ExpansionPlaybook() {
     abortRef.current = false;
 
     const sd = EXPANSION_STATES.find(s=>s.abbr===config.state);
-    const isBWTF = sd?.bwtf;
 
     addLog(`Building expansion playbook for ${sd?.name}...`);
 
@@ -137,7 +135,6 @@ Use web search to find real data. Return JSON:
   "marketOpportunity": "specific opportunity for ST1 in this state",
   "entryDifficulty": "easy|medium|hard",
   "entryDifficultyReason": "why",
-  ${isBWTF ? '"bwtfAdvantage": "how BWTF acquisition helps in this state",' : ''}
   "seasonalPattern": "when districts typically buy athletic equipment"
 }`);
     setProg(18); addLog("✓ Market intelligence gathered","success");
@@ -221,7 +218,6 @@ Configuration:
 - Priority: ${config.priority}
 - Team: ${config.teamSize}
 - Budget: ${config.budget}
-${isBWTF ? `- BWTF advantage: Use Bruce Whiting Track & Field brand recognition in this territory` : ""}
 ${config.note ? `- Additional context: ${config.note}` : ""}
 
 Return JSON:
@@ -272,7 +268,6 @@ Return JSON:
 `Write outreach email sequences for ST1 Sports entering ${sd?.name}.
 ${ST1}
 Focus: ${config.sports.join(", ")}
-${isBWTF ? "Use BWTF/Bruce Whiting acquisition as primary hook — these schools may have known Bruce." : ""}
 
 Create 2 sequences. Return JSON:
 {
@@ -305,7 +300,6 @@ Create 2 sequences. Return JSON:
 ${ST1}
 Focus sports: ${config.sports.join(", ")}
 Market data: ${sd?.highSchools} high schools, ${sd?.region} region.
-${isBWTF ? "BWTF advantage available for MN/ND." : ""}
 
 Return JSON:
 {
@@ -500,16 +494,14 @@ Return JSON:
                       <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,letterSpacing:.5}}>{s.abbr}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,marginTop:2,color:config.state===s.abbr?B.white:B.muted}}>{s.name}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:config.state===s.abbr?"rgba(255,255,255,.7)":B.muted}}>{s.highSchools} schools</div>
-                      {s.bwtf&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:config.state===s.abbr?"rgba(255,255,255,.9)":B.orange,marginTop:2}}>BWTF</div>}
                     </button>
                   ))}
                 </div>
                 {/* State info bar */}
                 {stateData&&(
-                  <div style={{marginTop:12,padding:"10px 12px",background:stateData.bwtf?B.orangeBg:B.blueBg,borderRadius:5,display:"flex",gap:20,alignItems:"center"}}>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:stateData.bwtf?B.orange:B.blue}}>{stateData.name}</div>
+                  <div style={{marginTop:12,padding:"10px 12px",background:B.blueBg,borderRadius:5,display:"flex",gap:20,alignItems:"center"}}>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.blue}}>{stateData.name}</div>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid}}>{stateData.highSchools} high schools · {stateData.region}</div>
-                    {stateData.bwtf&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>⭐ BWTF territory — leverage Bruce Whiting brand recognition</div>}
                   </div>
                 )}
               </div>
@@ -629,12 +621,6 @@ Return JSON:
                 </div>
                 <div style={{width:40,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
               </div>
-              {playbook.state.bwtf&&(
-                <div style={{background:B.orangeBg,border:`1px solid ${B.orange}40`,borderRadius:6,padding:"10px 14px",textAlign:"center"}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>BWTF TERRITORY</div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid}}>Use Bruce Whiting acquisition<br/>as your opening hook</div>
-                </div>
-              )}
             </div>
 
             {/* Revenue targets */}

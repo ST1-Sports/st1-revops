@@ -748,7 +748,7 @@ Channel: ${slackChannelName}`);
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>ALERT TYPES — WHAT FIRES TO SLACK</div>
                 {[
                   {label:"Overdue invoice alerts",desc:"Daily digest of all past-due invoices with totals",action:fireOverdueAlerts,btnLabel:"FIRE NOW"},
-                  {label:"High-intent signals",desc:"When prospecting finds BWTF territory contacts or hot leads",action:()=>sendSlackAlert("🔥 *High-Intent Signal*\nNew BWTF territory contacts found in Fargo North, ND — 3 Track & Field ADs ready for outreach"),btnLabel:"TEST"},
+                  {label:"High-intent signals",desc:"When prospecting finds high-priority contacts or hot leads",action:()=>sendSlackAlert("🔥 *High-Intent Signal*\nNew high-priority contacts found in Fargo North, ND — 3 Track & Field ADs ready for outreach"),btnLabel:"TEST"},
                   {label:"RFP deadline warnings",desc:"48-hour warning before any active RFP submission deadline",action:()=>sendSlackAlert("⏰ *RFP Deadline Alert*\nIowa IGHSAU bid (B26-IGHSAU-001) due in 48 hours — submission checklist 40% complete"),btnLabel:"TEST"},
                   {label:"PO received",desc:"When a deal moves to PO Received stage",action:()=>sendSlackAlert("💰 *PO Received*\nIowa City CSD — INV-00891 · $2,100\nFulfill with Molten Volleyballs — ship by end of week"),btnLabel:"TEST"},
                 ].map((a,i)=>(
