@@ -43,12 +43,30 @@ const pct   = n  => n != null && n !== "" ? `${Number(n).toFixed(1)}%` : "—";
 const toBase64 = file => new Promise((res,rej)=>{
   const r=new FileReader(); r.onload=()=>res(r.result.split(",")[1]); r.onerror=rej; r.readAsDataURL(file);
 });
-const toText = file => new Promise((res,rej)=>{
-  const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file);
+const toArrayBuffer = file => new Promise((res,rej)=>{
+  const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsArrayBuffer(file);
 });
+
+// Extract plain text from a PDF using pdfjs-dist (browser build)
+async function extractPdfText(arrayBuffer) {
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    "pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url
+  ).href;
+  const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  const parts = [];
+  for(let i=1; i<=pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const pageText = content.items.map(item=>item.str).join(" ");
+    parts.push(`--- PAGE ${i} ---\n${pageText}`);
+  }
+  return parts.join("\n\n");
+}
 
 const CLAUDE_MODEL = "claude-sonnet-4-6";
 const CLAUDE_TIMEOUT = 55000; // 55s client timeout (vercel fn is 60s)
+const MAX_B64_BYTES = 3 * 1024 * 1024; // 3 MB base64 threshold (~4 MB raw PDF)
 
 async function claudeCall(body) {
   const ctrl = new AbortController();
@@ -67,15 +85,30 @@ async function claudeCall(body) {
   }
 }
 
-// Claude API — PDF doc
-async function claudePDF(pdfB64Array, prompt, sys="", json=false) {
-  const content = [
-    ...pdfB64Array.map(b64=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:b64} })),
-    { type:"text", text: json ? prompt+"\n\nReturn ONLY valid JSON. No markdown fences." : prompt }
-  ];
-  const body = { model:CLAUDE_MODEL, max_tokens:2000, messages:[{role:"user",content}] };
-  if(sys) body.system = sys;
-  const text = await claudeCall(body);
+// Claude API — PDF doc (falls back to text extraction if PDFs are too large)
+async function claudePDF(pdfFiles, prompt, sys="", json=false) {
+  // Check total base64 size
+  const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a, 0);
+  let text;
+  if(totalB64Bytes > MAX_B64_BYTES) {
+    // Extract text from all PDFs and send as text prompt
+    const extractedParts = await Promise.all(pdfFiles.map(async(f,i)=>{
+      const buf = f.arrayBuffer || await toArrayBuffer(f.file);
+      const t = await extractPdfText(buf);
+      return pdfFiles.length>1 ? `=== DOCUMENT ${i+1} ===\n${t}` : t;
+    }));
+    const fullText = extractedParts.join("\n\n");
+    const textPrompt = `[PDF text extracted from ${pdfFiles.length} document(s)]\n\n${fullText}\n\n---\n\n${prompt}`;
+    text = await claudeText(textPrompt, sys, false);
+  } else {
+    const content = [
+      ...pdfFiles.map(f=>({ type:"document", source:{type:"base64",media_type:"application/pdf",data:f.b64} })),
+      { type:"text", text: json ? prompt+"\n\nReturn ONLY valid JSON. No markdown fences." : prompt }
+    ];
+    const body = { model:CLAUDE_MODEL, max_tokens:2000, messages:[{role:"user",content}] };
+    if(sys) body.system = sys;
+    text = await claudeCall(body);
+  }
   if(!json) return text;
   try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
 }
@@ -170,8 +203,8 @@ export default function RFPAutomation() {
     const files = Array.from(e.target.files);
     addLog(`Loading ${files.length} PDF${files.length>1?"s":""}...`);
     const loaded = await Promise.all(files.map(async f => {
-      const b64 = await toBase64(f);
-      return { name:f.name, size:f.size, b64 };
+      const [b64, arrayBuffer] = await Promise.all([toBase64(f), toArrayBuffer(f)]);
+      return { name:f.name, size:f.size, b64, arrayBuffer, file:f };
     }));
     setPdfFiles(prev=>[...prev,...loaded]);
     loaded.forEach(f=>addLog(`✓ ${f.name} (${(f.size/1024).toFixed(0)}KB)`,"success"));
@@ -202,17 +235,19 @@ export default function RFPAutomation() {
     setPhase("analyzing"); setProgress(5); setItems([]); setLog([]);
     abortRef.current = false;
 
-    const b64s = pdfFiles.map(f=>f.b64);
-    const totalSizeMB = pdfFiles.reduce((a,f)=>a+(f.b64?.length||0)*0.75/1024/1024,0);
+    const totalSizeMB = pdfFiles.reduce((a,f)=>a+f.size/1024/1024,0);
+    const totalB64Bytes = pdfFiles.reduce((a,f)=>(f.b64?.length||0)+a,0);
+    const willExtract = totalB64Bytes > MAX_B64_BYTES;
     addLog(`Analyzing ${pdfFiles.length} PDF document${pdfFiles.length>1?"s":""} (${totalSizeMB.toFixed(1)} MB)...`);
-    if(totalSizeMB>15) addLog("⚠ Large PDF — each step may take 30-50 seconds","warn");
+    if(willExtract) addLog("PDF is large — extracting text client-side to avoid upload limits","info");
+    else if(totalSizeMB>2) addLog("⚠ Large PDF — each step may take 30-50 seconds","warn");
 
     try {
 
     // ── STEP 1: Extract RFP metadata ─────────────────────────────────────
     addLog("Step 1/4 — Parsing bid requirements and metadata...");
-    const meta = await claudePDF(b64s,
-`You are analyzing ${b64s.length > 1 ? `${b64s.length} documents` : "a bid document"} for ST1 Sports athletic equipment supplier.
+    const meta = await claudePDF(pdfFiles,
+`You are analyzing ${pdfFiles.length > 1 ? `${pdfFiles.length} documents` : "a bid document"} for ST1 Sports athletic equipment supplier.
 ${ST1}
 
 Extract all bid metadata from these documents. Return JSON:
@@ -236,7 +271,7 @@ Extract all bid metadata from these documents. Return JSON:
   "referencesRequired": "",
   "requiredDocuments": ["W-9","signed bid form","etc"],
   "estimatedValue": 0,
-  "documentCount": ${b64s.length},
+  "documentCount": ${pdfFiles.length},
   "documentDescriptions": ["what each document covers"],
   "specialRequirements": ["any special requirements"],
   "notes": "other important details"
@@ -250,7 +285,7 @@ Extract all bid metadata from these documents. Return JSON:
 
     // ── STEP 2: SHIPPING DETECTION — critical ────────────────────────────
     addLog("Step 2/4 — Detecting shipping / freight rules...");
-    const shipping = await claudePDF(b64s,
+    const shipping = await claudePDF(pdfFiles,
 `CRITICAL: Analyze these bid documents carefully for shipping/freight pricing rules.
 Look for language like:
 - "prices shall include all transportation"
@@ -293,7 +328,7 @@ If you cannot find any explicit shipping language, set certainty to low and make
 
     // ── STEP 3: Extract all line items ───────────────────────────────────
     addLog("Step 3/4 — Extracting all line items and product specifications...");
-    const rawItems = await claudePDF(b64s,
+    const rawItems = await claudePDF(pdfFiles,
 `Extract EVERY product line item from these bid documents for ST1 Sports.
 Include ALL items even if we might not carry them — mark canBid:false for those.
 
