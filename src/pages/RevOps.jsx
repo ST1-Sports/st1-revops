@@ -2478,12 +2478,12 @@ function ModProspecting() {
                       <GBtn onClick={()=>setEditing(area.id)} style={{fontSize:9,padding:"3px 8px"}}>EDIT</GBtn>
                     </div>
                     <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:7}}>
-                      {(area.regions||[]).map(r=>{const c=US_REGIONS[r]?.color||B.orange;return<span key={r} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:c,background:c+"18",padding:"2px 7px",borderRadius:3}}>{r}</span>;})}
-                      {!(area.regions||[]).length&&(area.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}
-                      {(area.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{sp}</span>)}
+                      {(area.regions||[]).map(r=>{const rs=typeof r==="string"?r:r?.name||String(r);const c=US_REGIONS[rs]?.color||B.orange;return<span key={rs} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:c,background:c+"18",padding:"2px 7px",borderRadius:3}}>{rs}</span>;})}
+                      {!(area.regions||[]).length&&(area.states||[]).map(st=>{const s2=typeof st==="string"?st:st?.name||String(st);return<span key={s2} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>{s2}</span>;})}
+                      {(area.sports||[]).map(sp=>{const s2=typeof sp==="string"?sp:sp?.name||String(sp);return<span key={s2} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{s2}</span>;})}
                     </div>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
-                      {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
+                      {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).map(r=>typeof r==="string"?r:r?.name||String(r)).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
                     </div>
                     <OBtn onClick={()=>runScrape(area)} style={{width:"100%"}} sm>⊕ SCRAPE THIS AREA</OBtn>
                   </div>
@@ -2565,7 +2565,7 @@ function ModProspecting() {
                         </td>
                         <td style={{padding:"6px 10px",color:c.email?B.green:B.muted}}>{c.email||"—"}</td>
                         <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
-                          {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{c.sport}</span>}
+                          {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
                         </td>
                         <td style={{padding:"6px 10px",color:B.orange,fontWeight:500,fontSize:10,whiteSpace:"nowrap"}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]||"—"}</td>
                         <td style={{padding:"6px 10px"}}>
@@ -2573,7 +2573,7 @@ function ModProspecting() {
                         </td>
                         <td style={{padding:"6px 10px"}}>
                           <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                            {(c.tags||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>{t}</span>)}
+                            {(c.tags||[]).map((t,ti)=>{const ts=typeof t==="string"?t:t?.name||String(t);return<span key={ti} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>{ts}</span>;})}
                           </div>
                         </td>
                       </tr>
