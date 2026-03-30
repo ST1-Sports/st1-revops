@@ -3872,6 +3872,9 @@ function ModMarketing() {
   const [building,setBuilding]=useState(false);
   const [newCamp,setNewCamp]=useState(null); // draft campaign form
   const [genRunning,setGenRunning]=useState(false);
+  const [segRunning,setSegRunning]=useState(false);
+  const [segResult,setSegResult]=useState(null); // {summary, segments:[{contactId,fit,reason}]}
+  const [selectedContacts,setSelectedContacts]=useState(new Set());
   const [filterSport,setFilterSport]=useState("all");
 
   const gen=async()=>{
@@ -3909,12 +3912,52 @@ function ModMarketing() {
     setGenRunning(false);
   };
 
+  // ── AI audience segmentation ──────────────────────────────────────────────────
+  const analyzeAudience=async()=>{
+    if(!newCamp)return;
+    setSegRunning(true);setSegResult(null);
+    const contacts=s.contacts||[];
+    if(contacts.length===0){toast("No contacts in database yet — import or scrape contacts first","error");setSegRunning(false);return;}
+    // Compact representation for AI
+    const rows=contacts.map(c=>{
+      const title=typeof c.title==="string"?c.title:c.title?.name||"";
+      const school=typeof c.school==="string"?c.school:c.school?.name||"";
+      const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+      return `${c.id}|${c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}|${title}|${school}|${sport}|score:${c.score||0}|email:${c.email?"yes":"no"}|status:${c.outreachStatus||c.zohoStatus||"cold"}`;
+    }).slice(0,120); // cap at 120 contacts to keep prompt manageable
+    const result=await aiCall(
+      `You are a sales intelligence engine for ST1 Sports, a school/team sports equipment company.\n`+
+      `${ST1}\n\n`+
+      `CAMPAIGN TO FILL:\n`+
+      `Product: ${newCamp.product}\nChannel: ${newCamp.channel}\nTarget audience: ${newCamp.audience||"any"}\nContext: ${newCamp.ctx||"none"}\n\n`+
+      `CONTACT DATABASE (format: id|name|title|school|sport|score|has_email|outreach_status):\n`+
+      rows.join("\n")+"\n\n"+
+      `TASK: Analyze each contact and return a JSON object with:\n`+
+      `- "summary": 1-2 sentence overview of the segment you found\n`+
+      `- "segments": array of {contactId, fit, reason} where fit is "high"|"medium"|"low"\n`+
+      `HIGH = direct buyer/decision-maker for this product type with email\n`+
+      `MEDIUM = influencer, related role, or adjacent buyer\n`+
+      `LOW = unlikely fit but possible\n`+
+      `Only include contacts with a realistic reason. Omit completely irrelevant contacts.\n`+
+      `Return ONLY valid JSON, no markdown.`,
+      {json:true,tokens:2000}
+    );
+    const segs=result?.segments||[];
+    // Pre-select high + medium
+    const presel=new Set(segs.filter(s=>s.fit==="high"||s.fit==="medium").map(s=>s.contactId));
+    setSegResult({summary:result?.summary||"",segments:segs});
+    setSelectedContacts(presel);
+    setSegRunning(false);
+    if(segs.length===0) toast("No strong matches found — try broadening the audience or adding more contacts","info");
+  };
+
   const saveCampaign=()=>{
     if(!newCamp||!newCamp.touches.length)return;
     const contacts=s.contacts||[];
-    const seg=contacts.filter(c=>
-      (newCamp.audience==="all"||!newCamp.audience||(c.title||"").toLowerCase().includes(newCamp.audience.toLowerCase().split(" ")[0].toLowerCase()))
-    );
+    // Use AI-selected contacts if segmentation ran, otherwise fall back to keyword match
+    const seg=segResult
+      ? contacts.filter(c=>selectedContacts.has(c.id))
+      : contacts.filter(c=>(newCamp.audience==="all"||!newCamp.audience||(c.title||"").toLowerCase().includes(newCamp.audience.toLowerCase().split(" ")[0].toLowerCase())));
     const today=new Date().toISOString().slice(0,10);
     const seq={
       id:mkId(),
@@ -3930,7 +3973,7 @@ function ModMarketing() {
     };
     dispatch("ADD_SEQUENCE",seq);
     seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`}));
-    setBuilding(false);setNewCamp(null);setSelSeq(seq.id);
+    setBuilding(false);setNewCamp(null);setSelSeq(seq.id);setSegResult(null);setSelectedContacts(new Set());
     toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
   };
 
@@ -4202,10 +4245,71 @@ function ModMarketing() {
                 <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
                 <textarea value={newCamp.ctx} onChange={e=>setNewCamp(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
               </div>
+              {/* ── SMART SEGMENT ─────────────────────────────────────── */}
               <div style={{marginBottom:14}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
-                  Audience match: <strong style={{color:B.text}}>{(s.contacts||[]).filter(c=>(newCamp.audience==="all"||!newCamp.audience)||(c.title||"").toLowerCase().includes((newCamp.audience||"").toLowerCase().split(" ")[0].toLowerCase())).length} contacts</strong> from your database
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <Lbl>AUDIENCE SEGMENT</Lbl>
+                  <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
+                    {segRunning?"✦ ANALYZING...":"✦ SMART SEGMENT"}
+                  </button>
                 </div>
+                {segRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"8px 0"}}><Spin/>AI is matching contacts to this campaign…</div>}
+                {!segRunning&&!segResult&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
+                    {(s.contacts||[]).length===0
+                      ? "No contacts yet — import from Apollo, scrape leads, or add manually"
+                      : `${(s.contacts||[]).length} contacts in database · click Smart Segment to let AI find the best matches`
+                    }
+                  </div>
+                )}
+                {segResult&&(
+                  <div>
+                    {segResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"8px 10px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5,marginBottom:10,lineHeight:1.5}}>{segResult.summary}</div>}
+                    {(()=>{
+                      const byFit={high:[],medium:[],low:[]};
+                      (segResult.segments||[]).forEach(sg=>{byFit[sg.fit]?.push(sg);});
+                      const fitConfig=[["high","BEST MATCH",B.green],["medium","GOOD MATCH",B.orange],["low","POSSIBLE",B.muted]];
+                      return fitConfig.map(([fit,label,color])=>{
+                        if(!byFit[fit]?.length) return null;
+                        return(
+                          <div key={fit} style={{marginBottom:10}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color,letterSpacing:1}}>{label} ({byFit[fit].length})</div>
+                              <div style={{display:"flex",gap:6}}>
+                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.add(sg.contactId));return n;})} style={{background:"none",border:"none",color,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ ALL</button>
+                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.delete(sg.contactId));return n;})} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>− ALL</button>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
+                              {byFit[fit].map(sg=>{
+                                const c=(s.contacts||[]).find(c=>c.id===sg.contactId);
+                                if(!c)return null;
+                                const checked=selectedContacts.has(sg.contactId);
+                                const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unknown";
+                                const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                                const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                                return(
+                                  <div key={sg.contactId} onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);checked?n.delete(sg.contactId):n.add(sg.contactId);return n;})}
+                                    style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 8px",borderRadius:5,background:checked?`${color}08`:B.surface,border:`1px solid ${checked?color:B.border}`,cursor:"pointer"}}>
+                                    <input type="checkbox" checked={checked} onChange={()=>{}} style={{marginTop:2,flexShrink:0,accentColor:color}}/>
+                                    <div style={{flex:1,minWidth:0}}>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}{c.email&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginLeft:5}}>✉</span>}</div>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color,marginTop:1,fontStyle:"italic"}}>{sg.reason}</div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>
+                      {selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment
+                    </div>
+                  </div>
+                )}
               </div>
               <OBtn onClick={generateTouches} disabled={genRunning} style={{marginBottom:14,width:"100%"}}>
                 {genRunning?"✦ GENERATING SEQUENCE...":"✦ GENERATE 3-TOUCH SEQUENCE"}
