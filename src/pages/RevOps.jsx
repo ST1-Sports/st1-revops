@@ -2849,7 +2849,7 @@ function ModTemplates() {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                 <div><Lbl s={{marginBottom:4}}>TEMPLATE NAME</Lbl><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
                 <div><Lbl s={{marginBottom:4}}>TAGS (comma-separated)</Lbl>
-                  <input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean);}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  <input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
                 </div>
               </div>
               <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>SUBJECT LINE</Lbl><input value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
