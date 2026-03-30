@@ -2433,18 +2433,20 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch all pages from a Zoho CRM endpoint (handles 200/page limit)
-  const zohoFetchAll = async (baseEndpoint, onProgress) => {
-    let all = []; let page = 1;
+  // Fetch ALL records from a Zoho CRM module using COQL (bypasses 2000-record page limit)
+  const zohoFetchAll = async (module, fields, onProgress) => {
+    let all = []; let offset = 0;
+    const fList = fields.join(",");
     while(true) {
-      const sep = baseEndpoint.includes("?")?"&":"?";
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+        body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",
+          body:{select_query:`SELECT ${fList} FROM ${module} LIMIT 200 OFFSET ${offset}`}
+        })}).then(r=>r.json());
       const batch = res.data||[];
       all = [...all,...batch];
       if(onProgress) onProgress(all.length);
       if(!res.info?.more_records || batch.length<200) break;
-      page++;
+      offset += 200;
     }
     return all;
   };
@@ -2456,9 +2458,11 @@ function ModProspecting() {
       // Fetch contacts and leads with full pagination
       setZohoPullResult({contacts:0,leads:0,added:0,updated:0,loading:true});
       const [contactRows, leadRows] = await Promise.all([
-        zohoFetchAll("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source,Last_Activity_Time,Modified_Time",
+        zohoFetchAll("Contacts",
+          ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"],
           n=>setZohoPullResult(r=>({...r,contacts:n}))),
-        zohoFetchAll("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Modified_Time,Created_Time,Description,Converted",
+        zohoFetchAll("Leads",
+          ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"],
           n=>setZohoPullResult(r=>({...r,leads:n}))),
       ]);
       const now = Date.now();
@@ -2534,7 +2538,7 @@ function ModProspecting() {
     setRescoring(true);
     toast("Rescoring leads from Zoho activity...","info");
     try {
-      const leadRows=await zohoFetchAll("/Leads?fields=First_Name,Last_Name,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,Lead_Source");
+      const leadRows=await zohoFetchAll("Leads",["First_Name","Last_Name","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Lead_Source"]);
       toast(`Rescoring ${leadRows.length} leads...`,"info");
       const now=Date.now();
       const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
