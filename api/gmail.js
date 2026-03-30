@@ -12,7 +12,7 @@
  */
 
 export const config = {
-  api: { bodyParser: { sizeLimit: "1mb" } },
+  api: { bodyParser: { sizeLimit: "2mb" } },
 };
 
 let _token = null;
@@ -79,7 +79,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, cc, replyToMessageId } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
@@ -143,6 +143,58 @@ export default async function handler(req, res) {
         body:    body.slice(0, 3000), // cap body length
         snippet: msg.snippet || "",
       });
+    }
+
+    // ── SEND: compose and send email via Gmail ────────────────────────────────
+    if (action === "send") {
+      if (!to_email) return res.status(400).json({ error: "to_email required" });
+      if (!subject)  return res.status(400).json({ error: "subject required" });
+      if (!emailBody) return res.status(400).json({ error: "body required" });
+
+      const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
+      const lines = [
+        `To: ${toHeader}`,
+        ...(cc ? [`Cc: ${cc}`] : []),
+        `Subject: ${subject}`,
+        `MIME-Version: 1.0`,
+        `Content-Type: text/plain; charset=UTF-8`,
+        ``,
+        emailBody,
+      ];
+
+      // If replying to an existing thread, fetch the thread ID + references
+      let threadId;
+      if (replyToMessageId) {
+        try {
+          const origRes = await fetch(
+            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${replyToMessageId}?format=metadata&metadataHeaders=Message-ID&metadataHeaders=References`,
+            { headers: auth }
+          );
+          const orig = await origRes.json();
+          threadId = orig.threadId;
+          const msgIdHdr = (orig.payload?.headers || []).find(h => h.name === "Message-ID")?.value;
+          const refsHdr  = (orig.payload?.headers || []).find(h => h.name === "References")?.value;
+          if (msgIdHdr) {
+            lines.splice(lines.indexOf(""), 0, `In-Reply-To: ${msgIdHdr}`);
+            lines.splice(lines.indexOf(""), 0, `References: ${refsHdr ? refsHdr + " " + msgIdHdr : msgIdHdr}`);
+          }
+        } catch { /* ignore thread fetch errors */ }
+      }
+
+      const raw = Buffer.from(lines.join("\r\n"))
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      const sendRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method:  "POST",
+        headers: { ...auth, "Content-Type": "application/json" },
+        body:    JSON.stringify({ raw, ...(threadId ? { threadId } : {}) }),
+      });
+      const sendData = await sendRes.json();
+      if (!sendRes.ok) return res.status(sendRes.status).json({ error: sendData.error?.message || "Send failed", raw: sendData });
+      return res.json({ sent: true, messageId: sendData.id, threadId: sendData.threadId });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });

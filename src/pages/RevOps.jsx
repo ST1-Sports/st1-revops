@@ -3352,6 +3352,9 @@ function ModAgent() {
   const [input,setInput]=useState("");
   const [running,setRunning]=useState(false);
   const [expandedEmail,setExpandedEmail]=useState(null);
+  const [agentStatus,setAgentStatus]=useState(null); // "thinking"|"searching"|"zoho"|null
+  const [lastMeta,setLastMeta]=useState(null); // {liveZoho,searchUsed}
+  const [sendingEmail,setSendingEmail]=useState(null); // action key being sent
   const endRef=useRef(null);
   const inputRef=useRef(null);
 
@@ -3416,52 +3419,127 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
     dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
   };
 
-  const executeAction=(action,msgIdx,actionIdx)=>{
+  const executeAction=async(action,msgIdx,actionIdx)=>{
     if(action.type==="draft_email"){
       const key=`${msgIdx}_${actionIdx}`;
       setExpandedEmail(e=>e===key?null:key);
-    } else if(action.type==="create_deal"){
-      dispatch("ADD_DEAL",{id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:""});
-      toast(`Deal created: ${action.name||action.org}`,"success");
-    } else if(action.type==="flag_deal"){
+      return;
+    }
+    if(action.type==="create_deal"){
+      const newDeal={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
+      dispatch("ADD_DEAL",newDeal);
+      toast(`Deal created: ${newDeal.name}`,"success");
+      // Sync to Zoho CRM
+      try{
+        await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"create_deal",name:newDeal.name,amount:newDeal.value,stage:newDeal.stage,
+          account_name:newDeal.school,closing_date:action.followUpDate||"",description:newDeal.notes
+        })});
+        toast("✓ Created in Zoho CRM","success");
+      }catch{}
+      return;
+    }
+    if(action.type==="flag_deal"){
       const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
       if(deal){dispatch("UPDATE_DEAL",{id:deal.id,priority:action.priority||"hot"});toast(`${deal.name} flagged as ${action.priority||"hot"}`,"success");}
-    } else if(action.type==="schedule_followup"){
-      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(deal){dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:action.date,...(action.note?{notes:(deal.notes?deal.notes+"\n":"")+action.note}:{})});toast(`Follow-up set for ${deal.name}: ${action.date}`,"success");}
-    } else if(action.type==="log_note"){
-      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(deal){dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+action.note});toast(`Note logged on ${deal.name}`,"success");}
-    } else if(action.type==="add_contact"){
-      dispatch("ADD_CONTACTS",[{id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()}]);
-      toast(`Contact added: ${action.firstName} ${action.lastName}`,"success");
-    } else if(action.type==="create_campaign"){
-      setMod("marketing");toast("Switched to Marketing — create your campaign","info");
+      return;
     }
+    if(action.type==="schedule_followup"){
+      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
+      if(deal){
+        dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:action.date,...(action.note?{notes:(deal.notes?deal.notes+"\n":"")+action.note}:{})});
+        toast(`Follow-up set for ${deal.name}: ${action.date}`,"success");
+        // Sync note to Zoho
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:`Follow-up scheduled: ${action.date}. ${action.note||""}`})});}catch{}
+      }
+      return;
+    }
+    if(action.type==="log_note"){
+      const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
+      if(deal){
+        dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+action.note});
+        toast(`Note logged on ${deal.name}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:action.note})});}catch{}
+      }
+      return;
+    }
+    if(action.type==="add_contact"){
+      const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
+      dispatch("ADD_CONTACTS",[c]);
+      toast(`Contact added: ${c.fullName}`,"success");
+      // Sync to Zoho CRM
+      try{
+        await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school
+        })});
+        toast("✓ Contact synced to Zoho","success");
+      }catch{}
+      return;
+    }
+    if(action.type==="add_to_nurture"){
+      if(!action.email){toast("No email — can't add to nurture","error");return;}
+      try{
+        await fetch("/api/zoho-campaigns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"add_subscribers",listKey:"cold_leads",subscribers:[{email:action.email,firstName:action.firstName||"",lastName:action.lastName||"",company:action.company||""}]
+        })});
+        toast(`${action.email} added to nurture sequence`,"success");
+      }catch(e){toast(`Nurture add failed: ${e.message}`,"error");}
+      return;
+    }
+    if(action.type==="create_campaign"){
+      setMod("marketing");toast("Switched to Marketing — create your campaign","info");
+      return;
+    }
+  };
+
+  const sendEmailNow=async(action,key)=>{
+    if(!action.to_email){toast("No email address — can't send","error");return;}
+    setSendingEmail(key);
+    try{
+      const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body
+      })});
+      const d=await r.json();
+      if(d.sent){
+        toast(`Email sent to ${action.to_name||action.to_email}`,"success");
+        dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
+      } else {
+        toast(d.error||"Send failed","error");
+      }
+    }catch(e){toast(`Send error: ${e.message}`,"error");}
+    setSendingEmail(null);
   };
 
   const send=async(overrideMsg)=>{
     const msg=(overrideMsg||input).trim();
     if(!msg||running)return;
     setInput("");setRunning(true);
+    setAgentStatus("thinking");
     const userEntry={role:"user",content:msg,ts:Date.now()};
     const nextHistory=[...history,userEntry];
     setHistory(nextHistory);
-    const sys=buildContext();
-    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content)}));
+    const localContext={
+      deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],
+      invoices:s.invoices||[],sequences:s.sequences||[]
+    };
+    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     try {
-      const raw=await aiCallConv(apiMsgs,sys,{tokens:2000,json:true});
-      const message=raw?.message||raw||"Sorry, something went wrong.";
+      const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext})});
+      if(!r.ok){const e=await r.json();throw new Error(e.error||`HTTP ${r.status}`);}
+      const raw=await r.json();
+      const message=raw?.message||"Sorry, something went wrong.";
       const actions=Array.isArray(raw?.actions)?raw.actions:[];
       const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
-      const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,ts:Date.now()};
+      const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
+      setLastMeta(meta);
+      const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
       setHistory(h=>[...h,assistantEntry]);
       if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Check AI Agent"});
       dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
     } catch(e){
       setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
     }
-    setRunning(false);
+    setAgentStatus(null);setRunning(false);
     setTimeout(()=>inputRef.current?.focus(),100);
   };
 
@@ -3474,8 +3552,8 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
   const openRfps=s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)).slice(0,3);
 
-  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg}};
-  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS"};
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
 
   const STARTERS=[
     "Who should I call or email today?",
@@ -3493,8 +3571,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
       {/* ── Main chat ── */}
       <div style={{flex:1,padding:"22px 26px",display:"flex",flexDirection:"column",minWidth:0}}>
-        <PH title="REVOPS AGENT" sub="Full-context AI — drafts outreach, flags deals, takes real actions"
-          action={history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}/>
+        <PH title="REVOPS AGENT" sub="Full-context AI with live Zoho CRM + web search — drafts outreach, flags deals, syncs to CRM"
+          action={<div style={{display:"flex",gap:6,alignItems:"center"}}>
+            {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
+            {lastMeta?.searchUsed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>🔍 WEB</span>}
+            {history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}
+          </div>}/>
 
         <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,display:"flex",flexDirection:"column",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
           {history.length===0&&(
@@ -3533,6 +3615,11 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
                               </div>
                             </div>
                             <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              {a.to_email&&(
+                                <button onClick={()=>sendEmailNow(a,`${msgIdx}_${ai}`)} disabled={sendingEmail===`${msgIdx}_${ai}`} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===`${msgIdx}_${ai}`?.6:1}}>
+                                  {sendingEmail===`${msgIdx}_${ai}`?"SENDING...":"✉ SEND NOW"}
+                                </button>
+                              )}
                               <button onClick={()=>copyEmail(a)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋 COPY</button>
                               <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
                             </div>
@@ -3574,7 +3661,10 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
           {running&&(
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
-                <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Thinking...</span>
+                <Spin/>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+                  {agentStatus==="searching"?"🔍 Searching web...":agentStatus==="zoho"?"📡 Fetching live Zoho data...":"Thinking..."}
+                </span>
               </div>
             </div>
           )}

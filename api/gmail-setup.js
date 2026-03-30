@@ -14,10 +14,10 @@
  * Redirect URI to register in Google Cloud Console → APIs & Services → Credentials:
  *   https://<your-vercel-domain>/api/gmail-setup
  *
- * Scopes: gmail.readonly (read-only inbox access)
+ * Scopes: gmail.readonly (read inbox) + gmail.send (send emails)
  */
 
-const SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+const SCOPE = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
 
 export default async function handler(req, res) {
   const clientId     = process.env.GMAIL_CLIENT_ID;
@@ -117,8 +117,8 @@ export default async function handler(req, res) {
       padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px;
     ">Connect Gmail →</a>
     <div style="margin-top:20px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
-      <strong>Permission requested:</strong> Read-only Gmail access (gmail.readonly)<br>
-      ST1 RevOps will never send emails, delete messages, or modify your inbox.
+      <strong>Permissions requested:</strong> Read Gmail inbox (gmail.readonly) + Send emails on your behalf (gmail.send)<br>
+      ST1 RevOps will never delete messages or modify your inbox. Send permission is used only when you click "Send Now" on an agent-drafted email.
     </div>
   `));
 }
