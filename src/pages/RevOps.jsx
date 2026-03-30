@@ -275,6 +275,7 @@ export default function App() {
     {id:"reorder",    icon:"↺", label:"Reorder Engine",  badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"prospecting",icon:"⊕", label:"Prospecting"},
     {id:"marketing",  icon:"✦", label:"Marketing"},
+    {id:"ads",        icon:"⬛", label:"Ad Engine"},
     {id:"compete",    icon:"⊗", label:"Competitors"},
     {id:"agent",      icon:"AI",label:"AI Agent"},
     {id:"alerts",     icon:"◎", label:"Alerts",          badge:s.alerts.filter(a=>!a.sent).length},
@@ -392,6 +393,7 @@ export default function App() {
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
+            {mod==="ads"         && <ModAds/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -1992,18 +1994,6 @@ function ModProspecting() {
 // ════════════════════════════════════════════════════════════════════════════
 //  MARKETING
 // ════════════════════════════════════════════════════════════════════════════
-const SOCIAL_PLATFORMS = ["Instagram","Facebook","LinkedIn","Twitter/X","TikTok"];
-const POST_TYPES = ["Product Launch","Seasonal Promo","Behind the Scenes","Customer Win","Educational","Event / Meet"];
-const ASSET_TYPES = ["Social Post Graphic","Email Header","Email Banner","Print Flyer","Product Card","Event Promo"];
-const ASSET_STYLES = ["Action Shot","Product Flat Lay","Team Celebration","Infographic","Quote Card","Before & After"];
-const ASSET_SIZES = {
-  "Social Post Graphic":"1080×1080 px (square) or 1080×1350 px (portrait)",
-  "Email Header":"600×200 px",
-  "Email Banner":"600×300 px",
-  "Print Flyer":"8.5×11 in (portrait), 300 dpi",
-  "Product Card":"800×800 px",
-  "Event Promo":"1200×628 px (landscape)",
-};
 
 function ModMarketing() {
   const {s,dispatch,toast}=useApp();
@@ -2023,72 +2013,12 @@ function ModMarketing() {
   const [genRunning,setGenRunning]=useState(false);
   const [filterSport,setFilterSport]=useState("all");
 
-  // Social media state
-  const [socialPlatform,setSocialPlatform]=useState("Instagram");
-  const [postType,setPostType]=useState("Seasonal Promo");
-  const [inclHashtags,setInclHashtags]=useState(true);
-  const [inclEmoji,setInclEmoji]=useState(true);
-  const [inclCTA,setInclCTA]=useState(true);
-  const [socialOut,setSocialOut]=useState(null); // null | {platform,posts:[]} | {all:true,posts:{Instagram,Facebook,...}}
-  const [socialRunning,setSocialRunning]=useState(false);
-
-  // Creative assets state
-  const [assetType,setAssetType]=useState("Social Post Graphic");
-  const [assetStyle,setAssetStyle]=useState("Action Shot");
-  const [assetMsg,setAssetMsg]=useState("");
-  const [assetOut,setAssetOut]=useState("");
-  const [assetRunning,setAssetRunning]=useState(false);
-
   const gen=async()=>{
     setRunning(true);setOut("");
     let p="";
     if(tab==="copy") p=`Write ${channel} copy for ST1 Sports targeting ${audience}s. Product: ${product}. Tone: ${tone}. ${ctx} ${ST1}. Include subject line if email. Under 120 words. Use {{firstName}} {{orgName}}.`;
     else p=`90-day marketing strategy for ST1 Sports. Focus: ${product}. Audience: ${audience}s. ${ctx} ${ST1}. Include positioning, channels, monthly plan, KPIs.`;
     const t=await aiCall(p,{tokens:900});setOut(t||"");setRunning(false);
-  };
-
-  const genSocialPost=async(platforms=null)=>{
-    const pts=platforms||[socialPlatform];
-    setSocialRunning(true);setSocialOut(null);
-    const hashtagLine=inclHashtags?" Include 5–8 relevant hashtags (sport, school athletics, product).":"";
-    const emojiLine=inclEmoji?" Use relevant emojis to add energy.":"";
-    const ctaLine=inclCTA?" End with a clear CTA (DM us, link in bio, visit st1sports.com, etc.).":"";
-    const platformNotes={
-      "Instagram":"Up to 2200 chars, very visual, conversational, lifestyle feel.",
-      "Facebook":"Up to 500 chars recommended, friendly community tone, can include a question.",
-      "LinkedIn":"Professional tone, 150–300 chars, speak to ADs/coaches/administrators.",
-      "Twitter/X":"Max 280 chars — punchy, direct, strong hook.",
-      "TikTok":"Casual, energetic, hook in first line, max 300 chars.",
-    };
-    if(pts.length===1){
-      const plat=pts[0];
-      const note=platformNotes[plat]||"";
-      const p=`Write a ${postType} social media post for ST1 Sports on ${plat}. Product/topic: ${product}. ${note}${hashtagLine}${emojiLine}${ctaLine} ${ctx?`Context: ${ctx}.`:""} ${ST1}. Return only the post text, nothing else.`;
-      const t=await aiCall(p,{tokens:350});
-      setSocialOut({platform:plat,posts:[{platform:plat,text:t||""}]});
-    } else {
-      // All platforms at once
-      const promptParts=pts.map(plat=>{
-        const note=platformNotes[plat]||"";
-        return `"${plat}": Write a ${postType} post. ${note}`;
-      }).join("\n");
-      const p=`Write ${postType} social media posts for ST1 Sports across multiple platforms. Product/topic: ${product}.${hashtagLine}${emojiLine}${ctaLine} ${ctx?`Context: ${ctx}.`:""} ${ST1}.\n\nFor each platform write the post:\n${promptParts}\n\nReturn JSON: {${pts.map(pl=>`"${pl}":"post text"`).join(",")}}`;
-      const result=await aiCall(p,{json:true,tokens:1400});
-      const posts=pts.map(pl=>({platform:pl,text:result?.[pl]||""}));
-      setSocialOut({all:true,posts});
-    }
-    setSocialRunning(false);
-  };
-
-  const genAssetBrief=async()=>{
-    setAssetRunning(true);setAssetOut("");
-    const dims=ASSET_SIZES[assetType]||"Custom dimensions";
-    const p=`Generate a detailed creative brief for a ${assetType} for ST1 Sports.\n`+
-      `Asset size: ${dims}.\nVisual style: ${assetStyle}.\nProduct/topic: ${product}.\n`+
-      `${assetMsg?`Key message: ${assetMsg}.\n`:""}`+
-      `${ST1}\n\n`+
-      `Include:\n1. Dimensions & format\n2. Headline copy (primary text)\n3. Subheadline / supporting copy\n4. Visual direction (what to show, composition, photography notes)\n5. Color palette (use ST1 brand: #F37321 orange, black, white + sport-appropriate accents)\n6. Logo / brand placement\n7. CTA text & placement\n8. Canva search prompt (3–5 keywords to find a matching template)\n\nBe specific and actionable. Format as numbered sections.`;
-    const t=await aiCall(p,{tokens:700});setAssetOut(t||"");setAssetRunning(false);
   };
 
   const startNewCampaign=()=>{
@@ -2178,7 +2108,7 @@ function ModMarketing() {
     <div style={{padding:"22px 26px"}}>
       <PH title="MARKETING STUDIO" sub="Campaigns, outreach sequences, and AI copy generation"/>
       <div style={{display:"flex",gap:7,marginBottom:18,flexWrap:"wrap"}}>
-        {[["campaigns","Campaigns"],["copy","Copy Generator"],["social","Social Media"],["assets","Creative Assets"],["strategy","Strategy"]].map(([id,l])=>(
+        {[["campaigns","Campaigns"],["copy","Copy Generator"],["strategy","Strategy"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
         ))}
       </div>
@@ -2386,158 +2316,6 @@ function ModMarketing() {
         </div>
       )}
 
-      {/* ── SOCIAL MEDIA ───────────────────────────────────────────── */}
-      {tab==="social"&&(
-        <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
-          {/* Controls */}
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Platform</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {SOCIAL_PLATFORMS.map(pl=>(
-                  <button key={pl} onClick={()=>setSocialPlatform(pl)} style={{background:socialPlatform===pl?`${B.orange}14`:B.white,color:socialPlatform===pl?B.orange:B.muted,border:`1px solid ${socialPlatform===pl?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{pl}</button>
-                ))}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Post Type</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {POST_TYPES.map(pt=>(
-                  <button key={pt} onClick={()=>setPostType(pt)} style={{background:postType===pt?`${B.orange}14`:B.white,color:postType===pt?B.orange:B.muted,border:`1px solid ${postType===pt?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{pt}</button>
-                ))}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Product Focus</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {PRODUCT_CATS.map(o=><button key={o} onClick={()=>setProduct(o)} style={{background:product===o?`${B.orange}14`:B.white,color:product===o?B.orange:B.muted,border:`1px solid ${product===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:6}}>Options</Lbl>
-              <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                {[["inclHashtags","Include hashtags",inclHashtags,setInclHashtags],["inclEmoji","Include emoji",inclEmoji,setInclEmoji],["inclCTA","Include CTA",inclCTA,setInclCTA]].map(([,label,val,set])=>(
-                  <label key={label} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-                    <input type="checkbox" checked={val} onChange={e=>set(e.target.checked)} style={{accentColor:B.orange,width:13,height:13}}/>
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:6}}>Additional Context</Lbl>
-              <textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={2} placeholder="Specific offer, event, season, angle…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
-            </div>
-            <OBtn onClick={()=>genSocialPost()} disabled={socialRunning} style={{width:"100%"}}>{socialRunning?"GENERATING...":"✦ GENERATE POST"}</OBtn>
-            <GBtn onClick={()=>genSocialPost(SOCIAL_PLATFORMS)} disabled={socialRunning} style={{width:"100%",padding:"8px 0",fontSize:10}}>⬛ ALL PLATFORMS AT ONCE</GBtn>
-          </div>
-
-          {/* Output */}
-          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <Lbl>Generated Posts</Lbl>
-              {socialOut&&<GBtn onClick={()=>{
-                const txt=(socialOut.posts||[]).map(p=>`[${p.platform}]\n${p.text}`).join("\n\n---\n\n");
-                navigator.clipboard?.writeText(txt);
-              }} style={{fontSize:10,padding:"3px 8px"}}>COPY ALL</GBtn>}
-            </div>
-            {!socialOut&&!socialRunning&&(
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:60}}>
-                Configure and generate a post
-              </div>
-            )}
-            {socialRunning&&(
-              <div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing posts…</div>
-            )}
-            {socialOut&&!socialRunning&&(
-              <div style={{display:"flex",flexDirection:"column",gap:12,overflowY:"auto",flex:1}}>
-                {(socialOut.posts||[]).map((p,i)=>{
-                  const charCount=(p.text||"").length;
-                  const limits={"Twitter/X":280,"LinkedIn":300,"TikTok":300,"Instagram":2200,"Facebook":500};
-                  const limit=limits[p.platform];
-                  const over=limit&&charCount>limit;
-                  return (
-                    <div key={i} style={{borderLeft:`3px solid ${B.orange}`,paddingLeft:12}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>{p.platform.toUpperCase()}</span>
-                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:over?B.red:B.muted}}>{charCount}{limit?`/${limit}`:""} chars</span>
-                          <GBtn onClick={()=>navigator.clipboard?.writeText(p.text||"")} style={{fontSize:9,padding:"2px 7px"}}>COPY</GBtn>
-                        </div>
-                      </div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",background:B.surface,borderRadius:4,padding:"10px 12px"}}>{p.text}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── CREATIVE ASSETS ────────────────────────────────────────── */}
-      {tab==="assets"&&(
-        <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
-          {/* Controls */}
-          <div style={{display:"flex",flexDirection:"column",gap:10}}>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Asset Type</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {ASSET_TYPES.map(at=>(
-                  <button key={at} onClick={()=>setAssetType(at)} style={{background:assetType===at?`${B.orange}14`:B.white,color:assetType===at?B.orange:B.muted,border:`1px solid ${assetType===at?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{at}</button>
-                ))}
-              </div>
-              {ASSET_SIZES[assetType]&&(
-                <div style={{marginTop:7,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"4px 8px",borderRadius:3}}>
-                  📐 {ASSET_SIZES[assetType]}
-                </div>
-              )}
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Visual Style</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {ASSET_STYLES.map(st=>(
-                  <button key={st} onClick={()=>setAssetStyle(st)} style={{background:assetStyle===st?`${B.orange}14`:B.white,color:assetStyle===st?B.orange:B.muted,border:`1px solid ${assetStyle===st?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
-                ))}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:7}}>Product Focus</Lbl>
-              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                {PRODUCT_CATS.map(o=><button key={o} onClick={()=>setProduct(o)} style={{background:product===o?`${B.orange}14`:B.white,color:product===o?B.orange:B.muted,border:`1px solid ${product===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
-              </div>
-            </div>
-            <div className="card" style={{padding:12}}>
-              <Lbl s={{marginBottom:6}}>Key Message / Offer</Lbl>
-              <textarea value={assetMsg} onChange={e=>setAssetMsg(e.target.value)} rows={3} placeholder="e.g. 25% off all track hurdles through April — shop st1sports.com" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
-            </div>
-            <OBtn onClick={genAssetBrief} disabled={assetRunning} style={{width:"100%"}}>{assetRunning?"BUILDING BRIEF...":"✦ GENERATE CREATIVE BRIEF"}</OBtn>
-          </div>
-
-          {/* Output */}
-          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <Lbl>Creative Brief</Lbl>
-              {assetOut&&<GBtn onClick={()=>navigator.clipboard?.writeText(assetOut)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}
-            </div>
-            {!assetOut&&!assetRunning&&(
-              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,marginTop:50}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center"}}>
-                  Configure and generate a creative brief
-                </div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",maxWidth:320,lineHeight:1.6}}>
-                  The brief will include dimensions, headline copy, visual direction, color palette, and a Canva search prompt so you can build the asset immediately.
-                </div>
-              </div>
-            )}
-            {assetRunning&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Building brief…</div>}
-            {assetOut&&!assetRunning&&(
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.9,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{assetOut}</div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* ── STRATEGY ───────────────────────────────────────────────── */}
       {tab==="strategy"&&(
         <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
@@ -2562,6 +2340,533 @@ function ModMarketing() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AD ENGINE
+// ════════════════════════════════════════════════════════════════════════════
+const AD_OBJECTIVES = ["AWARENESS","CONSIDERATION","CONVERSION","RETARGETING"];
+const AD_PLATFORMS  = ["meta","instagram","tiktok","google","email"];
+const AD_IMG_STYLES = ["product_only","lifestyle","team","action"];
+const AD_SCENE_STYLES = ["action","studio","outdoor","classroom"];
+const AD_STATUS_COLORS = {
+  DRAFT:B.muted, ACTIVE:B.green, PAUSED:B.yellow, COMPLETE:B.blue, ARCHIVED:B.muted
+};
+
+function adFetch(path, opts={}) {
+  return fetch(`/api/adengine${path}`, {
+    headers: {"Content-Type":"application/json"},
+    ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  }).then(r=>r.json());
+}
+
+function ModAds() {
+  const {toast} = useApp();
+  const [tab, setTab] = useState("campaigns");
+
+  // Campaign list
+  const [campaigns, setCampaigns] = useState([]);
+  const [campTotal, setCampTotal] = useState(0);
+  const [campLoading, setCampLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [selCamp, setSelCamp] = useState(null);       // full campaign object
+  const [selCampId, setSelCampId] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  // Create modal
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    name:"", brief:"", audience:"", objective:"AWARENESS",
+    platforms:["meta"], imageStyle:"product_only", sceneStyle:"action",
+    variantsPerProduct:2, startDate:"", endDate:"",
+  });
+  const [creating, setCreating] = useState(false);
+
+  // Generate copy
+  const [copyProdName, setCopyProdName] = useState("");
+  const [copyProdDesc, setCopyProdDesc] = useState("");
+  const [copyProdPrice, setCopyProdPrice] = useState("");
+  const [genCopyRunning, setGenCopyRunning] = useState(false);
+
+  // Generate image
+  const [imgProdName, setImgProdName] = useState("");
+  const [imgStyle, setImgStyle] = useState("product_only");
+  const [imgScene, setImgScene] = useState("action");
+  const [genImgRunning, setGenImgRunning] = useState(false);
+  const [lastImg, setLastImg] = useState(null); // {url, assetId}
+
+  // Products
+  const [products, setProducts] = useState([]);
+  const [prodSearch, setProdSearch] = useState("");
+  const [prodLoading, setProdLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+
+  const loadCampaigns = async () => {
+    setCampLoading(true);
+    try {
+      const q = statusFilter ? `?status=${statusFilter}` : "";
+      const data = await adFetch(`/campaigns${q}`);
+      setCampaigns(data.items || []);
+      setCampTotal(data.total || 0);
+    } catch { toast("Failed to load campaigns","error"); }
+    setCampLoading(false);
+  };
+
+  const loadCampaignDetail = async (id) => {
+    setDetailLoading(true);
+    setSelCampId(id);
+    try {
+      const data = await adFetch(`/campaigns/${id}`);
+      setSelCamp(data.campaign);
+    } catch { toast("Failed to load campaign","error"); }
+    setDetailLoading(false);
+  };
+
+  const loadProducts = async (search="") => {
+    setProdLoading(true);
+    try {
+      const q = search ? `?search=${encodeURIComponent(search)}` : "";
+      const data = await adFetch(`/products${q}`);
+      setProducts(data.products || []);
+    } catch { toast("Failed to load products","error"); }
+    setProdLoading(false);
+  };
+
+  useEffect(()=>{ if(tab==="campaigns") loadCampaigns(); },[tab,statusFilter]);
+  useEffect(()=>{ if(tab==="products") loadProducts(prodSearch); },[tab]);
+
+  const createCampaign = async () => {
+    if (!createForm.name.trim()) { toast("Name required","error"); return; }
+    setCreating(true);
+    try {
+      const data = await adFetch("/campaigns", { method:"POST", body: createForm });
+      if (data.campaign) {
+        toast(`Campaign "${data.campaign.name}" created`,"success");
+        setShowCreate(false);
+        setCreateForm({name:"",brief:"",audience:"",objective:"AWARENESS",platforms:["meta"],imageStyle:"product_only",sceneStyle:"action",variantsPerProduct:2,startDate:"",endDate:""});
+        loadCampaigns();
+        loadCampaignDetail(data.campaign.id);
+      } else {
+        toast(data.error || "Create failed","error");
+      }
+    } catch { toast("Create failed","error"); }
+    setCreating(false);
+  };
+
+  const updateStatus = async (id, status) => {
+    await adFetch(`/campaigns/${id}`, { method:"PATCH", body:{status} });
+    loadCampaignDetail(id);
+    loadCampaigns();
+    toast(`Status → ${status}`,"success");
+  };
+
+  const generateCopy = async () => {
+    if (!selCamp) return;
+    setGenCopyRunning(true);
+    try {
+      const data = await adFetch("/generate-copy", {
+        method:"POST",
+        body:{ campaignId:selCamp.id, productName:copyProdName||undefined, productDesc:copyProdDesc||undefined, productPrice:copyProdPrice||undefined },
+      });
+      if (data.copy) {
+        toast("Copy generated","success");
+        loadCampaignDetail(selCamp.id);
+      } else {
+        toast(data.error || "Copy gen failed","error");
+      }
+    } catch { toast("Copy gen failed","error"); }
+    setGenCopyRunning(false);
+  };
+
+  const generateImage = async () => {
+    if (!selCamp) return;
+    setGenImgRunning(true);
+    setLastImg(null);
+    try {
+      const data = await adFetch("/generate-images", {
+        method:"POST",
+        body:{ campaignId:selCamp.id, productName:imgProdName||undefined, imageStyle:imgStyle, sceneStyle:imgScene },
+      });
+      if (data.asset) {
+        setLastImg({ url: data.imageUrl, assetId: data.asset.id });
+        toast("Image generated","success");
+        loadCampaignDetail(selCamp.id);
+      } else {
+        toast(data.error || "Image gen failed","error");
+      }
+    } catch { toast("Image gen failed","error"); }
+    setGenImgRunning(false);
+  };
+
+  const syncCatalog = async () => {
+    setSyncing(true);
+    try {
+      const data = await adFetch("/products", { method:"POST" });
+      toast(data.error ? data.error : `Synced ${data.synced} products`), data.error ? "error" : "success";
+      if (!data.error) loadProducts();
+    } catch { toast("Sync failed","error"); }
+    setSyncing(false);
+  };
+
+  const exportCSV = (id) => {
+    window.open(`/api/adengine/export-copy-csv?campaignId=${id}`, "_blank");
+  };
+
+  // ── STATUS PILL ─────────────────────────────────────────────────────────────
+  const StatusPill = ({status}) => (
+    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:AD_STATUS_COLORS[status]||B.muted,background:`${AD_STATUS_COLORS[status]||B.muted}18`,padding:"2px 7px",borderRadius:3,letterSpacing:.5}}>
+      {status}
+    </span>
+  );
+
+  return (
+    <div style={{padding:"22px 26px"}}>
+      <PH title="AD ENGINE" sub="Product campaigns, AI image generation, Meta ad copy, and asset management"/>
+      <div style={{display:"flex",gap:7,marginBottom:18}}>
+        {[["campaigns","Campaigns"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── CAMPAIGNS ──────────────────────────────────────────────────────────── */}
+      {tab==="campaigns"&&(
+        <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
+
+          {/* Left: list */}
+          <div>
+            <div style={{display:"flex",gap:6,marginBottom:10}}>
+              <OBtn sm onClick={()=>setShowCreate(true)} style={{flex:1}}>+ NEW CAMPAIGN</OBtn>
+            </div>
+            <div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
+              {["","DRAFT","ACTIVE","PAUSED","COMPLETE"].map(s=>(
+                <button key={s} onClick={()=>setStatusFilter(s)} style={{background:statusFilter===s?`${B.orange}14`:B.white,color:statusFilter===s?B.orange:B.muted,border:`1px solid ${statusFilter===s?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{s||"All"}</button>
+              ))}
+            </div>
+            {campLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11,padding:"10px 0"}}><Spin/>Loading…</div>}
+            {!campLoading&&campaigns.length===0&&(
+              <div className="card" style={{padding:20,textAlign:"center",fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>
+                No campaigns yet. Create one to get started.
+              </div>
+            )}
+            {campaigns.map(c=>(
+              <div key={c.id} onClick={()=>loadCampaignDetail(c.id)} className="card fu" style={{padding:"11px 13px",marginBottom:8,borderLeft:`3px solid ${selCampId===c.id?B.orange:B.border}`,cursor:"pointer",background:selCampId===c.id?`${B.orange}06`:B.white}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,flex:1,marginRight:8}}>{c.name}</div>
+                  <StatusPill status={c.status}/>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5}}>{c.objective} · {(c.platforms||[]).join(", ")}</div>
+                <div style={{display:"flex",gap:6}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c._count?.copies||0} copies</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 5px",borderRadius:3}}>{c._count?.assets||0} assets</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Right: detail / create form */}
+          <div>
+            {showCreate&&(
+              <div className="card" style={{padding:16,marginBottom:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>NEW CAMPAIGN</div>
+                  <GBtn onClick={()=>setShowCreate(false)}>CANCEL</GBtn>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  <div style={{gridColumn:"1/-1"}}>
+                    <Lbl s={{marginBottom:4}}>Campaign Name *</Lbl>
+                    <input value={createForm.name} onChange={e=>setCreateForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Spring Track 2026 — Meta" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Objective</Lbl>
+                    <select value={createForm.objective} onChange={e=>setCreateForm(f=>({...f,objective:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                      {AD_OBJECTIVES.map(o=><option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Audience</Lbl>
+                    <input value={createForm.audience} onChange={e=>setCreateForm(f=>({...f,audience:e.target.value}))} placeholder="Athletic Directors, K-12 coaches…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Image Style</Lbl>
+                    <select value={createForm.imageStyle} onChange={e=>setCreateForm(f=>({...f,imageStyle:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                      {AD_IMG_STYLES.map(o=><option key={o} value={o}>{o.replace("_"," ")}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Scene Style</Lbl>
+                    <select value={createForm.sceneStyle} onChange={e=>setCreateForm(f=>({...f,sceneStyle:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                      {AD_SCENE_STYLES.map(o=><option key={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Variants / Product</Lbl>
+                    <select value={createForm.variantsPerProduct} onChange={e=>setCreateForm(f=>({...f,variantsPerProduct:parseInt(e.target.value)}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                      {[1,2,3].map(n=><option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{marginBottom:12}}>
+                  <Lbl s={{marginBottom:4}}>Platforms</Lbl>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    {AD_PLATFORMS.map(p=>{
+                      const sel=(createForm.platforms||[]).includes(p);
+                      return <button key={p} onClick={()=>setCreateForm(f=>({...f,platforms:sel?f.platforms.filter(x=>x!==p):[...f.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{p}</button>;
+                    })}
+                  </div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:4}}>Brief / Context</Lbl>
+                  <textarea value={createForm.brief} onChange={e=>setCreateForm(f=>({...f,brief:e.target.value}))} rows={2} placeholder="Campaign objective, key messaging, special offers…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+                <OBtn onClick={createCampaign} disabled={creating} style={{width:"100%"}}>
+                  {creating?"CREATING...":"✓ CREATE CAMPAIGN"}
+                </OBtn>
+              </div>
+            )}
+
+            {detailLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:12,padding:20}}><Spin/>Loading campaign…</div>}
+
+            {selCamp&&!detailLoading&&(
+              <div>
+                {/* Header */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:3}}>{selCamp.name}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selCamp.objective} · {(selCamp.platforms||[]).join(", ")} · {selCamp.imageStyle?.replace("_"," ")} · {selCamp.sceneStyle}</div>
+                    {selCamp.audience&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Audience: {selCamp.audience}</div>}
+                    {selCamp.brief&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:6,maxWidth:500}}>{selCamp.brief}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                    <StatusPill status={selCamp.status}/>
+                    <select value={selCamp.status} onChange={e=>updateStatus(selCamp.id,e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:10}}>
+                      {["DRAFT","ACTIVE","PAUSED","COMPLETE","ARCHIVED"].map(s=><option key={s}>{s}</option>)}
+                    </select>
+                    <GBtn onClick={()=>exportCSV(selCamp.id)} style={{fontSize:9}}>⬇ CSV</GBtn>
+                  </div>
+                </div>
+
+                {/* Generate copy */}
+                <div className="card" style={{padding:14,marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE AD COPY</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Product Name</Lbl>
+                      <input value={copyProdName} onChange={e=>setCopyProdName(e.target.value)} placeholder="e.g. Blazer Hurdle H-28" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Product Price</Lbl>
+                      <input value={copyProdPrice} onChange={e=>setCopyProdPrice(e.target.value)} placeholder="$149.99" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Description</Lbl>
+                      <input value={copyProdDesc} onChange={e=>setCopyProdDesc(e.target.value)} placeholder="Short product description" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                    </div>
+                  </div>
+                  <OBtn onClick={generateCopy} disabled={genCopyRunning}>
+                    {genCopyRunning?"✦ GENERATING COPY...":"✦ GENERATE AD COPY"}
+                  </OBtn>
+                </div>
+
+                {/* Generate image */}
+                <div className="card" style={{padding:14,marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE IMAGE (gpt-image-1)</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Product Name</Lbl>
+                      <input value={imgProdName} onChange={e=>setImgProdName(e.target.value)} placeholder="e.g. Blazer Hurdle H-28" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Image Style</Lbl>
+                      <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                        {AD_IMG_STYLES.map(s=><option key={s} value={s}>{s.replace("_"," ")}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:3}}>Scene</Lbl>
+                      <select value={imgScene} onChange={e=>setImgScene(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                        {AD_SCENE_STYLES.map(s=><option key={s}>{s}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                    <OBtn onClick={generateImage} disabled={genImgRunning}>
+                      {genImgRunning?"✦ GENERATING IMAGE...":"✦ GENERATE IMAGE"}
+                    </OBtn>
+                    {lastImg&&(
+                      <a href={lastImg.url} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,alignSelf:"center"}}>View last image ↗</a>
+                    )}
+                  </div>
+                  {lastImg&&(
+                    <div style={{marginTop:10}}>
+                      <img src={lastImg.url} alt="Generated" style={{maxWidth:"100%",maxHeight:240,borderRadius:6,objectFit:"contain",border:`1px solid ${B.border}`}}/>
+                    </div>
+                  )}
+                </div>
+
+                {/* Copy list */}
+                {(selCamp.copies||[]).length>0&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:8}}>AD COPY ({selCamp.copies.length})</div>
+                    {selCamp.copies.map((c,i)=>(
+                      <div key={c.id} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5}}>
+                            {c.product?.name||`Copy #${i+1}`}
+                          </span>
+                          {c.badge&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"1px 5px",borderRadius:2}}>{c.badge}</span>}
+                        </div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{c.headline}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{c.subheadline} {c.cta&&`· CTA: ${c.cta}`}</div>
+                        {[c.primary_text_v1,c.primary_text_v2,c.primary_text_v3].filter(Boolean).map((t,vi)=>(
+                          <div key={vi} style={{background:B.surface,borderRadius:4,padding:"8px 10px",marginBottom:5,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,display:"flex",justifyContent:"space-between",gap:8}}>
+                            <div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginRight:6}}>V{vi+1}</span>{t}</div>
+                            <GBtn onClick={()=>navigator.clipboard?.writeText(t)} style={{fontSize:8,padding:"2px 6px",flexShrink:0}}>COPY</GBtn>
+                          </div>
+                        ))}
+                        {(c.headline_v1||c.headline_v2)&&(
+                          <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                            {[c.headline_v1,c.headline_v2].filter(Boolean).map((h,hi)=>(
+                              <div key={hi} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"3px 8px",borderRadius:3,display:"flex",gap:5,alignItems:"center"}}>
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>H{hi+1}</span>{h}
+                                <GBtn onClick={()=>navigator.clipboard?.writeText(h)} style={{fontSize:7,padding:"1px 4px"}}>⎘</GBtn>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Asset gallery */}
+                {(selCamp.assets||[]).length>0&&(
+                  <div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ASSETS ({selCamp.assets.length})</div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10}}>
+                      {selCamp.assets.map(a=>{
+                        const url=a.metadata?.url||(a.metadata?.b64?`data:${a.mimeType};base64,${a.metadata.b64}`:null);
+                        return (
+                          <div key={a.id} className="card" style={{padding:8,display:"flex",flexDirection:"column",gap:6}}>
+                            {url?(
+                              <img src={url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4}}/>
+                            ):(
+                              <div style={{width:"100%",aspectRatio:"1",background:B.surface,borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>No preview</div>
+                            )}
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{a.width}×{a.height} · {a.platform}</div>
+                            {url&&<a href={url} download={`asset-${a.id}.png`} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>⬇ Download</a>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {(selCamp.copies||[]).length===0&&(selCamp.assets||[]).length===0&&(
+                  <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+                    No copy or assets yet — use the Generate buttons above to get started.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!selCamp&&!detailLoading&&!showCreate&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+                Select a campaign or create a new one
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── PRODUCTS ───────────────────────────────────────────────────────────── */}
+      {tab==="products"&&(
+        <div>
+          <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"center"}}>
+            <input value={prodSearch} onChange={e=>setProdSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loadProducts(prodSearch)} placeholder="Search products…" style={{flex:1,maxWidth:280,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+            <GBtn onClick={()=>loadProducts(prodSearch)} style={{padding:"7px 14px"}}>SEARCH</GBtn>
+            <OBtn onClick={syncCatalog} disabled={syncing}>{syncing?"SYNCING...":"⟳ SYNC FROM WOOCOMMERCE"}</OBtn>
+          </div>
+          {prodLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11}}><Spin/>Loading…</div>}
+          {!prodLoading&&products.length===0&&(
+            <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+              No products in catalog. Sync from WooCommerce or add WC_URL, WC_KEY, WC_SECRET to your Vercel env vars.
+            </div>
+          )}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
+            {products.map(p=>(
+              <div key={p.id} className="card fu" style={{padding:10}}>
+                {p.main_image_url&&<img src={p.main_image_url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4,marginBottom:8}}/>}
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:3}}>{p.name}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:p.sale_price?B.red:B.muted}}>
+                  {p.sale_price?<><s style={{color:B.muted}}>${p.price}</s> ${p.sale_price}</>:p.price?`$${p.price}`:"—"}
+                </div>
+                <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:p.stock_status==="instock"?B.green:B.red,background:p.stock_status==="instock"?B.greenBg:B.redBg,padding:"1px 5px",borderRadius:2}}>{p.stock_status}</span>
+                  {p.on_sale&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>SALE</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── ASSETS ─────────────────────────────────────────────────────────────── */}
+      {tab==="assets"&&(
+        <AssetGallery toast={toast}/>
+      )}
+    </div>
+  );
+}
+
+function AssetGallery({toast}) {
+  const [assets,setAssets]=useState([]);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    fetch("/api/adengine/assets?limit=100")
+      .then(r=>r.json())
+      .then(d=>setAssets(d.assets||[]))
+      .catch(()=>toast("Failed to load assets","error"))
+      .finally(()=>setLoading(false));
+  },[]);
+
+  const del=async(id)=>{
+    if(!confirm("Delete this asset?"))return;
+    await fetch(`/api/adengine/assets?id=${id}`,{method:"DELETE"});
+    setAssets(a=>a.filter(x=>x.id!==id));
+    toast("Asset deleted","success");
+  };
+
+  if(loading) return <div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:12,padding:20}}><Spin/>Loading assets…</div>;
+  if(!assets.length) return <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No generated assets yet. Go to Campaigns and generate images.</div>;
+
+  return (
+    <div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>{assets.length} assets</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+        {assets.map(a=>{
+          const url=a.displayUrl;
+          return (
+            <div key={a.id} className="card" style={{padding:10}}>
+              {url
+                ? <img src={url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4,marginBottom:8}}/>
+                : <div style={{width:"100%",aspectRatio:"1",background:B.surface,borderRadius:4,marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>Stored on S3</div>
+              }
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:3}}>{a.product?.name||"—"}</div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:6}}>{a.width}×{a.height} · {a.platform} · {a.variant}</div>
+              <div style={{display:"flex",gap:5}}>
+                {url&&<a href={url} download={`asset-${a.id}.png`} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>⬇</a>}
+                <button onClick={()=>del(a.id)} style={{background:"none",border:"none",color:B.red,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>✕ Delete</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

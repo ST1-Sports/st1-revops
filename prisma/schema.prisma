@@ -1,0 +1,345 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-1.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── PRODUCTS ──────────────────────────────────────────────────────────────────
+
+model Product {
+  id                Int       @id
+  name              String
+  slug              String?
+  permalink         String?
+  price             String?
+  regular_price     String?
+  sale_price        String?
+  on_sale           Boolean   @default(false)
+  stock_status      String    @default("instock")
+  short_description String?
+  main_image_url    String?
+  images            Json      @default("[]")
+  categories        Json      @default("[]")
+  tags              Json      @default("[]")
+  attributes        Json      @default("[]")
+  brand             String?
+  date_modified     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  copies           Copy[]
+  assets           Asset[]
+  campaignProducts CampaignProduct[]
+}
+
+// ── CAMPAIGNS ─────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id                 String    @id @default(cuid())
+  name               String
+  slug               String    @unique
+  brief              String?
+  audience           String?
+  objective          String    @default("AWARENESS")
+  query              String    @default("")
+  platforms          Json      @default("[\"meta\"]")
+  status             String    @default("DRAFT")
+  imageStyle         String    @default("product_only")
+  sceneStyle         String    @default("action")
+  selectedProducts   Json?
+  variantsPerProduct Int       @default(2)
+  startDate          DateTime?
+  endDate            DateTime?
+  ownerUserId        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  assets           Asset[]
+  copies           Copy[]
+  jobs             Job[]
+  channelPlans     ChannelPlan[]
+  links            CampaignLink[]
+  deliverables     Deliverable[]
+  approvals        Approval[]
+  activityLogs     ActivityLog[]
+  distribution     DistributionItem[]
+  metrics          MetricsSnapshot[]
+}
+
+model Asset {
+  id          String   @id @default(cuid())
+  campaignId  String
+  productId   Int?
+  assetType   String
+  width       Int
+  height      Int
+  templateKey String
+  headline    String?
+  subheadline String?
+  cta         String?
+  badge       String?
+  fileKey     String
+  mimeType    String   @default("image/png")
+  variant     String   @default("A")
+  platform    String   @default("meta")
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product     Product? @relation(fields: [productId], references: [id])
+}
+
+model Copy {
+  id              String   @id @default(cuid())
+  campaignId      String
+  productId       Int?
+  headline        String?
+  subheadline     String?
+  cta             String?
+  badge           String?
+  primary_text_v1 String?
+  primary_text_v2 String?
+  primary_text_v3 String?
+  headline_v1     String?
+  headline_v2     String?
+  description     String?
+  urls            Json     @default("{}")
+  createdAt       DateTime @default(now())
+  campaign        Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  product         Product? @relation(fields: [productId], references: [id])
+}
+
+model Job {
+  id         String    @id @default(cuid())
+  type       String
+  payload    Json      @default("{}")
+  status     String    @default("queued")
+  error      String?
+  campaignId String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  campaign   Campaign? @relation(fields: [campaignId], references: [id])
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+// ── CAMPAIGN SPECIALS ─────────────────────────────────────────────────────────
+
+model CampaignSpecial {
+  id             String    @id @default(cuid())
+  name           String
+  brand          String
+  productQuery   Json
+  discountType   String
+  discountAmount Float
+  couponCode     String?
+  startAt        DateTime?
+  endAt          DateTime?
+  minSubtotal    Float?
+  usageLimit     Int?
+  emailAudience  String?
+  channels       Json      @default("[\"meta\"]")
+  tone           String    @default("energetic")
+  landingUrl     String?
+  status         String    @default("draft")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  products CampaignProduct[]
+  copies   CampaignCopy[]
+  coupons  CampaignCoupon[]
+  briefs   CampaignCreativeBrief[]
+}
+
+model CampaignProduct {
+  id                String          @id @default(cuid())
+  campaignSpecialId String
+  productId         Int
+  campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
+  product           Product         @relation(fields: [productId], references: [id])
+}
+
+model CampaignCopy {
+  id                String          @id @default(cuid())
+  campaignSpecialId String
+  platform          String
+  headline          String?
+  body              String?
+  cta               String?
+  createdAt         DateTime        @default(now())
+  campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
+}
+
+model CampaignCoupon {
+  id                String          @id @default(cuid())
+  campaignSpecialId String
+  code              String
+  wooCommerceId     Int?
+  createdAt         DateTime        @default(now())
+  campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
+}
+
+model CampaignCreativeBrief {
+  id                String          @id @default(cuid())
+  campaignSpecialId String
+  platform          String
+  imagePrompt       String?
+  copyNotes         String?
+  createdAt         DateTime        @default(now())
+  campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
+}
+
+// ── SALES ─────────────────────────────────────────────────────────────────────
+
+model SalesContact {
+  id           String          @id @default(cuid())
+  email        String          @unique
+  firstName    String?
+  lastName     String?
+  title        String?
+  companyName  String?
+  phone        String?
+  linkedinUrl  String?
+  source       String          @default("manual")
+  enriched     Boolean         @default(false)
+  score        Int             @default(0)
+  segment      String          @default("cold")
+  zohoCrmId    String?
+  pushedToZoho Boolean         @default(false)
+  status       String          @default("new")
+  notes        String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  activities   SalesActivity[]
+}
+
+model SalesDiscoverRun {
+  id          String   @id @default(cuid())
+  query       String
+  targetIcp   Json     @default("{}")
+  status      String   @default("pending")
+  found       Int      @default(0)
+  suggestions Json     @default("[]")
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SalesActivity {
+  id        String       @id @default(cuid())
+  contactId String
+  type      String
+  note      String?
+  metadata  Json         @default("{}")
+  createdAt DateTime     @default(now())
+  contact   SalesContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+}
+
+model SalesCompany {
+  id        String   @id @default(cuid())
+  name      String
+  domain    String?
+  industry  String?
+  size      String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ── CAMPAIGN SUPPORTING MODELS ────────────────────────────────────────────────
+
+model ChannelPlan {
+  id         String   @id @default(cuid())
+  campaignId String
+  platform   String
+  budget     Float?
+  objective  String?
+  targeting  Json     @default("{}")
+  schedule   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model CampaignLink {
+  id         String   @id @default(cuid())
+  campaignId String
+  label      String
+  url        String
+  utmParams  Json     @default("{}")
+  createdAt  DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model Deliverable {
+  id         String    @id @default(cuid())
+  campaignId String
+  type       String
+  status     String    @default("pending")
+  dueDate    DateTime?
+  assignedTo String?
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model Approval {
+  id         String    @id @default(cuid())
+  campaignId String
+  stage      String
+  status     String    @default("pending")
+  reviewerId String?
+  comment    String?
+  decidedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  campaignId String
+  userId     String
+  type       String
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model DistributionItem {
+  id         String    @id @default(cuid())
+  campaignId String
+  channel    String
+  format     String
+  status     String    @default("pending")
+  sentAt     DateTime?
+  metrics    Json      @default("{}")
+  createdAt  DateTime  @default(now())
+  campaign   Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model MetricsSnapshot {
+  id          String   @id @default(cuid())
+  campaignId  String
+  capturedAt  DateTime @default(now())
+  impressions Int      @default(0)
+  clicks      Int      @default(0)
+  conversions Int      @default(0)
+  spend       Float    @default(0)
+  revenue     Float    @default(0)
+  metadata    Json     @default("{}")
+  campaign    Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+}
+
+model IntegrationConnection {
+  id          String    @id @default(cuid())
+  service     String    @unique
+  credentials Json      @default("{}")
+  status      String    @default("connected")
+  lastSync    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}

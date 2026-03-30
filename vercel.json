@@ -1,6 +1,11 @@
 {
+  "functions": {
+    "api/adengine/generate-images.js": { "maxDuration": 60 },
+    "api/adengine/worker.js":          { "maxDuration": 60 },
+    "api/adengine/products.js":        { "maxDuration": 60 }
+  },
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {

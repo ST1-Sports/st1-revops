@@ -7,19 +7,34 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext .js,.jsx"
+    "lint": "eslint src --ext .js,.jsx",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "@prisma/client": "^5.22.0",
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@aws-sdk/client-s3": "^3.620.0",
+    "@aws-sdk/s3-request-presigner": "^3.620.0",
+    "@napi-rs/canvas": "^0.1.56",
+    "openai": "^6.25.0",
+    "archiver": "^7.0.1",
+    "csv-stringify": "^6.5.1",
+    "slugify": "^1.6.6",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "eslint": "^9.9.0",
+    "prisma": "^5.22.0",
     "vite": "^5.4.1"
   }
 }
