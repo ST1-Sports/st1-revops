@@ -71,6 +71,7 @@ const SEED = {
   templates: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"#sales-alerts"},
+  company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -100,6 +101,7 @@ function useStore() {
           alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
+          company:      {...SEED.company,...(p.company||{})},
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -259,7 +261,8 @@ function reducer(prev, action, payload) {
     case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
     case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
     case "SAVE_INTEGRATIONS": return {...prev, integrations:{...prev.integrations,...payload}};
-    case "RESET":             return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations};
+    case "SAVE_COMPANY":      return {...prev, company:{...prev.company,...payload}};
+    case "RESET":             return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company};
     default:                  return prev;
   }
 }
@@ -3767,6 +3770,29 @@ function ModMarketing() {
     dispatch("SCORE_CONTACT",{contactId,type:"replied",campaignId:seqId,note:"Replied to campaign"});
   };
 
+  const [editingTouchIdx,setEditingTouchIdx] = useState(null); // index in activeSeq.touches
+  const [touchDraft,setTouchDraft] = useState({subject:"",body:""});
+  const [previewModal,setPreviewModal] = useState(null); // {contact,touch}
+
+  const openTouchEdit=(idx)=>{
+    const t=activeSeq?.touches?.[idx];
+    if(!t)return;
+    setEditingTouchIdx(idx);
+    setTouchDraft({subject:t.subject||"",body:t.body||""});
+  };
+  const saveTouchEdit=()=>{
+    if(!activeSeq||editingTouchIdx===null)return;
+    const updated={...activeSeq,touches:activeSeq.touches.map((t,i)=>i===editingTouchIdx?{...t,...touchDraft}:t)};
+    dispatch("UPDATE_SEQUENCE",updated);
+    setEditingTouchIdx(null);
+    toast("Email updated","success");
+  };
+  const mergeTags=(text,c)=>(text||"")
+    .replace(/\{\{firstName\}\}/gi,c?.firstName||(c?.fullName||"").split(" ")[0]||"there")
+    .replace(/\{\{orgName\}\}/gi,(typeof c?.school==="string"?c.school:c?.school?.name)||"your school")
+    .replace(/\{\{lastName\}\}/gi,c?.lastName||"")
+    .replace(/\{\{sport\}\}/gi,(typeof c?.sport==="string"?c.sport:c?.sport?.name)||"athletics");
+
   const activeSeq=selSeq?(s.sequences||[]).find(s=>s.id===selSeq):null;
   const contactMap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
 
@@ -3872,11 +3898,23 @@ function ModMarketing() {
               </OBtn>
               {newCamp.touches.length>0&&(
                 <div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Review and edit each email before launching:</div>
                   {newCamp.touches.map((t,i)=>(
                     <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
-                      {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:5}}>Subj: {t.subject}</div>}
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,whiteSpace:"pre-wrap"}}>{t.body}</div>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
+                      </div>
+                      <div style={{marginBottom:6}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
+                        <input value={t.subject||""} onChange={e=>setNewCamp(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,subject:e.target.value}:x)}))}
+                          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                      </div>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
+                        <textarea value={t.body||""} onChange={e=>setNewCamp(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,body:e.target.value}:x)}))}
+                          rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                      </div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Merge tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
                     </div>
                   ))}
                   <OBtn onClick={saveCampaign} style={{width:"100%",marginTop:4}}>✓ LAUNCH CAMPAIGN</OBtn>
@@ -3887,20 +3925,63 @@ function ModMarketing() {
 
           {activeSeq&&!building&&(
             <div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
                 <div>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:3}}>{activeSeq.name}</div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{activeSeq.product} · {activeSeq.channel} · {activeSeq.touches.length} touches</div>
                 </div>
                 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3,letterSpacing:.5}}>{activeSeq.status?.toUpperCase()}</span>
               </div>
-              {/* Sequence touchpoints */}
-              <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {/* Stats bar */}
+              {(()=>{
+                const enrs=activeSeq.enrollments||[];
+                const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
+                const repliedN=enrs.filter(e=>e.status==="replied").length;
+                const doneN=enrs.filter(e=>e.status==="done").length;
+                const activeN=enrs.filter(e=>e.status==="active").length;
+                return(
+                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                      <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+              {/* Sequence touchpoints — editable */}
+              <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"flex-start"}}>
                 {activeSeq.touches.map((t,i)=>(
                   <div key={t.id||i} className="card" style={{flex:1,padding:10,borderTop:`2px solid ${B.orange}`}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:5}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
-                    {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{t.body?.slice(0,120)}{t.body?.length>120?"…":""}</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
+                      <button onClick={()=>editingTouchIdx===i?setEditingTouchIdx(null):openTouchEdit(i)}
+                        style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>
+                        {editingTouchIdx===i?"✕ CANCEL":"✎ EDIT"}
+                      </button>
+                    </div>
+                    {editingTouchIdx===i?(
+                      <div>
+                        <div style={{marginBottom:6}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
+                          <input value={touchDraft.subject} onChange={e=>setTouchDraft(d=>({...d,subject:e.target.value}))}
+                            style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                        </div>
+                        <div style={{marginBottom:8}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
+                          <textarea value={touchDraft.body} onChange={e=>setTouchDraft(d=>({...d,body:e.target.value}))}
+                            rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                        </div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
+                        <OBtn sm onClick={saveTouchEdit}>✓ SAVE EMAIL</OBtn>
+                      </div>
+                    ):(
+                      <>
+                        {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{t.body}</div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -3944,6 +4025,7 @@ function ModMarketing() {
                           </div>
                           {e.status==="active"&&(
                             <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
+                              {touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
                               <div style={{display:"flex",gap:4}}>
                                 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:activeSeq.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
                                 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:activeSeq.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
@@ -4019,6 +4101,36 @@ function ModMarketing() {
         </div>
       )}
       </>}
+
+      {/* ── EMAIL PREVIEW MODAL ─────────────────────────────────────────── */}
+      {previewModal&&(
+        <div onClick={()=>setPreviewModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:B.bg,border:`1px solid ${B.border}`,borderRadius:10,width:"100%",maxWidth:580,maxHeight:"85vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${B.border}`}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,letterSpacing:2}}>EMAIL PREVIEW</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>
+                  To: {previewModal.contact.fullName||`${previewModal.contact.firstName||""} ${previewModal.contact.lastName||""}`.trim()} &lt;{previewModal.contact.email||"no email"}&gt;
+                </div>
+              </div>
+              <button onClick={()=>setPreviewModal(null)} style={{background:"none",border:"none",color:B.muted,fontSize:18,cursor:"pointer",lineHeight:1}}>✕</button>
+            </div>
+            <div style={{padding:"14px 16px",borderBottom:`1px solid ${B.border}`,background:B.surface}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:3}}>SUBJECT</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{mergeTags(previewModal.touch.subject,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No subject</span>}</div>
+            </div>
+            <div style={{padding:"16px",overflowY:"auto",flex:1}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap"}}>
+                {mergeTags(previewModal.touch.body,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No body text</span>}
+              </div>
+            </div>
+            <div style={{padding:"10px 16px",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Touch {previewModal.touch.step} · Day {previewModal.touch.dayOffset} · merge tags applied</div>
+              <button onClick={()=>setPreviewModal(null)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"5px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLOSE</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -5532,13 +5644,34 @@ function ModActivity() {
 function ModSettings() {
   const {s,dispatch,toast}=useApp();
   const [ints,setInts]=useState({...s.integrations});
-  const save=()=>{dispatch("SAVE_INTEGRATIONS",ints);toast("Settings saved","success");};
+  const [co,setCo]=useState({...SEED.company,...(s.company||{})});
+  const save=()=>{dispatch("SAVE_INTEGRATIONS",ints);dispatch("SAVE_COMPANY",co);toast("Settings saved","success");};
 
   return (
     <div style={{padding:"22px 26px",maxWidth:680}}>
-      <PH title="SETTINGS" sub="Integrations, credentials, and data management"/>
+      <PH title="SETTINGS" sub="Company profile, integrations, and data management"/>
+
+      {/* Company Profile */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
-        <Lbl c={B.orange} s={{marginBottom:12}}>Zoho Integration</Lbl>
+        <Lbl c={B.orange} s={{marginBottom:12}}>Company Profile</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
+          This info is used in campaign emails, bid documents, and agent-drafted correspondence.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
+          {[["Company Name","name","text"],["Owner / Rep Name","ownerName","text"],["Email Address","email","email"],["Phone Number","phone","text"],["Address","address","text"],["Website","website","text"]].map(([l,k,t])=>(
+            <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
+              <input type={t} value={co[k]||""} onChange={e=>setCo(c=>({...c,[k]:e.target.value}))}
+                placeholder={k==="email"?"you@company.com":k==="website"?"yoursite.com":""}
+                style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+            </div>
+          ))}
+        </div>
+        <OBtn onClick={save}>SAVE SETTINGS</OBtn>
+      </div>
+
+      {/* Zoho/integrations */}
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
+        <Lbl c={B.purple} s={{marginBottom:12}}>Zoho / Slack Integration</Lbl>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
           {[["Zoho Books Token","zohoToken","password"],["Zoho Books Org ID","zohoOrgId","text"],["Zoho CRM Token","zohoCrmToken","password"],["Slack Channel","slackChannel","text"]].map(([l,k,t])=>(
             <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={t} value={ints[k]||""} onChange={e=>setInts(i=>({...i,[k]:e.target.value}))} placeholder={k.includes("Token")?"Paste OAuth token...":""} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
