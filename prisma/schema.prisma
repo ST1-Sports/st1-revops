@@ -343,3 +343,17 @@ model IntegrationConnection {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 }
+
+// ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
+
+model EmailOpen {
+  id        String   @id @default(cuid())
+  eid       String   // "{seqId}~{contactId}~{touchStep}"
+  seqId     String
+  contactId String
+  touchStep Int      @default(0)
+  openedAt  DateTime @default(now())
+
+  @@index([seqId])
+  @@index([contactId])
+}
