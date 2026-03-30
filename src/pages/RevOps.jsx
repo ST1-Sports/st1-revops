@@ -1308,9 +1308,16 @@ Under 80 words. Include subject line. Warm tone.`);
         {sel_d&&(
           <div style={{display:"flex",flexDirection:"column",gap:11,position:"sticky",top:0,maxHeight:"calc(100vh - 155px)",overflowY:"auto"}}>
             <div className="card" style={{padding:13,borderTop:`3px solid ${DSC[sel_d.stage]||B.orange}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
-                <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>{sel_d.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{sel_d.contact} · {sel_d.school}</div></div>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.orange}}>{fmt$(sel_d.value)}</div>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:9,alignItems:"flex-start"}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>{sel_d.name}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{sel_d.contact} · {sel_d.school}</div>
+                </div>
+                <div style={{flexShrink:0,marginLeft:9,textAlign:"right"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>VALUE ($)</div>
+                  <input type="number" defaultValue={sel_d.value||0} onBlur={e=>dispatch("UPDATE_DEAL",{id:sel_d.id,value:Number(e.target.value||0)})}
+                    style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+                </div>
               </div>
               <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
               <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
@@ -4840,9 +4847,19 @@ function ModAds() {
         }),
       });
       const data = await r.json();
-      if (data.status === "success" || data.postIds || data.id) {
-        setSocialResult({ ok:true });
-        toast(socialScheduleAt ? `Scheduled for ${socialScheduleAt}!` : `Posted to ${socialPlatforms.length} platform(s)!`, "success");
+      // Ayrshare returns status:"success" or "scheduled" on success.
+      // It can also return status:"success" WITH errors[] if individual platforms fail.
+      const platformErrors = Array.isArray(data.errors) ? data.errors : [];
+      const isSuccess = (data.status === "success" || data.status === "scheduled") && !data.error;
+      if (isSuccess) {
+        const failedNets = platformErrors.map(e=>e.network||e.platform).filter(Boolean);
+        const okCount = socialPlatforms.length - failedNets.length;
+        setSocialResult({ ok:true, platformErrors, failedNets });
+        if (failedNets.length === 0) {
+          toast(socialScheduleAt ? `Scheduled for ${new Date(socialScheduleAt).toLocaleString()}!` : `Posted to ${okCount} platform(s)!`, "success");
+        } else {
+          toast(`Posted to ${okCount} platform(s). Failed: ${failedNets.join(", ")}`, "warn");
+        }
         dispatch("ADD_SOCIAL_POST", {
           id:mkId(), createdAt:today(),
           date: socialScheduleAt ? socialScheduleAt.slice(0,10) : today(),
@@ -4855,8 +4872,9 @@ function ModAds() {
           postType: socialPostType,
         });
       } else {
-        setSocialResult({ ok:false, error: data.error || data.message || "Post failed" });
-        toast(data.error || data.message || "Post failed","error");
+        const errMsg = data.error || data.message || (platformErrors[0]?.message) || "Post failed";
+        setSocialResult({ ok:false, error: errMsg });
+        toast(errMsg, "error");
       }
     } catch { toast("Post failed","error"); }
     setSocialPosting(false);
@@ -5559,7 +5577,8 @@ function ModAds() {
                     {socialPosting?"POSTING…":socialScheduleAt?"🗓 SCHEDULE POST":"📣 POST NOW"}
                   </button>
                   {adImg&&<a href={adImg} download="st1-ad.png" style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",letterSpacing:.5}}>⬇ DOWNLOAD IMAGE</a>}
-                  {socialResult?.ok&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600}}>{socialScheduleAt?"✓ Scheduled!":"✓ Posted!"}</span>}
+                  {socialResult?.ok&&socialResult.failedNets?.length===0&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600}}>{socialScheduleAt?"✓ Scheduled!":"✓ Posted!"}</span>}
+                  {socialResult?.ok&&socialResult.failedNets?.length>0&&<span style={{color:B.yellow,fontFamily:"'Lexend',sans-serif",fontSize:10}}>⚠ Partial — failed: {socialResult.failedNets.join(", ")}</span>}
                   {socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:10}}>✗ {socialResult.error.slice(0,100)}</span>}
                 </div>
 
