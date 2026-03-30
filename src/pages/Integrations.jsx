@@ -1355,8 +1355,8 @@ Channel: ${slackChannelName}`);
                 )}
               </div>
 
-              {/* ── SOCIAL PUBLISHING ───────────────────────────────────────── */}
-              <SocialPublishPanel addLog={addLog}/>
+              {/* ── SOCIAL PUBLISHING (Ayrshare) ────────────────────────────── */}
+              <AyrsharePanel addLog={addLog}/>
 
             </div>
           )}
@@ -1661,77 +1661,73 @@ Channel: ${slackChannelName}`);
 }
 
 // ─── DIRECT SOCIAL PUBLISHING ─────────────────────────────────────────────────
-function SocialPublishPanel({addLog}) {
-  const [caption, setCaption] = useState("");
-  const [copied, setCopied] = useState(false);
+function AyrsharePanel({addLog}) {
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
-  const copyCaption = () => {
-    if (!caption.trim()) return;
-    navigator.clipboard.writeText(caption).then(()=>{
-      setCopied(true);
-      setTimeout(()=>setCopied(false), 2000);
-      addLog("Caption copied to clipboard","success");
-    });
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const r = await fetch("/api/social-post", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({action:"test"}),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        setTestResult({ok:true, user: data.user});
+        addLog("Ayrshare connected ✓","success");
+        try {
+          const st = JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");
+          localStorage.setItem("st1_integrations_status_v1", JSON.stringify({...st, social:true}));
+        } catch {}
+      } else {
+        setTestResult({ok:false, error: data.error});
+        addLog(`Ayrshare: ${data.error}`,"error");
+      }
+    } catch(e) { setTestResult({ok:false, error:e.message}); }
+    setTesting(false);
   };
-
-  const openPlatform = (platform) => {
-    copyCaption();
-    const urls = {
-      twitter:  `https://twitter.com/intent/tweet?text=${encodeURIComponent((caption||"").slice(0,280))}`,
-      linkedin: `https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent((caption||"").slice(0,3000))}`,
-      facebook: "https://www.facebook.com/",
-      instagram: "https://www.instagram.com/",
-    };
-    window.open(urls[platform], "_blank");
-    addLog(`Opened ${platform} — caption copied, paste it in the composer`,"info");
-  };
-
-  const PLATFORMS = [
-    {id:"twitter",  label:"𝕏 Twitter/X", color:"#000000", note:"Caption auto-fills in tweet box"},
-    {id:"linkedin", label:"LinkedIn",     color:"#0A66C2", note:"Caption auto-fills in post composer"},
-    {id:"facebook", label:"Facebook",     color:"#1877F2", note:"Caption copied — paste in your post"},
-    {id:"instagram",label:"Instagram",    color:"#E1306C", note:"Caption copied — paste in your post"},
-  ];
 
   return (
-    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #E1306C`}}>
-      <div style={{marginBottom:14}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post ads and content to Facebook, Instagram, LinkedIn, Twitter/X · no extra subscription needed</div>
-      </div>
-
-      {/* Caption composer */}
-      <div style={{marginBottom:14}}>
-        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>CAPTION</div>
-        <textarea
-          value={caption}
-          onChange={e=>setCaption(e.target.value)}
-          rows={4}
-          placeholder="Write your post caption here — or go to Ad Engine → Ad Creator and click 'Post to Social' to auto-fill from your ad"
-          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}
-        />
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:4}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{caption.length} chars</div>
-          <button onClick={copyCaption} disabled={!caption.trim()}
-            style={{background:copied?B.green:B.surface,color:copied?B.white:B.text,border:`1px solid ${copied?B.green:B.border}`,borderRadius:4,padding:"4px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",letterSpacing:.5,transition:"background .15s"}}>
-            {copied?"✓ COPIED":"⎘ COPY"}
-          </button>
+    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #7B5EA7`}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+        <div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post to Twitter/X, LinkedIn, Instagram, Facebook, TikTok — from the Ad Creator</div>
         </div>
+        <button onClick={testConnection} disabled={testing}
+          style={{background:testing?B.surface:B.purple,color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
+          {testing?"TESTING…":"TEST CONNECTION"}
+        </button>
       </div>
 
-      {/* Platform buttons */}
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>OPEN PLATFORM COMPOSER</div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-        {PLATFORMS.map(({id,label,color,note})=>(
-          <button key={id} onClick={()=>openPlatform(id)} disabled={!caption.trim()}
-            style={{background:caption.trim()?`${color}0d`:"#f8f8f8",color:caption.trim()?color:B.muted,border:`1px solid ${caption.trim()?color+"40":B.border}`,borderRadius:6,padding:"10px 14px",textAlign:"left",cursor:caption.trim()?"pointer":"default",transition:"background .15s"}}>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:700,marginBottom:2}}>{label} ↗</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:caption.trim()?color+"aa":B.muted}}>{note}</div>
-          </button>
-        ))}
-      </div>
-      <div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-        Twitter/X and LinkedIn pre-fill the caption in the composer. For Facebook and Instagram, the caption is copied to your clipboard — just paste it. Download your ad image from Ad Engine to attach it.
+      {testResult?.ok&&(
+        <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
+          ✓ <strong>Connected</strong> — Ayrshare API key is working.
+          {testResult.user?.activeSocialAccounts?.length>0&&(
+            <span> Platforms: {testResult.user.activeSocialAccounts.join(", ")}</span>
+          )}
+        </div>
+      )}
+      {testResult?.ok===false&&(
+        <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,lineHeight:1.5}}>
+          ✗ {testResult.error}
+        </div>
+      )}
+
+      <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
+        <strong>Setup (2 minutes):</strong>
+        <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2}}>
+          <li>Create a free account at <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>app.ayrshare.com</a></li>
+          <li>Connect your social accounts in Ayrshare (Twitter, LinkedIn, Instagram, Facebook, TikTok)</li>
+          <li>Copy your <strong>API Key</strong> from Ayrshare dashboard → Settings</li>
+          <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to your Vercel environment variables</li>
+          <li>Redeploy, then click <strong>Test Connection</strong> above</li>
+        </ol>
+        <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+          Once connected, go to <strong>Ad Engine → Ad Creator → POST TO SOCIAL</strong> to post ads directly to all platforms with scheduling, stories, and ad manager links.
+        </div>
       </div>
     </div>
   );
