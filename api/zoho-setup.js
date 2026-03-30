@@ -3,35 +3,41 @@
  *
  * One-time OAuth setup helper.
  *
- * Step 1 — GET /api/zoho-setup
- *   Shows a button linking to Zoho's authorization page.
+ * !! IMPORTANT — Complete Step 0 in Zoho API Console BEFORE clicking Authorize !!
  *
- * Step 2 — After Zoho redirects back with ?code=...
- *   Exchanges the auth code for access + refresh tokens and displays them.
- *   Copy the refresh_token value into your Vercel ZOHO_REFRESH_TOKEN env var.
+ * Step 0 — Configure your Zoho API Console app (one-time):
+ *   1. Go to https://api-console.zoho.com/
+ *   2. Click your existing app (or create a new "Server-based Applications" one)
+ *   3. Click "Edit" → open the "Scopes" tab
+ *   4. Search for and add ALL of the following services + scopes:
+ *        Zoho Books:     invoices.ALL, contacts.ALL, customerpayments.ALL, estimates.ALL, items.ALL
+ *        Zoho CRM:       modules.Contacts.ALL, modules.Leads.ALL, modules.Deals.ALL, users.READ
+ *        Zoho Campaigns: campaign.ALL, contact.ALL
+ *        Zoho Social:    portals.ALL, message.ALL
+ *   5. Save the app.  Redirect URI must be: https://revops.st1sports.com/api/zoho-setup
  *
- * Required env vars before running:
- *   ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET
- *
- * Redirect URI to register in your Zoho OAuth app:
- *   https://<your-vercel-domain>/api/zoho-setup
+ * Step 1 — GET /api/zoho-setup → click Authorize button
+ * Step 2 — Copy the refresh_token into Vercel env var ZOHO_REFRESH_TOKEN, then redeploy
  */
 
 const SCOPES = [
-  // Zoho Books — invoices, AR, payments, items/inventory, estimates/quotes
+  // Zoho Books
   "ZohoBooks.invoices.ALL",
   "ZohoBooks.contacts.ALL",
   "ZohoBooks.customerpayments.ALL",
   "ZohoBooks.estimates.ALL",
   "ZohoBooks.items.ALL",
-  // Zoho CRM — contacts, leads, deals
+  // Zoho CRM
   "ZohoCRM.modules.Contacts.ALL",
   "ZohoCRM.modules.Leads.ALL",
   "ZohoCRM.modules.Deals.ALL",
   "ZohoCRM.users.READ",
-  // Zoho Campaigns — email list management, marketing automation
+  // Zoho Campaigns
   "ZohoCampaigns.campaign.ALL",
   "ZohoCampaigns.contact.ALL",
+  // Zoho Social
+  "ZohoSocial.portals.ALL",
+  "ZohoSocial.message.ALL",
 ].join(",");
 
 export default async function handler(req, res) {
@@ -90,8 +96,7 @@ export default async function handler(req, res) {
         </div>
 
         <div style="margin-top:16px;padding:14px;background:#e8f0fa;border:1px solid #1a5fa840;border-radius:6px">
-          <strong>Next:</strong> redeploy your Vercel project so the new env vars take effect, then click
-          "Test Connection" on the Integrations page.
+          <strong>Next:</strong> redeploy your Vercel project so the new env vars take effect.
         </div>
       `));
 
@@ -104,6 +109,9 @@ export default async function handler(req, res) {
   if (oauthError) {
     return res.status(400).send(page("Authorization Denied", `
       <p style="color:red">Zoho returned: ${oauthError}</p>
+      <p>If you see <strong>"Invalid OAuth Scope"</strong>, you need to add the missing product scopes
+      to your app at <a href="https://api-console.zoho.com/" target="_blank">api-console.zoho.com</a>
+      before authorizing. See Step 0 at the top of this page.</p>
       <p><a href="/api/zoho-setup">← Try again</a></p>
     `));
   }
@@ -112,15 +120,6 @@ export default async function handler(req, res) {
     return res.status(500).send(page("Setup Required", `
       <p style="color:red">Set <strong>ZOHO_CLIENT_ID</strong> and <strong>ZOHO_CLIENT_SECRET</strong>
       in Vercel environment variables first, then come back here.</p>
-      <h3 style="margin-top:20px">How to create your Zoho OAuth app</h3>
-      <ol style="line-height:2">
-        <li>Go to <strong>api-console.zoho.com</strong></li>
-        <li>Click <strong>Server-based Applications</strong> → Create</li>
-        <li>Set Homepage URL to your Vercel URL</li>
-        <li>Set Authorized Redirect URI to: <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px">https://YOUR-VERCEL-DOMAIN/api/zoho-setup</code></li>
-        <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> into Vercel env vars</li>
-        <li>Redeploy, then come back to this page</li>
-      </ol>
     `));
   }
 
@@ -134,23 +133,47 @@ export default async function handler(req, res) {
   }).toString();
 
   return res.status(200).send(page("Connect Zoho to ST1 RevOps", `
-    <p style="color:#424242;margin-bottom:24px">
-      Click the button below to authorize ST1 RevOps to access your Zoho Books and CRM accounts.
-      You'll be redirected back here with your tokens.
-    </p>
+
+    <div style="margin-bottom:28px;padding:18px;background:#fff3cd;border:2px solid #f0ad00;border-radius:8px">
+      <div style="font-size:15px;font-weight:700;color:#7a4f00;margin-bottom:12px">⚠ Complete Step 0 in Zoho API Console FIRST</div>
+      <p style="color:#5a3a00;margin:0 0 10px">
+        Before clicking Authorize, your Zoho API Console app must have <strong>all four products</strong> enabled.
+        If any product is missing, Zoho will show "Invalid OAuth Scope."
+      </p>
+      <ol style="color:#5a3a00;margin:0;padding-left:20px;line-height:2">
+        <li>Go to <a href="https://api-console.zoho.com/" target="_blank" style="color:#c47a00;font-weight:700">api-console.zoho.com</a></li>
+        <li>Open your app → click <strong>Edit</strong> → <strong>Scopes</strong> tab</li>
+        <li>Add <strong>Zoho Books</strong>, <strong>Zoho CRM</strong>, <strong>Zoho Campaigns</strong>, and <strong>Zoho Social</strong></li>
+        <li>For each, enable the <strong>ALL</strong> permission level on the scopes listed below</li>
+        <li>Save, then come back here and click Authorize</li>
+      </ol>
+    </div>
+
+    <div style="margin-bottom:24px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
+      <strong>Scopes being requested (all must be enabled in API Console):</strong>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px">
+        ${[
+          ["Zoho Books","ZohoBooks.invoices.ALL, contacts.ALL, customerpayments.ALL, estimates.ALL, items.ALL"],
+          ["Zoho CRM","ZohoCRM.modules.Contacts.ALL, Leads.ALL, Deals.ALL, users.READ"],
+          ["Zoho Campaigns","ZohoCampaigns.campaign.ALL, contact.ALL"],
+          ["Zoho Social","ZohoSocial.portals.ALL, message.ALL"],
+        ].map(([product, scopes]) => `
+          <div style="padding:8px;background:white;border:1px solid #e8e8e8;border-radius:4px">
+            <div style="font-weight:700;font-size:11px;color:#f37321;margin-bottom:3px">${product}</div>
+            <div style="font-size:11px;color:#555;font-family:monospace">${scopes}</div>
+          </div>
+        `).join("")}
+      </div>
+    </div>
 
     <a href="${authUrl}" style="
       display:inline-block;background:#F37321;color:white;text-decoration:none;
       padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px;
     ">Authorize with Zoho →</a>
 
-    <div style="margin-top:24px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
-      <strong>Permissions being requested:</strong><br>
-      Zoho Books: read/write invoices, contacts, payments<br>
-      Zoho CRM: read/write Contacts, Leads, and Deals<br>
-      Zoho Campaigns: manage mailing lists and subscribers<br>
-      Zoho Campaigns: manage mailing lists and subscribers
-    </div>
+    <p style="margin-top:16px;font-size:12px;color:#888">
+      Redirect URI registered in your app: <code style="background:#f0f0f0;padding:2px 6px;border-radius:3px">${redirectUri}</code>
+    </p>
   `));
 }
 
@@ -174,7 +197,7 @@ function tokenRow(name, value) {
 function page(title, body) {
   return `<!doctype html><html><head><meta charset="utf-8">
     <title>${title} — ST1 RevOps</title>
-    <style>body{font-family:system-ui,sans-serif;max-width:640px;margin:40px auto;padding:0 20px;color:#1a1a1a}
+    <style>body{font-family:system-ui,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;color:#1a1a1a}
       h1{color:#f37321;font-size:22px;margin-bottom:8px}</style>
   </head><body>
     <h1>${title}</h1>
