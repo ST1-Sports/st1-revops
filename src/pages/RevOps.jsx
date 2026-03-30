@@ -502,12 +502,22 @@ export default function App() {
           <header style={{background:B.white,borderBottom:`1px solid ${B.border}`,height:46,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",flexShrink:0,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{NAV.find(n=>n.id===mod)?.label?.toUpperCase()}</div>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
-              {[["Books",s.integrations.zohoToken],[" CRM",s.integrations.zohoCrmToken],["Slack",s.integrations.slackChannel]].map(([l,v])=>(
-                <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
-                  <div className={v?"":"blink"} style={{width:6,height:6,borderRadius:"50%",background:v?B.green:B.muted}}/>
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{l}</span>
-                </div>
-              ))}
+              {(()=>{
+                let st={};
+                try{st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");}catch{}
+                return [
+                  ["Books",    st.books    || !!s.integrations.zohoToken],
+                  ["CRM",      st.crm      || !!s.integrations.zohoCrmToken],
+                  ["Campaigns",st.campaigns],
+                  ["Gmail",    st.gmail    || !!s.integrations.gmailToken],
+                  ["Slack",    st.slack    !== false && !!s.integrations.slackChannel],
+                ].map(([l,v])=>(
+                  <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
+                    <div className={v?"":"blink"} style={{width:6,height:6,borderRadius:"50%",background:v?B.green:B.muted}}/>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{l}</span>
+                  </div>
+                ));
+              })()}
               <div style={{width:1,height:14,background:B.border}}/>
               <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:s.alerts.filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
                 ◎
@@ -6120,15 +6130,51 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 function ModAlerts() {
   const {s,dispatch,toast}=useApp();
   const [channel,setChannel]=useState(s.integrations.slackChannel||"#sales-alerts");
+  const [sending,setSending]=useState(false);
   const pending=s.alerts.filter(a=>!a.sent);
-  const send=id=>{dispatch("DISMISS_ALERT",id);dispatch("LOG",{msg:`Alert sent to Slack ${channel}`});toast("Alert sent to "+channel,"success");};
+
+  const sendToSlack=async(msg)=>{
+    const ch=channel||"#sales-alerts";
+    try{
+      const r=await fetch("/api/claude",{
+        method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-6",max_tokens:200,
+          mcp_servers:[{type:"url",url:"https://mcp.slack.com/mcp",name:"slack"}],
+          messages:[{role:"user",content:`Send this exact message to Slack channel ${ch}:\n\n${msg}\n\nUse the slack_send_message tool with channel_id="${ch}". Reply with just "sent" when done.`}]
+        })
+      });
+      const d=await r.json();
+      const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").toLowerCase();
+      return text.includes("sent")||d.content?.some(b=>b.type==="tool_use");
+    }catch{return false;}
+  };
+
+  const send=async(id)=>{
+    const alert=s.alerts.find(a=>a.id===id);
+    if(!alert)return;
+    setSending(true);
+    const msg=`🔥 ST1 RevOps Alert\n${alert.msg}${alert.action?`\n→ ${alert.action}`:""}`;
+    const ok=await sendToSlack(msg);
+    dispatch("DISMISS_ALERT",id);
+    dispatch("LOG",{msg:`Alert ${ok?"sent to":"queued for"} Slack ${channel}`});
+    toast(ok?`✓ Sent to ${channel}`:`Queued (check Slack config)`,"success");
+    setSending(false);
+  };
+
+  const sendAll=async()=>{
+    setSending(true);
+    for(const a of pending){await send(a.id);}
+    setSending(false);
+  };
   return (
     <div style={{padding:"22px 26px"}}>
       <PH title="ALERT QUEUE" sub="High-intent signals queued for Slack"/>
-      <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:16}}>
+      <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:16,flexWrap:"wrap"}}>
         <Lbl>Slack:</Lbl>
         <input value={channel} onChange={e=>setChannel(e.target.value)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 10px",fontSize:12,width:180}}/>
-        {pending.length>0&&<OBtn sm onClick={()=>pending.forEach(a=>send(a.id))}>SEND ALL ({pending.length})</OBtn>}
+        {pending.length>0&&<OBtn sm onClick={sendAll} disabled={sending}>{sending?"SENDING…":`SEND ALL (${pending.length})`}</OBtn>}
+        {sending&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Sending to Slack…</span>}
       </div>
       {s.alerts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>No alerts yet — signals from deals, invoices, and prospecting appear here</div>}
       <div style={{display:"flex",flexDirection:"column",gap:7}}>
@@ -6139,7 +6185,7 @@ function ModAlerts() {
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:2}}>{a.msg}</div>
               {a.action&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>→ {a.action}</div>}
             </div>
-            {!a.sent&&<OBtn sm onClick={()=>send(a.id)} style={{marginLeft:11,flexShrink:0}}>SEND →</OBtn>}
+            {!a.sent&&<OBtn sm onClick={()=>send(a.id)} disabled={sending} style={{marginLeft:11,flexShrink:0}}>{sending?"…":"SEND →"}</OBtn>}
           </div>
         ))}
       </div>
