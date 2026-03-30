@@ -274,30 +274,38 @@ export default function App() {
   if (!s.currentUserId) return <Login dispatch={dispatch}/>;
 
   const NAV = [
-    {id:"briefing",   icon:"◈", label:"Daily Briefing",  badge:urgentCount(s)},
-    {id:"revenue",    icon:"↑", label:"Revenue"},
-    {id:"deals",      icon:"◫", label:"Deal Manager"},
-    {id:"quotes",     icon:"▤", label:"Quote Builder"},
-    {id:"orders",     icon:"⊡", label:"Orders",          badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
-    {id:"rfp",        icon:"⊘", label:"RFP / Bids",      badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
-    {id:"invoicing",  icon:"▲", label:"Invoices & AR",   badge:s.invoices.filter(i=>i.status==="overdue").length},
-    {id:"reorder",    icon:"↺", label:"Reorder Engine",  badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
-    {id:"prospecting",icon:"⊕", label:"Prospecting"},
-    {id:"marketing",  icon:"✦", label:"Marketing"},
-    {id:"outreach",   icon:"✉", label:"Batch Outreach"},
-    {id:"templates",  icon:"≈", label:"Email Templates"},
-    {id:"ads",        icon:"⬛", label:"Ad Engine"},
-    {id:"compete",    icon:"⊗", label:"Competitors"},
-    {id:"agent",      icon:"AI",label:"AI Agent"},
-    {id:"alerts",     icon:"◎", label:"Alerts",          badge:s.alerts.filter(a=>!a.sent).length},
-    {id:"activity",   icon:"≡", label:"Activity"},
-    {id:"settings",   icon:"⚙", label:"Settings"},
-    // External standalone tools — open in same tab
+    // ── SALES ──────────────────────────────────────────────────────────
+    {id:"_s_sales"},
+    {id:"briefing",    icon:"◈", label:"Briefing",       badge:urgentCount(s)},
+    {id:"revenue",     icon:"↑", label:"Revenue"},
+    {id:"deals",       icon:"◫", label:"Deals"},
+    {id:"quotes",      icon:"▤", label:"Quotes"},
+    {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
+    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:s.invoices.filter(i=>i.status==="overdue").length},
+    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    // ── GROWTH ─────────────────────────────────────────────────────────
+    {id:"_s_growth"},
+    {id:"prospecting", icon:"⊕", label:"Prospecting"},
+    {id:"outreach",    icon:"✉", label:"Outreach"},
+    {id:"templates",   icon:"≈", label:"Email Templates"},
+    {id:"marketing",   icon:"✦", label:"Campaigns"},
+    {id:"ads",         icon:"⬛", label:"Ad Engine"},
+    // ── TOOLS ──────────────────────────────────────────────────────────
+    {id:"_s_tools"},
+    {id:"agent",       icon:"AI",label:"AI Agent"},
+    {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
+    {id:"compete",     icon:"⊗", label:"Competitors"},
+    {id:"alerts",      icon:"◎", label:"Alerts",         badge:s.alerts.filter(a=>!a.sent).length},
+    // ── SYSTEM ─────────────────────────────────────────────────────────
+    {id:"_s_system"},
+    {id:"activity",    icon:"≡", label:"Activity"},
+    {id:"settings",    icon:"⚙", label:"Settings"},
+    {id:"integrations",icon:"⚡",label:"Integrations",   href:"/integrations"},
+    // ── STANDALONE TOOLS ───────────────────────────────────────────────
     {id:"_div"},
-    {id:"rfp-tool",   icon:"📋", label:"RFP Automation",  href:"/rfp"},
-    {id:"prices",     icon:"$",  label:"Price Manager",    href:"/prices"},
-    {id:"expansion",  icon:"◉",  label:"Expansion Planner",href:"/expansion"},
-    {id:"integrations",icon:"⚡",label:"Integrations",     href:"/integrations"},
+    {id:"rfp-tool",    icon:"📋", label:"RFP Automation", href:"/rfp"},
+    {id:"prices",      icon:"$",  label:"Price Manager",  href:"/prices"},
+    {id:"expansion",   icon:"◉",  label:"Expansion",      href:"/expansion"},
   ];
 
   return (
@@ -334,14 +342,21 @@ export default function App() {
             <button onClick={()=>setSlim(c=>!c)} style={{background:"none",border:"none",color:B.muted,fontSize:13,padding:2,flexShrink:0,marginLeft:slim?0:2}}>{slim?"→":"←"}</button>
           </div>
 
-          <nav style={{flex:1,overflowY:"auto",overflowX:"hidden",paddingTop:4}}>
+          <nav style={{flex:1,overflowY:"auto",overflowX:"hidden",paddingTop:6}}>
             {NAV.map(n=>{
+              // Section header
+              if(n.id.startsWith("_s_")) {
+                const label = n.id.replace("_s_","").toUpperCase();
+                return !slim
+                  ? <div key={n.id} style={{padding:"10px 13px 3px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:2,opacity:.7}}>{label}</div>
+                  : <div key={n.id} style={{height:1,background:B.border,margin:"5px 8px"}}/>;
+              }
               // Divider
               if(n.id==="_div") return <div key="_div" style={{height:1,background:B.border,margin:"6px 8px"}}/>;
               // External link (standalone tools)
               if(n.href) return (
                 <a key={n.id} href={n.href} title={slim?n.label:undefined}
-                  style={{display:"flex",textDecoration:"none",width:"100%",background:"transparent",borderLeft:`3px solid transparent`,color:B.muted,padding:slim?"9px 0":"8px 11px 8px 10px",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:400}}>
+                  style={{display:"flex",textDecoration:"none",width:"100%",background:"transparent",borderLeft:`3px solid transparent`,color:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:400}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
                   {!slim&&<span style={{marginLeft:"auto",fontSize:9,color:B.muted,flexShrink:0}}>↗</span>}
@@ -350,7 +365,7 @@ export default function App() {
               // Normal nav item
               return (
                 <button key={n.id} onClick={()=>setMod(n.id)} title={slim?n.label:undefined}
-                  style={{width:"100%",background:mod===n.id?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:B.muted,padding:slim?"9px 0":"8px 11px 8px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative"}}>
+                  style={{width:"100%",background:mod===n.id?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative"}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
                   {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:n.id==="invoicing"?B.red:B.orange,color:B.white,borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
