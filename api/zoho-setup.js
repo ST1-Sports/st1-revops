@@ -33,7 +33,8 @@ const SCOPES = [
   "ZohoCampaigns.campaign.ALL",
   "ZohoCampaigns.contact.ALL",
   // Zoho Social — post to Facebook, Instagram, LinkedIn, Twitter/X
-  "ZohoSocial.account.ALL",
+  "ZohoSocial.portals.ALL",
+  "ZohoSocial.message.ALL",
 ].join(",");
 
 export default async function handler(req, res) {
@@ -151,7 +152,7 @@ export default async function handler(req, res) {
       Zoho Books: read/write invoices, contacts, payments<br>
       Zoho CRM: read/write Contacts, Leads, and Deals<br>
       Zoho Campaigns: manage mailing lists and subscribers<br>
-      Zoho Social: read accounts, publish posts to connected channels
+      Zoho Social: read portals/channels, publish posts to connected networks
     </div>
   `));
 }
