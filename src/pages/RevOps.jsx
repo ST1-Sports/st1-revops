@@ -1992,6 +1992,19 @@ function ModProspecting() {
 // ════════════════════════════════════════════════════════════════════════════
 //  MARKETING
 // ════════════════════════════════════════════════════════════════════════════
+const SOCIAL_PLATFORMS = ["Instagram","Facebook","LinkedIn","Twitter/X","TikTok"];
+const POST_TYPES = ["Product Launch","Seasonal Promo","Behind the Scenes","Customer Win","Educational","Event / Meet"];
+const ASSET_TYPES = ["Social Post Graphic","Email Header","Email Banner","Print Flyer","Product Card","Event Promo"];
+const ASSET_STYLES = ["Action Shot","Product Flat Lay","Team Celebration","Infographic","Quote Card","Before & After"];
+const ASSET_SIZES = {
+  "Social Post Graphic":"1080×1080 px (square) or 1080×1350 px (portrait)",
+  "Email Header":"600×200 px",
+  "Email Banner":"600×300 px",
+  "Print Flyer":"8.5×11 in (portrait), 300 dpi",
+  "Product Card":"800×800 px",
+  "Event Promo":"1200×628 px (landscape)",
+};
+
 function ModMarketing() {
   const {s,dispatch,toast}=useApp();
   const [tab,setTab]=useState("campaigns");
@@ -2010,12 +2023,72 @@ function ModMarketing() {
   const [genRunning,setGenRunning]=useState(false);
   const [filterSport,setFilterSport]=useState("all");
 
+  // Social media state
+  const [socialPlatform,setSocialPlatform]=useState("Instagram");
+  const [postType,setPostType]=useState("Seasonal Promo");
+  const [inclHashtags,setInclHashtags]=useState(true);
+  const [inclEmoji,setInclEmoji]=useState(true);
+  const [inclCTA,setInclCTA]=useState(true);
+  const [socialOut,setSocialOut]=useState(null); // null | {platform,posts:[]} | {all:true,posts:{Instagram,Facebook,...}}
+  const [socialRunning,setSocialRunning]=useState(false);
+
+  // Creative assets state
+  const [assetType,setAssetType]=useState("Social Post Graphic");
+  const [assetStyle,setAssetStyle]=useState("Action Shot");
+  const [assetMsg,setAssetMsg]=useState("");
+  const [assetOut,setAssetOut]=useState("");
+  const [assetRunning,setAssetRunning]=useState(false);
+
   const gen=async()=>{
     setRunning(true);setOut("");
     let p="";
     if(tab==="copy") p=`Write ${channel} copy for ST1 Sports targeting ${audience}s. Product: ${product}. Tone: ${tone}. ${ctx} ${ST1}. Include subject line if email. Under 120 words. Use {{firstName}} {{orgName}}.`;
     else p=`90-day marketing strategy for ST1 Sports. Focus: ${product}. Audience: ${audience}s. ${ctx} ${ST1}. Include positioning, channels, monthly plan, KPIs.`;
     const t=await aiCall(p,{tokens:900});setOut(t||"");setRunning(false);
+  };
+
+  const genSocialPost=async(platforms=null)=>{
+    const pts=platforms||[socialPlatform];
+    setSocialRunning(true);setSocialOut(null);
+    const hashtagLine=inclHashtags?" Include 5–8 relevant hashtags (sport, school athletics, product).":"";
+    const emojiLine=inclEmoji?" Use relevant emojis to add energy.":"";
+    const ctaLine=inclCTA?" End with a clear CTA (DM us, link in bio, visit st1sports.com, etc.).":"";
+    const platformNotes={
+      "Instagram":"Up to 2200 chars, very visual, conversational, lifestyle feel.",
+      "Facebook":"Up to 500 chars recommended, friendly community tone, can include a question.",
+      "LinkedIn":"Professional tone, 150–300 chars, speak to ADs/coaches/administrators.",
+      "Twitter/X":"Max 280 chars — punchy, direct, strong hook.",
+      "TikTok":"Casual, energetic, hook in first line, max 300 chars.",
+    };
+    if(pts.length===1){
+      const plat=pts[0];
+      const note=platformNotes[plat]||"";
+      const p=`Write a ${postType} social media post for ST1 Sports on ${plat}. Product/topic: ${product}. ${note}${hashtagLine}${emojiLine}${ctaLine} ${ctx?`Context: ${ctx}.`:""} ${ST1}. Return only the post text, nothing else.`;
+      const t=await aiCall(p,{tokens:350});
+      setSocialOut({platform:plat,posts:[{platform:plat,text:t||""}]});
+    } else {
+      // All platforms at once
+      const promptParts=pts.map(plat=>{
+        const note=platformNotes[plat]||"";
+        return `"${plat}": Write a ${postType} post. ${note}`;
+      }).join("\n");
+      const p=`Write ${postType} social media posts for ST1 Sports across multiple platforms. Product/topic: ${product}.${hashtagLine}${emojiLine}${ctaLine} ${ctx?`Context: ${ctx}.`:""} ${ST1}.\n\nFor each platform write the post:\n${promptParts}\n\nReturn JSON: {${pts.map(pl=>`"${pl}":"post text"`).join(",")}}`;
+      const result=await aiCall(p,{json:true,tokens:1400});
+      const posts=pts.map(pl=>({platform:pl,text:result?.[pl]||""}));
+      setSocialOut({all:true,posts});
+    }
+    setSocialRunning(false);
+  };
+
+  const genAssetBrief=async()=>{
+    setAssetRunning(true);setAssetOut("");
+    const dims=ASSET_SIZES[assetType]||"Custom dimensions";
+    const p=`Generate a detailed creative brief for a ${assetType} for ST1 Sports.\n`+
+      `Asset size: ${dims}.\nVisual style: ${assetStyle}.\nProduct/topic: ${product}.\n`+
+      `${assetMsg?`Key message: ${assetMsg}.\n`:""}`+
+      `${ST1}\n\n`+
+      `Include:\n1. Dimensions & format\n2. Headline copy (primary text)\n3. Subheadline / supporting copy\n4. Visual direction (what to show, composition, photography notes)\n5. Color palette (use ST1 brand: #F37321 orange, black, white + sport-appropriate accents)\n6. Logo / brand placement\n7. CTA text & placement\n8. Canva search prompt (3–5 keywords to find a matching template)\n\nBe specific and actionable. Format as numbered sections.`;
+    const t=await aiCall(p,{tokens:700});setAssetOut(t||"");setAssetRunning(false);
   };
 
   const startNewCampaign=()=>{
@@ -2104,8 +2177,8 @@ function ModMarketing() {
   return (
     <div style={{padding:"22px 26px"}}>
       <PH title="MARKETING STUDIO" sub="Campaigns, outreach sequences, and AI copy generation"/>
-      <div style={{display:"flex",gap:7,marginBottom:18}}>
-        {[["campaigns","Campaigns"],["copy","Copy Generator"],["strategy","Strategy"]].map(([id,l])=>(
+      <div style={{display:"flex",gap:7,marginBottom:18,flexWrap:"wrap"}}>
+        {[["campaigns","Campaigns"],["copy","Copy Generator"],["social","Social Media"],["assets","Creative Assets"],["strategy","Strategy"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
         ))}
       </div>
@@ -2309,6 +2382,158 @@ function ModMarketing() {
             {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate</div>}
             {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing...</div>}
             {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── SOCIAL MEDIA ───────────────────────────────────────────── */}
+      {tab==="social"&&(
+        <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
+          {/* Controls */}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Platform</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {SOCIAL_PLATFORMS.map(pl=>(
+                  <button key={pl} onClick={()=>setSocialPlatform(pl)} style={{background:socialPlatform===pl?`${B.orange}14`:B.white,color:socialPlatform===pl?B.orange:B.muted,border:`1px solid ${socialPlatform===pl?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{pl}</button>
+                ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Post Type</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {POST_TYPES.map(pt=>(
+                  <button key={pt} onClick={()=>setPostType(pt)} style={{background:postType===pt?`${B.orange}14`:B.white,color:postType===pt?B.orange:B.muted,border:`1px solid ${postType===pt?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{pt}</button>
+                ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Product Focus</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {PRODUCT_CATS.map(o=><button key={o} onClick={()=>setProduct(o)} style={{background:product===o?`${B.orange}14`:B.white,color:product===o?B.orange:B.muted,border:`1px solid ${product===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:6}}>Options</Lbl>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                {[["inclHashtags","Include hashtags",inclHashtags,setInclHashtags],["inclEmoji","Include emoji",inclEmoji,setInclEmoji],["inclCTA","Include CTA",inclCTA,setInclCTA]].map(([,label,val,set])=>(
+                  <label key={label} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                    <input type="checkbox" checked={val} onChange={e=>set(e.target.checked)} style={{accentColor:B.orange,width:13,height:13}}/>
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:6}}>Additional Context</Lbl>
+              <textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={2} placeholder="Specific offer, event, season, angle…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+            </div>
+            <OBtn onClick={()=>genSocialPost()} disabled={socialRunning} style={{width:"100%"}}>{socialRunning?"GENERATING...":"✦ GENERATE POST"}</OBtn>
+            <GBtn onClick={()=>genSocialPost(SOCIAL_PLATFORMS)} disabled={socialRunning} style={{width:"100%",padding:"8px 0",fontSize:10}}>⬛ ALL PLATFORMS AT ONCE</GBtn>
+          </div>
+
+          {/* Output */}
+          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <Lbl>Generated Posts</Lbl>
+              {socialOut&&<GBtn onClick={()=>{
+                const txt=(socialOut.posts||[]).map(p=>`[${p.platform}]\n${p.text}`).join("\n\n---\n\n");
+                navigator.clipboard?.writeText(txt);
+              }} style={{fontSize:10,padding:"3px 8px"}}>COPY ALL</GBtn>}
+            </div>
+            {!socialOut&&!socialRunning&&(
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:60}}>
+                Configure and generate a post
+              </div>
+            )}
+            {socialRunning&&(
+              <div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing posts…</div>
+            )}
+            {socialOut&&!socialRunning&&(
+              <div style={{display:"flex",flexDirection:"column",gap:12,overflowY:"auto",flex:1}}>
+                {(socialOut.posts||[]).map((p,i)=>{
+                  const charCount=(p.text||"").length;
+                  const limits={"Twitter/X":280,"LinkedIn":300,"TikTok":300,"Instagram":2200,"Facebook":500};
+                  const limit=limits[p.platform];
+                  const over=limit&&charCount>limit;
+                  return (
+                    <div key={i} style={{borderLeft:`3px solid ${B.orange}`,paddingLeft:12}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>{p.platform.toUpperCase()}</span>
+                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:over?B.red:B.muted}}>{charCount}{limit?`/${limit}`:""} chars</span>
+                          <GBtn onClick={()=>navigator.clipboard?.writeText(p.text||"")} style={{fontSize:9,padding:"2px 7px"}}>COPY</GBtn>
+                        </div>
+                      </div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",background:B.surface,borderRadius:4,padding:"10px 12px"}}>{p.text}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── CREATIVE ASSETS ────────────────────────────────────────── */}
+      {tab==="assets"&&(
+        <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
+          {/* Controls */}
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Asset Type</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {ASSET_TYPES.map(at=>(
+                  <button key={at} onClick={()=>setAssetType(at)} style={{background:assetType===at?`${B.orange}14`:B.white,color:assetType===at?B.orange:B.muted,border:`1px solid ${assetType===at?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{at}</button>
+                ))}
+              </div>
+              {ASSET_SIZES[assetType]&&(
+                <div style={{marginTop:7,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"4px 8px",borderRadius:3}}>
+                  📐 {ASSET_SIZES[assetType]}
+                </div>
+              )}
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Visual Style</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {ASSET_STYLES.map(st=>(
+                  <button key={st} onClick={()=>setAssetStyle(st)} style={{background:assetStyle===st?`${B.orange}14`:B.white,color:assetStyle===st?B.orange:B.muted,border:`1px solid ${assetStyle===st?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+                ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:7}}>Product Focus</Lbl>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                {PRODUCT_CATS.map(o=><button key={o} onClick={()=>setProduct(o)} style={{background:product===o?`${B.orange}14`:B.white,color:product===o?B.orange:B.muted,border:`1px solid ${product===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
+              </div>
+            </div>
+            <div className="card" style={{padding:12}}>
+              <Lbl s={{marginBottom:6}}>Key Message / Offer</Lbl>
+              <textarea value={assetMsg} onChange={e=>setAssetMsg(e.target.value)} rows={3} placeholder="e.g. 25% off all track hurdles through April — shop st1sports.com" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+            </div>
+            <OBtn onClick={genAssetBrief} disabled={assetRunning} style={{width:"100%"}}>{assetRunning?"BUILDING BRIEF...":"✦ GENERATE CREATIVE BRIEF"}</OBtn>
+          </div>
+
+          {/* Output */}
+          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <Lbl>Creative Brief</Lbl>
+              {assetOut&&<GBtn onClick={()=>navigator.clipboard?.writeText(assetOut)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}
+            </div>
+            {!assetOut&&!assetRunning&&(
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:10,marginTop:50}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center"}}>
+                  Configure and generate a creative brief
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",maxWidth:320,lineHeight:1.6}}>
+                  The brief will include dimensions, headline copy, visual direction, color palette, and a Canva search prompt so you can build the asset immediately.
+                </div>
+              </div>
+            )}
+            {assetRunning&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Building brief…</div>}
+            {assetOut&&!assetRunning&&(
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.9,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{assetOut}</div>
+            )}
           </div>
         </div>
       )}
