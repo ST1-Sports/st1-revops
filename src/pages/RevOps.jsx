@@ -77,6 +77,7 @@ function useStore() {
           alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
           activity:     Array.isArray(p.activity)     ? p.activity     : [],
           integrations: {...SEED.integrations,...(p.integrations||{})},
+          invoiceLastSync: p.invoiceLastSync||null,
         };
       }
     } catch {}
@@ -99,6 +100,25 @@ function useStore() {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const toBuffer = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsArrayBuffer(f);});
+
+function inferSport(items=[]) {
+  const t=(items||[]).map(i=>i.name||i.item_name||"").join(" ").toLowerCase();
+  if(/track|hurdle|javelin|discus|shot.?put|pole.?vault|sprint|relay|starting.?block|cross.?country|timing|finish.?lynx/.test(t)) return "Track & Field";
+  if(/baseball|softball|bat|glove|helmet/.test(t)) return "Baseball/Softball";
+  if(/volleyball/.test(t)) return "Volleyball";
+  if(/football/.test(t)) return "Football";
+  if(/basketball/.test(t)) return "Basketball";
+  if(/wrestling/.test(t)) return "Wrestling";
+  return "General";
+}
+
+// Shared Zoho Books/CRM proxy helper
+async function zohoCall(service, endpoint, method="GET", body=null) {
+  const r = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({service,endpoint,method,...(body?{body}:{})})});
+  if(!r.ok) throw new Error(`Zoho proxy ${r.status}`);
+  return r.json();
+}
 
 // Sport → best outreach window (months before season for procurement decisions)
 const SPORT_WINDOWS = {
@@ -157,7 +177,10 @@ function reducer(prev, action, payload) {
     case "UPDATE_INVOICE":    return {...prev, invoices:prev.invoices.map(i=>i.id===payload.id?{...i,...payload}:i)};
     case "ADD_RFP":           return {...prev, rfps:[payload,...prev.rfps]};
     case "UPDATE_RFP":        return {...prev, rfps:prev.rfps.map(r=>r.id===payload.id?{...r,...payload}:r)};
-    case "UPDATE_REORDER":    return {...prev, reorders:prev.reorders.map(r=>r.id===payload.id?{...r,...payload}:r)};
+    case "ADD_REORDER":       return {...prev, reorders:[payload,...(prev.reorders||[])]};
+    case "SET_REORDERS":      return {...prev, reorders:payload};
+    case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
+    case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
     case "UPDATE_CONTACT":      return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
@@ -974,124 +997,332 @@ function ModRFP() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  INVOICING
+//  INVOICING — data live from Zoho Books
 // ════════════════════════════════════════════════════════════════════════════
 function ModInvoicing() {
-  const {s,dispatch,toast,cu}=useApp();
+  const {s,dispatch,toast}=useApp();
   const [flt,setFlt]=useState("all");
   const [sel,setSel]=useState(null);
   const [drafts,setDrafts]=useState({});
   const [drafting,setDrafting]=useState(null);
-  const isOwner=cu?.role==="owner";
-  const pool=isOwner?s.invoices:s.invoices.filter(i=>i.assignee===cu?.id);
-  const list=pool.filter(i=>flt==="all"||(flt==="overdue"&&i.status==="overdue")||(flt==="unpaid"&&["sent","viewed","partial"].includes(i.status))||(flt==="draft"&&i.status==="draft")||(flt==="paid"&&i.status==="paid")).sort((a,b)=>{const o={overdue:0,partial:1,viewed:2,sent:3,unpaid:4,draft:5,paid:6};return(o[a.status]??5)-(o[b.status]??5);});
+  const [syncing,setSyncing]=useState(false);
+
+  const pool=s.invoices||[];
+  const STAT_MAP={draft:"draft",sent:"sent",overdue:"overdue",paid:"paid",void:"void",partially_paid:"partial",viewed:"viewed"};
+
+  const syncFromZoho=async()=>{
+    setSyncing(true);
+    try {
+      // Pull all recent invoices — Zoho Books handles status (overdue, paid, etc.)
+      const res=await zohoCall("books","/invoices?per_page=200&sort_column=date&sort_order=D");
+      const raw=res.invoices||[];
+      if(!raw.length&&res.message) throw new Error(res.message);
+      const mapped=raw.map(zi=>({
+        id:"zoho_"+zi.invoice_id,
+        zohoId:zi.invoice_id,
+        number:zi.invoice_number||zi.invoice_number_formatted||"",
+        customer:zi.customer_name,
+        customerId:zi.customer_id,
+        status:STAT_MAP[zi.status]||zi.status,
+        date:zi.date,
+        dueDate:zi.due_date,
+        total:zi.total||0,
+        balance:zi.balance||0,
+        items:(zi.line_items||[]).map(li=>({
+          name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total,
+        })),
+        source:"zoho",
+      }));
+      dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
+      dispatch("LOG",{msg:`Zoho Books sync — ${mapped.length} invoices loaded`});
+      toast(`${mapped.length} invoices synced from Zoho Books`,"success");
+    } catch(e){
+      toast(`Sync failed: ${e.message.slice(0,100)}`,"error");
+    }
+    setSyncing(false);
+  };
+
+  const list=pool.filter(i=>{
+    if(flt==="all") return true;
+    if(flt==="overdue") return i.status==="overdue";
+    if(flt==="unpaid") return ["sent","viewed","partial"].includes(i.status);
+    if(flt==="draft") return i.status==="draft";
+    if(flt==="paid") return i.status==="paid";
+    return true;
+  }).sort((a,b)=>{
+    const o={overdue:0,partial:1,viewed:2,sent:3,draft:4,paid:5,void:6};
+    return (o[a.status]??5)-(o[b.status]??5);
+  });
+
   const ar=pool.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const paid=pool.filter(i=>i.status==="paid").reduce((a,i)=>a+i.total,0);
+  const overdueTot=pool.filter(i=>i.status==="overdue").reduce((a,i)=>a+(i.balance||0),0);
+  const paidTot=pool.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
 
   const draftRem=async(inv,type)=>{
-    const k=inv.id+type;setDrafting(k);
-    const dOD=dAgo(inv.dueDate);
+    const k=inv.id+type; setDrafting(k);
+    const dOD=inv.dueDate?dAgo(inv.dueDate):0;
     const t=await aiCall(`Write a${type==="gentle"?" friendly":type==="firm"?" firm":" final"} invoice reminder from Matt Stone at ST1 Sports.
 Invoice ${inv.number} for ${fmt$(inv.balance)} to ${inv.customer}${type!=="gentle"?`, ${dOD} days overdue`:""}.
 Under 70 words. Sign: Matt Stone | ST1 Sports | matt@st1sports.com`);
-    setDrafts(d=>({...d,[k]:t||""}));setDrafting(null);
+    setDrafts(d=>({...d,[k]:t||""})); setDrafting(null);
   };
-  const markSent=inv=>{dispatch("UPDATE_INVOICE",{id:inv.id,status:"sent",crmSynced:true});dispatch("LOG",{msg:`Invoice ${inv.number} sent to ${inv.customer} — CRM tagged Customer`});toast(inv.customer+" tagged Customer in CRM","success");};
+
+  const lastSync=s.invoiceLastSync
+    ? new Date(s.invoiceLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
+    : null;
 
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="INVOICES & AR" sub="Track payments · send reminders · sync customers to CRM"/>
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:16}}>
-        <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.orange}/>
-        <KCard l="Overdue" v={fmt$(pool.filter(i=>i.status==="overdue").reduce((a,i)=>a+(i.balance||0),0))} c={B.red}/>
-        <KCard l="Collected" v={fmt$(paid)} c={B.green}/>
-      </div>
-      <div style={{display:"flex",gap:5,marginBottom:12}}>
-        {[["all","All"],["overdue","Overdue"],["unpaid","Unpaid"],["draft","Draft"],["paid","Paid"]].map(([v,l])=>(
-          <button key={v} onClick={()=>setFlt(v)} style={{background:flt===v?B.orange:B.white,color:flt===v?B.white:B.muted,border:`1px solid ${flt===v?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{l}</button>
-        ))}
-      </div>
-      {list.map(inv=>{const st=ISC[inv.status]||{c:B.muted,bg:B.surface};const isOD=inv.status==="overdue";const dOD=isOD?dAgo(inv.dueDate):0;const ex=sel===inv.id;return(
-        <div key={inv.id} className="card fu" style={{marginBottom:8,borderLeft:`3px solid ${st.c}`,padding:0,overflow:"hidden"}}>
-          <div style={{display:"flex",alignItems:"center",gap:11,padding:"9px 12px",cursor:"pointer",background:ex?B.surface:B.white}} onClick={()=>setSel(ex?null:inv.id)}>
-            <div style={{flex:1}}>
-              <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.customer}</span>
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:st.c,background:st.bg,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{inv.status?.toUpperCase()}{isOD?` · ${dOD}d`:""}</span>
-                {inv.crmSynced&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>CRM ✓</span>}
-                {!inv.crmSynced&&["sent","viewed","partial","paid"].includes(inv.status)&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,background:B.yellowBg,padding:"2px 5px",borderRadius:3}}>CRM SYNC</span>}
-              </div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.number} · Due {fmtD(inv.dueDate)}</div>
-            </div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$(inv.balance||inv.total)}</div>
+      <PH title="INVOICES & AR" sub="Live from Zoho Books — all balances and statuses are authoritative from Zoho"
+        action={
+          <div style={{display:"flex",alignItems:"center",gap:9}}>
+            {lastSync&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Synced {lastSync}</span>}
+            <OBtn onClick={syncFromZoho} disabled={syncing} style={{minWidth:160}}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
           </div>
-          {ex&&(
-            <div style={{borderTop:`1px solid ${B.border}`,padding:"11px 12px",background:B.surface}}>
-              <div style={{background:B.white,borderRadius:5,border:`1px solid ${B.border}`,marginBottom:9,overflow:"hidden"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                  <tbody>{(inv.items||[]).map((it,i)=>(
-                    <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2?B.surface:B.white}}>
-                      <td style={{padding:"5px 9px",fontWeight:500}}>{it.name}</td>
-                      <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{it.qty}</td>
-                      <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{fmt$(it.rate)}</td>
-                      <td style={{padding:"5px 9px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:9}}>
-                {inv.status==="draft"&&<OBtn sm onClick={()=>markSent(inv)}>✉ SEND + TAG CRM</OBtn>}
-                {(isOD||["sent","viewed"].includes(inv.status))&&<OBtn sm onClick={()=>draftRem(inv,"gentle")} disabled={drafting===inv.id+"gentle"}>{drafting===inv.id+"gentle"?"...":"✦ DRAFT REMINDER"}</OBtn>}
-                {isOD&&dOD>21&&<OBtn sm col={B.red} onClick={()=>draftRem(inv,dOD>35?"final":"firm")} disabled={!!drafting}>{dOD>35?"FINAL NOTICE":"2ND NOTICE"}</OBtn>}
-                {!inv.crmSynced&&["sent","viewed","partial","paid"].includes(inv.status)&&<OBtn sm col={B.purple} onClick={()=>{dispatch("UPDATE_INVOICE",{id:inv.id,crmSynced:true});dispatch("LOG",{msg:inv.customer+" tagged Customer in CRM"});toast("CRM updated","success");}}>TAG CRM</OBtn>}
-              </div>
-              {["gentle","firm","final"].map(type=>{const k=inv.id+type;if(!drafts[k])return null;const lc={gentle:B.orange,firm:B.yellow,final:B.red};return(
-                <div key={type} style={{background:B.white,borderRadius:4,padding:9,border:`1px solid ${B.border}`,marginBottom:6}}>
-                  <Lbl c={lc[type]} s={{marginBottom:6}}>{type==="gentle"?"REMINDER":type==="firm"?"2ND NOTICE":"FINAL NOTICE"}</Lbl>
-                  <textarea value={drafts[k]} onChange={e=>setDrafts(d=>({...d,[k]:e.target.value}))} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-                  <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[k])} style={{fontSize:10,padding:"3px 8px",marginTop:6}}>COPY</GBtn>
-                </div>
-              );})}
-            </div>
-          )}
+        }
+      />
+
+      {pool.length===0?(
+        <div style={{textAlign:"center",padding:"70px 0"}}>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.muted,marginBottom:8}}>No invoices synced yet</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:20}}>Connect Zoho Books and click Sync to pull your invoices</div>
+          <OBtn onClick={syncFromZoho} disabled={syncing}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
         </div>
-      );})}
+      ):(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:16}}>
+            <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.orange}/>
+            <KCard l="Overdue" v={fmt$(overdueTot)} c={B.red}/>
+            <KCard l="Paid (this pull)" v={fmt$(paidTot)} c={B.green}/>
+          </div>
+          <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
+            {[["all","All"],["overdue","Overdue"],["unpaid","Unpaid"],["draft","Draft"],["paid","Paid"]].map(([v,l])=>(
+              <button key={v} onClick={()=>setFlt(v)} style={{background:flt===v?B.orange:B.white,color:flt===v?B.white:B.muted,border:`1px solid ${flt===v?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{l}</button>
+            ))}
+          </div>
+          {list.map(inv=>{
+            const st=ISC[inv.status]||{c:B.muted,bg:B.surface};
+            const isOD=inv.status==="overdue";
+            const dOD=isOD&&inv.dueDate?dAgo(inv.dueDate):0;
+            const ex=sel===inv.id;
+            return(
+              <div key={inv.id} className="card fu" style={{marginBottom:8,borderLeft:`3px solid ${st.c}`,padding:0,overflow:"hidden"}}>
+                <div style={{display:"flex",alignItems:"center",gap:11,padding:"9px 12px",cursor:"pointer",background:ex?B.surface:B.white}} onClick={()=>setSel(ex?null:inv.id)}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.customer}</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:st.c,background:st.bg,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{(inv.status||"").toUpperCase()}{isOD&&dOD>0?` · ${dOD}d`:""}</span>
+                    </div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.number} · Due {fmtD(inv.dueDate)}</div>
+                  </div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$(inv.balance||inv.total)}</div>
+                </div>
+                {ex&&(
+                  <div style={{borderTop:`1px solid ${B.border}`,padding:"11px 12px",background:B.surface}}>
+                    {(inv.items||[]).length>0&&(
+                      <div style={{background:B.white,borderRadius:5,border:`1px solid ${B.border}`,marginBottom:9,overflow:"hidden"}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                          <tbody>{inv.items.map((it,i)=>(
+                            <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2?B.surface:B.white}}>
+                              <td style={{padding:"5px 9px",fontWeight:500}}>{it.name}</td>
+                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{it.qty}</td>
+                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{fmt$(it.rate)}</td>
+                              <td style={{padding:"5px 9px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</td>
+                            </tr>
+                          ))}</tbody>
+                        </table>
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:drafts[inv.id+"gentle"]||drafts[inv.id+"firm"]||drafts[inv.id+"final"]?9:0}}>
+                      {(isOD||["sent","viewed"].includes(inv.status))&&(
+                        <OBtn sm onClick={()=>draftRem(inv,"gentle")} disabled={!!drafting}>{drafting===inv.id+"gentle"?"...":"✦ DRAFT REMINDER"}</OBtn>
+                      )}
+                      {isOD&&dOD>21&&(
+                        <OBtn sm col={B.red} onClick={()=>draftRem(inv,dOD>35?"final":"firm")} disabled={!!drafting}>{dOD>35?"FINAL NOTICE":"2ND NOTICE"}</OBtn>
+                      )}
+                    </div>
+                    {["gentle","firm","final"].map(type=>{
+                      const k=inv.id+type; if(!drafts[k]) return null;
+                      const lc={gentle:B.orange,firm:B.yellow,final:B.red};
+                      return(
+                        <div key={type} style={{background:B.white,borderRadius:4,padding:9,border:`1px solid ${B.border}`,marginBottom:6}}>
+                          <Lbl c={lc[type]} s={{marginBottom:6}}>{type==="gentle"?"REMINDER":type==="firm"?"2ND NOTICE":"FINAL NOTICE"}</Lbl>
+                          <textarea value={drafts[k]} onChange={e=>setDrafts(d=>({...d,[k]:e.target.value}))} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
+                          <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[k])} style={{fontSize:10,padding:"3px 8px",marginTop:6}}>COPY</GBtn>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  REORDER
+//  REORDER — populated from Zoho Books paid invoices
 // ════════════════════════════════════════════════════════════════════════════
 function ModReorder() {
   const {s,dispatch,toast}=useApp();
   const [drafts,setDrafts]=useState({});
   const [drafting,setDrafting]=useState(null);
-  const active=s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()));
+  const [pulling,setPulling]=useState(false);
+  const [showAdd,setShowAdd]=useState(false);
+  const [form,setForm]=useState({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
+
+  const active=(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()));
+
   const draftReo=async(r)=>{
     setDrafting(r.id);
     const t=await aiCall(`Write a short seasonal reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
-School: ${r.school} | Contact: ${r.contact}, ${r.state} | Sport: ${r.sport}
-Last order: ${fmtD(r.lastOrderDate)} — ${r.lastItems?.join(", ")} — ${fmt$(r.lastOrderValue)}
+School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
+Last order: ${fmtD(r.lastOrderDate)} — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
 Under 80 words. Reference exact last order. Ask if they need to restock. Warm tone.`);
-    setDrafts(d=>({...d,[r.id]:t||""}));setDrafting(null);
+    setDrafts(d=>({...d,[r.id]:t||""})); setDrafting(null);
   };
+
+  // Pull paid invoices from Zoho Books → build reorder queue
+  // Window: last ordered 45–365 days ago, skip if already queued
+  const pullFromZoho=async()=>{
+    setPulling(true);
+    try {
+      const res=await zohoCall("books","/invoices?filter_by=Status.Paid&per_page=200&sort_column=date&sort_order=D");
+      const invoices=res.invoices||[];
+      if(!invoices.length&&res.message) throw new Error(res.message);
+
+      // Keep only most recent paid invoice per customer
+      const byCustomer={};
+      for(const inv of invoices){
+        const key=inv.customer_id||inv.customer_name;
+        if(!byCustomer[key]||new Date(inv.date)>new Date(byCustomer[key].date))
+          byCustomer[key]=inv;
+      }
+
+      const existingIds=new Set((s.reorders||[]).map(r=>r.zohoInvoiceId).filter(Boolean));
+      const now=Date.now();
+      let added=0;
+
+      for(const inv of Object.values(byCustomer)){
+        if(existingIds.has(inv.invoice_id)) continue;
+        const daysSince=Math.floor((now-new Date(inv.date).getTime())/86400000);
+        if(daysSince<45||daysSince>365) continue; // outside reorder window
+
+        dispatch("ADD_REORDER",{
+          id:"reorder_"+inv.invoice_id,
+          zohoInvoiceId:inv.invoice_id,
+          school:inv.customer_name,
+          contact:(inv.contact_persons||[])[0]?.contact_person_name||inv.customer_name,
+          state:"",
+          sport:inferSport(inv.line_items||[]),
+          lastOrderDate:inv.date,
+          lastItems:(inv.line_items||[]).slice(0,3).map(li=>li.name||li.item_name||"").filter(Boolean),
+          lastOrderValue:inv.total||0,
+          status:"pending",
+          source:"zoho",
+        });
+        added++;
+      }
+
+      dispatch("LOG",{msg:`Reorder sync from Zoho Books — ${added} new accounts queued`});
+      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window (45–365 days since last order)`,"success");
+    } catch(e){
+      toast(`Zoho sync failed: ${e.message.slice(0,100)}`,"error");
+    }
+    setPulling(false);
+  };
+
+  const addManual=()=>{
+    if(!form.school.trim()) return toast("School name required","error");
+    dispatch("ADD_REORDER",{
+      id:mkId(),
+      school:form.school,
+      contact:form.contact,
+      state:form.state,
+      sport:form.sport,
+      lastOrderDate:form.lastOrderDate,
+      lastItems:form.lastItems.split(",").map(x=>x.trim()).filter(Boolean),
+      lastOrderValue:parseFloat(form.lastOrderValue)||0,
+      status:"pending",
+      source:"manual",
+    });
+    setForm({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
+    setShowAdd(false);
+    toast("Added to reorder queue","success");
+  };
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="REORDER ENGINE" sub={active.length>0?`${active.length} account${active.length!==1?"s":""} ready for seasonal outreach`:"All accounts up to date"}/>
+      <PH title="REORDER ENGINE" sub={active.length>0?`${active.length} account${active.length!==1?"s":""} ready for seasonal outreach`:"All accounts up to date"}
+        action={
+          <div style={{display:"flex",gap:7}}>
+            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD MANUALLY"}</GBtn>
+            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
+          </div>
+        }
+      />
+
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:18}}>
         <KCard l="In Queue" v={active.length} c={B.orange}/>
-        <KCard l="Sent" v={s.reorders.filter(r=>r.status==="sent").length} c={B.green}/>
-        <KCard l="Snoozed" v={s.reorders.filter(r=>r.snoozedUntil&&new Date(r.snoozedUntil)>new Date()).length} c={B.muted}/>
+        <KCard l="Sent" v={(s.reorders||[]).filter(r=>r.status==="sent").length} c={B.green}/>
+        <KCard l="Snoozed" v={(s.reorders||[]).filter(r=>r.snoozedUntil&&new Date(r.snoozedUntil)>new Date()).length} c={B.muted}/>
       </div>
-      {active.length===0&&<div style={{textAlign:"center",padding:"40px 0"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No reorder outreach needed right now</div></div>}
+
+      {/* Manual add form */}
+      {showAdd&&(
+        <div className="card" style={{padding:14,marginBottom:16}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:12}}>ADD MANUALLY</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:9}}>
+            {[["School / Org *","school"],["Contact Name","contact"],["State","state"]].map(([l,k])=>(
+              <div key={k}>
+                <Lbl s={{marginBottom:3}}>{l}</Lbl>
+                <input value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:9,marginBottom:12}}>
+            <div>
+              <Lbl s={{marginBottom:3}}>Sport</Lbl>
+              <select value={form.sport} onChange={e=>setForm(f=>({...f,sport:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
+                {SPORTS_LIST.map(sp=><option key={sp}>{sp}</option>)}
+              </select>
+            </div>
+            <div>
+              <Lbl s={{marginBottom:3}}>Last Order Date</Lbl>
+              <input type="date" value={form.lastOrderDate} onChange={e=>setForm(f=>({...f,lastOrderDate:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+            </div>
+            <div>
+              <Lbl s={{marginBottom:3}}>Items (comma-sep)</Lbl>
+              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus..." style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+            </div>
+            <div>
+              <Lbl s={{marginBottom:3}}>Order Value</Lbl>
+              <input type="number" value={form.lastOrderValue} onChange={e=>setForm(f=>({...f,lastOrderValue:e.target.value}))} placeholder="0" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+            </div>
+          </div>
+          <OBtn onClick={addManual}>ADD TO QUEUE</OBtn>
+        </div>
+      )}
+
+      {active.length===0&&!showAdd&&(
+        <div style={{textAlign:"center",padding:"40px 0"}}>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Sync Zoho Books to populate from paid invoices (45–365 days old), or add accounts manually</div>
+        </div>
+      )}
+
       {active.map(r=>(
         <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${B.orange}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
             <div>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:2}}>{r.school}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.contact} · {r.state} · {r.sport}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Last order: {fmtD(r.lastOrderDate)} · {r.lastItems?.slice(0,2).join(", ")} · {fmt$(r.lastOrderValue)}</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                Last order: {fmtD(r.lastOrderDate)} · {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+              </div>
             </div>
             <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
               <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"...":"✦ DRAFT"}</OBtn>
@@ -1143,7 +1374,6 @@ function ModProspecting() {
   const [zohoPushed,  setZohoPushed]  = useState(0);
   const [zohoPulling, setZohoPulling] = useState(false);
   const [zohoPullResult, setZohoPullResult] = useState(null);
-  const [enrollingContact, setEnrollingContact] = useState(null); // contactId being enrolled
 
   // Import-list state
   const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
