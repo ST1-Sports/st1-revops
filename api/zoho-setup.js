@@ -18,13 +18,20 @@
  */
 
 const SCOPES = [
+  // Zoho Books — invoices, AR, payments
   "ZohoBooks.invoices.ALL",
   "ZohoBooks.contacts.ALL",
   "ZohoBooks.customerpayments.ALL",
+  // Zoho CRM — contacts, leads, deals
   "ZohoCRM.modules.Contacts.ALL",
   "ZohoCRM.modules.Leads.ALL",
   "ZohoCRM.modules.Deals.ALL",
   "ZohoCRM.users.READ",
+  // Zoho Campaigns — email list management, marketing automation
+  "ZohoCampaigns.campaign.ALL",
+  "ZohoCampaigns.contact.ALL",
+  // Zoho Social — post to Facebook, Instagram, LinkedIn, Twitter/X
+  "ZohoSocial.account.ALL",
 ].join(",");
 
 export default async function handler(req, res) {
@@ -140,7 +147,9 @@ export default async function handler(req, res) {
     <div style="margin-top:24px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
       <strong>Permissions being requested:</strong><br>
       Zoho Books: read/write invoices, contacts, payments<br>
-      Zoho CRM: read/write Contacts and Leads, read Users
+      Zoho CRM: read/write Contacts, Leads, and Deals<br>
+      Zoho Campaigns: manage mailing lists and subscribers<br>
+      Zoho Social: read accounts, publish posts to connected channels
     </div>
   `));
 }

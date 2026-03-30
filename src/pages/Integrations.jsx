@@ -105,6 +105,26 @@ export default function IntegrationsHub() {
   const [drafting, setDrafting] = useState(null);
   const [crmSyncResult, setCrmSyncResult] = useState(null); // { contacts, deals }
   const [crmPulling, setCrmPulling] = useState(null); // "contacts"|"deals"|null
+
+  // Zoho Campaigns
+  const [mailingLists, setMailingLists] = useState([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(false);
+  const [coldLeadListKey, setColdLeadListKey] = useState(() => { try { return localStorage.getItem("st1_cold_lead_listkey")||""; } catch { return ""; } });
+  const [coldLeadSyncing, setColdLeadSyncing] = useState(false);
+  const [coldLeadSyncResult, setColdLeadSyncResult] = useState(null);
+  const [zohoEmailCampaigns, setZohoEmailCampaigns] = useState([]);
+  const [campaignCreating, setCampaignCreating] = useState(false);
+  const [newListName, setNewListName] = useState("Cold Leads — Promo Offers");
+
+  // Zoho Social
+  const [socialPortals, setSocialPortals] = useState([]);
+  const [socialChannels, setSocialChannels] = useState([]);
+  const [selectedPortalId, setSelectedPortalId] = useState("");
+  const [socialLoading, setSocialLoading] = useState(false);
+  const [testPostMsg, setTestPostMsg] = useState("New athletic equipment now in stock at ST1 Sports! Check out our latest hurdles and track gear. 🏃‍♀️ Shop at st1sports.com");
+  const [testPostChannels, setTestPostChannels] = useState([]);
+  const [socialPosting, setSocialPosting] = useState(false);
+  const [socialPostResult, setSocialPostResult] = useState(null);
   const [gmailStatus, setGmailStatus] = useState(() => !!(loadStatus().gmail));
   const [emailMessages, setEmailMessages] = useState([]);
   const [emailOpps, setEmailOpps]   = useState([]);
@@ -172,6 +192,178 @@ export default function IntegrationsHub() {
       }
     }
     setTesting(null);
+  };
+
+  // ── ZOHO CAMPAIGNS HELPERS ──────────────────────────────────────────────────
+  const campaignsAPI = async (action, params={}) => {
+    const r = await fetch("/api/zoho-campaigns", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...params }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Campaigns API ${r.status}`);
+    return data;
+  };
+
+  const testCampaigns = async () => {
+    setTesting("campaigns"); addLog("Testing Zoho Campaigns connection...");
+    try {
+      const data = await campaignsAPI("list_lists");
+      setMailingLists(data.lists || []);
+      setStatus(s=>({...s, campaigns: true}));
+      addLog(`✓ Zoho Campaigns connected — ${data.total} mailing lists`, "success");
+    } catch(e) {
+      addLog(`Campaigns: ${e.message.slice(0,140)}`, "error");
+      setStatus(s=>({...s, campaigns: false}));
+    }
+    setTesting(null);
+  };
+
+  const loadMailingLists = async () => {
+    setCampaignsLoading(true);
+    try {
+      const data = await campaignsAPI("list_lists");
+      setMailingLists(data.lists || []);
+    } catch(e) { addLog(`Lists: ${e.message.slice(0,100)}`, "error"); }
+    setCampaignsLoading(false);
+  };
+
+  const loadEmailCampaigns = async () => {
+    try {
+      const data = await campaignsAPI("list_campaigns", { range: 20 });
+      setZohoEmailCampaigns(data.campaigns || []);
+    } catch(e) { addLog(`Email campaigns: ${e.message.slice(0,100)}`, "error"); }
+  };
+
+  const createColdLeadList = async () => {
+    if (!newListName.trim()) return;
+    setCampaignCreating(true);
+    try {
+      const data = await campaignsAPI("create_list", { listname: newListName.trim(), description: "Cold leads receiving ST1 Sports promotional offers and nurture emails" });
+      if (data.ok) {
+        addLog(`✓ Created list "${newListName}"`, "success");
+        await loadMailingLists();
+        if (data.listkey) {
+          setColdLeadListKey(data.listkey);
+          try { localStorage.setItem("st1_cold_lead_listkey", data.listkey); } catch {}
+        }
+      }
+    } catch(e) { addLog(`Create list: ${e.message.slice(0,100)}`, "error"); }
+    setCampaignCreating(false);
+  };
+
+  const syncColdLeadsNow = async () => {
+    if (!coldLeadListKey) { addLog("Select or create a Cold Leads list first", "warn"); return; }
+    setColdLeadSyncing(true);
+    setColdLeadSyncResult(null);
+    try {
+      // Read contacts from RevOps localStorage, filter cold ones
+      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
+      const contacts = Array.isArray(store.contacts) ? store.contacts : [];
+      const now = Date.now();
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      const coldContacts = contacts.filter(c => {
+        if (!c.email) return false;
+        const isColdScore = (c.score || 0) < 25;
+        const lastActivity = c.activity?.length
+          ? Math.max(...c.activity.map(a => new Date(a.ts || a.date || 0).getTime()))
+          : 0;
+        const isInactive = !lastActivity || (now - lastActivity) > THIRTY_DAYS;
+        return isColdScore && isInactive;
+      });
+
+      if (!coldContacts.length) {
+        setColdLeadSyncResult({ added: 0, total: 0, msg: "No cold leads found to sync" });
+        addLog("No cold leads to sync (all contacts have score ≥ 25 or recent activity)", "info");
+        setColdLeadSyncing(false);
+        return;
+      }
+
+      const data = await campaignsAPI("add_subscribers", {
+        listkey: coldLeadListKey,
+        contacts: coldContacts.map(c => ({
+          email:     c.email,
+          firstName: c.firstName || c.first_name || "",
+          lastName:  c.lastName  || c.last_name  || "",
+          company:   c.orgName   || c.school     || c.company || "",
+          phone:     c.phone     || "",
+        })),
+      });
+
+      const result = { added: data.added || coldContacts.length, total: coldContacts.length, msg: `${data.added} of ${coldContacts.length} synced` };
+      setColdLeadSyncResult(result);
+      addLog(`✓ ${result.msg} cold leads → Zoho Campaigns`, "success");
+    } catch(e) {
+      addLog(`Cold lead sync: ${e.message.slice(0,140)}`, "error");
+      setColdLeadSyncResult({ error: e.message });
+    }
+    setColdLeadSyncing(false);
+  };
+
+  // ── ZOHO SOCIAL HELPERS ─────────────────────────────────────────────────────
+  const socialAPI = async (action, params={}) => {
+    const r = await fetch("/api/zoho-social", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...params }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Social API ${r.status}`);
+    return data;
+  };
+
+  const testSocial = async () => {
+    setTesting("social"); addLog("Testing Zoho Social connection...");
+    try {
+      const data = await socialAPI("list_portals");
+      setSocialPortals(data.portals || []);
+      if (data.portals?.length) {
+        setSelectedPortalId(data.portals[0].id);
+        setStatus(s=>({...s, social: true}));
+        addLog(`✓ Zoho Social connected — ${data.portals.length} portal(s)`, "success");
+        // Load channels for first portal
+        const chData = await socialAPI("list_channels", { portalId: data.portals[0].id });
+        setSocialChannels(chData.channels || []);
+      } else {
+        addLog("Zoho Social connected but no portals found — add social accounts in Zoho Social first", "warn");
+        setStatus(s=>({...s, social: true}));
+      }
+    } catch(e) {
+      addLog(`Social: ${e.message.slice(0,140)}`, "error");
+      setStatus(s=>({...s, social: false}));
+    }
+    setTesting(null);
+  };
+
+  const loadSocialChannels = async (portalId) => {
+    setSocialLoading(true);
+    try {
+      const data = await socialAPI("list_channels", { portalId });
+      setSocialChannels(data.channels || []);
+    } catch(e) { addLog(`Social channels: ${e.message.slice(0,100)}`, "error"); }
+    setSocialLoading(false);
+  };
+
+  const postToSocial = async () => {
+    if (!selectedPortalId || !testPostChannels.length || !testPostMsg.trim()) {
+      addLog("Select portal, channels, and enter a message first", "warn"); return;
+    }
+    setSocialPosting(true);
+    setSocialPostResult(null);
+    try {
+      const data = await socialAPI("create_post", {
+        portalId: selectedPortalId,
+        channelIds: testPostChannels,
+        message: testPostMsg,
+      });
+      setSocialPostResult({ ok: true, postId: data.postId });
+      addLog(`✓ Posted to ${testPostChannels.length} channel(s) — post ID: ${data.postId || "n/a"}`, "success");
+    } catch(e) {
+      setSocialPostResult({ ok: false, error: e.message });
+      addLog(`Social post: ${e.message.slice(0,140)}`, "error");
+    }
+    setSocialPosting(false);
   };
 
   const testWoo = async () => {
@@ -566,17 +758,19 @@ Channel: ${slackChannelName}`);
           </div>
           <div>
             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>INTEGRATIONS HUB</div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SLACK · ZOHO · WOOCOMMERCE</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SLACK · ZOHO · CAMPAIGNS · SOCIAL · WOOCOMMERCE</div>
           </div>
         </div>
         {/* Live connection status */}
         <div style={{display:"flex",gap:18,alignItems:"center"}}>
           {[
-            ["Slack",       status.slack,  "#4A154B"],
-            ["Zoho Books",  status.books,  "#E42527"],
-            ["Zoho CRM",    status.crm,    "#E42527"],
-            ["Gmail",       gmailStatus,   "#EA4335"],
-            ["WooCommerce", status.woo,    "#7F54B3"],
+            ["Slack",       status.slack,       "#4A154B"],
+            ["Zoho Books",  status.books,       "#E42527"],
+            ["Zoho CRM",    status.crm,         "#E42527"],
+            ["Campaigns",   status.campaigns,   "#E42527"],
+            ["Social",      status.social,      "#E42527"],
+            ["Gmail",       gmailStatus,        "#EA4335"],
+            ["WooCommerce", status.woo,         "#7F54B3"],
           ].map(([l,ok,c])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
               <div style={{width:7,height:7,borderRadius:"50%",background:ok?B.green:B.muted}}/>
@@ -588,7 +782,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["email","Email Scanner"],["woo","WooCommerce"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["email","Email Scanner"],["woo","WooCommerce"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -935,6 +1129,326 @@ Channel: ${slackChannelName}`);
             </div>
           )}
 
+          {/* ── MARKETING ── */}
+          {tab==="marketing"&&(
+            <div className="fu">
+              <div style={{marginBottom:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>MARKETING AUTOMATION</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Zoho Campaigns for email · Zoho Social for publishing · Cold lead nurture automation</div>
+                <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
+              </div>
+
+              {/* ── COLD LEAD AUTOMATION ──────────────────────────────────── */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid ${B.blue}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>COLD LEAD NURTURE</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>
+                      Contacts with score &lt; 25 AND inactive &gt; 30 days are automatically identified and synced to Zoho Campaigns for promotional email nurturing.
+                    </div>
+                  </div>
+                  {(()=>{
+                    try {
+                      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
+                      const contacts = Array.isArray(store.contacts) ? store.contacts : [];
+                      const now = Date.now();
+                      const cold = contacts.filter(c => {
+                        if (!c.email) return false;
+                        const isColdScore = (c.score||0) < 25;
+                        const lastAct = c.activity?.length ? Math.max(...c.activity.map(a=>new Date(a.ts||a.date||0).getTime())) : 0;
+                        return isColdScore && (!lastAct || now-lastAct > 30*24*60*60*1000);
+                      });
+                      return cold.length > 0 ? (
+                        <div style={{background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:6,padding:"8px 14px",textAlign:"center",flexShrink:0}}>
+                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:24,color:B.blue}}>{cold.length}</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1}}>COLD LEADS</div>
+                        </div>
+                      ) : null;
+                    } catch { return null; }
+                  })()}
+                </div>
+
+                {/* List selector */}
+                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12,border:`1px solid ${B.border}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>TARGET MAILING LIST</div>
+                  {mailingLists.length > 0 ? (
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <select
+                        value={coldLeadListKey}
+                        onChange={e=>{setColdLeadListKey(e.target.value);try{localStorage.setItem("st1_cold_lead_listkey",e.target.value);}catch{}}}
+                        style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11}}
+                      >
+                        <option value="">— Select a list —</option>
+                        {mailingLists.map(l=>(
+                          <option key={l.listkey} value={l.listkey}>{l.listname} ({l.subscribers} subscribers)</option>
+                        ))}
+                      </select>
+                      <button onClick={loadMailingLists} disabled={campaignsLoading} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"7px 10px",fontSize:10,cursor:"pointer"}}>↻</button>
+                    </div>
+                  ) : (
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      <input
+                        value={newListName}
+                        onChange={e=>setNewListName(e.target.value)}
+                        style={{flex:1,minWidth:200,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}
+                      />
+                      <button onClick={createColdLeadList} disabled={campaignCreating||!status.campaigns} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>
+                        {campaignCreating?"CREATING...":"+ CREATE LIST"}
+                      </button>
+                      {status.campaigns && (
+                        <button onClick={loadMailingLists} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"7px 10px",fontSize:10,cursor:"pointer"}}>LOAD EXISTING</button>
+                      )}
+                    </div>
+                  )}
+                  {!status.campaigns && (
+                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow,background:B.yellowBg,padding:"6px 10px",borderRadius:4}}>
+                      ⚠ Connect Zoho Campaigns below first
+                    </div>
+                  )}
+                </div>
+
+                {/* What counts as cold */}
+                <div style={{background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,padding:"10px 12px",marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1.5,marginBottom:6}}>COLD LEAD CRITERIA</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {[
+                      ["Score < 25","No recent engagement — cold by our scoring algorithm"],
+                      ["No activity > 30 days","Last email/call/meeting was over 30 days ago"],
+                      ["Has email address","Required for email nurturing"],
+                    ].map(([label,desc])=>(
+                      <div key={label} style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                        <span style={{color:B.blue,fontSize:12,flexShrink:0}}>✓</span>
+                        <div>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{label}</span>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:6}}>{desc}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sync button + result */}
+                <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                  <button
+                    onClick={syncColdLeadsNow}
+                    disabled={coldLeadSyncing || !status.campaigns || !coldLeadListKey}
+                    style={{background:B.blue,color:B.white,border:"none",borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}
+                  >
+                    {coldLeadSyncing?"⟳ SYNCING...":"⟳ SYNC COLD LEADS NOW"}
+                  </button>
+                  {coldLeadSyncResult && !coldLeadSyncResult.error && (
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+                      ✓ {coldLeadSyncResult.msg}
+                    </div>
+                  )}
+                  {coldLeadSyncResult?.error && (
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                      ✗ {coldLeadSyncResult.error.slice(0,100)}
+                    </div>
+                  )}
+                </div>
+
+                {/* Nurture strategy tip */}
+                <div style={{marginTop:14,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:5}}>NURTURE STRATEGY — RECOMMENDED</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
+                    Once cold leads are in Zoho Campaigns, set up an <strong>Autoresponder</strong> series in Zoho Campaigns → Automation → Autoresponder:
+                  </div>
+                  <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:3}}>
+                    {[
+                      "Day 1 — Welcome + top products catalog",
+                      "Day 5 — Sport-specific spotlight (hurdles, starting blocks, etc.)",
+                      "Day 14 — Limited-time promo code or bundle offer",
+                      "Day 30 — Re-engagement: 'Still interested? Here's what's new'",
+                      "Day 60 — Final: 'Save 10% — we'd love to earn your business'",
+                    ].map((s,i)=>(
+                      <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,display:"flex",gap:6}}>
+                        <span style={{color:B.orange,flexShrink:0}}>→</span>{s}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── ZOHO CAMPAIGNS ──────────────────────────────────────────── */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #E42527`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>ZOHO CAMPAIGNS</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Email marketing, mailing lists, subscriber management</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {status.campaigns
+                      ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3}}>✓ CONNECTED</span>
+                      : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:3}}>NOT CONNECTED</span>}
+                    <button onClick={testCampaigns} disabled={testing==="campaigns"} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                      {testing==="campaigns"?"TESTING...":"TEST CONNECTION"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Scope reminder */}
+                {!status.campaigns && (
+                  <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                    <strong>Setup:</strong> Re-run <a href="/api/zoho-setup" style={{color:B.blue}}>/api/zoho-setup</a> to authorize the new <code>ZohoCampaigns.campaign.ALL</code> and <code>ZohoCampaigns.contact.ALL</code> scopes. Your existing token doesn't include them yet.
+                  </div>
+                )}
+
+                {/* Mailing lists */}
+                {status.campaigns && (
+                  <div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2}}>MAILING LISTS ({mailingLists.length})</div>
+                      <div style={{display:"flex",gap:6}}>
+                        <button onClick={loadMailingLists} disabled={campaignsLoading} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"4px 9px",fontSize:9,cursor:"pointer"}}>
+                          {campaignsLoading?"...":"↻ REFRESH"}
+                        </button>
+                        <button onClick={loadEmailCampaigns} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"4px 9px",fontSize:9,cursor:"pointer"}}>LOAD CAMPAIGNS</button>
+                      </div>
+                    </div>
+                    {mailingLists.length === 0 ? (
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 0"}}>No mailing lists yet. Create one above or click Refresh.</div>
+                    ) : (
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8,marginBottom:12}}>
+                        {mailingLists.map(l=>(
+                          <div key={l.listkey} style={{background:B.surface,border:`1px solid ${coldLeadListKey===l.listkey?B.orange:B.border}`,borderRadius:6,padding:"10px 12px"}}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:2}}>{l.listname}</div>
+                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{l.subscribers.toLocaleString()}</div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:6}}>SUBSCRIBERS</div>
+                            <button onClick={()=>{setColdLeadListKey(l.listkey);try{localStorage.setItem("st1_cold_lead_listkey",l.listkey);}catch{};}} style={{background:coldLeadListKey===l.listkey?B.orange:B.surface,color:coldLeadListKey===l.listkey?B.white:B.muted,border:`1px solid ${coldLeadListKey===l.listkey?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
+                              {coldLeadListKey===l.listkey?"✓ COLD LEAD LIST":"USE FOR COLD LEADS"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Email campaigns */}
+                    {zohoEmailCampaigns.length > 0 && (
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8,marginTop:12}}>RECENT EMAIL CAMPAIGNS</div>
+                        <div style={{overflowX:"auto"}}>
+                          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                            <thead>
+                              <tr style={{background:B.surface}}>
+                                {["Campaign","Status","Sent","Opens","Clicks"].map(h=>(
+                                  <th key={h} style={{padding:"6px 10px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,borderBottom:`2px solid ${B.border}`,fontWeight:400}}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {zohoEmailCampaigns.map(c=>(
+                                <tr key={c.campaignkey} style={{borderBottom:`1px solid ${B.border}`}}>
+                                  <td style={{padding:"7px 10px",fontFamily:"'Lexend',sans-serif",color:B.text,fontWeight:500}}>{c.campaignname}</td>
+                                  <td style={{padding:"7px 10px"}}><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c.status==="Sent"?B.green:B.yellow,background:c.status==="Sent"?B.greenBg:B.yellowBg,padding:"2px 6px",borderRadius:3}}>{c.status}</span></td>
+                                  <td style={{padding:"7px 10px",fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.text}}>{c.sent.toLocaleString()}</td>
+                                  <td style={{padding:"7px 10px",color:B.blue}}>{c.opens.toLocaleString()}</td>
+                                  <td style={{padding:"7px 10px",color:B.green}}>{c.clicks.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── ZOHO SOCIAL ─────────────────────────────────────────────── */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #E42527`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>ZOHO SOCIAL</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post ads and content directly to Facebook, Instagram, LinkedIn, Twitter/X</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {status.social
+                      ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3}}>✓ CONNECTED</span>
+                      : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:3}}>NOT CONNECTED</span>}
+                    <button onClick={testSocial} disabled={testing==="social"} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                      {testing==="social"?"TESTING...":"TEST CONNECTION"}
+                    </button>
+                  </div>
+                </div>
+
+                {!status.social && (
+                  <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                    <strong>Setup:</strong> Re-run <a href="/api/zoho-setup" style={{color:B.blue}}>/api/zoho-setup</a> to authorize <code>ZohoSocial.account.ALL</code>. Also make sure your Facebook, Instagram, LinkedIn, or Twitter accounts are connected in <a href="https://social.zoho.com" target="_blank" rel="noreferrer" style={{color:B.blue}}>Zoho Social</a>.
+                  </div>
+                )}
+
+                {status.social && (
+                  <div>
+                    {/* Portal selector */}
+                    {socialPortals.length > 1 && (
+                      <div style={{marginBottom:12}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>PORTAL</div>
+                        <div style={{display:"flex",gap:6}}>
+                          {socialPortals.map(p=>(
+                            <button key={p.id} onClick={()=>{setSelectedPortalId(p.id);loadSocialChannels(p.id);}} style={{background:selectedPortalId===p.id?B.orange:B.surface,color:selectedPortalId===p.id?B.white:B.text,border:`1px solid ${selectedPortalId===p.id?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p.name}</button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Connected channels */}
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>CONNECTED CHANNELS</div>
+                      {socialLoading ? (
+                        <div style={{color:B.muted,fontSize:11,fontFamily:"'Lexend',sans-serif"}}>Loading channels…</div>
+                      ) : socialChannels.length === 0 ? (
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No channels found. Connect social accounts in Zoho Social first.</div>
+                      ) : (
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                          {socialChannels.map(ch=>{
+                            const sel = testPostChannels.includes(ch.id);
+                            const networkColors = {Facebook:"#1877F2",Instagram:"#E1306C",Twitter:"#1DA1F2",LinkedIn:"#0A66C2",YouTube:"#FF0000"};
+                            const c = networkColors[ch.network] || B.muted;
+                            return (
+                              <button key={ch.id} onClick={()=>setTestPostChannels(s=>sel?s.filter(x=>x!==ch.id):[...s,ch.id])} style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"8px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:2,minWidth:80}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,color:c}}>{ch.network}</div>
+                                <div style={{fontSize:11}}>{ch.name}</div>
+                                {sel && <div style={{fontSize:9,color:c}}>✓ selected</div>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Post composer */}
+                    <div style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>POST COMPOSER</div>
+                      <textarea
+                        value={testPostMsg}
+                        onChange={e=>setTestPostMsg(e.target.value)}
+                        rows={3}
+                        style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:10}}
+                      />
+                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                        <button
+                          onClick={postToSocial}
+                          disabled={socialPosting||!testPostChannels.length||!testPostMsg.trim()}
+                          style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}
+                        >
+                          {socialPosting?"POSTING...":"POST TO SELECTED CHANNELS"}
+                        </button>
+                        {testPostChannels.length===0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Select channels above</span>}
+                        {socialPostResult?.ok && <span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✓ Posted! ID: {socialPostResult.postId||"n/a"}</span>}
+                        {socialPostResult?.error && <span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✗ {socialPostResult.error.slice(0,80)}</span>}
+                      </div>
+                      <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                        Tip: Go to the <strong>Ad Engine → Ad Creator</strong> tab to generate a polished ad image, then use "Post to Social" there to post the rendered ad directly.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+            </div>
+          )}
+
           {/* ── EMAIL SCANNER ── */}
           {tab==="email"&&(
             <div className="fu">
@@ -1190,10 +1704,12 @@ Channel: ${slackChannelName}`);
         <div style={{background:B.white,borderLeft:`1px solid ${B.border}`,padding:"16px",overflowY:"auto"}}>
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:10}}>LIVE STATUS</div>
           {[
-            {l:"Slack",       c:"#4A154B",desc:"MCP connected",         ok:status.slack},
-            {l:"Zoho Books",  c:B.red,    desc:"Invoice & AR data",      ok:status.books},
-            {l:"Zoho CRM",    c:B.red,    desc:"Contact sync",           ok:status.crm},
-            {l:"WooCommerce", c:"#7F54B3",desc:"Products & orders",      ok:status.woo},
+            {l:"Slack",        c:"#4A154B",desc:"MCP connected",          ok:status.slack},
+            {l:"Zoho Books",   c:B.red,   desc:"Invoice & AR data",       ok:status.books},
+            {l:"Zoho CRM",     c:B.red,   desc:"Contact sync",            ok:status.crm},
+            {l:"Campaigns",    c:B.red,   desc:"Email lists + automation", ok:status.campaigns},
+            {l:"Social",       c:B.red,   desc:"Facebook/Instagram/etc",  ok:status.social},
+            {l:"WooCommerce",  c:"#7F54B3",desc:"Products & orders",      ok:status.woo},
           ].map(k=>(
             <div key={k.l} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
