@@ -49,13 +49,21 @@ export default async function handler(req, res) {
   // Build post text — append link if provided and not already in caption
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
+  // Filter out base64 data URLs and relative paths — social platforms need public HTTPS URLs
+  const publicMediaUrls = (mediaUrls || []).filter(u =>
+    typeof u === "string" && u.startsWith("http") && !u.startsWith("data:")
+  );
+
   const body = {
     post: postText,
     platforms,
-    ...(mediaUrls?.length ? { mediaUrls } : {}),
+    ...(publicMediaUrls.length ? { mediaUrls: publicMediaUrls } : {}),
     ...(scheduleDate ? { scheduleDate } : {}),
     ...(isStory ? { isStory: true } : {}),
   };
+
+  // Tell the caller if we dropped any image URLs
+  const droppedImages = (mediaUrls || []).length - publicMediaUrls.length;
 
   try {
     const r = await fetch("https://app.ayrshare.com/api/post", {
@@ -67,8 +75,10 @@ export default async function handler(req, res) {
       body: JSON.stringify(body),
     });
     const data = await r.json();
-    // Ayrshare returns status:"success" on success
-    return res.status(r.ok ? 200 : r.status).json(data);
+    return res.status(r.ok ? 200 : r.status).json({
+      ...data,
+      ...(droppedImages > 0 ? { _warning: `${droppedImages} image(s) skipped — must be public HTTPS URLs. Use Ideogram AI or paste a public image URL instead of uploading from your device.` } : {}),
+    });
   } catch (e) {
     return res.status(500).json({ error: e.message });
   }

@@ -4854,7 +4854,7 @@ function ModAds() {
       if (isSuccess) {
         const failedNets = platformErrors.map(e=>e.network||e.platform).filter(Boolean);
         const okCount = socialPlatforms.length - failedNets.length;
-        setSocialResult({ ok:true, platformErrors, failedNets });
+        setSocialResult({ ok:true, platformErrors, failedNets, warning: data._warning });
         if (failedNets.length === 0) {
           toast(socialScheduleAt ? `Scheduled for ${new Date(socialScheduleAt).toLocaleString()}!` : `Posted to ${okCount} platform(s)!`, "success");
         } else {
@@ -5581,6 +5581,13 @@ function ModAds() {
                   {socialResult?.ok&&socialResult.failedNets?.length>0&&<span style={{color:B.yellow,fontFamily:"'Lexend',sans-serif",fontSize:10}}>⚠ Partial — failed: {socialResult.failedNets.join(", ")}</span>}
                   {socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:10}}>✗ {socialResult.error.slice(0,100)}</span>}
                 </div>
+
+                {/* Image URL warning */}
+                {socialResult?.warning&&(
+                  <div style={{marginTop:10,background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.6}}>
+                    ⚠ <strong>Image not attached:</strong> {socialResult.warning}
+                  </div>
+                )}
 
                 {/* No API key warning */}
                 {socialResult?.error?.includes("AYRSHARE_API_KEY")&&(
