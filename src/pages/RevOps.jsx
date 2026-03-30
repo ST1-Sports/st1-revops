@@ -3777,6 +3777,90 @@ function ModMarketing() {
   const [editingTouchIdx,setEditingTouchIdx] = useState(null); // index in activeSeq.touches
   const [touchDraft,setTouchDraft] = useState({subject:"",body:""});
   const [previewModal,setPreviewModal] = useState(null); // {contact,touch}
+  const [sending, setSending] = useState(false);
+  const [checkingReplies, setCheckingReplies] = useState(false);
+
+  // ── Actual Gmail send for one enrollment ─────────────────────────────────────
+  const sendOneEmail = async (seq, enroll) => {
+    const c = contactMap[enroll.contactId];
+    if (!c?.email) return {ok:false,reason:"no email"};
+    const touch = seq.touches[enroll.step];
+    if (!touch) return {ok:false,reason:"no touch"};
+    const co = s.company||{};
+    const sig = co.name ? `\n\n—\n${co.ownerName||co.name}\n${co.email||""}\n${co.phone||""}`.trim() : "";
+    const subject = mergeTags(touch.subject,c) || `Following up — ${seq.product}`;
+    const body    = mergeTags(touch.body,c) + sig;
+    try {
+      const r = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body})});
+      const d = await r.json();
+      return d.sent ? {ok:true} : {ok:false,reason:d.error||"send failed"};
+    } catch(err){ return {ok:false,reason:err.message}; }
+  };
+
+  // ── Send all due emails for one campaign ─────────────────────────────────────
+  const sendDueEmails = async (seqId) => {
+    const seq=(s.sequences||[]).find(seq=>seq.id===seqId);
+    if(!seq)return;
+    const todayStr=today();
+    const due=(seq.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr);
+    if(!due.length){toast("No emails due today","info");return;}
+    setSending(true);
+    let sent=0,failed=0;
+    for(const enroll of due){
+      const res=await sendOneEmail(seq,enroll);
+      if(res.ok){markContacted(seqId,enroll.contactId);sent++;}
+      else failed++;
+    }
+    setSending(false);
+    toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
+  };
+
+  // ── Send due emails across ALL active campaigns ───────────────────────────────
+  const sendAllDue = async () => {
+    const todayStr=today();
+    const seqs=(s.sequences||[]).filter(seq=>seq.status==="active");
+    let totalSent=0,totalFailed=0;
+    setSending(true);
+    for(const seq of seqs){
+      const due=(seq.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr);
+      for(const enroll of due){
+        const res=await sendOneEmail(seq,enroll);
+        if(res.ok){markContacted(seq.id,enroll.contactId);totalSent++;}
+        else totalFailed++;
+      }
+    }
+    setSending(false);
+    if(totalSent+totalFailed===0){toast("No emails due today","info");return;}
+    toast(`Sent ${totalSent} email${totalSent!==1?"s":""}${totalFailed?`, ${totalFailed} failed`:""}`,totalSent>0?"success":"error");
+  };
+
+  // ── Check Gmail for replies from enrolled contacts ────────────────────────────
+  const checkReplies = async (seqId) => {
+    const seq=(s.sequences||[]).find(seq=>seq.id===seqId);
+    if(!seq)return;
+    const activeEnrolls=(seq.enrollments||[]).filter(e=>e.status==="active");
+    const activeEmails=activeEnrolls.map(e=>contactMap[e.contactId]?.email).filter(Boolean);
+    if(!activeEmails.length){toast("No active enrollments with email","info");return;}
+    setCheckingReplies(true);
+    try{
+      const query=activeEmails.slice(0,15).map(e=>`from:${e}`).join(" OR ");
+      const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"list",query,maxResults:50})});
+      const data=await r.json();
+      const repliedEmailSet=new Set((data.messages||[]).map(m=>{
+        const match=m.from?.match(/<([^>]+)>/)||m.from?.match(/([^\s]+@[^\s]+)/);
+        return match?.[1]?.toLowerCase();
+      }).filter(Boolean));
+      let found=0;
+      activeEnrolls.forEach(e=>{
+        const c=contactMap[e.contactId];
+        if(c?.email&&repliedEmailSet.has(c.email.toLowerCase())){markReplied(seqId,e.contactId);found++;}
+      });
+      toast(found>0?`Found ${found} repl${found!==1?"ies":"y"}!`:"No new replies detected",found>0?"success":"info");
+    }catch(err){toast("Reply check failed: "+err.message,"error");}
+    setCheckingReplies(false);
+  };
 
   const openTouchEdit=(idx)=>{
     const t=activeSeq?.touches?.[idx];
@@ -3826,7 +3910,16 @@ function ModMarketing() {
         <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
           {/* Left: sequence list */}
           <div>
-            <OBtn sm onClick={startNewCampaign} style={{width:"100%",marginBottom:12}}>+ NEW CAMPAIGN</OBtn>
+            <OBtn sm onClick={startNewCampaign} style={{width:"100%",marginBottom:8}}>+ NEW CAMPAIGN</OBtn>
+            {(()=>{
+              const todayStr=today();
+              const totalDue=(s.sequences||[]).filter(seq=>seq.status==="active").reduce((n,seq)=>n+(seq.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length,0);
+              return totalDue>0?(
+                <button onClick={sendAllDue} disabled={sending} style={{width:"100%",marginBottom:12,background:B.green,color:B.white,border:"none",borderRadius:5,padding:"8px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+                  {sending?"SENDING...":"▶ SEND ALL DUE ("+totalDue+")"}
+                </button>
+              ):<div style={{marginBottom:12}}/>;
+            })()}
             {(s.sequences||[]).length===0&&!building&&(
               <div className="card" style={{padding:20,textAlign:"center"}}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No campaigns yet</div>
@@ -3951,6 +4044,22 @@ function ModMarketing() {
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
                       </div>
                     ))}
+                    {(()=>{
+                      const todayStr=today();
+                      const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
+                      return(
+                        <>
+                          <button onClick={()=>sendDueEmails(activeSeq.id)} disabled={sending||dueN===0}
+                            style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
+                            {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
+                          </button>
+                          <button onClick={()=>checkReplies(activeSeq.id)} disabled={checkingReplies}
+                            style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                            {checkingReplies?"CHECKING...":"↻ CHECK REPLIES"}
+                          </button>
+                        </>
+                      );
+                    })()}
                   </div>
                 );
               })()}
