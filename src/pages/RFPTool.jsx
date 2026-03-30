@@ -853,6 +853,36 @@ ${ST1}
                 </div>
               )}
 
+              {/* Compliance flags */}
+              {complianceFlags.length>0&&(
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>COMPLIANCE FLAGS ({complianceFlags.length})</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {complianceFlags.map((f,i)=>{
+                      const col = f.severity==="blocker"?B.red:f.severity==="warning"?B.yellow:B.blue;
+                      const bg  = f.severity==="blocker"?B.redBg:f.severity==="warning"?B.yellowBg:B.blueBg;
+                      return(
+                        <div key={i} style={{padding:"10px 14px",borderRadius:6,background:bg,borderLeft:`4px solid ${col}`,border:`1px solid ${col}40`,borderLeftWidth:4}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                            <div style={{flex:1}}>
+                              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3}}>
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,letterSpacing:1}}>
+                                  {f.severity==="blocker"?"🚫 BLOCKER":f.severity==="warning"?"⚠ WARNING":"ℹ INFO"} · {(f.type||"").replace(/_/g," ").toUpperCase()}
+                                </span>
+                              </div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:2}}>{f.title}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:3}}>{f.requirement}</div>
+                              {f.exactLanguage&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginBottom:3}}>"{f.exactLanguage.slice(0,200)}"</div>}
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:col,fontWeight:500}}>→ {f.action}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* RFP summary */}
               <div className="card" style={{marginBottom:14,borderTop:`3px solid ${B.orange}`}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
