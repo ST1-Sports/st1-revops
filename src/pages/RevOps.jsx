@@ -271,6 +271,13 @@ function reducer(prev, action, payload) {
   }
 }
 
+// ─── SHARED HELPERS ───────────────────────────────────────────────────────────
+const mergeTags=(text,c)=>(text||"")
+  .replace(/\{\{firstName\}\}/gi,c?.firstName||(c?.fullName||"").split(" ")[0]||"there")
+  .replace(/\{\{orgName\}\}/gi,(typeof c?.school==="string"?c.school:c?.school?.name)||"your school")
+  .replace(/\{\{lastName\}\}/gi,c?.lastName||"")
+  .replace(/\{\{sport\}\}/gi,(typeof c?.sport==="string"?c.sport:c?.sport?.name)||"athletics");
+
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
 const RFP_STAGES  = ["New", "In Process", "Bid", "No Bid"];
@@ -626,17 +633,19 @@ function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{backgr
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 
 function ModBriefing() {
-  const {s,dispatch,cu,setMod}=useApp();
+  const {s,dispatch,cu,setMod,toast}=useApp();
   const [advice,setAdvice]=useState("");
   const [loadAdv,setLoadAdv]=useState(false);
   const [addingOrder,setAddingOrder]=useState(false);
   const [oForm,setOForm]=useState({name:"",contact:"",school:"",value:"",invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:"",dealId:"",source:"manual"});
+  const [sending,setSending]=useState(false);
 
   const isOwner=cu?.role==="owner";
   const myDeals=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
   const myInv  =isOwner?s.invoices:s.invoices.filter(i=>i.assignee===cu?.id);
   const myRfps =isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
   const orders =s.orders||[];
+  const cMap   =Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
 
   const overdueDeals=myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0);
   const dueDeals    =myDeals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)>=0&&dUntil(d.followUpDate)<=1);
@@ -645,6 +654,71 @@ function ModBriefing() {
   const pos         =myDeals.filter(d=>d.stage==="PO Received");
   const pipeline    =myDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
   const ar          =myInv.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+
+  // Campaign stats
+  const todayStr2=today();
+  const seqs=s.sequences||[];
+  const activeSeqs=seqs.filter(seq=>seq.status==="active");
+  const emailsDueToday=activeSeqs.reduce((n,seq)=>n+(seq.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr2)<=todayStr2).length,0);
+
+  // Send due emails across all campaigns (from dashboard)
+  const dashSendAll=async()=>{
+    const co=s.company||{};
+    const sigParts=[co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
+    const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
+    setSending(true);
+    let sent=0,failed=0;
+    for(const seq of activeSeqs){
+      const due=(seq.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr2)<=todayStr2);
+      for(const enroll of due){
+        const c=cMap[enroll.contactId];
+        if(!c?.email){failed++;continue;}
+        const touch=seq.touches[enroll.step];
+        if(!touch){failed++;continue;}
+        const subject=mergeTags(touch.subject,c)||`Following up — ${seq.product}`;
+        const plain=mergeTags(touch.body,c)+sigText;
+        const eid=`${seq.id}~${enroll.contactId}~${enroll.step}`;
+        const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;
+        const esc=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+        const htmlLines=plain.split("\n").map(l=>l.trim()?`<p style="margin:0 0 10px 0">${esc(l)}</p>`:"<br>").join("");
+        const htmlBody=`<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}<img src="${trackUrl}" width="1" height="1" style="display:none" alt=""></body></html>`;
+        try{
+          const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body:plain,htmlBody})});
+          const d=await r.json();
+          if(d.sent){
+            const nextStep=enroll.step+1;
+            const done=nextStep>=seq.touches.length;
+            const nextTouch=seq.touches[nextStep];
+            const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+            dispatch("UPDATE_SEQUENCE",{...seq,enrollments:seq.enrollments.map(e=>
+              e.contactId===enroll.contactId?{...e,step:nextStep,status:done?"done":"active",nextDate:nextDate||e.nextDate,lastContacted:todayStr2}:e
+            )});
+            dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:seq.id,note:"Touch sent"});
+            sent++;
+          } else failed++;
+        }catch{failed++;}
+      }
+    }
+    setSending(false);
+    if(sent+failed===0){toast("No emails due today","info");return;}
+    toast(`Sent ${sent} email${sent!==1?"s":""}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
+  };
+
+  // Build recent outreach activity from enrollment data
+  const recentActivity=(()=>{
+    const items=[];
+    seqs.forEach(seq=>{
+      (seq.enrollments||[]).forEach(e=>{
+        const c=cMap[e.contactId];
+        const name=c?(c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||c.email):"Unknown";
+        if(e.status==="replied") items.push({date:e.lastContacted||e.enrolledAt||"",type:"replied",name,seq:seq.name,color:B.green,icon:"↩"});
+        if(e.openedAt) items.push({date:e.openedAt.slice?.(0,10)||"",type:"opened",name,seq:seq.name,color:B.teal,icon:"👁"});
+        if(e.lastContacted&&e.step>0) items.push({date:e.lastContacted,type:"sent",name,seq:seq.name,color:B.purple,icon:"✉",step:e.step});
+      });
+    });
+    return items.filter(i=>i.date).sort((a,b)=>b.date.localeCompare(a.date)).slice(0,18);
+  })();
   const inFlightOrders=orders.filter(o=>o.stage!=="Invoiced");
   const hotLeads=[...(s.contacts||[])].filter(c=>(c.score||0)>=60).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
 
@@ -730,11 +804,12 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
       </div>
 
       {/* KPI row */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
         <KCard l="Open Pipeline"  v={fmt$(pipeline)} c={B.orange} onClick={()=>setMod("deals")}/>
         <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.red} onClick={()=>setMod("invoicing")}/>
         <KCard l="Orders In Flight" v={inFlightOrders.length} c={B.blue}/>
         <KCard l="Hot Leads" v={hotLeads.length} c={B.green} onClick={()=>setMod("prospecting")}/>
+        <KCard l="Emails Due Today" v={emailsDueToday} c={emailsDueToday>0?B.green:B.muted} sub={emailsDueToday>0?"click Send All ↓":undefined} onClick={emailsDueToday>0?dashSendAll:undefined}/>
         <KCard l="Actions Needed" v={overdueDeals.length+overdueInv.length+rfpsDue.length} c={overdueDeals.length>0?B.red:B.yellow}/>
       </div>
 
@@ -822,6 +897,95 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
         {orders.length===0&&!addingOrder&&(
           <div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
             No orders yet · Create manually, or click "Import POs" when deals reach PO Received stage
+          </div>
+        )}
+      </div>
+
+      {/* ── CAMPAIGN ACTIVITY ──────────────────────────────────────────────── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:18}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>OUTREACH & CAMPAIGN ACTIVITY</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+              {seqs.length} campaign{seqs.length!==1?"s":""} · {seqs.reduce((n,s)=>n+(s.enrollments||[]).length,0)} enrolled · {seqs.reduce((n,s)=>n+(s.enrollments||[]).filter(e=>e.status==="active").length,0)} active
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {emailsDueToday>0&&(
+              <button onClick={dashSendAll} disabled={sending} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+                {sending?"SENDING...":"▶ SEND ALL DUE ("+emailsDueToday+")"}
+              </button>
+            )}
+            <button onClick={()=>setMod("marketing")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>MANAGE CAMPAIGNS →</button>
+          </div>
+        </div>
+
+        {seqs.length===0?(
+          <div style={{textAlign:"center",padding:"20px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+            No campaigns yet — <button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",padding:0}}>create one in Campaigns →</button>
+          </div>
+        ):(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            {/* Campaign table */}
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr auto auto auto auto auto auto",gap:"4px 10px",alignItems:"center",marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${B.border}`}}>
+                {["CAMPAIGN","ENRL","SENT","OPEN","REPL","DONE","DUE"].map(h=>(
+                  <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>
+                ))}
+              </div>
+              {seqs.map(seq=>{
+                const enrs=seq.enrollments||[];
+                const sentN=enrs.reduce((n,e)=>n+(e.step||0),0);
+                const openN=enrs.filter(e=>e.openedAt).length;
+                const replN=enrs.filter(e=>e.status==="replied").length;
+                const doneN=enrs.filter(e=>e.status==="done").length;
+                const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr2)<=todayStr2).length;
+                const openPct=enrs.length>0?Math.round(openN/enrs.length*100):0;
+                const replPct=enrs.length>0?Math.round(replN/enrs.length*100):0;
+                return(
+                  <div key={seq.id} style={{display:"grid",gridTemplateColumns:"1fr auto auto auto auto auto auto",gap:"4px 10px",alignItems:"center",marginBottom:8,paddingBottom:8,borderBottom:`1px solid ${B.border}`}}>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:180}}>{seq.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{seq.product} · {seq.touches?.length||0} touches</div>
+                      <div style={{display:"flex",gap:4,marginTop:3}}>
+                        <div style={{height:3,width:Math.round(openPct*0.7),background:B.teal,borderRadius:2,minWidth:2}}/>
+                        <div style={{height:3,width:Math.round(replPct*0.7),background:B.green,borderRadius:2,minWidth:0}}/>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{openPct}% open · {replPct}% reply</div>
+                      </div>
+                    </div>
+                    {[enrs.length,sentN,openN,replN,doneN].map((v,i)=>(
+                      <div key={i} style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:[B.blue,B.purple,B.teal,B.green,B.muted][i],textAlign:"center"}}>{v}</div>
+                    ))}
+                    <div style={{textAlign:"center"}}>
+                      {dueN>0?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:B.green,padding:"2px 6px",borderRadius:3,whiteSpace:"nowrap"}}>▶ {dueN}</span>:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>—</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Recent outreach activity feed */}
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>RECENT ACTIVITY</div>
+              {recentActivity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Activity appears after you send emails</div>}
+              <div style={{maxHeight:260,overflowY:"auto"}}>
+                {recentActivity.map((item,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:7,paddingBottom:7,borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{width:20,height:20,borderRadius:"50%",background:`${item.color}18`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:10,marginTop:1}}>{item.icon}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:item.color}}>
+                        {item.type==="sent"?`emailed (touch ${item.step})`:item.type==="opened"?"opened email":item.type==="replied"?"replied ←":""}
+                        <span style={{color:B.muted}}> · {item.seq}</span>
+                      </div>
+                    </div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0,whiteSpace:"nowrap"}}>
+                      {item.date===todayStr2?"today":item.date===new Date(Date.now()-86400000).toISOString().slice(0,10)?"yesterday":item.date}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -921,29 +1085,51 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
             </div>
           )}
 
-          {/* Campaign pulse */}
-          {(s.sequences||[]).length>0&&(
+          {/* Campaign pulse — richer */}
+          {seqs.length>0&&(
             <div className="card" style={{padding:14,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <Lbl>CAMPAIGN PULSE</Lbl>
+                <Lbl>✦ CAMPAIGN PULSE</Lbl>
                 <button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:B.orange,fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>MANAGE →</button>
               </div>
-              {(s.sequences||[]).slice(0,4).map(seq=>{
-                const active=seq.enrollments.filter(e=>e.status==="active").length;
-                const replied=seq.enrollments.filter(e=>e.status==="replied").length;
-                const pct=seq.enrollments.length>0?Math.round((replied/seq.enrollments.length)*100):0;
+              {/* Aggregate funnel */}
+              {(()=>{
+                const totEnr=seqs.reduce((n,s)=>n+(s.enrollments||[]).length,0);
+                const totSent=seqs.reduce((n,s)=>n+(s.enrollments||[]).reduce((m,e)=>m+(e.step||0),0),0);
+                const totOpen=seqs.reduce((n,s)=>n+(s.enrollments||[]).filter(e=>e.openedAt).length,0);
+                const totRepl=seqs.reduce((n,s)=>n+(s.enrollments||[]).filter(e=>e.status==="replied").length,0);
+                return totEnr>0?(
+                  <div style={{display:"flex",gap:6,marginBottom:12,justifyContent:"space-between"}}>
+                    {[["Enrolled",totEnr,B.blue],["Sent",totSent,B.purple],["Opened",totOpen,B.teal],["Replied",totRepl,B.green]].map(([l,v,c])=>(
+                      <div key={l} style={{textAlign:"center"}}>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:c}}>{v}</div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{l}</div>
+                      </div>
+                    ))}
+                  </div>
+                ):null;
+              })()}
+              {seqs.slice(0,5).map(seq=>{
+                const enrs=seq.enrollments||[];
+                const openN=enrs.filter(e=>e.openedAt).length;
+                const replN=enrs.filter(e=>e.status==="replied").length;
+                const activeN=enrs.filter(e=>e.status==="active").length;
+                const openPct=enrs.length>0?Math.round(openN/enrs.length*100):0;
+                const replPct=enrs.length>0?Math.round(replN/enrs.length*100):0;
                 return(
                   <div key={seq.id} style={{marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${B.border}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{seq.name}</div>
-                      <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:replied>0?B.green:B.muted}}>{pct}%</span>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:160}}>{seq.name}</div>
+                      <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:replN>0?B.green:B.muted}}>{replPct}%</span>
                     </div>
-                    <div style={{height:4,background:B.border,borderRadius:2,marginBottom:4}}>
-                      <div style={{height:"100%",width:`${pct}%`,background:B.green,borderRadius:2,transition:"width .4s"}}/>
+                    <div style={{position:"relative",height:5,background:B.border,borderRadius:3,marginBottom:5,overflow:"hidden"}}>
+                      <div style={{position:"absolute",left:0,top:0,height:"100%",width:`${openPct}%`,background:B.teal,borderRadius:3}}/>
+                      <div style={{position:"absolute",left:0,top:0,height:"100%",width:`${replPct}%`,background:B.green,borderRadius:3}}/>
                     </div>
-                    <div style={{display:"flex",gap:8}}>
-                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue}}>{active} active</span>
-                      {replied>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>{replied} replied</span>}
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,letterSpacing:.3}}>{activeN} active</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.teal,letterSpacing:.3}}>{openPct}% open</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,letterSpacing:.3}}>{replPct}% reply</span>
                     </div>
                   </div>
                 );
@@ -3912,12 +4098,6 @@ function ModMarketing() {
     setEditingTouchIdx(null);
     toast("Email updated","success");
   };
-  const mergeTags=(text,c)=>(text||"")
-    .replace(/\{\{firstName\}\}/gi,c?.firstName||(c?.fullName||"").split(" ")[0]||"there")
-    .replace(/\{\{orgName\}\}/gi,(typeof c?.school==="string"?c.school:c?.school?.name)||"your school")
-    .replace(/\{\{lastName\}\}/gi,c?.lastName||"")
-    .replace(/\{\{sport\}\}/gi,(typeof c?.sport==="string"?c.sport:c?.sport?.name)||"athletics");
-
   const activeSeq=selSeq?(s.sequences||[]).find(s=>s.id===selSeq):null;
   const contactMap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
 
