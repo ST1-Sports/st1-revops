@@ -2283,6 +2283,7 @@ function ModProspecting() {
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
   const importFileRef=useRef();
+  const apolloFileRef=useRef();
 
   // Load persisted task state on mount
   const savedTask = bgTasks.getTask(SCRAPE_TASK_ID);
@@ -2303,7 +2304,9 @@ function ModProspecting() {
   const [importSel,setImportSel]     = useState(new Set());
   const [enrollingContact,setEnrollingContact] = useState(null);
   const [flaggingContact,setFlaggingContact] = useState(null);
-  const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"
+  const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
+  const [bulkSel,setBulkSel] = useState(new Set()); // selected contact IDs
+  const [bulkEnrolling,setBulkEnrolling] = useState(false);
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -2630,6 +2633,54 @@ function ModProspecting() {
     }
   };
 
+  const handleApolloUpload=async(e)=>{
+    const file=e.target.files[0];
+    if(!file)return;
+    e.target.value="";
+    setImportPhase("parsing");setImportRows([]);
+    try {
+      const buf=await toBuffer(file);
+      const wb=XLSX.read(buf,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const csvText=XLSX.utils.sheet_to_csv(ws);
+      const lines=csvText.split("\n").filter(l=>l.trim()).slice(0,201);
+      if(lines.length<2){toast("File appears empty","error");setImportPhase("idle");return;}
+      const result=await aiCall(
+        `Apollo.io export CSV. Map Apollo columns to contact records.\n\nCSV:\n${lines.join("\n")}\n\n`+
+        `Apollo column mapping: "First Name"→firstName, "Last Name"→lastName, "Title"→title, "Company"→school, `+
+        `"Email"→email, "LinkedIn URL"→linkedIn, "City"→city, "State"→state, "# Employees"→(ignore for now). `+
+        `For each row also infer: fullName (First+Last), `+
+        `orgType (school|club|district|company — use "company" if not clearly educational), `+
+        `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title/company), `+
+        `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
+        `tags (array of relevant tags), outreachWindow (best 2-month window for purchasing decisions based on sport). `+
+        `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"company","sport":"","priority":"medium","tags":[],"outreachWindow":"","linkedIn":"","source":"apollo"}]. `+
+        `Skip blank rows and header rows. Use empty string for unknown fields.`,
+        {json:true,tokens:4000}
+      );
+      if(Array.isArray(result)&&result.length>0){
+        const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
+          ...c,
+          id:mkId(),
+          source:"apollo",
+          confidence:"high",
+          outreachStatus:"new",
+          importedAt:Date.now(),
+        }));
+        setImportRows(mapped);
+        setImportSel(new Set(mapped.map(c=>c.id)));
+        setImportPhase("preview");
+        toast(`${mapped.length} Apollo contacts mapped — review below`,"success");
+      } else {
+        toast("Could not extract contacts from Apollo file","error");
+        setImportPhase("idle");
+      }
+    } catch(err) {
+      toast(`Apollo import error: ${err.message}`,"error");
+      setImportPhase("idle");
+    }
+  };
+
   const commitListImport=async(pushZoho=false)=>{
     const selected=importRows.filter(c=>importSel.has(c.id));
     const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
@@ -2742,8 +2793,8 @@ function ModProspecting() {
 
       {view==="import"&&(
         <div>
-          {/* Source row: Zoho pull + CSV upload */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+          {/* Source row: Zoho pull + CSV upload + Apollo */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
             {/* Zoho pull card */}
             <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.purple}`}}>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:2,marginBottom:8}}>PULL FROM ZOHO CRM</div>
@@ -2779,6 +2830,19 @@ function ModProspecting() {
                   {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD CSV / EXCEL"}
                 </OBtn>
                 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} in database</span>
+              </div>
+            </div>
+            {/* Apollo.io import card */}
+            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.teal}`}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:2,marginBottom:8}}>APOLLO.IO IMPORT</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
+                Upload an Apollo.io CSV export. AI maps: First Name, Last Name, Title, Company, Email, LinkedIn URL, City, State into your contact database.
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
+                <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()} disabled={importPhase==="parsing"}>
+                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD APOLLO CSV"}
+                </OBtn>
               </div>
             </div>
           </div>
@@ -2840,11 +2904,46 @@ function ModProspecting() {
 
           {/* Contact database */}
           <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>YOUR CONTACT DATABASE ({(s.contacts||[]).length})</div>
-              <div style={{display:"flex",gap:4}}>
-                {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"],["dead","⊘ DEAD"]].map(([v,l])=>(
-                  <button key={v} onClick={()=>setDbFilter(v)} style={{background:dbFilter===v?(v==="dead"?B.red:B.blue):B.white,color:dbFilter===v?B.white:v==="dead"?B.red:B.muted,border:`1px solid ${dbFilter===v?(v==="dead"?B.red:B.blue):v==="dead"?`${B.red}40`:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>CONTACT DATABASE ({(s.contacts||[]).length})</div>
+                {bulkSel.size>0&&(
+                  <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>{bulkSel.size} SELECTED</span>
+                    <div style={{position:"relative"}}>
+                      <button onClick={()=>setBulkEnrolling(v=>!v)} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"3px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>+ BULK ENROLL ▾</button>
+                      {bulkEnrolling&&(
+                        <div style={{position:"absolute",left:0,top:"100%",zIndex:30,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:180,padding:6}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 6px"}}>ENROLL IN CAMPAIGN</div>
+                          {(s.sequences||[]).map(seq=>(
+                            <button key={seq.id} onClick={()=>{
+                              const today=new Date().toISOString().slice(0,10);
+                              let enrolled=0;
+                              const updated={...seq,enrollments:[...(seq.enrollments||[])]};
+                              bulkSel.forEach(cid=>{
+                                if(!updated.enrollments.some(e=>e.contactId===cid)){
+                                  updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today});
+                                  dispatch("SCORE_CONTACT",{contactId:cid,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
+                                  enrolled++;
+                                }
+                              });
+                              dispatch("UPDATE_SEQUENCE",updated);
+                              setBulkEnrolling(false);setBulkSel(new Set());
+                              toast(`${enrolled} contacts enrolled in ${seq.name}`,"success");
+                            }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,cursor:"pointer",borderRadius:3}}>{seq.name}</button>
+                          ))}
+                          {(s.sequences||[]).length===0&&<div style={{padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
+                          <button onClick={()=>setBulkEnrolling(false)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={()=>setBulkSel(new Set())} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>✕ clear</button>
+                  </div>
+                )}
+              </div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {[["all","ALL"],["leads","LEADS"],["customers","CUSTOMERS"],["scraped","◈ SCRAPED"],["dead","⊘ DEAD"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>{setDbFilter(v);setBulkSel(new Set());}} style={{background:dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):B.white,color:dbFilter===v?B.white:v==="dead"?B.red:v==="scraped"?B.purple:B.muted,border:`1px solid ${dbFilter===v?(v==="dead"?B.red:v==="scraped"?B.purple:B.blue):v==="dead"?`${B.red}40`:v==="scraped"?`${B.purple}40`:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
             </div>
@@ -2907,6 +3006,8 @@ function ModProspecting() {
                     const isDead=!!c.deadStatus;
                     if(dbFilter==="dead") return isDead;
                     if(isDead) return false;
+                    const isScraped=["website","directory","search"].includes(c.source);
+                    if(dbFilter==="scraped") return isScraped;
                     const inv=findCustomerInvoice(c,s.invoices||[]);
                     if(dbFilter==="customers") return !!inv;
                     if(dbFilter==="leads") return !inv;
@@ -2916,8 +3017,10 @@ function ModProspecting() {
                     const campaigns=s.sequences||[];
                     const custInvoice=findCustomerInvoice(c,s.invoices||[]);
                     return(
-                    <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.priority==="high"?B.orange:c.priority==="medium"?B.blue:B.border}`}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.priority==="high"?B.orange:c.priority==="medium"?B.blue:B.border}`,background:bulkSel.has(c.id)?`${B.orange}06`:undefined}}>
+                      <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+                        <input type="checkbox" checked={bulkSel.has(c.id)} onChange={()=>setBulkSel(prev=>{const n=new Set(prev);n.has(c.id)?n.delete(c.id):n.add(c.id);return n;})} style={{marginTop:4,accentColor:B.orange,width:13,height:13,cursor:"pointer",flexShrink:0}}/>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flex:1}}>
                         <div style={{flex:1}}>
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
                             <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed"}</span>
@@ -2928,10 +3031,14 @@ function ModProspecting() {
                             {c.zohoSource&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 5px",borderRadius:3}}>{c.zohoSource}</span>}
                             {custInvoice&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#1a7f37",background:"#d8f3dc",padding:"2px 5px",borderRadius:3}} title={`Invoice: ${custInvoice.number||custInvoice.id}`}>✓ CUSTOMER</span>}
                             {c.deadStatus&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,background:B.redBg,padding:"2px 5px",borderRadius:3}}>⊘ {c.deadStatus.replace(/_/g," ").toUpperCase()}</span>}
+                            {c.emailBounced&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,padding:"2px 5px",borderRadius:3}}>✉✗ BOUNCED</span>}
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""} · {c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
                           <div style={{display:"flex",gap:10,marginTop:2}}>
-                            {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✉ {c.email}</span>}
+                            {c.email&&(c.emailBounced
+                              ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,textDecoration:"line-through",opacity:.7}} title="Email bounced / bad address">✉✗ {c.email}</span>
+                              :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✉ {c.email}</span>
+                            )}
                             {c.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</span>}
                           </div>
                           {(c.activity||[]).length>0&&(
@@ -2973,10 +3080,25 @@ function ModProspecting() {
                                     toast(`${c.fullName||c.firstName||c.lastName} restored`,"success");
                                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,cursor:"pointer",borderRadius:3}}>↩ Restore</button>
                                 )}
+                                <div style={{borderTop:`1px solid ${B.border}`,margin:"4px 0"}}/>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 3px"}}>EMAIL</div>
+                                {!c.emailBounced?(
+                                  <button onClick={()=>{
+                                    dispatch("UPDATE_CONTACT",{id:c.id,emailBounced:true});
+                                    setFlaggingContact(null);
+                                    toast(`Email marked as bounced for ${c.fullName||c.firstName||c.lastName}`,"warn");
+                                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,cursor:"pointer",borderRadius:3}}>✉✗ Bad Email / Bounced</button>
+                                ):(
+                                  <button onClick={()=>{
+                                    dispatch("UPDATE_CONTACT",{id:c.id,emailBounced:false});
+                                    setFlaggingContact(null);
+                                    toast(`Email restored for ${c.fullName||c.firstName||c.lastName}`,"success");
+                                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,cursor:"pointer",borderRadius:3}}>✉ Mark Email OK</button>
+                                )}
                                 <button onClick={()=>setFlaggingContact(null)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
                               </div>
                             ):(
-                              <button onClick={()=>setFlaggingContact(c.id)} style={{background:"none",color:c.deadStatus?B.red:B.muted,border:`1px solid ${c.deadStatus?B.red+"40":B.border}`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>⊘ {c.deadStatus?c.deadStatus.replace(/_/g," ").toUpperCase():"FLAG DEAD"}</button>
+                              <button onClick={()=>setFlaggingContact(c.id)} style={{background:"none",color:c.deadStatus?B.red:c.emailBounced?B.yellow:B.muted,border:`1px solid ${c.deadStatus?B.red+"40":c.emailBounced?B.yellow+"40":B.border}`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>{c.deadStatus?"⊘ "+c.deadStatus.replace(/_/g," ").toUpperCase():c.emailBounced?"✉✗ BAD EMAIL":"⊘ FLAG DEAD"}</button>
                             )}
                           </div>
                           {campaigns.length>0&&(
@@ -3007,6 +3129,7 @@ function ModProspecting() {
                               )}
                             </div>
                           )}
+                        </div>
                         </div>
                       </div>
                     </div>
