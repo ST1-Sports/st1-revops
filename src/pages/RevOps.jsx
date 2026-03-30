@@ -270,6 +270,7 @@ export default function App() {
   const NAV = [
     {id:"briefing",   icon:"◈", label:"Daily Briefing",  badge:urgentCount(s)},
     {id:"deals",      icon:"◫", label:"Deal Manager"},
+    {id:"quotes",     icon:"▤", label:"Quote Builder"},
     {id:"rfp",        icon:"⊘", label:"RFP / Bids",      badge:s.rfps.filter(r=>!["Won","Lost","No Bid"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     {id:"invoicing",  icon:"▲", label:"Invoices & AR",   badge:s.invoices.filter(i=>i.status==="overdue").length},
     {id:"reorder",    icon:"↺", label:"Reorder Engine",  badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
@@ -388,6 +389,7 @@ export default function App() {
           <main style={{flex:1,overflowY:"auto",background:B.pageBg}}>
             {mod==="briefing"    && <ModBriefing/>}
             {mod==="deals"       && <ModDeals/>}
+            {mod==="quotes"      && <ModQuotes/>}
             {mod==="rfp"         && <ModRFP/>}
             {mod==="invoicing"   && <ModInvoicing/>}
             {mod==="reorder"     && <ModReorder/>}
@@ -926,6 +928,345 @@ Under 80 words. Include subject line. Warm tone.`);
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  QUOTE BUILDER
+// ════════════════════════════════════════════════════════════════════════════
+const ST1_PRODUCTS=[
+  {name:"110m Hurdles (Set of 10)",rate:1450,description:"Aluminum competition hurdles, adjustable height"},
+  {name:"400m Hurdles (Set of 10)",rate:1650,description:"Heavy-duty competition 400m hurdles"},
+  {name:"Starting Blocks (Pair)",rate:380,description:"Competition starting blocks, aluminum"},
+  {name:"Shot Put 12lb",rate:45,description:"Competition shot put, 12lb"},
+  {name:"Shot Put 16lb",rate:52,description:"Competition shot put, 16lb"},
+  {name:"Discus 1kg",rate:65,description:"Rubber competition discus"},
+  {name:"Discus 1.75kg",rate:78,description:"Rubber competition discus, men's"},
+  {name:"Hammer 7.26kg",rate:85,description:"Competition hammer"},
+  {name:"Hammer 4kg",rate:72,description:"Women's competition hammer"},
+  {name:"Javelin Men's 800g",rate:125,description:"Carbon fiber competition javelin"},
+  {name:"Javelin Women's 600g",rate:115,description:"Carbon fiber competition javelin"},
+  {name:"High Jump Standards",rate:895,description:"Aluminum high jump standards with crossbar"},
+  {name:"Pole Vault Standards",rate:2200,description:"Competition pole vault standards"},
+  {name:"Long Jump Rake + Drag Mat",rate:185,description:"Aluminum rake, 6ft drag mat"},
+  {name:"Hurdle Storage Cart",rate:245,description:"Holds 10 hurdles, with wheels"},
+  {name:"Relay Batons Set (4)",rate:35,description:"Aluminum relay batons"},
+  {name:"Training Hurdles Set (6)",rate:285,description:"Adjustable practice hurdles"},
+  {name:"Throwing Cage",rate:3200,description:"Competition throwing cage, portable"},
+  {name:"Shot Put Toe Board",rate:95,description:"Aluminum competition toe board"},
+  {name:"Measuring Tape 50m",rate:55,description:"Officials fiberglass measuring tape"},
+  {name:"Equipment Shipping & Handling",rate:150,description:""},
+];
+
+function ModQuotes() {
+  const {s,dispatch,toast}=useApp();
+  const [tab,setTab]=useState("build");
+  const [customer,setCustomer]=useState({name:"",email:"",school:"",phone:"",address:""});
+  const [contactQ,setContactQ]=useState("");
+  const [lineItems,setLineItems]=useState([{id:mkId(),name:"",description:"",qty:1,rate:0}]);
+  const [discount,setDiscount]=useState(0);
+  const [taxPct,setTaxPct]=useState(0);
+  const [terms,setTerms]=useState("Payment due within 30 days of invoice receipt. All equipment ships within 5–7 business days from order confirmation. Volume discounts may apply for orders over $2,000. ST1 Sports standard warranty applies to all equipment.");
+  const [notes,setNotes]=useState("");
+  const [quoteDate,setQuoteDate]=useState(today());
+  const [validDays,setValidDays]=useState(30);
+  const [zohoItems,setZohoItems]=useState([]);
+  const [itemsLoaded,setItemsLoaded]=useState(false);
+  const [pastQuotes,setPastQuotes]=useState([]);
+  const [quotesLoading,setQuotesLoading]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [showPicker,setShowPicker]=useState(false);
+  const [pickerQ,setPickerQ]=useState("");
+  const [savedQuote,setSavedQuote]=useState(null);
+
+  const allProducts=[...ST1_PRODUCTS,...zohoItems.filter(zi=>!ST1_PRODUCTS.find(p=>p.name===zi.name))];
+  const filteredProducts=allProducts.filter(p=>!pickerQ||p.name.toLowerCase().includes(pickerQ.toLowerCase())||p.description?.toLowerCase().includes(pickerQ.toLowerCase()));
+
+  useEffect(()=>{
+    if(tab==="build"&&!itemsLoaded){
+      setItemsLoaded(true);
+      fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list_items"})})
+        .then(r=>r.json()).then(d=>{if(d.items?.length)setZohoItems(d.items);}).catch(()=>{});
+    }
+    if(tab==="list"&&!quotesLoading&&pastQuotes.length===0){
+      setQuotesLoading(true);
+      fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list_quotes"})})
+        .then(r=>r.json()).then(d=>setPastQuotes(d.quotes||[])).catch(()=>{}).finally(()=>setQuotesLoading(false));
+    }
+  },[tab]);
+
+  const subtotal=lineItems.reduce((a,li)=>a+(li.qty||0)*(li.rate||0),0);
+  const discountAmt=subtotal*(discount/100);
+  const taxAmt=(subtotal-discountAmt)*(taxPct/100);
+  const total=subtotal-discountAmt+taxAmt;
+
+  const addLine=(product=null)=>{
+    setLineItems(ls=>[...ls,product
+      ?{id:mkId(),name:product.name,description:product.description||"",qty:1,rate:product.rate,item_id:product.item_id}
+      :{id:mkId(),name:"",description:"",qty:1,rate:0}]);
+    setShowPicker(false);setPickerQ("");
+  };
+  const removeLine=(id)=>setLineItems(ls=>ls.filter(l=>l.id!==id));
+  const updLine=(id,field,val)=>setLineItems(ls=>ls.map(l=>l.id===id?{...l,[field]:val}:l));
+  const fillContact=(c)=>{
+    setCustomer({name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),email:c.email||"",school:c.school||"",phone:c.phone||"",address:""});
+    setContactQ("");
+  };
+  const contactMatches=(s.contacts||[]).filter(c=>contactQ&&((c.fullName||c.firstName||"").toLowerCase().includes(contactQ.toLowerCase())||c.school?.toLowerCase().includes(contactQ.toLowerCase()))).slice(0,6);
+
+  const saveQuote=async(sendEmail=false)=>{
+    if(!customer.name&&!customer.school){toast("Customer name required","error");return;}
+    if(!lineItems.some(li=>li.name&&(li.qty||0)>0&&(li.rate||0)>0)){toast("Add at least one line item with name, qty, and price","error");return;}
+    if(sendEmail&&!customer.email){toast("Customer email required to send","error");return;}
+    setSaving(true);
+    const expiry=new Date(quoteDate);expiry.setDate(expiry.getDate()+validDays);
+    const expiryStr=expiry.toISOString().split("T")[0];
+    try{
+      const r=await fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"create_quote",
+        customer_name:customer.school||customer.name,
+        contact_person:customer.name,
+        billing_address:{attention:customer.name,phone:customer.phone||"",address:customer.address||""},
+        line_items:lineItems.filter(li=>li.name&&(li.qty||0)>0).map(li=>({...li,quantity:li.qty})),
+        discount,tax_percentage:taxPct,date:quoteDate,expiry_date:expiryStr,
+        notes:notes||"Thank you for considering ST1 Sports. We look forward to equipping your program.",
+        terms,send_email:sendEmail,email:customer.email||"",
+      })});
+      const d=await r.json();
+      if(d.quote_id){
+        const qLabel=d.estimate_number||d.quote_id;
+        toast(`${sendEmail&&d.emailed?"Quote saved & emailed":"Quote saved to Zoho Books"} — ${qLabel}`,"success");
+        setSavedQuote({...d,customer:customer.school||customer.name,total,qLabel});
+        dispatch("LOG",{msg:`Quote ${qLabel} created for ${customer.school||customer.name} — ${fmt$(total)}`});
+      } else {
+        toast(d.error?`Zoho error: ${d.error}`:"Saved (Zoho Books not fully connected)","info");
+        setSavedQuote({quote_id:"local",customer:customer.school||customer.name,total,qLabel:"Local"});
+      }
+    }catch(e){toast(`Save failed: ${e.message}`,"error");}
+    setSaving(false);
+  };
+
+  const resetBuilder=()=>{
+    setCustomer({name:"",email:"",school:"",phone:"",address:""});
+    setLineItems([{id:mkId(),name:"",description:"",qty:1,rate:0}]);
+    setDiscount(0);setTaxPct(0);setNotes("");setSavedQuote(null);setShowPicker(false);
+  };
+
+  const STATUS_C={draft:B.muted,sent:B.blue,accepted:B.green,declined:B.red,expired:B.orange,invoiced:B.teal};
+
+  return(
+    <div style={{padding:"22px 26px",height:"calc(100vh - 46px)",overflowY:"auto"}}>
+      <PH title="QUOTE BUILDER" sub="Build quotes from Zoho inventory, send to customers, track in Zoho Books"
+        action={<div style={{display:"flex",gap:6}}>
+          {[["build","BUILD QUOTE"],["list","PAST QUOTES"]].map(([t,l])=>(
+            <button key={t} onClick={()=>setTab(t)} style={{background:tab===t?B.orange:B.white,color:tab===t?B.white:B.muted,border:`1px solid ${tab===t?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>}/>
+
+      {tab==="build"&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:16,marginTop:4}}>
+
+          {/* ── Left: builder ── */}
+          <div>
+            {/* Customer */}
+            <div className="card" style={{padding:16,marginBottom:12}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:12}}>CUSTOMER</div>
+              <div style={{position:"relative",marginBottom:10}}>
+                <input value={contactQ||customer.name} onChange={e=>{setContactQ(e.target.value);if(!e.target.value)setCustomer(c=>({...c,name:""}));}} placeholder="Search contacts or type customer name..." style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 11px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                {contactMatches.length>0&&(
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",zIndex:20,maxHeight:180,overflowY:"auto"}}>
+                    {contactMatches.map(c=>(
+                      <div key={c.id} onClick={()=>fillContact(c)} style={{padding:"8px 12px",cursor:"pointer",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                        <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
+                        <div style={{color:B.muted,fontSize:10}}>{c.title} — {c.school} · {c.email||"no email"}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                {[["School / Org","school"],["Email","email"],["Phone","phone"],["Shipping Address","address"]].map(([l,k])=>(
+                  <div key={k}>
+                    <Lbl s={{marginBottom:3}}>{l}</Lbl>
+                    <input value={customer[k]} onChange={e=>setCustomer(c=>({...c,[k]:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"6px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Line items */}
+            <div className="card" style={{padding:16,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2}}>LINE ITEMS {zohoItems.length>0&&<span style={{color:B.green,marginLeft:4}}>· {zohoItems.length} from Zoho</span>}</div>
+                <OBtn sm onClick={()=>setShowPicker(p=>!p)}>+ ADD ITEM</OBtn>
+              </div>
+
+              {showPicker&&(
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:10,marginBottom:12}}>
+                  <input autoFocus value={pickerQ} onChange={e=>setPickerQ(e.target.value)} placeholder="Search products..." style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,marginBottom:8,fontFamily:"'Lexend',sans-serif"}}/>
+                  <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:3}}>
+                    {filteredProducts.map((p,i)=>(
+                      <div key={i} onClick={()=>addLine(p)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",borderRadius:4,cursor:"pointer",background:B.white,border:`1px solid ${B.border}`}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{p.name}{p.sku?<span style={{color:B.muted,fontWeight:400}}> — {p.sku}</span>:null}</div>
+                          {p.description&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.description}</div>}
+                          {p.stock!=null&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:p.stock>0?B.green:B.red,marginTop:2}}>STOCK: {p.stock}</div>}
+                        </div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.green,flexShrink:0,marginLeft:10}}>{fmt$(p.rate)}</div>
+                      </div>
+                    ))}
+                    <div onClick={()=>addLine()} style={{padding:"7px 10px",borderRadius:4,cursor:"pointer",background:B.white,border:`1px dashed ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>+ Custom line item</div>
+                  </div>
+                </div>
+              )}
+
+              {/* Table header */}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 56px 100px 80px 24px",gap:6,marginBottom:5,paddingBottom:5,borderBottom:`1px solid ${B.border}`}}>
+                {["ITEM / DESCRIPTION","QTY","UNIT PRICE","TOTAL",""].map(h=>(
+                  <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8}}>{h}</div>
+                ))}
+              </div>
+
+              {lineItems.map(li=>(
+                <div key={li.id} style={{display:"grid",gridTemplateColumns:"1fr 56px 100px 80px 24px",gap:6,marginBottom:8,alignItems:"start"}}>
+                  <div>
+                    <input value={li.name} onChange={e=>updLine(li.id,"name",e.target.value)} placeholder="Item name" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:3}}/>
+                    <input value={li.description} onChange={e=>updLine(li.id,"description",e.target.value)} placeholder="Description" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <input type="number" min="1" value={li.qty} onChange={e=>updLine(li.id,"qty",parseFloat(e.target.value)||1)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 6px",fontSize:11,fontFamily:"'Lexend',sans-serif",textAlign:"center",width:"100%",boxSizing:"border-box"}}/>
+                  <input type="number" min="0" step="0.01" value={li.rate} onChange={e=>updLine(li.id,"rate",parseFloat(e.target.value)||0)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",width:"100%",boxSizing:"border-box"}}/>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",paddingTop:6}}>{fmt$((li.qty||0)*(li.rate||0))}</div>
+                  <button onClick={()=>removeLine(li.id)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:0,lineHeight:1,paddingTop:4}}>×</button>
+                </div>
+              ))}
+            </div>
+
+            {/* Terms + Notes */}
+            <div className="card" style={{padding:16}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                <div>
+                  <Lbl s={{marginBottom:5}}>TERMS</Lbl>
+                  <textarea value={terms} onChange={e=>setTerms(e.target.value)} rows={4} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:5}}>NOTES TO CUSTOMER</Lbl>
+                  <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={4} placeholder="e.g. Volume discount applied, delivery timeline, etc." style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ── Right: summary + actions ── */}
+          <div>
+            <div className="card" style={{padding:16,marginBottom:12,position:"sticky",top:0}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:14}}>SUMMARY</div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                <div>
+                  <Lbl s={{marginBottom:3}}>QUOTE DATE</Lbl>
+                  <input type="date" value={quoteDate} onChange={e=>setQuoteDate(e.target.value)} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}/>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:3}}>VALID (DAYS)</Lbl>
+                  <input type="number" min="1" value={validDays} onChange={e=>setValidDays(parseInt(e.target.value)||30)} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}/>
+                </div>
+              </div>
+
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                <div>
+                  <Lbl s={{marginBottom:3}}>DISCOUNT %</Lbl>
+                  <input type="number" min="0" max="100" step="0.5" value={discount} onChange={e=>setDiscount(parseFloat(e.target.value)||0)} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}/>
+                </div>
+                <div>
+                  <Lbl s={{marginBottom:3}}>TAX %</Lbl>
+                  <input type="number" min="0" max="30" step="0.1" value={taxPct} onChange={e=>setTaxPct(parseFloat(e.target.value)||0)} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11}}/>
+                </div>
+              </div>
+
+              <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12,display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Subtotal</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(subtotal)}</span>
+                </div>
+                {discount>0&&<div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>Discount ({discount}%)</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>−{fmt$(discountAmt)}</span>
+                </div>}
+                {taxPct>0&&<div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Tax ({taxPct}%)</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(taxAmt)}</span>
+                </div>}
+                <div style={{display:"flex",justifyContent:"space-between",borderTop:`1px solid ${B.border}`,paddingTop:8,marginTop:4}}>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>TOTAL</span>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(total)}</span>
+                </div>
+              </div>
+
+              {savedQuote?(
+                <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:12,marginBottom:10,textAlign:"center"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>✓ QUOTE SAVED</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:4}}>{savedQuote.customer} · {fmt$(savedQuote.total)}</div>
+                  {savedQuote.qLabel&&savedQuote.qLabel!=="Local"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{savedQuote.qLabel}</div>}
+                  <div style={{display:"flex",gap:7,justifyContent:"center",marginTop:10}}>
+                    <button onClick={resetBuilder} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>+ NEW QUOTE</button>
+                    <button onClick={()=>setTab("list")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>VIEW ALL →</button>
+                  </div>
+                </div>
+              ):(
+                <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                  <OBtn onClick={()=>saveQuote(false)} disabled={saving}>{saving?"SAVING...":"💾 SAVE TO ZOHO BOOKS"}</OBtn>
+                  <button onClick={()=>saveQuote(true)} disabled={saving} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"9px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",opacity:saving?.6:1}}>✉ SAVE & EMAIL TO CUSTOMER</button>
+                  <button onClick={resetBuilder} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>CLEAR</button>
+                </div>
+              )}
+              {!customer.email&&customer.name&&!savedQuote&&(
+                <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center"}}>Add customer email to enable email delivery</div>
+              )}
+            </div>
+
+            <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:5}}>INVENTORY STATUS</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.7}}>
+                {zohoItems.length>0
+                  ?<span style={{color:B.green}}>✓ {zohoItems.length} items loaded from Zoho Books</span>
+                  :"Showing ST1 standard products. Connect Zoho Books to load live inventory, SKUs, and current pricing."}
+              </div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6,lineHeight:1.5}}>{ST1_PRODUCTS.length} standard products available</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==="list"&&(
+        <div style={{marginTop:4}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Quotes synced from Zoho Books Estimates</div>
+            <OBtn sm onClick={()=>{setPastQuotes([]);setQuotesLoading(false);}}>REFRESH</OBtn>
+          </div>
+          {quotesLoading&&<div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}><Spin/> Loading from Zoho Books...</div>}
+          {!quotesLoading&&pastQuotes.length===0&&(
+            <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+              No quotes found in Zoho Books.<br/>
+              <button onClick={()=>setTab("build")} style={{marginTop:12,background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>BUILD FIRST QUOTE →</button>
+            </div>
+          )}
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {pastQuotes.map((q,i)=>(
+              <div key={i} className="card" style={{padding:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{q.customer_name}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{q.estimate_number} · {q.date}{q.expiry_date?` → expires ${q.expiry_date}`:""}</div>
+                </div>
+                <div style={{display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.orange}}>{fmt$(q.total||0)}</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:STATUS_C[q.status]||B.muted,background:`${STATUS_C[q.status]||B.muted}18`,padding:"2px 8px",borderRadius:10,letterSpacing:.5}}>{(q.status||"draft").toUpperCase()}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1608,14 +1949,17 @@ function ModProspecting() {
     }
   };
 
-  const commitListImport=()=>{
+  const commitListImport=async(pushZoho=false)=>{
     const selected=importRows.filter(c=>importSel.has(c.id));
     const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
     const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
     const dupes=selected.length-toAdd.length;
     dispatch("ADD_CONTACTS",toAdd);
-    toast(`Imported ${toAdd.length} contacts${dupes>0?` · ${dupes} duplicates skipped`:""}  `,"success");
+    toast(`Imported ${toAdd.length} contacts${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
     setImportPhase("idle");setImportRows([]);setImportSel(new Set());
+    if(pushZoho&&toAdd.length>0){
+      await pushToZohoLeads(toAdd);
+    }
   };
 
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
@@ -1757,7 +2101,8 @@ function ModProspecting() {
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{importRows.length} contacts ready · {importSel.size} selected</div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-                  <OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ IMPORT {importSel.size} CONTACTS</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ IMPORT {importSel.size}</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ IMPORT + PUSH TO ZOHO</OBtn>
                 </div>
               </div>
               <div style={{overflowX:"auto"}}>

@@ -18,10 +18,12 @@
  */
 
 const SCOPES = [
-  // Zoho Books — invoices, AR, payments
+  // Zoho Books — invoices, AR, payments, items/inventory, estimates/quotes
   "ZohoBooks.invoices.ALL",
   "ZohoBooks.contacts.ALL",
   "ZohoBooks.customerpayments.ALL",
+  "ZohoBooks.estimates.ALL",
+  "ZohoBooks.items.ALL",
   // Zoho CRM — contacts, leads, deals
   "ZohoCRM.modules.Contacts.ALL",
   "ZohoCRM.modules.Leads.ALL",
