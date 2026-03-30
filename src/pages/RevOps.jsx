@@ -4697,6 +4697,7 @@ function ModAds() {
   const [adAc, setAdAc] = useState("#F37321");
   const [adLogo, setAdLogo] = useState(true);
   const [adImg, setAdImg] = useState("");
+  const [adUrl, setAdUrl] = useState("");
   const [previewUrl, setPreviewUrl] = useState("/api/adengine/render-ad?tpl=bold&sz=square&headline=TRAIN+HARDER.+WIN+MORE.&cta=SHOP+NOW&bg=%230A0A0A&tc=%23FFFFFF&ac=%23F37321");
   const [ideoPrompt, setIdeoPrompt] = useState("");
   const [ideoStyle, setIdeoStyle] = useState("REALISTIC");
@@ -4763,11 +4764,9 @@ function ModAds() {
   // Post to Social
   const [showSocialPanel, setShowSocialPanel] = useState(false);
   const [socialCaption, setSocialCaption] = useState("");
-  const [socialPortals, setSocialPortals] = useState([]);
-  const [socialChannels, setSocialChannels] = useState([]);
-  const [socialPortalId, setSocialPortalId] = useState("");
-  const [socialSelChannels, setSocialSelChannels] = useState([]);
-  const [socialLoading, setSocialLoading] = useState(false);
+  const [socialPlatforms, setSocialPlatforms] = useState(["twitter","linkedin","instagram","facebook"]);
+  const [socialPostType, setSocialPostType] = useState("post"); // post | story | ad
+  const [socialScheduleAt, setSocialScheduleAt] = useState("");
   const [socialPosting, setSocialPosting] = useState(false);
   const [socialResult, setSocialResult] = useState(null);
   const [copyGenRunning, setCopyGenRunning] = useState(false);
@@ -4793,46 +4792,49 @@ function ModAds() {
     setCopyGenRunning(false);
   };
 
-  const openSocialPanel = async () => {
+  const openSocialPanel = () => {
     setShowSocialPanel(true);
     setSocialResult(null);
-    setSocialCaption([adHeadline, adSub, adCta ? `👉 ${adCta}` : "", "#ST1Sports #Athletics #TrackAndField"].filter(Boolean).join("\n\n"));
-    if (socialPortals.length) return;
-    setSocialLoading(true);
-    try {
-      const r = await fetch("/api/zoho-social", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"list_portals"}) });
-      const data = await r.json();
-      if (data.portals?.length) {
-        setSocialPortals(data.portals);
-        const pid = data.portals[0].id;
-        setSocialPortalId(pid);
-        const cr = await fetch("/api/zoho-social", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"list_channels",portalId:pid}) });
-        const cd = await cr.json();
-        setSocialChannels(cd.channels || []);
-      } else {
-        setSocialPortals([]);
-      }
-    } catch { /* handled by empty portals state */ }
-    setSocialLoading(false);
+    const parts = [adHeadline, adSub, adCta ? `👉 ${adCta}` : "", "#ST1Sports #Athletics #TrackAndField"].filter(Boolean);
+    setSocialCaption(parts.join("\n\n"));
   };
 
   const submitSocialPost = async () => {
-    if (!socialPortalId || !socialSelChannels.length) { toast("Select at least one channel","error"); return; }
+    if (!socialPlatforms.length) { toast("Select at least one platform","error"); return; }
+    if (!socialCaption.trim()) { toast("Caption is required","error"); return; }
     setSocialPosting(true);
     setSocialResult(null);
     try {
-      const r = await fetch("/api/zoho-social", {
+      const r = await fetch("/api/social-post", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({ action:"create_post", portalId: socialPortalId, channelIds: socialSelChannels, message: socialCaption, imageUrl: adImg||undefined }),
+        body: JSON.stringify({
+          post: socialCaption,
+          platforms: socialPlatforms,
+          mediaUrls: adImg ? [adImg] : undefined,
+          scheduleDate: socialScheduleAt || undefined,
+          isStory: socialPostType === "story",
+          link: adUrl || undefined,
+        }),
       });
       const data = await r.json();
-      if (data.ok) {
-        setSocialResult({ ok:true, postId: data.postId });
-        toast(`Posted to ${socialSelChannels.length} channel(s)!`, "success");
+      if (data.status === "success" || data.postIds || data.id) {
+        setSocialResult({ ok:true });
+        toast(socialScheduleAt ? `Scheduled for ${socialScheduleAt}!` : `Posted to ${socialPlatforms.length} platform(s)!`, "success");
+        dispatch("ADD_SOCIAL_POST", {
+          id:mkId(), createdAt:today(),
+          date: socialScheduleAt ? socialScheduleAt.slice(0,10) : today(),
+          time: socialScheduleAt ? socialScheduleAt.slice(11,16) : new Date().toTimeString().slice(0,5),
+          platforms: socialPlatforms,
+          caption: socialCaption,
+          imageUrl: adImg,
+          link: adUrl,
+          status: socialScheduleAt ? "scheduled" : "published",
+          postType: socialPostType,
+        });
       } else {
-        setSocialResult({ ok:false, error: data.error });
-        toast(data.error || "Post failed", "error");
+        setSocialResult({ ok:false, error: data.error || data.message || "Post failed" });
+        toast(data.error || data.message || "Post failed","error");
       }
     } catch { toast("Post failed","error"); }
     setSocialPosting(false);
@@ -5315,6 +5317,10 @@ function ModAds() {
                     <input value={adBadge} onChange={e=>setAdBadge(e.target.value)} placeholder="NEW · SALE · FREE SHIP" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                   </div>
                 </div>
+                <div>
+                  <Lbl s={{marginBottom:3}}>Link URL (appended to social posts)</Lbl>
+                  <input value={adUrl} onChange={e=>setAdUrl(e.target.value)} placeholder="https://st1sports.com/products/..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"monospace"}}/>
+                </div>
               </div>
             </div>
 
@@ -5432,7 +5438,7 @@ function ModAds() {
                 </OBtn>
                 <button onClick={()=>{
                   const name=adHeadline||"Untitled Ad";
-                  dispatch("ADD_SAVED_AD",{id:mkId(),name,tpl:adTpl,sz:adSz,headline:adHeadline,sub:adSub,cta:adCta,badge:adBadge,bg:adBg,tc:adTc,ac:adAc,logo:adLogo,logoUrl:adLogoUrl,img:adImg,createdAt:today()});
+                  dispatch("ADD_SAVED_AD",{id:mkId(),name,tpl:adTpl,sz:adSz,headline:adHeadline,sub:adSub,cta:adCta,badge:adBadge,bg:adBg,tc:adTc,ac:adAc,logo:adLogo,logoUrl:adLogoUrl,img:adImg,url:adUrl,createdAt:today()});
                   toast(`"${name}" saved!`,"success");
                 }} style={{background:B.white,color:B.green,border:`1px solid ${B.green}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
                   ✦ SAVE AD
@@ -5459,67 +5465,89 @@ function ModAds() {
                   <button onClick={()=>{setShowSocialPanel(false);setSocialResult(null);}} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
                 </div>
 
-                {socialLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10}}>Loading connected channels…</div>}
-
-                {/* Not connected — show setup instructions + manual fallback */}
-                {!socialLoading&&socialPortals.length===0&&(
-                  <div>
-                    <div style={{background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"12px 14px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.7}}>
-                      <strong>Zoho Social not connected yet.</strong><br/>
-                      Go to <a href="/api/zoho-social-setup" target="_blank" style={{color:"#c47a00",fontWeight:700}}>api/zoho-social-setup</a> to authorize Zoho Social separately (it uses its own OAuth token). Once connected, you'll be able to pick channels and post directly. In the meantime, use the quick-post buttons below.
-                    </div>
-                    {/* Caption + copy gen */}
-                    <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
-                    <div style={{display:"flex",gap:7,flexWrap:"wrap",marginTop:8}}>
-                      {[
-                        {label:"𝕏 Post",color:"#000",url:`https://twitter.com/intent/tweet?text=${encodeURIComponent((socialCaption||"").slice(0,280))}`},
-                        {label:"LinkedIn",color:"#0A66C2",url:`https://www.linkedin.com/feed/?shareActive=true&text=${encodeURIComponent((socialCaption||"").slice(0,3000))}`},
-                        {label:"Facebook",color:"#1877F2",url:`https://www.facebook.com/`},
-                        {label:"Instagram",color:"#E1306C",url:`https://www.instagram.com/`},
-                      ].map(({label,color,url})=>(
-                        <button key={label} onClick={()=>{navigator.clipboard.writeText(socialCaption);toast("Caption copied — paste in composer","success");window.open(url,"_blank");}}
-                          style={{background:`${color}10`,color,border:`1px solid ${color}40`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                          {label} ↗
+                {/* Platform picker */}
+                <div style={{marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>PLATFORMS</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {[
+                      {id:"twitter",label:"𝕏",name:"Twitter/X",color:"#000"},
+                      {id:"linkedin",label:"in",name:"LinkedIn",color:"#0A66C2"},
+                      {id:"instagram",label:"IG",name:"Instagram",color:"#E1306C"},
+                      {id:"facebook",label:"f",name:"Facebook",color:"#1877F2"},
+                      {id:"tiktok",label:"TT",name:"TikTok",color:"#000"},
+                    ].map(({id,label,name,color})=>{
+                      const sel=socialPlatforms.includes(id);
+                      return(
+                        <button key={id} onClick={()=>setSocialPlatforms(p=>sel?p.filter(x=>x!==id):[...p,id])}
+                          style={{background:sel?`${color}14`:B.surface,color:sel?color:B.muted,border:`1.5px solid ${sel?color:B.border}`,borderRadius:5,padding:"5px 12px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?700:400}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10}}>{label}</span> {name}{sel&&<span style={{marginLeft:4}}>✓</span>}
                         </button>
-                      ))}
-                      {adImg&&<a href={adImg} download="st1-ad.png" style={{background:B.purple+"18",color:B.purple,border:`1px solid ${B.purple}40`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,textDecoration:"none"}}>↓ Image</a>}
-                    </div>
+                      );
+                    })}
                   </div>
-                )}
+                </div>
 
-                {/* Connected — Zoho Social channel picker */}
-                {!socialLoading&&socialChannels.length>0&&(
-                  <>
-                    <div style={{marginBottom:12}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>SELECT CHANNELS</div>
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                        {socialChannels.map(ch=>{
-                          const sel=socialSelChannels.includes(ch.id);
-                          const nColors={Facebook:"#1877F2",Instagram:"#E1306C",Twitter:"#1DA1F2",LinkedIn:"#0A66C2",YouTube:"#FF0000"};
-                          const c=nColors[ch.network]||B.muted;
-                          return(
-                            <button key={ch.id} onClick={()=>setSocialSelChannels(s=>sel?s.filter(x=>x!==ch.id):[...s,ch.id])}
-                              style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"6px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
-                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,letterSpacing:.5,display:"block"}}>{ch.network}</span>
-                              {ch.name}{sel&&<span style={{color:c,marginLeft:4}}>✓</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div style={{marginBottom:10}}>
-                      <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:3}}>{socialCaption.length}/2200 · {adImg?"Image attached ✓":"no image"}</div>
-                    </div>
-                    <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                      <button onClick={submitSocialPost} disabled={socialPosting||!socialSelChannels.length||!socialCaption.trim()}
-                        style={{background:B.purple,color:B.white,border:"none",borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}>
-                        {socialPosting?"POSTING...":"📣 POST NOW"}
+                {/* Post type */}
+                <div style={{marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>POST TYPE</div>
+                  <div style={{display:"flex",gap:6}}>
+                    {[["post","Post"],["story","Story"],["ad","Ad (Meta/Google)"]].map(([id,label])=>(
+                      <button key={id} onClick={()=>setSocialPostType(id)}
+                        style={{background:socialPostType===id?B.purple:B.surface,color:socialPostType===id?B.white:B.muted,border:`1px solid ${socialPostType===id?B.purple:B.border}`,borderRadius:5,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:socialPostType===id?700:400}}>
+                        {label}
                       </button>
-                      {socialResult?.ok&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✓ Posted!</span>}
-                      {socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:11}}>✗ {socialResult.error.slice(0,80)}</span>}
+                    ))}
+                  </div>
+                  {socialPostType==="ad"&&(
+                    <div style={{marginTop:8,background:"#f0f4ff",border:"1px solid #c5d0f0",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#354080",lineHeight:1.6}}>
+                      <strong>Ad Manager links:</strong>&nbsp;
+                      <a href="https://adsmanager.facebook.com" target="_blank" rel="noreferrer" style={{color:"#1877F2",fontWeight:700,marginRight:10}}>Meta Ads ↗</a>
+                      <a href="https://ads.google.com" target="_blank" rel="noreferrer" style={{color:"#4285F4",fontWeight:700}}>Google Ads ↗</a>
+                      <div style={{marginTop:4,fontSize:10,color:"#667"}}>Download your ad image below and upload it directly in Ads Manager. The caption and URL below are ready to copy.</div>
                     </div>
-                  </>
+                  )}
+                </div>
+
+                {/* Caption + AI copy */}
+                <div style={{marginBottom:12}}>
+                  <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:3}}>
+                    {socialCaption.length} chars · {adImg?"📎 image attached":"no image"}{adUrl&&" · 🔗 link included"}
+                  </div>
+                </div>
+
+                {/* Schedule + URL */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>SCHEDULE (leave blank = post now)</div>
+                    <input type="datetime-local" value={socialScheduleAt} onChange={e=>setSocialScheduleAt(e.target.value)}
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                  </div>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>LINK URL</div>
+                    <input value={adUrl} onChange={e=>setAdUrl(e.target.value)} placeholder="https://st1sports.com/…"
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"monospace"}}/>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                  <button onClick={submitSocialPost} disabled={socialPosting||!socialPlatforms.length||!socialCaption.trim()}
+                    style={{background:socialPosting||!socialPlatforms.length||!socialCaption.trim()?B.muted:B.purple,color:B.white,border:"none",borderRadius:5,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>
+                    {socialPosting?"POSTING…":socialScheduleAt?"🗓 SCHEDULE POST":"📣 POST NOW"}
+                  </button>
+                  {adImg&&<a href={adImg} download="st1-ad.png" style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",letterSpacing:.5}}>⬇ DOWNLOAD IMAGE</a>}
+                  {socialResult?.ok&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600}}>{socialScheduleAt?"✓ Scheduled!":"✓ Posted!"}</span>}
+                  {socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:10}}>✗ {socialResult.error.slice(0,100)}</span>}
+                </div>
+
+                {/* No API key warning */}
+                {socialResult?.error?.includes("AYRSHARE_API_KEY")&&(
+                  <div style={{marginTop:10,background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.6}}>
+                    <strong>Ayrshare not connected.</strong> Get a free API key at{" "}
+                    <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:"#c47a00",fontWeight:700}}>app.ayrshare.com</a>,
+                    then add <code style={{background:"#ffe8a0",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to your Vercel environment variables and redeploy.
+                  </div>
                 )}
               </div>
             )}
@@ -5581,7 +5609,7 @@ function ModAds() {
       {tab==="saved"&&(
         <SavedAdsPanel
           savedAds={s.savedAds||[]}
-          onLoad={ad=>{setAdTpl(ad.tpl||"bold");setAdSz(ad.sz||"square");setAdHeadline(ad.headline||"");setAdSub(ad.sub||"");setAdCta(ad.cta||"");setAdBadge(ad.badge||"");setAdBg(ad.bg||"#0A0A0A");setAdTc(ad.tc||"#FFFFFF");setAdAc(ad.ac||"#F37321");setAdLogo(ad.logo!==false);setAdLogoUrl(ad.logoUrl||"");setAdImg(ad.img||"");setTab("creator");toast(`Loaded "${ad.name}"`, "success");}}
+          onLoad={ad=>{setAdTpl(ad.tpl||"bold");setAdSz(ad.sz||"square");setAdHeadline(ad.headline||"");setAdSub(ad.sub||"");setAdCta(ad.cta||"");setAdBadge(ad.badge||"");setAdBg(ad.bg||"#0A0A0A");setAdTc(ad.tc||"#FFFFFF");setAdAc(ad.ac||"#F37321");setAdLogo(ad.logo!==false);setAdLogoUrl(ad.logoUrl||"");setAdImg(ad.img||"");setAdUrl(ad.url||"");setTab("creator");toast(`Loaded "${ad.name}"`, "success");}}
           onDelete={id=>dispatch("DELETE_SAVED_AD",id)}
         />
       )}
