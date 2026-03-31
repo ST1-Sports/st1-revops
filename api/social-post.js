@@ -1,42 +1,43 @@
 /**
- * /api/social-post  — Social media posting via Buffer
+ * /api/social-post  — Social media posting via Publer
  *
- * Buffer is purpose-built for social media scheduling.
- * Plans start at $6/mo. Connects Facebook, Instagram, LinkedIn, Twitter/X, TikTok, Pinterest.
+ * Publer is purpose-built for social media scheduling.
+ * Plans start at $12/mo. Connects Facebook, Instagram, LinkedIn, Twitter/X, TikTok, Pinterest, YouTube.
+ * API key is in your account Settings — no app creation required.
  *
  * Required env vars:
- *   BUFFER_ACCESS_TOKEN   — from buffer.com/developers/apps (personal access token)
- *   BUFFER_PROFILE_IDS    — comma-separated profile IDs, e.g. "abc123,def456,ghi789"
- *                           Get these by calling action:"profiles" after setting the token
+ *   PUBLER_API_KEY    — from app.publer.io → Settings → API
  *
  * Optional (for platform-specific routing):
- *   BUFFER_PROFILE_FACEBOOK   — profile ID for your Facebook page
- *   BUFFER_PROFILE_INSTAGRAM  — profile ID for your Instagram business account
- *   BUFFER_PROFILE_LINKEDIN   — profile ID for your LinkedIn company page
- *   BUFFER_PROFILE_TWITTER    — profile ID for your Twitter/X account
- *   BUFFER_PROFILE_TIKTOK     — profile ID for your TikTok account
+ *   PUBLER_ACCOUNT_FACEBOOK   — account ID for your Facebook page
+ *   PUBLER_ACCOUNT_INSTAGRAM  — account ID for your Instagram business account
+ *   PUBLER_ACCOUNT_LINKEDIN   — account ID for your LinkedIn company page
+ *   PUBLER_ACCOUNT_TWITTER    — account ID for your Twitter/X account
+ *   PUBLER_ACCOUNT_TIKTOK     — account ID for your TikTok account
+ *   PUBLER_ACCOUNT_IDS        — comma-separated fallback if per-platform IDs not set
  *
  * POST body:
  *   { post, platforms, mediaUrls?, scheduleDate?, isStory?, link?, action? }
  *
- *   action="test"     → verify token works
- *   action="profiles" → list all connected Buffer profiles + their IDs
+ *   action="test"     → verify API key works
+ *   action="profiles" → list all connected Publer accounts + their IDs
  *   action="post"     → post or schedule (default)
  */
 
-const BUFFER_API = "https://api.bufferapp.com/1";
+const PUBLER_API = "https://app.publer.io/api/v1";
 
-async function bufferRequest(path, method = "GET", body = null, token) {
+async function publerRequest(path, method = "GET", body = null, apiKey) {
   const opts = {
     method,
-    headers: { Authorization: `Bearer ${token}` },
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
   };
   if (body) {
-    // Buffer API uses form-encoded bodies
-    opts.headers["Content-Type"] = "application/x-www-form-urlencoded";
-    opts.body = new URLSearchParams(body).toString();
+    opts.body = JSON.stringify(body);
   }
-  const r = await fetch(`${BUFFER_API}${path}`, opts);
+  const r = await fetch(`${PUBLER_API}${path}`, opts);
   const data = await r.json();
   return { ok: r.ok, status: r.status, data };
 }
@@ -44,67 +45,68 @@ async function bufferRequest(path, method = "GET", body = null, token) {
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const token = process.env.BUFFER_ACCESS_TOKEN;
+  const apiKey = process.env.PUBLER_API_KEY;
 
-  if (!token) {
+  if (!apiKey) {
     return res.status(500).json({
-      error: "BUFFER_ACCESS_TOKEN not set",
-      setup: "Get your access token at buffer.com/developers/apps and add it to Vercel env vars",
+      error: "PUBLER_API_KEY not set",
+      setup: "Get your API key at app.publer.io → Settings → API and add it to Vercel env vars",
     });
   }
 
   const { post, platforms, mediaUrls, scheduleDate, isStory, link, action } = req.body || {};
 
-  // ── List profiles ────────────────────────────────────────────────────────────
+  // ── List accounts ────────────────────────────────────────────────────────────
   if (action === "profiles") {
-    const { ok, data } = await bufferRequest("/profiles.json", "GET", null, token);
-    if (!ok) return res.status(400).json({ error: data.message || "Failed to fetch profiles" });
+    const { ok, data } = await publerRequest("/social_accounts", "GET", null, apiKey);
+    if (!ok) return res.status(400).json({ error: data.message || data.error || "Failed to fetch accounts" });
+    const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
     return res.json({
       ok: true,
-      profiles: (data || []).map(p => ({
-        id: p.id,
-        service: p.service,        // "twitter" | "facebook" | "instagram" | "linkedin" | "tiktok"
-        name: p.formatted_username || p.service_username,
-        avatar: p.avatar,
-        connected: !p.disconnected,
+      profiles: accounts.map(a => ({
+        id: String(a.id),
+        service: (a.platform || a.social_network || "").toLowerCase(),
+        name: a.name || a.username || a.display_name,
+        avatar: a.picture || a.avatar,
+        connected: !a.needs_reconnect,
       })),
     });
   }
 
   // ── Test connection ──────────────────────────────────────────────────────────
   if (action === "test") {
-    const { ok, data } = await bufferRequest("/user.json", "GET", null, token);
-    if (ok) return res.json({ ok: true, user: { name: data.name, email: data.email, plan: data.plan } });
-    return res.status(400).json({ ok: false, error: data.message || "Auth failed" });
+    const { ok, data } = await publerRequest("/user", "GET", null, apiKey);
+    if (ok) {
+      const user = data.user || data;
+      return res.json({ ok: true, user: { name: user.name || user.display_name, email: user.email, plan: user.plan } });
+    }
+    return res.status(400).json({ ok: false, error: data.message || data.error || "Auth failed" });
   }
 
   // ── Post / Schedule ──────────────────────────────────────────────────────────
   if (!post?.trim()) return res.status(400).json({ error: "post text is required" });
 
-  // Build profile ID list — use per-platform env vars if set, else fall back to BUFFER_PROFILE_IDS
+  // Build account ID list — use per-platform env vars if set, else fall back to PUBLER_ACCOUNT_IDS
   const platformMap = {
-    facebook:  process.env.BUFFER_PROFILE_FACEBOOK,
-    instagram: process.env.BUFFER_PROFILE_INSTAGRAM,
-    linkedin:  process.env.BUFFER_PROFILE_LINKEDIN,
-    twitter:   process.env.BUFFER_PROFILE_TWITTER,
-    tiktok:    process.env.BUFFER_PROFILE_TIKTOK,
+    facebook:  process.env.PUBLER_ACCOUNT_FACEBOOK,
+    instagram: process.env.PUBLER_ACCOUNT_INSTAGRAM,
+    linkedin:  process.env.PUBLER_ACCOUNT_LINKEDIN,
+    twitter:   process.env.PUBLER_ACCOUNT_TWITTER,
+    tiktok:    process.env.PUBLER_ACCOUNT_TIKTOK,
   };
 
-  let profileIds = [];
+  let accountIds = [];
   if (platforms?.length) {
-    profileIds = platforms
-      .map(p => platformMap[p])
-      .filter(Boolean);
+    accountIds = platforms.map(p => platformMap[p]).filter(Boolean);
   }
-  // Fall back to all profiles if no per-platform IDs are set
-  if (!profileIds.length && process.env.BUFFER_PROFILE_IDS) {
-    profileIds = process.env.BUFFER_PROFILE_IDS.split(",").map(s => s.trim()).filter(Boolean);
+  if (!accountIds.length && process.env.PUBLER_ACCOUNT_IDS) {
+    accountIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
   }
 
-  if (!profileIds.length) {
+  if (!accountIds.length) {
     return res.status(400).json({
-      error: "No Buffer profile IDs configured",
-      setup: "Go to Integrations → Social Publishing → Load Profiles to find your profile IDs, then add them to Vercel env vars",
+      error: "No Publer account IDs configured",
+      setup: "Go to Integrations → Social Publishing → Load Profiles to find your account IDs, then add them to Vercel env vars",
     });
   }
 
@@ -115,40 +117,46 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Build Buffer API body
-  const body = { text: postText };
-  profileIds.forEach((id, i) => { body[`profile_ids[${i}]`] = id; });
+  // Build Publer API body
+  const payload = {
+    account_ids: accountIds,
+    text: postText,
+  };
 
   if (scheduleDate) {
-    body.scheduled_at = new Date(scheduleDate).toISOString();
-  } else {
-    body.now = "true";
+    payload.scheduled_at = new Date(scheduleDate).toISOString();
+  }
+
+  if (isStory) {
+    payload.type = "STORY";
   }
 
   if (publicMediaUrls.length) {
-    body["media[photo]"] = publicMediaUrls[0];
-    body["media[thumbnail]"] = publicMediaUrls[0];
+    payload.media = publicMediaUrls.map(url => ({ url }));
   }
 
   try {
-    const { ok, data } = await bufferRequest("/updates/create.json", "POST", body, token);
-    if (ok && (data.success || data.updates?.length)) {
+    const { ok, data } = await publerRequest("/post", "POST", payload, apiKey);
+
+    if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
+      const posts = data.posts || (data.id ? [data] : []);
       return res.json({
-        status: "success",
-        backend: "buffer",
-        postIds: (data.updates || []).map(u => u.id),
+        status: scheduleDate ? "scheduled" : "success",
+        backend: "publer",
+        postIds: posts.map(p => p.id).filter(Boolean),
         scheduled: !!scheduleDate,
         ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0 ? {
           _warning: "Image skipped — must be a public HTTPS URL. Use Ideogram AI or paste a URL.",
         } : {}),
       });
     }
+
     return res.status(400).json({
       error: data.message || data.error || "Post failed",
-      backend: "buffer",
+      backend: "publer",
       raw: data,
     });
   } catch (e) {
-    return res.status(500).json({ error: e.message, backend: "buffer" });
+    return res.status(500).json({ error: e.message, backend: "publer" });
   }
 }
