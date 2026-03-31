@@ -75,6 +75,7 @@ const SEED = {
   brandAssets: [],
   savedAds: [],
   socialPosts: [],
+  campaigns: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -108,6 +109,7 @@ function useStore() {
           brandAssets:  Array.isArray(p.brandAssets)  ? p.brandAssets  : [],
           savedAds:     Array.isArray(p.savedAds)     ? p.savedAds     : [],
           socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
+          campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -275,6 +277,9 @@ function reducer(prev, action, payload) {
     case "ADD_SOCIAL_POST":     return {...prev, socialPosts:[...(prev.socialPosts||[]),payload]};
     case "UPDATE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).map(p=>p.id===payload.id?{...p,...payload}:p)};
     case "DELETE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).filter(p=>p.id!==payload)};
+    case "ADD_CAMPAIGN":    return {...prev, campaigns:[payload,...(prev.campaigns||[])]};
+    case "UPDATE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
     default:                  return prev;
   }
