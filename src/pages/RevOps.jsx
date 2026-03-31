@@ -422,6 +422,7 @@ export default function App() {
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
     {id:"emails",      icon:"✉", label:"Emails"},
+    {id:"social",      icon:"📱", label:"Social"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
@@ -566,6 +567,7 @@ export default function App() {
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="emails"      && <ModEmails/>}
+            {mod==="social"      && <ModSocial/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -6202,6 +6204,300 @@ function _AdBold({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p
 function _AdClean({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box",alignItems:"center",justifyContent:"center"}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:40,maxWidth:160,objectFit:"contain",marginBottom:Math.round(h*.035)}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:Math.round(h*.035)}}><div style={{width:5,height:24,background:ac,borderRadius:2}}/><div style={{fontSize:16,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{img&&<img src={img} style={{width:Math.round(w*.52),height:Math.round(h*.44),objectFit:"contain",borderRadius:14,marginBottom:Math.round(h*.038)}}/>}{badge&&<div style={{background:ac,color:"#fff",padding:"6px 16px",borderRadius:4,fontSize:14,fontWeight:800,marginBottom:16}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.066),fontWeight:900,color:tc,lineHeight:1.08,letterSpacing:-.5,textAlign:"center",marginBottom:16}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.025),color:tc+"99",lineHeight:1.55,textAlign:"center",maxWidth:Math.round(w*.76),marginBottom:22}}>{sub}</div>}{cta&&<div style={{background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.052)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:Math.round(h*.045)}}>ST1SPORTS.COM</div></div>);}
 function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",background:bg,width:"100%",height:"100%",fontFamily:"system-ui"}}><div style={{display:"flex",flexDirection:"column",flex:1,padding:p,justifyContent:"center",gap:18}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:34,maxWidth:130,objectFit:"contain",marginBottom:6}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:"6px 14px",borderRadius:4,fontSize:13,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.074),fontWeight:900,color:tc,lineHeight:1.06,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.026),color:tc+"AA",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.04)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800,marginTop:8}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:"auto"}}>ST1SPORTS.COM</div></div><div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",background:`${ac}0F`,borderLeft:`4px solid ${ac}`}}>{img?<img src={img} style={{width:Math.round(w*.41),height:Math.round(h*.66),objectFit:"contain",borderRadius:10}}/>:<div style={{fontSize:18,color:tc+"33",fontWeight:700,letterSpacing:2}}>PRODUCT IMAGE</div>}</div></div>);}
 function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&(logoUrl?<img src={logoUrl} style={{position:"absolute",top:py,left:px,maxHeight:32,maxWidth:120,objectFit:"contain"}} alt="Logo"/>:<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SOCIAL MEDIA
+// ════════════════════════════════════════════════════════════════════════════
+const PLATFORM_COLORS = {instagram:"#E4405F",facebook:"#1877F2",linkedin:"#0A66C2",twitter:"#1DA1F2",tiktok:"#010101"};
+const SOCIAL_PLATFORMS = ["instagram","facebook","linkedin","twitter","tiktok"];
+
+function ModSocial() {
+  const {s,dispatch,toast}=useApp();
+  const [tab,setTab]=useState("calendar");
+  const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
+  const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
+  // New post form
+  const [caption,setCaption]=useState("");
+  const [platforms,setPlatforms]=useState([]);
+  const [postType,setPostType]=useState("post");
+  const [imageUrl,setImageUrl]=useState("");
+  const [scheduleAt,setScheduleAt]=useState("");
+  const [scheduleTime,setScheduleTime]=useState("09:00");
+  const [linkUrl,setLinkUrl]=useState("");
+  const [linkedCampId,setLinkedCampId]=useState("");
+  const [posting,setPosting]=useState(false);
+  const [genRunning,setGenRunning]=useState(false);
+  // Filters
+  const [filterStatus,setFilterStatus]=useState("all");
+  const [filterPlatform,setFilterPlatform]=useState("all");
+
+  const campaigns=s.campaigns||[];
+
+  // Combine standalone + campaign social posts (scheduled drafts + published)
+  const standalonePosts=(s.socialPosts||[]).map(p=>({...p,_source:"standalone"}));
+  const campaignDraftPosts=campaigns.flatMap(c=>
+    (c.socialDrafts||[])
+      .filter(p=>(p.scheduledDate||p.date))
+      .map(p=>({...p,date:p.scheduledDate||p.date,status:"scheduled",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
+  );
+  const campaignPosts=campaigns.flatMap(c=>
+    (c.socialPosts||[]).map(p=>({...p,_source:"campaign",_campaignId:c.id,_campaignName:c.name}))
+  );
+  const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
+    .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
+
+  const getPostsForDay=(y,m,d)=>{
+    const dateStr=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    return allPosts.filter(p=>(p.date||"").slice(0,10)===dateStr);
+  };
+
+  const generateCaption=async()=>{
+    setGenRunning(true);
+    const r=await aiCall(
+      `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`,
+      {tokens:300}
+    );
+    if(r) setCaption(r);
+    setGenRunning(false);
+  };
+
+  const submitPost=async()=>{
+    if(!platforms.length){toast("Select at least one platform","error");return;}
+    if(!caption.trim()){toast("Caption is required","error");return;}
+    setPosting(true);
+    const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
+    try{
+      const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
+      const data=await r.json();
+      const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
+      if(isSuccess){
+        const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:scheduleAt?"scheduled":"published",postType,campaignId:linkedCampId||""};
+        dispatch("ADD_SOCIAL_POST",post);
+        if(linkedCampId){
+          const camp=campaigns.find(c=>c.id===linkedCampId);
+          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
+        }
+        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted!","success");
+        setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+        setTab("posts");
+      }else{toast(data.error||"Post failed","error");}
+    }catch{toast("Post failed","error");}
+    setPosting(false);
+  };
+
+  const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const DAY_NAMES=["Su","Mo","Tu","We","Th","Fr","Sa"];
+  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
+  const firstDay=new Date(calYear,calMonth,1).getDay();
+
+  const filtered=allPosts.filter(p=>{
+    if(filterStatus!=="all"&&p.status!==filterStatus) return false;
+    if(filterPlatform!=="all"&&!(p.platforms||[]).includes(filterPlatform)) return false;
+    return true;
+  });
+
+  const scheduledCount=allPosts.filter(p=>p.status==="scheduled").length;
+
+  return(
+    <div style={{padding:"22px 26px"}}>
+      <PH title="SOCIAL MEDIA" sub="Schedule, publish, and track posts across all platforms"/>
+      <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",gap:5}}>
+          {[["calendar","📅 CALENDAR"],["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
+            <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {scheduledCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,padding:"3px 9px",borderRadius:3}}>{scheduledCount} SCHEDULED</span>}
+          <OBtn sm onClick={()=>setTab("new")}>+ NEW POST</OBtn>
+        </div>
+      </div>
+
+      {/* ── CALENDAR ──────────────────────────────────────────────────────── */}
+      {tab==="calendar"&&(
+        <div>
+          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
+            <button onClick={()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>‹</button>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,flex:1,textAlign:"center",letterSpacing:.3}}>{MONTH_NAMES[calMonth]} {calYear}</div>
+            <button onClick={()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>›</button>
+            <OBtn sm onClick={()=>setTab("new")}>+ POST</OBtn>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:2}}>
+            {DAY_NAMES.map(d=><div key={d} style={{textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,padding:"5px 0",letterSpacing:.5}}>{d}</div>)}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+            {Array(firstDay).fill(null).map((_,i)=><div key={`e${i}`} style={{background:B.surface,minHeight:90,borderRadius:4}}/>)}
+            {Array(daysInMonth).fill(null).map((_,i)=>{
+              const d=i+1;
+              const posts=getPostsForDay(calYear,calMonth,d);
+              const isToday=new Date().getFullYear()===calYear&&new Date().getMonth()===calMonth&&new Date().getDate()===d;
+              return(
+                <div key={d} style={{background:B.bg,border:`1px solid ${isToday?B.orange:B.border}`,borderRadius:4,padding:"5px 6px",minHeight:90,cursor:posts.length?"pointer":"default"}} onClick={()=>{if(posts.length)setTab("posts");}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
+                  {posts.slice(0,3).map((p,pi)=>{
+                    const col=PLATFORM_COLORS[(p.platforms||[])[0]]||B.purple;
+                    const isDraft=p._source==="campaign_draft";
+                    return(
+                      <div key={pi} style={{background:`${col}18`,borderLeft:`2px solid ${col}`,padding:"1px 5px",borderRadius:2,marginBottom:2,opacity:isDraft?.7:1}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isDraft?"(draft) ":""}{(p.platforms||[]).join(", ")}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{(p.caption||"").slice(0,28)}</div>
+                      </div>
+                    );
+                  })}
+                  {posts.length>3&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:2}}>+{posts.length-3}</div>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>PLATFORMS:</div>
+            {Object.entries(PLATFORM_COLORS).map(([pl,col])=>(
+              <div key={pl} style={{display:"flex",alignItems:"center",gap:4}}>
+                <div style={{width:10,height:10,borderRadius:2,background:col,flexShrink:0}}/>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{pl}</span>
+              </div>
+            ))}
+            <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:12}}>
+              <div style={{width:10,height:10,borderRadius:2,background:B.purple,opacity:.5,flexShrink:0}}/>
+              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>campaign draft</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ALL POSTS ─────────────────────────────────────────────────────── */}
+      {tab==="posts"&&(
+        <div>
+          <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
+            <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
+              {["all","scheduled","published","draft"].map(st=>(
+                <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st.toUpperCase()}</button>
+              ))}
+            </div>
+            <select value={filterPlatform} onChange={e=>setFilterPlatform(e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"5px 8px",fontSize:11,color:B.text}}>
+              <option value="all">All platforms</option>
+              {SOCIAL_PLATFORMS.map(p=><option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          {filtered.length===0?(
+            <div className="card" style={{padding:40,textAlign:"center"}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No posts yet</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Create standalone posts here or schedule posts inside a campaign</div>
+              <OBtn onClick={()=>setTab("new")}>+ CREATE FIRST POST</OBtn>
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {filtered.map(p=>{
+                const sc={scheduled:B.blue,published:B.green,draft:B.muted}[p.status]||B.muted;
+                return(
+                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                    {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
+                        {(p.platforms||[]).map(pl=>(
+                          <span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
+                        ))}
+                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{(p.status||"draft").toUpperCase()}</span>
+                        {p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
+                        {p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
+                        {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
+                      </div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>
+                    </div>
+                    {p._source==="standalone"&&(
+                      <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer",flexShrink:0}}>✕</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── NEW POST ──────────────────────────────────────────────────────── */}
+      {tab==="new"&&(
+        <div style={{maxWidth:640}}>
+          <div className="card" style={{padding:22}}>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:18}}>NEW POST</div>
+            {/* Platforms */}
+            <div style={{marginBottom:16}}>
+              <Lbl s={{marginBottom:8}}>PLATFORMS</Lbl>
+              <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                {SOCIAL_PLATFORMS.map(pl=>{
+                  const on=platforms.includes(pl);
+                  const col=PLATFORM_COLORS[pl];
+                  return(<button key={pl} onClick={()=>setPlatforms(p=>on?p.filter(x=>x!==pl):[...p,pl])} style={{background:on?col:B.surface,color:on?"#fff":B.muted,border:`2px solid ${on?col:B.border}`,borderRadius:5,padding:"8px 16px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:on?600:400}}>{pl.charAt(0).toUpperCase()+pl.slice(1)}</button>);
+                })}
+              </div>
+            </div>
+            {/* Post type */}
+            <div style={{marginBottom:16}}>
+              <Lbl s={{marginBottom:7}}>POST TYPE</Lbl>
+              <div style={{display:"flex",gap:6}}>
+                {["post","story","reel"].map(t=>(
+                  <button key={t} onClick={()=>setPostType(t)} style={{background:postType===t?`${B.orange}14`:B.surface,color:postType===t?B.orange:B.muted,border:`1px solid ${postType===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t.toUpperCase()}</button>
+                ))}
+              </div>
+            </div>
+            {/* Caption */}
+            <div style={{marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <Lbl>CAPTION</Lbl>
+                <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
+                  {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                </button>
+              </div>
+              <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
+            </div>
+            {/* Image */}
+            <div style={{marginBottom:14}}>
+              <Lbl s={{marginBottom:5}}>IMAGE URL (optional)</Lbl>
+              <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:120,borderRadius:6,objectFit:"cover"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
+            </div>
+            {/* Link */}
+            <div style={{marginBottom:14}}>
+              <Lbl s={{marginBottom:5}}>LINK URL (optional)</Lbl>
+              <input value={linkUrl} onChange={e=>setLinkUrl(e.target.value)} placeholder="https://st1sports.com/..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+            </div>
+            {/* Campaign link */}
+            {campaigns.length>0&&(
+              <div style={{marginBottom:14}}>
+                <Lbl s={{marginBottom:5}}>LINK TO CAMPAIGN (optional)</Lbl>
+                <select value={linkedCampId} onChange={e=>setLinkedCampId(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12}}>
+                  <option value="">Standalone post</option>
+                  {campaigns.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+            )}
+            {/* Schedule */}
+            <div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
+              <Lbl s={{marginBottom:8}}>SCHEDULE</Lbl>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE (blank = post now)</div>
+                  <input type="date" value={scheduleAt} onChange={e=>setScheduleAt(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+                </div>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>
+                  <input type="time" value={scheduleTime} onChange={e=>setScheduleTime(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+                </div>
+              </div>
+            </div>
+            {!platforms.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:10}}>Select at least one platform</div>}
+            <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length} style={{width:"100%",justifyContent:"center"}}>
+              {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
+            </OBtn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ModAds() {
   const {s, dispatch, toast} = useApp();
