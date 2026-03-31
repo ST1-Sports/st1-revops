@@ -1667,16 +1667,34 @@ function AyrsharePanel({addLog}) {
   const [profiles, setProfiles] = useState([]);
   const [loadingProfiles, setLoadingProfiles] = useState(false);
 
+  const safePost = async (body) => {
+    const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    let data;
+    try { data = await r.json(); } catch {
+      const txt = await r.text().catch(()=>"");
+      if (!r.ok || txt.toLowerCase().includes("publer_api_key") || txt.toLowerCase().includes("server error")) {
+        throw new Error("PUBLER_API_KEY not set in Vercel — add it under Settings → Environment Variables, then redeploy.");
+      }
+      throw new Error(txt || `Server error ${r.status}`);
+    }
+    return data;
+  };
+
   const testConnection = async () => {
     setTesting(true); setTestResult(null);
     try {
-      const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"test"}) });
-      const data = await r.json();
+      const data = await safePost({action:"test"});
       if (data.ok) {
         setTestResult({ok:true, user: data.user});
         addLog("Publer connected ✓","success");
         try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
-      } else { setTestResult({ok:false, error: data.error}); addLog(`Publer: ${data.error}`,"error"); }
+      } else {
+        const msg = data.error?.includes("PUBLER_API_KEY")
+          ? "PUBLER_API_KEY not set in Vercel — add it under Settings → Environment Variables, then redeploy."
+          : (data.error || "Connection failed");
+        setTestResult({ok:false, error: msg});
+        addLog(`Publer: ${msg}`,"error");
+      }
     } catch(e) { setTestResult({ok:false, error:e.message}); }
     setTesting(false);
   };
@@ -1684,8 +1702,7 @@ function AyrsharePanel({addLog}) {
   const loadProfiles = async () => {
     setLoadingProfiles(true); setProfiles([]);
     try {
-      const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"profiles"}) });
-      const data = await r.json();
+      const data = await safePost({action:"profiles"});
       if (data.ok) { setProfiles(data.profiles||[]); addLog(`Loaded ${data.profiles?.length||0} Publer accounts`,"success"); }
       else { addLog(`Failed: ${data.error}`,"error"); }
     } catch(e) { addLog(e.message,"error"); }
