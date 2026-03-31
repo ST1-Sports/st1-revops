@@ -3936,7 +3936,8 @@ function ModMarketing() {
   const [selCampId,setSelCampId]=useState(null);
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
-  const [campSubTab,setCampSubTab]=useState("email");
+  const [campSubTab,setCampSubTab]=useState("execute");
+  const [campStep,setCampStep]=useState(1); // wizard step 1=strategy 2=assets 3=launch
   // Calendar
   const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
   const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
@@ -3970,8 +3971,19 @@ function ModMarketing() {
     const t = await aiCall(p,{tokens:900}); setOut(t||""); setRunning(false);
   };
 
+  const CHANNELS = [
+    {id:"email",icon:"✉",label:"Cold Email"},
+    {id:"social",icon:"📱",label:"Social Media"},
+    {id:"paid_ads",icon:"⬛",label:"Paid Ads"},
+    {id:"sms",icon:"💬",label:"SMS"},
+    {id:"phone",icon:"📞",label:"Phone"},
+    {id:"newsletter",icon:"📧",label:"Newsletter"},
+  ];
+  const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
+
   const startNewCampaign = () => {
-    setCampDraft({name:"",product,audience,channel,tone,ctx:"",touches:[],startDate:today(),endDate:"",goal:""});
+    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"]});
+    setCampStep(1);
     setShowNewCampForm(true);
     setSelCampId(null);
   };
@@ -4054,13 +4066,15 @@ function ModMarketing() {
       enrollments: seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr})),
       socialPosts: [],
       adIds: [],
+      channels: campDraft.channels||[],
+      metrics: campDraft.metrics||[],
       status: "active",
       createdAt: todayStr,
       color: CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
     };
     dispatch("ADD_CAMPAIGN", camp);
     seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
-    setShowNewCampForm(false); setCampDraft(null); setSelCampId(campId); setCampSubTab("email");
+    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("execute");
     setSegResult(null); setSelectedContacts(new Set());
     toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
   };
@@ -4297,147 +4311,217 @@ function ModMarketing() {
           )}
 
           {showNewCampForm&&campDraft&&(
-            <div className="card" style={{padding:18,maxWidth:900}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,letterSpacing:.2}}>NEW CAMPAIGN</div>
-                <GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());}}>CANCEL</GBtn>
+            <div style={{maxWidth:860}}>
+              {/* Wizard stepper */}
+              <div style={{display:"flex",alignItems:"center",marginBottom:22,gap:0}}>
+                {[["1","STRATEGY","Define goals & channels"],["2","ASSETS","Build your content"],["3","LAUNCH","Review & activate"]].map(([n,label,sub],i)=>{
+                  const done=campStep>Number(n);const active=campStep===Number(n);
+                  return(<>
+                    <div key={n} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
+                      <div style={{width:32,height:32,borderRadius:"50%",background:done?B.green:active?B.orange:B.surface,border:`2px solid ${done?B.green:active?B.orange:B.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Russo One',sans-serif",fontSize:13,color:done||active?B.white:B.muted,cursor:done?"pointer":"default"}} onClick={()=>done&&setCampStep(Number(n))}>{done?"✓":n}</div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:active?B.orange:B.muted,letterSpacing:.5,textAlign:"center"}}>{label}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"center"}}>{sub}</div>
+                    </div>
+                    {i<2&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
+                  </>);
+                })}
+                <div style={{marginLeft:"auto",paddingLeft:16}}><GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());setCampStep(1);}}>CANCEL</GBtn></div>
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Campaign Name</Lbl>
-                  <input value={campDraft.name} onChange={e=>setCampDraft(c=>({...c,name:e.target.value}))} placeholder="e.g. T&F ADs — Spring 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+
+              {/* STEP 1: STRATEGY */}
+              {campStep===1&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>1 — STRATEGY</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+                  <div><Lbl s={{marginBottom:4}}>Campaign Name</Lbl><input value={campDraft.name} onChange={e=>setCampDraft(c=>({...c,name:e.target.value}))} placeholder="e.g. T&F Spring Push 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Campaign Goal</Lbl><input value={campDraft.goal} onChange={e=>setCampDraft(c=>({...c,goal:e.target.value}))} placeholder="e.g. 5 new quotes, 10 meetings booked" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Start Date</Lbl><input type="date" value={campDraft.startDate} onChange={e=>setCampDraft(c=>({...c,startDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>End Date</Lbl><input type="date" value={campDraft.endDate||""} onChange={e=>setCampDraft(c=>({...c,endDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Product Focus</Lbl><select value={campDraft.product} onChange={e=>setCampDraft(c=>({...c,product:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{PRODUCT_CATS.map(o=><option key={o}>{o}</option>)}</select></div>
+                  <div><Lbl s={{marginBottom:4}}>Target Audience</Lbl><input value={campDraft.audience} onChange={e=>setCampDraft(c=>({...c,audience:e.target.value}))} placeholder="Athletic Director, Coach, all..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
                 </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Goal</Lbl>
-                  <input value={campDraft.goal} onChange={e=>setCampDraft(c=>({...c,goal:e.target.value}))} placeholder="e.g. 5 new quotes, 10 meetings" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                <div style={{marginBottom:16}}>
+                  <Lbl s={{marginBottom:8}}>CHANNELS — select all that apply</Lbl>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+                    {CHANNELS.map(ch=>{
+                      const on=(campDraft.channels||[]).includes(ch.id);
+                      return(<button key={ch.id} onClick={()=>setCampDraft(c=>({...c,channels:on?c.channels.filter(x=>x!==ch.id):[...(c.channels||[]),ch.id]}))}
+                        style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:`2px solid ${on?B.orange:B.border}`,borderRadius:6,padding:"10px 12px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:16}}>{ch.icon}</span>
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:on?600:400}}>{ch.label}</span>
+                        {on&&<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>✓</span>}
+                      </button>);
+                    })}
+                  </div>
+                  {(campDraft.channels||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:6}}>Select at least one channel to reach your audience</div>}
                 </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Start Date</Lbl>
-                  <input type="date" value={campDraft.startDate} onChange={e=>setCampDraft(c=>({...c,startDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+                <div style={{marginBottom:16}}>
+                  <Lbl s={{marginBottom:8}}>METRICS TO TRACK</Lbl>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {METRICS.map(m=>{
+                      const on=(campDraft.metrics||[]).includes(m);
+                      return(<button key={m} onClick={()=>setCampDraft(c=>({...c,metrics:on?c.metrics.filter(x=>x!==m):[...(c.metrics||[]),m]}))}
+                        style={{background:on?`${B.blue}12`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
+                        {on?"☑ ":"☐ "}{m}
+                      </button>);
+                    })}
+                  </div>
                 </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>End Date</Lbl>
-                  <input type="date" value={campDraft.endDate||""} onChange={e=>setCampDraft(c=>({...c,endDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Product Focus</Lbl>
-                  <select value={campDraft.product} onChange={e=>setCampDraft(c=>({...c,product:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-                    {PRODUCT_CATS.map(o=><option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Channel</Lbl>
-                  <select value={campDraft.channel} onChange={e=>setCampDraft(c=>({...c,channel:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-                    {["cold email","LinkedIn","email newsletter","SMS","phone"].map(o=><option key={o}>{o}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:4}}>Audience</Lbl>
-                  <input value={campDraft.audience} onChange={e=>setCampDraft(c=>({...c,audience:e.target.value}))} placeholder="Athletic Director, Coach, all..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-                </div>
-                <div>
+                <div style={{marginBottom:14}}>
                   <Lbl s={{marginBottom:4}}>Tone</Lbl>
-                  <div style={{display:"flex",gap:5,flexWrap:"wrap",paddingTop:6}}>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                     {["friendly","professional","urgent","conversational"].map(t=>(
                       <button key={t} onClick={()=>setCampDraft(c=>({...c,tone:t}))} style={{background:campDraft.tone===t?`${B.orange}14`:B.white,color:campDraft.tone===t?B.orange:B.muted,border:`1px solid ${campDraft.tone===t?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>
                     ))}
                   </div>
                 </div>
-              </div>
-              <div style={{marginBottom:14}}>
-                <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
-                <textarea value={campDraft.ctx} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
-              </div>
-              {/* ── SMART SEGMENT ─────────────────────────────────────── */}
-              <div style={{marginBottom:14}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                  <Lbl>AUDIENCE SEGMENT</Lbl>
-                  <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
-                    {segRunning?"✦ ANALYZING...":"✦ SMART SEGMENT"}
-                  </button>
+                <div style={{marginBottom:16}}>
+                  <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
+                  <textarea value={campDraft.ctx} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
                 </div>
-                {segRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"8px 0"}}><Spin/>AI is matching contacts to this campaign…</div>}
-                {!segRunning&&!segResult&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
-                    {(s.contacts||[]).length===0
-                      ? "No contacts yet — import from Apollo, scrape leads, or add manually"
-                      : `${(s.contacts||[]).length} contacts in database · click Smart Segment to let AI find the best matches`
-                    }
-                  </div>
-                )}
-                {segResult&&(
-                  <div>
-                    {segResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"8px 10px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5,marginBottom:10,lineHeight:1.5}}>{segResult.summary}</div>}
-                    {(()=>{
-                      const byFit={high:[],medium:[],low:[]};
-                      (segResult.segments||[]).forEach(sg=>{byFit[sg.fit]?.push(sg);});
-                      const fitConfig=[["high","BEST MATCH",B.green],["medium","GOOD MATCH",B.orange],["low","POSSIBLE",B.muted]];
-                      return fitConfig.map(([fit,label,color])=>{
-                        if(!byFit[fit]?.length) return null;
-                        return(
-                          <div key={fit} style={{marginBottom:10}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color,letterSpacing:1}}>{label} ({byFit[fit].length})</div>
-                              <div style={{display:"flex",gap:6}}>
-                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.add(sg.contactId));return n;})} style={{background:"none",border:"none",color,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ ALL</button>
-                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.delete(sg.contactId));return n;})} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>− ALL</button>
-                              </div>
-                            </div>
-                            <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
-                              {byFit[fit].map(sg=>{
-                                const c=(s.contacts||[]).find(c=>c.id===sg.contactId);
-                                if(!c)return null;
-                                const checked=selectedContacts.has(sg.contactId);
-                                const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unknown";
-                                const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                                const school=typeof c.school==="string"?c.school:c.school?.name||"";
-                                return(
-                                  <div key={sg.contactId} onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);checked?n.delete(sg.contactId):n.add(sg.contactId);return n;})}
-                                    style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 8px",borderRadius:5,background:checked?`${color}08`:B.surface,border:`1px solid ${checked?color:B.border}`,cursor:"pointer"}}>
-                                    <input type="checkbox" checked={checked} onChange={()=>{}} style={{marginTop:2,flexShrink:0,accentColor:color}}/>
-                                    <div style={{flex:1,minWidth:0}}>
-                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}{c.email&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginLeft:5}}>✉</span>}</div>
-                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
-                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color,marginTop:1,fontStyle:"italic"}}>{sg.reason}</div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      });
-                    })()}
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>
-                      {selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment
-                    </div>
-                  </div>
-                )}
+                <div style={{display:"flex",justifyContent:"flex-end"}}>
+                  <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: BUILD ASSETS →</OBtn>
+                </div>
               </div>
-              <OBtn onClick={generateTouches} disabled={genRunning} style={{marginBottom:14,width:"100%"}}>
-                {genRunning?"✦ GENERATING SEQUENCE...":"✦ GENERATE 3-TOUCH SEQUENCE"}
-              </OBtn>
-              {campDraft.touches.length>0&&(
-                <div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Review and edit each email before launching:</div>
-                  {campDraft.touches.map((t,i)=>(
-                    <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
-                      <div style={{marginBottom:6}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
-                        <input value={t.subject||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,subject:e.target.value}:x)}))}
-                          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              )}
+
+              {/* STEP 2: ASSETS */}
+              {campStep===2&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>2 — ASSETS</div>
+                {/* Email channel: AI sequence generator */}
+                {(campDraft.channels||[]).includes("email")&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE</div>
+                    <OBtn onClick={generateTouches} disabled={genRunning} style={{marginBottom:12}}>
+                      {genRunning?"✦ GENERATING...":"✦ AI GENERATE 3-TOUCH EMAIL SEQUENCE"}
+                    </OBtn>
+                    {campDraft.touches.length>0&&campDraft.touches.map((t,i)=>(
+                      <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
+                        <div style={{marginBottom:6}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
+                          <input value={t.subject||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,subject:e.target.value}:x)}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                        <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
+                          <textarea value={t.body||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,body:e.target.value}:x)}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/></div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
                       </div>
-                      <div>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
-                        <textarea value={t.body||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,body:e.target.value}:x)}))}
-                          rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-                      </div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Merge tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
+                    ))}
+                  </div>
+                )}
+                {/* Social channel */}
+                {(campDraft.channels||[]).includes("social")&&(
+                  <div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📱 SOCIAL MEDIA POSTS</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>You'll add and schedule social posts in the Execute step once the campaign is created.</div>
+                  </div>
+                )}
+                {/* Paid ads channel */}
+                {(campDraft.channels||[]).includes("paid_ads")&&(
+                  <div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ PAID ADS</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Create ads in the Ad Engine tab, then link them to this campaign after it's created.</div>
+                  </div>
+                )}
+                {/* SMS/Phone channels */}
+                {((campDraft.channels||[]).includes("sms")||(campDraft.channels||[]).includes("phone"))&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📞 CALL / SMS NOTES</div>
+                    <textarea value={campDraft.callNotes||""} onChange={e=>setCampDraft(c=>({...c,callNotes:e.target.value}))} rows={3} placeholder="Talking points, script outline, key messages..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
+                )}
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:8}}>
+                  <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(3)}>NEXT: REVIEW & LAUNCH →</OBtn>
+                </div>
+              </div>
+              )}
+
+              {/* STEP 3: LAUNCH */}
+              {campStep===3&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>3 — REVIEW & LAUNCH</div>
+                {/* Summary */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+                  {[["Campaign",campDraft.name],["Goal",campDraft.goal||"—"],["Product",campDraft.product],["Audience",campDraft.audience||"All"],["Dates",`${campDraft.startDate}${campDraft.endDate?` → ${campDraft.endDate}`:""}`],["Tone",campDraft.tone]].map(([k,v])=>(
+                    <div key={k} style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:2}}>{k.toUpperCase()}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{v}</div>
                     </div>
                   ))}
-                  <OBtn onClick={saveCampaign} style={{width:"100%",marginTop:4}}>✓ LAUNCH CAMPAIGN</OBtn>
                 </div>
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>CHANNELS</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.channels||[]).map(ch=>{const c=CHANNELS.find(x=>x.id===ch);return<span key={ch} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"4px 10px"}}>{c?.icon} {c?.label}</span>;})}</div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>TRACKING METRICS</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"4px 10px"}}>{m}</span>)}</div>
+                </div>
+                <div style={{marginBottom:18}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>EMAIL TOUCHES</div>
+                  {campDraft.touches.length===0?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>None added — go back to Assets to generate</div>:<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{campDraft.touches.length} email touch{campDraft.touches.length!==1?"es":""} ready</div>}
+                </div>
+                {/* Smart segment */}
+                <div style={{marginBottom:18}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <Lbl>AUDIENCE — who gets enrolled?</Lbl>
+                    <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
+                      {segRunning?"✦ ANALYZING...":"✦ SMART SEGMENT"}
+                    </button>
+                  </div>
+                  {segRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"8px 0"}}><Spin/>AI matching contacts…</div>}
+                  {!segRunning&&!segResult&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>{(s.contacts||[]).length} contacts · run Smart Segment to find best matches, or launch to enroll by keyword</div>}
+                  {segResult&&(
+                    <div>
+                      {segResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"8px 10px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5,marginBottom:10,lineHeight:1.5}}>{segResult.summary}</div>}
+                      {(()=>{
+                        const byFit={high:[],medium:[],low:[]};
+                        (segResult.segments||[]).forEach(sg=>{byFit[sg.fit]?.push(sg);});
+                        return [["high","BEST MATCH",B.green],["medium","GOOD MATCH",B.orange],["low","POSSIBLE",B.muted]].map(([fit,label,color])=>{
+                          if(!byFit[fit]?.length) return null;
+                          return(
+                            <div key={fit} style={{marginBottom:10}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color,letterSpacing:1}}>{label} ({byFit[fit].length})</div>
+                                <div style={{display:"flex",gap:6}}>
+                                  <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.add(sg.contactId));return n;})} style={{background:"none",border:"none",color,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ ALL</button>
+                                  <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.delete(sg.contactId));return n;})} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>− ALL</button>
+                                </div>
+                              </div>
+                              <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
+                                {byFit[fit].map(sg=>{
+                                  const c=(s.contacts||[]).find(c=>c.id===sg.contactId);
+                                  if(!c) return null;
+                                  const checked=selectedContacts.has(sg.contactId);
+                                  const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unknown";
+                                  const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                                  const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                                  return(
+                                    <div key={sg.contactId} onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);checked?n.delete(sg.contactId):n.add(sg.contactId);return n;})}
+                                      style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 8px",borderRadius:5,background:checked?`${color}08`:B.surface,border:`1px solid ${checked?color:B.border}`,cursor:"pointer"}}>
+                                      <input type="checkbox" checked={checked} onChange={()=>{}} style={{marginTop:2,flexShrink:0,accentColor:color}}/>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}{c.email&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginLeft:5}}>✉</span>}</div>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color,marginTop:1,fontStyle:"italic"}}>{sg.reason}</div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>{selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment</div>
+                    </div>
+                  )}
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
+                  <OBtn onClick={saveCampaign} style={{fontSize:13,padding:"10px 28px"}}>🚀 LAUNCH CAMPAIGN</OBtn>
+                </div>
+              </div>
               )}
             </div>
           )}
@@ -4462,7 +4546,7 @@ function ModMarketing() {
               </div>
               {/* Sub-tabs */}
               <div style={{display:"flex",gap:0,marginBottom:16,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",width:"fit-content"}}>
-                {[["email","✉ EMAIL"],["social","📱 SOCIAL"],["ads","⬛ ADS"],["graphics","🖼 GRAPHICS"]].map(([id,l])=>(
+                {[["strategy","📋 STRATEGY"],["assets","🛠 ASSETS"],["execute","▶ EXECUTE"]].map(([id,l])=>(
                   <button key={id} onClick={()=>setCampSubTab(id)} style={{background:campSubTab===id?B.orange:"transparent",color:campSubTab===id?B.white:B.muted,border:"none",padding:"8px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
