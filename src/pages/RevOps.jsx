@@ -4215,15 +4215,14 @@ const CAMP_STATUS_COLORS = {draft:B.muted,active:B.green,paused:B.yellow,complet
 
 function ModMarketing() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("campaigns");
-  // copy/strategy state (standalone copy/strategy generators)
-  const [product,setProduct]=useState("Track & Field Equipment");
-  const [audience,setAudience]=useState("Athletic Director");
-  const [channel,setChannel]=useState("cold email");
-  const [tone,setTone]=useState("friendly");
-  const [ctx,setCtx]=useState("");
-  const [out,setOut]=useState("");
-  const [running,setRunning]=useState(false);
+  const [tab,setTab]=useState("plans");
+
+  // Plans (strategies) state
+  const [selPlanId,setSelPlanId]=useState(null);
+  const [showNewPlanForm,setShowNewPlanForm]=useState(false);
+  const [planDraft,setPlanDraft]=useState(null);
+  const [planSuggestRunning,setPlanSuggestRunning]=useState(false);
+  const [planSuggestions,setPlanSuggestions]=useState(null);
 
   // Campaign list / wizard state
   const [selCampId,setSelCampId]=useState(null);
@@ -4231,14 +4230,17 @@ function ModMarketing() {
   const [campDraft,setCampDraft]=useState(null);
   // Campaign detail sub-tabs: strategy | assets | execute | report
   const [campSubTab,setCampSubTab]=useState("strategy");
-  // Wizard steps: 1=strategy 2=assets 3=audience 4=launch
+  // Wizard steps: 1=define 2=icp 3=assets_checklist 4=build_assets 5=launch
   const [campStep,setCampStep]=useState(1);
   // Calendar
   const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
   const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
-  // Asset creation
+  // Asset generation running states per type
   const [genRunning,setGenRunning]=useState(false);
   const [genSocialRunning,setGenSocialRunning]=useState(false);
+  const [genAdRunning,setGenAdRunning]=useState(false);
+  const [genCallRunning,setGenCallRunning]=useState(false);
+  const [genMailRunning,setGenMailRunning]=useState(false);
   // Touch editing (assets tab)
   const [editingTouchIdx,setEditingTouchIdx]=useState(null);
   const [touchDraft,setTouchDraft]=useState({subject:"",body:""});
@@ -4248,7 +4250,7 @@ function ModMarketing() {
   const [checkingReplies,setCheckingReplies]=useState(false);
   const [checkingOpens,setCheckingOpens]=useState(false);
   const [previewModal,setPreviewModal]=useState(null);
-  // Audience segmentation (wizard step 3)
+  // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
   const [selectedContacts,setSelectedContacts]=useState(new Set());
@@ -4257,17 +4259,11 @@ function ModMarketing() {
   const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
 
   const campaigns = s.campaigns || [];
+  const strategies = s.strategies || [];
   const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
+  const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
   const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
-
-  const gen = async (mode) => {
-    setRunning(true); setOut("");
-    let p = mode==="copy"
-      ? `Write ${channel} copy for ST1 Sports targeting ${audience}s. Product: ${product}. Tone: ${tone}. ${ctx} ${ST1}. Include subject line if email. Under 120 words. Use {{firstName}} {{orgName}}.`
-      : `90-day marketing strategy for ST1 Sports. Focus: ${product}. Audience: ${audience}s. ${ctx} ${ST1}. Include positioning, channels, monthly plan, KPIs.`;
-    const t = await aiCall(p,{tokens:900}); setOut(t||""); setRunning(false);
-  };
 
   const CHANNELS = [
     {id:"email",icon:"✉",label:"Cold Email"},
@@ -4279,8 +4275,16 @@ function ModMarketing() {
   ];
   const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
 
-  const startNewCampaign = () => {
-    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],socialDrafts:[],adScript:"",callNotes:"",startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"],repId:""});
+  const startNewCampaign = (fromPlan=null) => {
+    setCampDraft({
+      name:"",product:"Track & Field Equipment",audience:"Athletic Director",tone:"friendly",ctx:"",
+      touches:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",
+      startDate:today(),endDate:"",goal:"",channels:[],
+      metrics:["Opens","Replies","Quotes Sent"],repId:"",
+      planId:fromPlan?.id||"",
+      icp:{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
+      assetTypes:[],
+    });
     setCampStep(1);
     setShowNewCampForm(true);
     setSelCampId(null);
@@ -4323,12 +4327,82 @@ function ModMarketing() {
     setGenSocialRunning(false);
   };
 
+  const generateAdCopy = async () => {
+    if(!campDraft) return;
+    setGenAdRunning(true);
+    const result = await aiCall(
+      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors and coaches"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
+      {tokens:600}
+    );
+    setCampDraft(c=>({...c,adCopy:result||""}));
+    setGenAdRunning(false);
+  };
+
+  const generateCallScript = async () => {
+    if(!campDraft) return;
+    setGenCallRunning(true);
+    const result = await aiCall(
+      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Include: opening line, value prop (30 secs), 3 common objections with responses, closing CTA. Under 300 words.`,
+      {tokens:800}
+    );
+    setCampDraft(c=>({...c,callScript:result||""}));
+    setGenCallRunning(false);
+  };
+
+  const generateDirectMail = async () => {
+    if(!campDraft) return;
+    setGenMailRunning(true);
+    const result = await aiCall(
+      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Format as a professional letter. Include: compelling headline, 3 bullet benefits, social proof line, clear CTA, signature. Use {{firstName}} {{orgName}} merge tags. Under 250 words.`,
+      {tokens:700}
+    );
+    setCampDraft(c=>({...c,directMail:result||""}));
+    setGenMailRunning(false);
+  };
+
+  const generateAllAssets = async () => {
+    if(!campDraft) return;
+    const types = campDraft.assetTypes||[];
+    const emailTypes = types.filter(t=>t==="email3"||t==="email5");
+    const socialTypes = types.filter(t=>t==="social3"||t==="social6");
+    if(emailTypes.length>0) await generateTouches();
+    if(socialTypes.length>0) await generateSocialDrafts();
+    if(types.includes("adcopy")) await generateAdCopy();
+    if(types.includes("callscript")) await generateCallScript();
+    if(types.includes("directmail")) await generateDirectMail();
+  };
+
+  const suggestCampaignPlan = async () => {
+    if(!planDraft) return;
+    setPlanSuggestRunning(true); setPlanSuggestions(null);
+    const result = await aiCall(
+      `You are a marketing strategist for ST1 Sports, a school/team sports equipment company.\n${ST1}\n\n`+
+      `MARKETING PLAN REQUEST:\n`+
+      `Plan Name: ${planDraft.name}\nSport Focus: ${planDraft.sport||"General"}\nStates/Areas: ${(planDraft.states||[]).join(", ")||"All"}\n`+
+      `Segment: ${planDraft.segment||"All Levels"}\nSeason Window: ${planDraft.seasonStart||""} to ${planDraft.seasonEnd||""}\n`+
+      `Goals: ${planDraft.goals||"Drive awareness and quotes"}\n\n`+
+      `Generate 4-6 campaign ideas that work together to achieve these goals.\n`+
+      `Return JSON: {"campaigns":[{"name":"","goal":"","timing":"","channels":[],"assetTypes":[]}]}\n`+
+      `channels options: email, social, paid_ads, phone, sms, newsletter\n`+
+      `assetTypes options: email3, email5, social3, social6, adcopy, callscript, directmail\n`+
+      `Make campaigns specific to the sport, region, and buying season. Return ONLY valid JSON.`,
+      {json:true,tokens:1400}
+    );
+    setPlanSuggestions(result?.campaigns||[]);
+    setPlanSuggestRunning(false);
+    if(!result?.campaigns?.length) toast("No suggestions returned — try adding more detail to the plan","info");
+  };
+
   // ── AI audience segmentation ──────────────────────────────────────────────────
   const analyzeAudience = async () => {
     if(!campDraft) return;
     setSegRunning(true); setSegResult(null);
     const contacts = s.contacts||[];
     if(contacts.length===0){toast("No contacts in database yet — import or scrape contacts first","error");setSegRunning(false);return;}
+    const icp = campDraft.icp||{};
     const rows = contacts.map(c=>{
       const title=typeof c.title==="string"?c.title:c.title?.name||"";
       const school=typeof c.school==="string"?c.school:c.school?.name||"";
@@ -4339,7 +4413,9 @@ function ModMarketing() {
       `You are a sales intelligence engine for ST1 Sports, a school/team sports equipment company.\n`+
       `${ST1}\n\n`+
       `CAMPAIGN TO FILL:\n`+
-      `Product: ${campDraft.product}\nChannel: ${campDraft.channel}\nTarget audience: ${campDraft.audience||"any"}\nContext: ${campDraft.ctx||"none"}\n\n`+
+      `Product: ${campDraft.product}\nChannels: ${(campDraft.channels||[]).join(", ")||"email"}\nTarget audience: ${campDraft.audience||"any"}\nContext: ${campDraft.ctx||"none"}\n`+
+      `ICP Sports: ${(icp.sports||[]).join(", ")||"any"}\nICP Titles: ${(icp.titles||[]).join(", ")||"any"}\n`+
+      `ICP School Level: ${icp.schoolLevel||"Both"}\nICP States: ${(icp.states||[]).join(", ")||"any"}\n\n`+
       `CONTACT DATABASE (format: id|name|title|school|sport|score|has_email|outreach_status):\n`+
       rows.join("\n")+"\n\n"+
       `TASK: Analyze each contact and return a JSON object with:\n`+
@@ -4361,11 +4437,15 @@ function ModMarketing() {
   };
 
   const saveCampaign = () => {
-    if(!campDraft||!campDraft.touches.length) return;
+    const types = campDraft?.assetTypes||[];
+    const hasEmail = types.some(t=>t==="email3"||t==="email5");
+    const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
+    if(!campDraft) return;
+    if(types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching","error");return;}
     const contacts = s.contacts||[];
     const seg = segResult
       ? contacts.filter(c=>selectedContacts.has(c.id))
-      : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes(campDraft.audience.toLowerCase().split(" ")[0].toLowerCase())));
+      : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
     const todayStr = today();
     const campId = mkId();
     const camp = {
@@ -4381,9 +4461,17 @@ function ModMarketing() {
       touches: campDraft.touches,
       enrollments: seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr})),
       socialPosts: [],
+      socialDrafts: campDraft.socialDrafts||[],
+      adCopy: campDraft.adCopy||"",
+      callScript: campDraft.callScript||"",
+      directMail: campDraft.directMail||"",
       adIds: [],
       channels: campDraft.channels||[],
       metrics: campDraft.metrics||[],
+      assetTypes: campDraft.assetTypes||[],
+      icp: campDraft.icp||{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
+      planId: campDraft.planId||"",
+      ctx: campDraft.ctx||"",
       status: "active",
       createdAt: todayStr,
       color: CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
@@ -4583,30 +4671,261 @@ function ModMarketing() {
     return events;
   };
 
+  const ASSET_TYPE_OPTIONS = [
+    {id:"email3",label:"3-Touch Email Sequence"},
+    {id:"email5",label:"5-Touch Email Sequence"},
+    {id:"social3",label:"3 Social Posts"},
+    {id:"social6",label:"6 Social Posts"},
+    {id:"adcopy",label:"Ad Copy"},
+    {id:"callscript",label:"Call Script"},
+    {id:"directmail",label:"Direct Mail Letter"},
+  ];
+  const COMMON_TITLES = ["Athletic Director","Head Coach","Assistant Coach","Procurement Manager","Principal"];
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="CAMPAIGNS" sub="Unified hub — emails, social posts, ads & creative"/>
+      <PH title="CAMPAIGNS" sub="Strategy builder, campaign wizard, and execution hub"/>
       <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap"}}>
-        {[["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["copy","COPY"],["strategy","STRATEGY"],["adengine","AD ENGINE"]].map(([id,l])=>(
+        {[["plans","PLANS"],["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["adengine","AD ENGINE"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
         ))}
       </div>
 
       {tab==="adengine"&&<ModAds/>}
 
+      {/* ── PLANS TAB ──────────────────────────────────────────────────────── */}
+      {tab==="plans"&&(
+        <div>
+          {!selPlanId&&!showNewPlanForm&&(
+            <>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{strategies.length} PLAN{strategies.length!==1?"S":""}</div>
+                <OBtn sm onClick={()=>{setPlanDraft({name:"",sport:"",states:[],segment:"All Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);}}>+ NEW PLAN</OBtn>
+              </div>
+              {strategies.length===0?(
+                <div className="card" style={{padding:40,textAlign:"center"}}>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:8}}>No plans yet — build a marketing plan to organize your campaigns</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>A marketing plan defines your sport focus, target area, segment, and goals — then AI suggests campaigns to achieve them.</div>
+                  <OBtn onClick={()=>{setPlanDraft({name:"",sport:"",states:[],segment:"All Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);}}>+ CREATE FIRST PLAN</OBtn>
+                </div>
+              ):(
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
+                  {strategies.map(plan=>{
+                    const linkedCamps=campaigns.filter(c=>c.planId===plan.id).length;
+                    return(
+                      <div key={plan.id} onClick={()=>setSelPlanId(plan.id)} className="card fu"
+                        style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${B.orange}`}}>
+                        <div style={{padding:"14px 16px"}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,marginBottom:5}}>{plan.name}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>
+                            {plan.sport&&<span style={{marginRight:8}}>{plan.sport}</span>}
+                            {(plan.states||[]).length>0&&<span>{(plan.states||[]).join(", ")}</span>}
+                          </div>
+                          {plan.segment&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3,display:"inline-block",marginBottom:6}}>{plan.segment}</div>}
+                          {(plan.seasonStart||plan.seasonEnd)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{plan.seasonStart||""}{plan.seasonEnd?` → ${plan.seasonEnd}`:""}</div>}
+                          {plan.goals&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:8,lineHeight:1.4}}>{plan.goals.slice(0,80)}{plan.goals.length>80?"...":""}</div>}
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {linkedCamps>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{linkedCamps} campaign{linkedCamps!==1?"s":""}</span>}
+                          </div>
+                        </div>
+                        <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"flex-end"}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>OPEN →</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* New Plan Form */}
+          {showNewPlanForm&&planDraft&&(
+            <div style={{maxWidth:700}} className="card" style2={{padding:20}}>
+              <div className="card" style={{padding:20}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>NEW MARKETING PLAN</div>
+                  <GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);}}>CANCEL</GBtn>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+                  <div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:4}}>Plan Name</Lbl><input value={planDraft.name} onChange={e=>setPlanDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Spring Track & Field 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Sport Focus</Lbl><select value={planDraft.sport} onChange={e=>setPlanDraft(d=>({...d,sport:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">-- Select Sport --</option>{SPORTS_LIST.map(sp=><option key={sp}>{sp}</option>)}</select></div>
+                  <div><Lbl s={{marginBottom:4}}>Segment</Lbl><select value={planDraft.segment} onChange={e=>setPlanDraft(d=>({...d,segment:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["All Levels","High School","College"].map(o=><option key={o}>{o}</option>)}</select></div>
+                  <div><Lbl s={{marginBottom:4}}>Season Start</Lbl><input type="date" value={planDraft.seasonStart||""} onChange={e=>setPlanDraft(d=>({...d,seasonStart:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Season End</Lbl><input type="date" value={planDraft.seasonEnd||""} onChange={e=>setPlanDraft(d=>({...d,seasonEnd:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:6}}>Target States / Areas</Lbl>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                    {STATES_LIST.map(st=>{const on=(planDraft.states||[]).includes(st);return(<button key={st} onClick={()=>setPlanDraft(d=>({...d,states:on?d.states.filter(x=>x!==st):[...(d.states||[]),st]}))} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);})}</div>
+                </div>
+                <div style={{marginBottom:16}}>
+                  <Lbl s={{marginBottom:4}}>Goals</Lbl>
+                  <textarea value={planDraft.goals||""} onChange={e=>setPlanDraft(d=>({...d,goals:e.target.value}))} rows={3} placeholder="e.g. Drive 20 quotes in Iowa T&F ADs before Jan buying window, build brand awareness..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:planSuggestions?20:0}}>
+                  <OBtn onClick={suggestCampaignPlan} disabled={planSuggestRunning||!planDraft.name}>
+                    {planSuggestRunning?"✦ GENERATING...":"✦ SUGGEST CAMPAIGN PLAN"}
+                  </OBtn>
+                  <OBtn onClick={()=>{if(!planDraft.name.trim()){toast("Add a plan name first","error");return;}const plan={id:mkId(),name:planDraft.name,sport:planDraft.sport,states:planDraft.states||[],segment:planDraft.segment,seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,createdAt:today()};dispatch("ADD_STRATEGY",plan);setShowNewPlanForm(false);setSelPlanId(plan.id);setPlanSuggestions(null);toast("Plan saved","success");}} col={B.green} disabled={!planDraft.name.trim()}>SAVE PLAN</OBtn>
+                </div>
+                {planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>AI building campaign ideas for this plan…</div>}
+                {planSuggestions&&planSuggestions.length>0&&(
+                  <div style={{marginTop:16}}>
+                    <Lbl s={{marginBottom:10}}>AI-SUGGESTED CAMPAIGNS</Lbl>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {planSuggestions.map((sug,i)=>(
+                        <div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${B.orange}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                            <div style={{flex:1}}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
+                              {sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
+                              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                {(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}
+                              </div>
+                            </div>
+                            <button onClick={()=>{
+                              const savedPlan={id:mkId(),name:planDraft.name,sport:planDraft.sport,states:planDraft.states||[],segment:planDraft.segment,seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,createdAt:today()};
+                              dispatch("ADD_STRATEGY",savedPlan);
+                              startNewCampaign(savedPlan);
+                              setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal,channels:sug.channels||[],assetTypes:sug.assetTypes||[],planId:savedPlan.id}));
+                              setShowNewPlanForm(false);
+                              setTab("campaigns");
+                              setPlanSuggestions(null);
+                              toast("Plan saved — complete the campaign wizard","success");
+                            }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10,whiteSpace:"nowrap"}}>CREATE CAMPAIGN →</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Plan Detail */}
+          {selPlanId&&selPlan&&(
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <button onClick={()=>setSelPlanId(null)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>← BACK</button>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2}}>{selPlan.name}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selPlan.sport&&`${selPlan.sport} · `}{(selPlan.states||[]).join(", ")||""}</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ CAMPAIGN FROM PLAN</OBtn>
+                  <button onClick={()=>{if(window.confirm("Delete this plan?")){{dispatch("DEL_STRATEGY",selPlan.id);setSelPlanId(null);}}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
+                </div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                <div className="card" style={{padding:"14px 16px",borderLeft:`4px solid ${B.orange}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>PLAN GOALS</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{selPlan.goals||<span style={{color:B.muted,fontStyle:"italic"}}>No goals defined</span>}</div>
+                </div>
+                <div className="card" style={{padding:"14px 16px"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                    {[["SPORT",selPlan.sport||"—"],["SEGMENT",selPlan.segment||"—"],["SEASON START",selPlan.seasonStart||"—"],["SEASON END",selPlan.seasonEnd||"—"]].map(([k,v])=>(
+                      <div key={k}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{k}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{v}</div></div>
+                    ))}
+                  </div>
+                  {(selPlan.states||[]).length>0&&<div style={{marginTop:10}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>TARGET STATES</div>
+                    <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selPlan.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}</div>
+                  </div>}
+                </div>
+              </div>
+              {/* Linked campaigns */}
+              {(()=>{
+                const linked=campaigns.filter(c=>c.planId===selPlan.id);
+                return(
+                  <div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <Lbl>LINKED CAMPAIGNS ({linked.length})</Lbl>
+                      <OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ NEW CAMPAIGN</OBtn>
+                    </div>
+                    {linked.length===0?(
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>No campaigns linked to this plan yet. Use "AI SUGGEST" or create a campaign and link it to this plan.</div>
+                    ):(
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
+                        {linked.map(camp=>{
+                          const enrs=camp.enrollments||[];
+                          const active=enrs.filter(e=>e.status==="active").length;
+                          const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
+                          return(
+                            <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("strategy");setTab("campaigns");}} className="card fu" style={{padding:"12px 14px",cursor:"pointer",borderTop:`3px solid ${camp.color||B.orange}`}}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{camp.name}</div>
+                              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,padding:"2px 5px",borderRadius:3}}>{(camp.status||"draft").toUpperCase()}</span>
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 5px",borderRadius:3}}>{active} enrolled</span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* AI suggest campaigns for this plan */}
+                    <div style={{marginTop:16}}>
+                      <button onClick={async()=>{
+                        setPlanSuggestRunning(true);setPlanSuggestions(null);
+                        const result=await aiCall(
+                          `You are a marketing strategist for ST1 Sports, a school/team sports equipment company.\n${ST1}\n\n`+
+                          `MARKETING PLAN:\nPlan Name: ${selPlan.name}\nSport Focus: ${selPlan.sport||"General"}\n`+
+                          `States/Areas: ${(selPlan.states||[]).join(", ")||"All"}\nSegment: ${selPlan.segment||"All Levels"}\n`+
+                          `Season Window: ${selPlan.seasonStart||""} to ${selPlan.seasonEnd||""}\nGoals: ${selPlan.goals||"Drive awareness and quotes"}\n\n`+
+                          `Generate 4-6 campaign ideas. Return JSON: {"campaigns":[{"name":"","goal":"","timing":"","channels":[],"assetTypes":[]}]}\n`+
+                          `channels options: email, social, paid_ads, phone, sms\nassetTypes: email3, email5, social3, social6, adcopy, callscript, directmail`,
+                          {json:true,tokens:1400}
+                        );
+                        setPlanSuggestions(result?.campaigns||[]);
+                        setPlanSuggestRunning(false);
+                      }} disabled={planSuggestRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",opacity:planSuggestRunning?.7:1}}>
+                        {planSuggestRunning?"✦ GENERATING...":"✦ AI SUGGEST CAMPAIGNS FOR THIS PLAN"}
+                      </button>
+                      {planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>Generating campaign ideas…</div>}
+                      {planSuggestions&&planSuggestions.length>0&&(
+                        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
+                          {planSuggestions.map((sug,i)=>(
+                            <div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${B.orange}`}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
+                                  {sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
+                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}</div>
+                                </div>
+                                <button onClick={()=>{startNewCampaign(selPlan);setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal,channels:sug.channels||[],assetTypes:sug.assetTypes||[]}));setTab("campaigns");}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10,whiteSpace:"nowrap"}}>CREATE CAMPAIGN →</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── CAMPAIGNS TAB ──────────────────────────────────────────────────────── */}
       {tab==="campaigns"&&(
         <div>
           {!selCampId&&!showNewCampForm&&(
             <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{campaigns.length} CAMPAIGN{campaigns.length!==1?"S":""}</div>
-                <OBtn sm onClick={startNewCampaign}>+ NEW CAMPAIGN</OBtn>
+                <OBtn sm onClick={()=>startNewCampaign()}>+ NEW CAMPAIGN</OBtn>
               </div>
               {campaigns.length===0?(
                 <div className="card" style={{padding:40,textAlign:"center"}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:8}}>No campaigns yet</div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>Create a campaign to coordinate emails, social posts, and ads in one place</div>
-                  <OBtn onClick={startNewCampaign}>+ CREATE FIRST CAMPAIGN</OBtn>
+                  <OBtn onClick={()=>startNewCampaign()}>+ CREATE FIRST CAMPAIGN</OBtn>
                 </div>
               ):(
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
@@ -4645,10 +4964,10 @@ function ModMarketing() {
           )}
 
           {showNewCampForm&&campDraft&&(
-            <div style={{maxWidth:860}}>
+            <div style={{maxWidth:900}}>
               {/* Wizard stepper */}
               <div style={{display:"flex",alignItems:"center",marginBottom:22,gap:0}}>
-                {[["1","STRATEGY","Goals & channels"],["2","ASSETS","Build content"],["3","AUDIENCE","Select contacts"],["4","LAUNCH","Activate"]].map(([n,label,sub],i)=>{
+                {[["1","DEFINE","Name & channels"],["2","ICP","Ideal customer"],["3","ASSETS","Choose assets"],["4","BUILD","Create content"],["5","LAUNCH","Activate"]].map(([n,label,sub],i)=>{
                   const done=campStep>Number(n);const active=campStep===Number(n);
                   return(<React.Fragment key={n}>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
@@ -4656,23 +4975,24 @@ function ModMarketing() {
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:active?B.orange:B.muted,letterSpacing:.5,textAlign:"center"}}>{label}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"center"}}>{sub}</div>
                     </div>
-                    {i<3&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
+                    {i<4&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
                   </React.Fragment>);
                 })}
                 <div style={{marginLeft:"auto",paddingLeft:16}}><GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());setCampStep(1);}}>CANCEL</GBtn></div>
               </div>
 
-              {/* STEP 1: STRATEGY */}
+              {/* STEP 1: DEFINE */}
               {campStep===1&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>1 — STRATEGY</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>1 — DEFINE</div>
+                {campDraft.planId&&(()=>{const plan=strategies.find(p=>p.id===campDraft.planId);return plan?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:10}}>Part of plan: <strong>{plan.name}</strong></div>:null;})()}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
                   <div><Lbl s={{marginBottom:4}}>Campaign Name</Lbl><input value={campDraft.name} onChange={e=>setCampDraft(c=>({...c,name:e.target.value}))} placeholder="e.g. T&F Spring Push 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
                   <div><Lbl s={{marginBottom:4}}>Campaign Goal</Lbl><input value={campDraft.goal} onChange={e=>setCampDraft(c=>({...c,goal:e.target.value}))} placeholder="e.g. 5 new quotes, 10 meetings booked" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                  <div><Lbl s={{marginBottom:4}}>Start Date</Lbl><input type="date" value={campDraft.startDate} onChange={e=>setCampDraft(c=>({...c,startDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-                  <div><Lbl s={{marginBottom:4}}>End Date</Lbl><input type="date" value={campDraft.endDate||""} onChange={e=>setCampDraft(c=>({...c,endDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
                   <div><Lbl s={{marginBottom:4}}>Product Focus</Lbl><select value={campDraft.product} onChange={e=>setCampDraft(c=>({...c,product:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{PRODUCT_CATS.map(o=><option key={o}>{o}</option>)}</select></div>
                   <div><Lbl s={{marginBottom:4}}>Target Audience</Lbl><input value={campDraft.audience} onChange={e=>setCampDraft(c=>({...c,audience:e.target.value}))} placeholder="Athletic Director, Coach, all..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>Start Date</Lbl><input type="date" value={campDraft.startDate} onChange={e=>setCampDraft(c=>({...c,startDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>End Date</Lbl><input type="date" value={campDraft.endDate||""} onChange={e=>setCampDraft(c=>({...c,endDate:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
                 </div>
                 <div style={{marginBottom:16}}>
                   <Lbl s={{marginBottom:8}}>CHANNELS — select all that apply</Lbl>
@@ -4689,18 +5009,6 @@ function ModMarketing() {
                   </div>
                   {(campDraft.channels||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:6}}>Select at least one channel to reach your audience</div>}
                 </div>
-                <div style={{marginBottom:16}}>
-                  <Lbl s={{marginBottom:8}}>METRICS TO TRACK</Lbl>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                    {METRICS.map(m=>{
-                      const on=(campDraft.metrics||[]).includes(m);
-                      return(<button key={m} onClick={()=>setCampDraft(c=>({...c,metrics:on?c.metrics.filter(x=>x!==m):[...(c.metrics||[]),m]}))}
-                        style={{background:on?`${B.blue}12`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
-                        {on?"☑ ":"☐ "}{m}
-                      </button>);
-                    })}
-                  </div>
-                </div>
                 <div style={{marginBottom:14}}>
                   <Lbl s={{marginBottom:4}}>Tone</Lbl>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -4712,7 +5020,7 @@ function ModMarketing() {
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
                   <div>
                     <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
-                    <textarea value={campDraft.ctx} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={3} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+                    <textarea value={campDraft.ctx||""} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={3} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
                   </div>
                   <div>
                     <Lbl s={{marginBottom:4}}>ASSIGNED REP</Lbl>
@@ -4741,23 +5049,110 @@ function ModMarketing() {
                   </div>
                 </div>
                 <div style={{display:"flex",justifyContent:"flex-end"}}>
-                  <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: BUILD ASSETS →</OBtn>
+                  <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: ICP →</OBtn>
                 </div>
               </div>
               )}
 
-              {/* STEP 2: ASSETS */}
+              {/* STEP 2: ICP */}
               {campStep===2&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>2 — ASSETS</div>
-                {/* Email channel: AI sequence generator */}
-                {(campDraft.channels||[]).includes("email")&&(
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>2 — IDEAL CUSTOMER PROFILE</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Define exactly who this campaign targets. This guides both AI asset generation and contact matching.</div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:6}}>SPORT FOCUS — select all that apply</Lbl>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                    {SPORTS_LIST.map(sp=>{const on=(campDraft.icp?.sports||[]).includes(sp);return(<button key={sp} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,sports:on?c.icp.sports.filter(x=>x!==sp):[...(c.icp?.sports||[]),sp]}}))} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>);})}
+                  </div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:6}}>TARGET TITLES — select or add</Lbl>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
+                    {COMMON_TITLES.map(t=>{const on=(campDraft.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,titles:on?c.icp.titles.filter(x=>x!==t):[...(c.icp?.titles||[]),t]}}))} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
+                  </div>
+                  {(campDraft.icp?.titles||[]).filter(t=>!COMMON_TITLES.includes(t)).length>0&&(
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {(campDraft.icp?.titles||[]).filter(t=>!COMMON_TITLES.includes(t)).map(t=>(
+                        <span key={t} style={{background:`${B.blue}14`,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif",display:"flex",alignItems:"center",gap:4}}>
+                          {t}<button onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,titles:c.icp.titles.filter(x=>x!==t)}}))} style={{background:"none",border:"none",color:B.blue,cursor:"pointer",padding:0,fontSize:12,lineHeight:1}}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:6}}>SCHOOL LEVEL</Lbl>
+                  <div style={{display:"flex",gap:8}}>
+                    {["High School","College","Both"].map(sl=>(
+                      <button key={sl} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,schoolLevel:sl}}))} style={{background:(campDraft.icp?.schoolLevel||"Both")===sl?`${B.orange}14`:B.surface,color:(campDraft.icp?.schoolLevel||"Both")===sl?B.orange:B.muted,border:`1px solid ${(campDraft.icp?.schoolLevel||"Both")===sl?B.orange:B.border}`,borderRadius:3,padding:"6px 16px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>
+                    ))}
+                  </div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <Lbl s={{marginBottom:6}}>TARGET STATES</Lbl>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                    {STATES_LIST.map(st=>{const on=(campDraft.icp?.states||[]).includes(st);return(<button key={st} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,states:on?c.icp.states.filter(x=>x!==st):[...(c.icp?.states||[]),st]}}))} style={{background:on?`${B.teal}14`:B.surface,color:on?B.teal:B.muted,border:`1px solid ${on?B.teal:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);})}
+                  </div>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Buying Season Notes</Lbl>
+                    <textarea value={campDraft.icp?.buyingSeasonNotes||""} onChange={e=>setCampDraft(c=>({...c,icp:{...c.icp,buyingSeasonNotes:e.target.value}}))} rows={2} placeholder="e.g. Track ADs buy Nov-Jan for spring season..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Additional ICP Notes</Lbl>
+                    <textarea value={campDraft.icp?.notes||""} onChange={e=>setCampDraft(c=>({...c,icp:{...c.icp,notes:e.target.value}}))} rows={2} placeholder="Pain points, objections, buying triggers..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(3)}>NEXT: ASSETS NEEDED →</OBtn>
+                </div>
+              </div>
+              )}
+
+              {/* STEP 3: ASSETS CHECKLIST */}
+              {campStep===3&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>3 — ASSETS NEEDED</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Select the asset types you want to build for this campaign. You'll generate them in the next step.</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20}}>
+                  {ASSET_TYPE_OPTIONS.map(opt=>{
+                    const on=(campDraft.assetTypes||[]).includes(opt.id);
+                    return(<button key={opt.id} onClick={()=>setCampDraft(c=>({...c,assetTypes:on?c.assetTypes.filter(x=>x!==opt.id):[...(c.assetTypes||[]),opt.id]}))}
+                      style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:`2px solid ${on?B.orange:B.border}`,borderRadius:6,padding:"12px 14px",textAlign:"left",cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:on?600:400,flex:1}}>{opt.label}</span>
+                      {on&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.orange}}>✓</span>}
+                    </button>);
+                  })}
+                </div>
+                {(campDraft.assetTypes||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:12}}>Select at least one asset type to proceed.</div>}
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(4)} disabled={(campDraft.assetTypes||[]).length===0}>NEXT: BUILD ASSETS →</OBtn>
+                </div>
+              </div>
+              )}
+
+              {/* STEP 4: BUILD ASSETS */}
+              {campStep===4&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>4 — BUILD ASSETS</div>
+                <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+                  <OBtn onClick={generateAllAssets} disabled={genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning}>
+                    {(genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning)?"✦ GENERATING ALL...":"✦ GENERATE ALL"}
+                  </OBtn>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Or generate each section individually below</div>
+                </div>
+                {/* Email sequence */}
+                {(campDraft.assetTypes||[]).some(t=>t==="email3"||t==="email5")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE</div>
-                    <OBtn onClick={generateTouches} disabled={genRunning} style={{marginBottom:12}}>
-                      {genRunning?"✦ GENERATING...":"✦ AI GENERATE 3-TOUCH EMAIL SEQUENCE"}
-                    </OBtn>
-                    {campDraft.touches.length>0&&campDraft.touches.map((t,i)=>(
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>✉ EMAIL SEQUENCE</div>
+                      <OBtn sm onClick={generateTouches} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    {genRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10}}><Spin/>Writing emails…</div>}
+                    {(campDraft.touches||[]).length>0&&campDraft.touches.map((t,i)=>(
                       <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
                         <div style={{marginBottom:6}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
@@ -4769,14 +5164,15 @@ function ModMarketing() {
                     ))}
                   </div>
                 )}
-                {/* Social channel */}
-                {(campDraft.channels||[]).includes("social")&&(
+                {/* Social posts */}
+                {(campDraft.assetTypes||[]).some(t=>t==="social3"||t==="social6")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>📱 SOCIAL MEDIA POSTS</div>
-                    <OBtn onClick={generateSocialDrafts} disabled={genSocialRunning} style={{marginBottom:12}}>
-                      {genSocialRunning?"✦ GENERATING...":"✦ AI GENERATE 3 SOCIAL CAPTIONS"}
-                    </OBtn>
-                    {(campDraft.socialDrafts||[]).length>0&&(campDraft.socialDrafts||[]).map((p,i)=>(
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1}}>📱 SOCIAL POSTS</div>
+                      <OBtn sm onClick={generateSocialDrafts} disabled={genSocialRunning}>{genSocialRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    {genSocialRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,marginBottom:10}}><Spin/>Writing social posts…</div>}
+                    {(campDraft.socialDrafts||[]).length>0&&campDraft.socialDrafts.map((p,i)=>(
                       <div key={p.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.purple}`}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:6}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
                         <textarea value={p.caption||""} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,caption:e.target.value}:x)}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
@@ -4787,40 +5183,61 @@ function ModMarketing() {
                     ))}
                   </div>
                 )}
-                {/* Paid ads channel */}
-                {(campDraft.channels||[]).includes("paid_ads")&&(
+                {/* Ad Copy */}
+                {(campDraft.assetTypes||[]).includes("adcopy")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ PAID ADS COPY</div>
-                    <textarea value={campDraft.adScript||""} onChange={e=>setCampDraft(c=>({...c,adScript:e.target.value}))} rows={3} placeholder="Ad headline, primary text, CTA… or generate in Ad Engine tab after launch." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Full ad creative available in the Ad Engine tab once the campaign is active.</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>⬛ AD COPY</div>
+                      <OBtn sm onClick={generateAdCopy} disabled={genAdRunning}>{genAdRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    {genAdRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10}}><Spin/>Writing ad copy…</div>}
+                    <textarea value={campDraft.adCopy||""} onChange={e=>setCampDraft(c=>({...c,adCopy:e.target.value}))} rows={5} placeholder="Ad headline, primary text, and CTA variations…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
                   </div>
                 )}
-                {/* SMS/Phone channels */}
-                {((campDraft.channels||[]).includes("sms")||(campDraft.channels||[]).includes("phone"))&&(
+                {/* Call Script */}
+                {(campDraft.assetTypes||[]).includes("callscript")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📞 CALL / SMS TALK TRACK</div>
-                    <textarea value={campDraft.callNotes||""} onChange={e=>setCampDraft(c=>({...c,callNotes:e.target.value}))} rows={4} placeholder="Key talking points, opening line, objection responses, CTA…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:1}}>📞 CALL SCRIPT</div>
+                      <OBtn sm onClick={generateCallScript} disabled={genCallRunning}>{genCallRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    {genCallRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,marginBottom:10}}><Spin/>Writing call script…</div>}
+                    <textarea value={campDraft.callScript||""} onChange={e=>setCampDraft(c=>({...c,callScript:e.target.value}))} rows={6} placeholder="Opening, value prop, objection handling, CTA…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
                   </div>
                 )}
-                {/* Newsletter channel */}
-                {(campDraft.channels||[]).includes("newsletter")&&(
+                {/* Direct Mail */}
+                {(campDraft.assetTypes||[]).includes("directmail")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📧 NEWSLETTER</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Use the email sequence above for your newsletter content, or create a batch send from the Batch Outreach module.</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1}}>✉ DIRECT MAIL LETTER</div>
+                      <OBtn sm onClick={generateDirectMail} disabled={genMailRunning}>{genMailRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    {genMailRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.teal,marginBottom:10}}><Spin/>Writing letter…</div>}
+                    <textarea value={campDraft.directMail||""} onChange={e=>setCampDraft(c=>({...c,directMail:e.target.value}))} rows={6} placeholder="Direct mail letter with headline, benefits, CTA…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
                   </div>
                 )}
-                {(campDraft.channels||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"16px 0",textAlign:"center"}}>← Go back to Step 1 and select channels to see asset options here</div>}
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:16}}>
-                  <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
-                  <OBtn onClick={()=>setCampStep(3)}>NEXT: SELECT AUDIENCE →</OBtn>
-                </div>
+                {(()=>{
+                  const types=campDraft.assetTypes||[];
+                  const hasEmail=types.some(t=>t==="email3"||t==="email5");
+                  const hasContent=(campDraft.touches||[]).length>0||(campDraft.adCopy||"").trim()||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim()||(campDraft.socialDrafts||[]).length>0;
+                  const canProceed=hasContent;
+                  return(
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <GBtn onClick={()=>setCampStep(3)}>← BACK</GBtn>
+                      <div>
+                        {!canProceed&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6,textAlign:"right"}}>Generate at least one asset to continue</div>}
+                        <OBtn onClick={()=>setCampStep(5)} disabled={!canProceed}>NEXT: LAUNCH →</OBtn>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               )}
 
-              {/* STEP 3: AUDIENCE */}
-              {campStep===3&&(
+              {/* STEP 5: LAUNCH */}
+              {campStep===5&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:6}}>3 — AUDIENCE</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>5 — LAUNCH</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
@@ -4879,45 +5296,13 @@ function ModMarketing() {
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>{selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment</div>
                   </div>
                 )}
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
-                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
-                  <OBtn onClick={()=>setCampStep(4)}>NEXT: REVIEW & LAUNCH →</OBtn>
-                </div>
-              </div>
-              )}
-
-              {/* STEP 4: LAUNCH */}
-              {campStep===4&&(
-              <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>4 — REVIEW & LAUNCH</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-                  {[["Campaign",campDraft.name||"Untitled"],["Goal",campDraft.goal||"—"],["Product",campDraft.product],["Audience",campDraft.audience||"All"],["Dates",`${campDraft.startDate}${campDraft.endDate?` → ${campDraft.endDate}`:""}`],["Tone",campDraft.tone]].map(([k,v])=>(
-                    <div key={k} style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:2}}>{k.toUpperCase()}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{v}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{marginBottom:14}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>CHANNELS</div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.channels||[]).map(ch=>{const c=CHANNELS.find(x=>x.id===ch);return<span key={ch} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"4px 10px"}}>{c?.icon} {c?.label}</span>;})}</div>
-                </div>
-                <div style={{marginBottom:14}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>METRICS TO TRACK</div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"4px 10px"}}>☑ {m}</span>)}</div>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:18}}>
-                  {(campDraft.channels||[]).includes("email")&&<div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{campDraft.touches.length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>EMAIL TOUCHES</div></div>}
-                  {(campDraft.channels||[]).includes("social")&&<div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.purple}}>{(campDraft.socialDrafts||[]).length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>SOCIAL POSTS</div></div>}
-                  <div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.blue}}>{selectedContacts.size||"~"+(s.contacts||[]).length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>CONTACTS</div></div>
-                </div>
                 <div style={{padding:"10px 14px",background:`${B.green}08`,border:`1px solid ${B.green}20`,borderRadius:6,marginBottom:18}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
-                    Launching will enroll <strong>{selectedContacts.size||(s.contacts||[]).filter(c=>campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0])).length} contacts</strong> and set the campaign to <strong>active</strong>. You can pause or edit at any time from the campaign detail view.
+                    Launching will enroll <strong>{selectedContacts.size||(s.contacts||[]).filter(c=>campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0])).length} contacts</strong> and set the campaign to <strong>active</strong>.
                   </div>
                 </div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <GBtn onClick={()=>setCampStep(3)}>← BACK</GBtn>
+                  <GBtn onClick={()=>setCampStep(4)}>← BACK</GBtn>
                   <OBtn onClick={saveCampaign} style={{fontSize:13,padding:"10px 28px"}}>🚀 LAUNCH CAMPAIGN</OBtn>
                 </div>
               </div>
@@ -4953,6 +5338,8 @@ function ModMarketing() {
               {/* STRATEGY TAB */}
               {campSubTab==="strategy"&&(
                 <div>
+                  {/* Plan link */}
+                  {selCamp.planId&&(()=>{const plan=strategies.find(p=>p.id===selCamp.planId);return plan?(<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:12,cursor:"pointer"}} onClick={()=>{setSelPlanId(plan.id);setSelCampId(null);setTab("plans");}}>Part of plan: <strong>{plan.name}</strong> — view plan →</div>):null;})()}
                   {/* Strategy header — goal prominent */}
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
                     {/* Left: Goal + context */}
@@ -4960,7 +5347,7 @@ function ModMarketing() {
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>CAMPAIGN GOAL</div>
                       {selCamp.goal
                         ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,fontWeight:600,lineHeight:1.4,marginBottom:10}}>{selCamp.goal}</div>
-                        : <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:10,fontStyle:"italic"}}>No goal set — click Edit to add one</div>}
+                        : <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:10,fontStyle:"italic"}}>No goal set</div>}
                       {selCamp.ctx&&(
                         <div>
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>CONTEXT / ANGLE</div>
@@ -4986,6 +5373,27 @@ function ModMarketing() {
                       ):null;})()}
                     </div>
                   </div>
+                  {/* ICP */}
+                  {selCamp.icp&&(()=>{
+                    const icp=selCamp.icp;
+                    const hasSports=(icp.sports||[]).length>0;
+                    const hasTitles=(icp.titles||[]).length>0;
+                    const hasStates=(icp.states||[]).length>0;
+                    if(!hasSports&&!hasTitles&&!hasStates&&!icp.schoolLevel) return null;
+                    return(
+                      <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>IDEAL CUSTOMER PROFILE</div>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                          {hasSports&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SPORTS</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:`${B.orange}14`,borderRadius:3,padding:"2px 7px"}}>{sp}</span>)}</div></div>}
+                          {hasTitles&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>TITLES</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.titles||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,borderRadius:3,padding:"2px 7px"}}>{t}</span>)}</div></div>}
+                          {icp.schoolLevel&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SCHOOL LEVEL</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{icp.schoolLevel}</div></div>}
+                          {hasStates&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>STATES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(icp.states||[]).join(", ")}</div></div>}
+                        </div>
+                        {icp.buyingSeasonNotes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>BUYING SEASON NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.buyingSeasonNotes}</div></div>}
+                        {icp.notes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>ICP NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.notes}</div></div>}
+                      </div>
+                    );
+                  })()}
                   {/* Channels */}
                   {(selCamp.channels||[]).length>0&&(
                     <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
@@ -5228,7 +5636,42 @@ function ModMarketing() {
                       </div>
                     </div>
                   )}
-                  {/* Social posts */}
+                  {/* Social drafts (campaign-level) */}
+                  {(selCamp.socialDrafts||[]).length>0&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>📱 SOCIAL DRAFT POSTS</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {(selCamp.socialDrafts||[]).map((p,i)=>(
+                          <div key={p.id||i} className="card" style={{padding:"10px 12px",borderLeft:`3px solid ${B.purple}`}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,marginBottom:5}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
+                            <textarea value={p.caption||""} onChange={e=>{const updated=(selCamp.socialDrafts||[]).map((x,j)=>j===i?{...x,caption:e.target.value}:x);dispatch("UPDATE_CAMPAIGN",{...selCamp,socialDrafts:updated});}} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {/* Ad Copy */}
+                  {selCamp.adCopy&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ AD COPY</div>
+                      <textarea value={selCamp.adCopy||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adCopy:e.target.value})} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                    </div>
+                  )}
+                  {/* Call Script */}
+                  {selCamp.callScript&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:1,marginBottom:6}}>📞 CALL SCRIPT</div>
+                      <textarea value={selCamp.callScript||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,callScript:e.target.value})} rows={6} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                    </div>
+                  )}
+                  {/* Direct Mail */}
+                  {selCamp.directMail&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1,marginBottom:6}}>✉ DIRECT MAIL LETTER</div>
+                      <textarea value={selCamp.directMail||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,directMail:e.target.value})} rows={6} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                    </div>
+                  )}
+                  {/* Social posts (scheduled) */}
                   <div style={{marginBottom:20}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1}}>📱 SOCIAL POSTS — {(selCamp.socialPosts||[]).length}</div>
@@ -5429,58 +5872,6 @@ function ModMarketing() {
           </div>
           <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
             {campaigns.map(camp=>(<div key={camp.id} style={{display:"flex",gap:6,alignItems:"center"}}><div style={{width:10,height:10,borderRadius:2,background:camp.color||B.orange}}/><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{camp.name}</div></div>))}
-          </div>
-        </div>
-      )}
-
-      {/* ── COPY GENERATOR ─────────────────────────────────────────── */}
-      {tab==="copy"&&(
-        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
-          <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {[["Product",PRODUCT_CATS,product,setProduct],
-              ["Audience",["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager","Coach"],audience,setAudience],
-              ["Channel",["cold email","LinkedIn","email newsletter","SMS","Instagram"],channel,setChannel],
-              ["Tone",["friendly","professional","urgent","conversational"],tone,setTone]].map(([l,opts,val,set])=>(
-              <div key={l} className="card" style={{padding:12}}>
-                <Lbl s={{marginBottom:7}}>{l}</Lbl>
-                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                  {opts.map(o=><button key={o} onClick={()=>set(o)} style={{background:val===o?`${B.orange}14`:B.white,color:val===o?B.orange:B.muted,border:`1px solid ${val===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
-                </div>
-              </div>
-            ))}
-            <div className="card" style={{padding:12}}><Lbl s={{marginBottom:6}}>Context</Lbl><textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={2} placeholder="Any specific angle or context..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical"}}/></div>
-            <OBtn onClick={()=>gen("copy")} disabled={running} style={{width:"100%"}}>{running?"GENERATING...":"✦ GENERATE"}</OBtn>
-          </div>
-          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><Lbl>Output</Lbl>{out&&<GBtn onClick={()=>navigator.clipboard?.writeText(out)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}</div>
-            {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate</div>}
-            {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Writing...</div>}
-            {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
-          </div>
-        </div>
-      )}
-
-      {/* ── STRATEGY ───────────────────────────────────────────────── */}
-      {tab==="strategy"&&(
-        <div style={{display:"grid",gridTemplateColumns:"260px 1fr",gap:16}}>
-          <div style={{display:"flex",flexDirection:"column",gap:9}}>
-            {[["Product",PRODUCT_CATS,product,setProduct],
-              ["Audience",["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager","Coach"],audience,setAudience]].map(([l,opts,val,set])=>(
-              <div key={l} className="card" style={{padding:12}}>
-                <Lbl s={{marginBottom:7}}>{l}</Lbl>
-                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-                  {opts.map(o=><button key={o} onClick={()=>set(o)} style={{background:val===o?`${B.orange}14`:B.white,color:val===o?B.orange:B.muted,border:`1px solid ${val===o?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{o}</button>)}
-                </div>
-              </div>
-            ))}
-            <div className="card" style={{padding:12}}><Lbl s={{marginBottom:6}}>Context</Lbl><textarea value={ctx} onChange={e=>setCtx(e.target.value)} rows={3} placeholder="Target season, budget cycle, competitive notes..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,resize:"vertical"}}/></div>
-            <OBtn onClick={()=>gen("strategy")} disabled={running} style={{width:"100%"}}>{running?"GENERATING...":"✦ BUILD STRATEGY"}</OBtn>
-          </div>
-          <div className="card" style={{padding:14,minHeight:360,display:"flex",flexDirection:"column"}}>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><Lbl>Strategy Output</Lbl>{out&&<GBtn onClick={()=>navigator.clipboard?.writeText(out)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>}</div>
-            {!out&&!running&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",marginTop:50}}>Configure and generate strategy</div>}
-            {running&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12}}><Spin/>Generating strategy...</div>}
-            {out&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",flex:1,overflowY:"auto"}}>{out}</div>}
           </div>
         </div>
       )}
