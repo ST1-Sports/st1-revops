@@ -1662,121 +1662,115 @@ Channel: ${slackChannelName}`);
 
 // ─── DIRECT SOCIAL PUBLISHING ─────────────────────────────────────────────────
 function AyrsharePanel({addLog}) {
-  const [testing, setTesting] = useState(false);
+  const [testing, setTesting]   = useState(false);
   const [testResult, setTestResult] = useState(null);
-  const [option, setOption] = useState("make"); // "make" | "ayrshare"
+  const [profiles, setProfiles] = useState([]);
+  const [loadingProfiles, setLoadingProfiles] = useState(false);
 
   const testConnection = async () => {
-    setTesting(true);
-    setTestResult(null);
+    setTesting(true); setTestResult(null);
     try {
-      const r = await fetch("/api/social-post", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({action:"test"}),
-      });
+      const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"test"}) });
       const data = await r.json();
       if (data.ok) {
-        setTestResult({ok:true, backend: data.backend, user: data.user});
-        addLog(`Social publishing connected via ${data.backend} ✓`,"success");
-        try {
-          const st = JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");
-          localStorage.setItem("st1_integrations_status_v1", JSON.stringify({...st, social:true}));
-        } catch {}
-      } else {
-        setTestResult({ok:false, error: data.error});
-        addLog(`Social: ${data.error}`,"error");
-      }
+        setTestResult({ok:true, user: data.user});
+        addLog("Buffer connected ✓","success");
+        try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
+      } else { setTestResult({ok:false, error: data.error}); addLog(`Buffer: ${data.error}`,"error"); }
     } catch(e) { setTestResult({ok:false, error:e.message}); }
     setTesting(false);
   };
 
+  const loadProfiles = async () => {
+    setLoadingProfiles(true); setProfiles([]);
+    try {
+      const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"profiles"}) });
+      const data = await r.json();
+      if (data.ok) { setProfiles(data.profiles||[]); addLog(`Loaded ${data.profiles?.length||0} Buffer profiles`,"success"); }
+      else { addLog(`Failed: ${data.error}`,"error"); }
+    } catch(e) { addLog(e.message,"error"); }
+    setLoadingProfiles(false);
+  };
+
+  const NET_COLORS = {twitter:"#000",facebook:"#1877F2",instagram:"#E1306C",linkedin:"#0A66C2",tiktok:"#000"};
+  const NET_ICONS  = {twitter:"𝕏",facebook:"f",instagram:"📷",linkedin:"in",tiktok:"T"};
+
   return (
-    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`4px solid #7B5EA7`}}>
+    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #1DA1F2"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
         <div>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok from the Ad Creator</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING · BUFFER</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Schedule and post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok · $6/mo</div>
         </div>
         <button onClick={testConnection} disabled={testing}
-          style={{background:testing?B.surface:B.purple,color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
+          style={{background:testing?B.surface:"#1DA1F2",color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
           {testing?"TESTING…":"TEST CONNECTION"}
         </button>
       </div>
 
       {testResult?.ok&&(
         <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
-          ✓ <strong>Connected</strong> via {testResult.backend}.
-          {testResult.user?.activeSocialAccounts?.length>0&&<span> Platforms: {testResult.user.activeSocialAccounts.join(", ")}</span>}
+          ✓ <strong>Buffer connected</strong> — {testResult.user?.name} ({testResult.user?.plan} plan)
         </div>
       )}
       {testResult?.ok===false&&(
-        <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,lineHeight:1.5}}>
+        <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
           ✗ {testResult.error}
         </div>
       )}
 
-      {/* Option tabs */}
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {[["make","⭐ Make — $9/mo (recommended)"],["ayrshare","Ayrshare — $29/mo"]].map(([id,label])=>(
-          <button key={id} onClick={()=>setOption(id)}
-            style={{background:option===id?B.purple:B.surface,color:option===id?B.white:B.muted,border:`1px solid ${option===id?B.purple:B.border}`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer",fontWeight:option===id?600:400}}>
-            {label}
-          </button>
+      <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>SETUP</div>
+        {[
+          {n:"1",title:"Create Buffer account",body:<>Sign up at <a href="https://buffer.com" target="_blank" rel="noreferrer" style={{color:"#1DA1F2",fontWeight:700}}>buffer.com</a> — <strong>Essentials $6/mo</strong>. Connect your social accounts inside Buffer.</>},
+          {n:"2",title:"Get your access token",body:<>Go to <a href="https://buffer.com/developers/apps" target="_blank" rel="noreferrer" style={{color:"#1DA1F2",fontWeight:700}}>buffer.com/developers/apps</a> → <strong>Create an app</strong> → fill any name/URL → copy the <strong>Access Token</strong>.</>},
+          {n:"3",title:"Add to Vercel",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>BUFFER_ACCESS_TOKEN = your_token_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click Test Connection above.</span></>},
+          {n:"4",title:"Load profiles → add IDs to Vercel",body:<>Click <strong>Load Profiles</strong> below to see your connected account IDs, then add each one to Vercel as shown.</>},
+        ].map(({n,title,body})=>(
+          <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
+            <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
+            <div style={{flex:1}}><div style={{fontWeight:600,marginBottom:3}}>{title}</div><div style={{color:B.muted,lineHeight:1.7,fontSize:10}}>{body}</div></div>
+          </div>
         ))}
-      </div>
 
-      {option==="make"&&(
-        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>STEP-BY-STEP MAKE SETUP</div>
-          {[
-            {n:"1",title:"Create account",body:<>Sign up at <a href="https://www.make.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>make.com</a> — free trial, then <strong>Core plan $9/mo</strong></>},
-            {n:"2",title:"New Scenario → Webhook trigger",body:<>Create a new scenario → search <strong>Webhooks</strong> → pick <strong>Custom webhook</strong> → click Add → name it "ST1 Social Post" → Save. Copy the webhook URL shown — you'll need it for step 6.</>},
-            {n:"3",title:"Add a Router",body:<>Click the <strong>+</strong> after the webhook → add <strong>Flow Control → Router</strong>. This splits the post into one path per platform.</>},
-            {n:"4",title:"Add platform modules + filters",body:<>
-              <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:7}}>
-                {[
-                  ["Facebook","Facebook Pages → Create a Post","contains(1.platforms[]; \"facebook\")","Message: {{1.post}}  |  Photo URL: {{1.mediaUrls[1]}}"],
-                  ["Instagram","Instagram for Business → Create a Photo Post","contains(1.platforms[]; \"instagram\")","Caption: {{1.post}}  |  Image URL: {{1.mediaUrls[1]}}"],
-                  ["LinkedIn","LinkedIn → Create a Company Update","contains(1.platforms[]; \"linkedin\")","Commentary: {{1.post}}  |  Media URL: {{1.mediaUrls[1]}}"],
-                  ["Twitter/X","Twitter → Create a Tweet","contains(1.platforms[]; \"twitter\")","Status: {{1.post}}  |  Media: {{1.mediaUrls[1]}}"],
-                ].map(([plat,mod,filter,fields])=>(
-                  <div key={plat} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 11px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:5}}>{plat}</div>
-                    <div style={{fontSize:10,marginBottom:3}}><strong>Module:</strong> {mod}</div>
-                    <div style={{fontSize:10,marginBottom:3}}><strong>Router filter:</strong> <code style={{background:"#f0f0f0",padding:"1px 5px",borderRadius:2,fontFamily:"monospace"}}>{filter}</code></div>
-                    <div style={{fontSize:10,color:B.muted}}><strong>Fields:</strong> {fields}</div>
+        <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12,marginTop:4}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>YOUR BUFFER PROFILES</div>
+            <button onClick={loadProfiles} disabled={loadingProfiles}
+              style={{background:loadingProfiles?B.surface:B.orangeBg,color:loadingProfiles?B.muted:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
+              {loadingProfiles?"LOADING…":"⟳ LOAD PROFILES"}
+            </button>
+          </div>
+          {profiles.length>0&&(
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {profiles.map(p=>(
+                <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 11px"}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:p.connected?"#1E8F4E":"#ccc",flexShrink:0}}/>
+                  <div style={{width:26,height:26,borderRadius:4,background:`${NET_COLORS[p.service]||"#888"}18`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,flexShrink:0}}>
+                    {NET_ICONS[p.service]||"?"}
                   </div>
-                ))}
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500}}>{p.name}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:NET_COLORS[p.service]||B.muted,letterSpacing:.5}}>{(p.service||"").toUpperCase()}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontFamily:"monospace",fontSize:9,color:B.muted,userSelect:"all",marginBottom:2}}>{p.id}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>
+                      → <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>BUFFER_PROFILE_{(p.service||"").toUpperCase()}</code>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              <div style={{background:"#e8f0fa",borderRadius:5,padding:"9px 12px",fontSize:10,color:B.blue,marginTop:4,lineHeight:1.6}}>
+                Copy each ID and add to Vercel as the env var shown (e.g. <code style={{background:"#d0e4f7",padding:"1px 4px",borderRadius:2}}>BUFFER_PROFILE_INSTAGRAM = abc123</code>). Redeploy and posts will route to the right accounts.
               </div>
-            </>},
-            {n:"5",title:"Scheduling (optional)",body:<>To support scheduled posts: right-click the router → add a <strong>Sleep</strong> module before each platform branch. Duration: <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2,fontFamily:"monospace"}}>{"{{max(0; formatDate(1.scheduleDate; \"X\") - now)}}"}</code> seconds. Wrap in a filter: only run if <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2,fontFamily:"monospace"}}>{"{{1.scheduleDate}}"}</code> is not empty.</>},
-            {n:"6",title:"Add webhook URL to Vercel + redeploy",body:<>In Vercel → your project → Settings → Environment Variables, add:<br/><code style={{background:"#f0f0f0",padding:"3px 8px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>MAKE_WEBHOOK_URL = https://hook.us1.make.com/xxxx</code><br/><span style={{color:B.muted}}>Then Redeploy → come back here → click <strong>Test Connection</strong>.</span></>},
-          ].map(({n,title,body})=>(
-            <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
-              <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
-              <div style={{flex:1}}><div style={{fontWeight:600,marginBottom:3,lineHeight:1.4}}>{title}</div><div style={{color:B.muted,lineHeight:1.7,fontSize:10}}>{body}</div></div>
             </div>
-          ))}
-          <div style={{background:"#e8f0fa",borderRadius:5,padding:"9px 12px",fontSize:10,color:B.blue,lineHeight:1.6}}>
-            💡 Make handles all platform OAuth — just connect your Facebook/Instagram/LinkedIn/Twitter accounts inside each module. No developer app registrations needed.
-          </div>
+          )}
+          {profiles.length===0&&!loadingProfiles&&(
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>Add your access token to Vercel, redeploy, then click Load Profiles</div>
+          )}
         </div>
-      )}
-
-      {option==="ayrshare"&&(
-        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
-          <strong>Ayrshare setup:</strong>
-          <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2.2}}>
-            <li>Sign up at <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>app.ayrshare.com</a> — use the <strong>Starter plan ($29/mo)</strong>, not Business ($149)</li>
-            <li>Connect your social accounts in Ayrshare dashboard</li>
-            <li>Copy your <strong>API Key</strong> from Settings</li>
-            <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to Vercel env vars, redeploy, then Test Connection</li>
-          </ol>
-          <div style={{marginTop:8,background:"#fff3cd",borderRadius:4,padding:"8px 10px",fontSize:10,color:"#7a4f00"}}>
-            ⚠ The free Ayrshare plan adds "[Sent with Free Plan]" to every post. Use a paid plan to avoid this.
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
