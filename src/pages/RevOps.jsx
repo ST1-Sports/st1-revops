@@ -160,6 +160,20 @@ async function zohoCall(service, endpoint, method="GET", body=null) {
   return r.json();
 }
 
+async function pushActivityToZoho(contact, activityNote) {
+  if (!contact?.zohoId) return;
+  try {
+    await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({
+        service: "crm",
+        endpoint: `/Activities`,
+        method: "POST",
+        body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Date().toISOString().slice(0,10), Who_Id: { id: contact.zohoId }, Status: "Completed" }] }
+      })
+    });
+  } catch {}
+}
+
 // Sport → best outreach window (months before season for procurement decisions)
 const SPORT_WINDOWS = {
   "Track & Field":    "Nov–Jan",
@@ -341,6 +355,8 @@ export default function App() {
   const [mod, setMod]   = useState("briefing");
   const [slim, setSlim] = useState(false);
   const [toasts, setToasts] = useState([]);
+  const [showSearch, setShowSearch] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const dispatch = useCallback((action, payload) => {
     set(prev => reducer(prev, action, payload));
@@ -406,6 +422,17 @@ export default function App() {
     return()=>clearInterval(iv);
   },[s.currentUserId]);
 
+  useEffect(()=>{
+    const handler=(e)=>{
+      if(e.key==="/" && !["INPUT","TEXTAREA","SELECT"].includes(document.activeElement?.tagName)){
+        e.preventDefault();setShowSearch(true);setSearchQuery("");
+      }
+      if(e.key==="Escape") setShowSearch(false);
+    };
+    window.addEventListener("keydown",handler);
+    return()=>window.removeEventListener("keydown",handler);
+  },[]);
+
   if (!s.currentUserId) return <Login dispatch={dispatch}/>;
 
   const NAV = [
@@ -425,6 +452,7 @@ export default function App() {
     {id:"emails",      icon:"✉", label:"Emails"},
     {id:"social",      icon:"📱", label:"Social"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
+    {id:"calendar",    icon:"▦", label:"Content Calendar"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"agent",       icon:"AI",label:"AI Agent"},
@@ -549,6 +577,12 @@ export default function App() {
                 ));
               })()}
               <div style={{width:1,height:14,background:B.border}}/>
+              <button onClick={()=>{setShowSearch(true);setSearchQuery("");}} title="Search (press /)" style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:11,borderRadius:4,padding:"3px 9px",display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                <span style={{fontSize:12}}>⌕</span>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10}}>Search</span>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
+              </button>
+              <div style={{width:1,height:14,background:B.border}}/>
               <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:s.alerts.filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
                 ◎
                 {s.alerts.filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{s.alerts.filter(a=>!a.sent).length}</span>}
@@ -570,6 +604,7 @@ export default function App() {
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="emails"      && <ModEmails/>}
             {mod==="social"      && <ModSocial/>}
+            {mod==="calendar"    && <ModCalendar/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -578,6 +613,48 @@ export default function App() {
             </ErrBound>
           </main>
         </div>
+
+        {/* GLOBAL SEARCH MODAL */}
+        {showSearch&&(
+          <div onClick={()=>setShowSearch(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9998,display:"flex",alignItems:"flex-start",justifyContent:"center",paddingTop:80}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 20px 60px rgba(0,0,0,.25)",width:"100%",maxWidth:560,overflow:"hidden"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",borderBottom:`1px solid ${B.border}`}}>
+                <span style={{fontSize:16,color:B.muted}}>⌕</span>
+                <input autoFocus value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Search contacts, deals, campaigns, orders..." style={{flex:1,border:"none",outline:"none",fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,background:"transparent"}}/>
+                <button onClick={()=>setShowSearch(false)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer",padding:"2px 6px"}}>✕</button>
+              </div>
+              {searchQuery.trim().length>=2&&(()=>{
+                const q=searchQuery.trim().toLowerCase();
+                const contacts=(s.contacts||[]).filter(c=>(c.fullName||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase().includes(q)).slice(0,4);
+                const deals=(s.deals||[]).filter(d=>(d.name||"").toLowerCase().includes(q)||(d.contact||"").toLowerCase().includes(q)||(d.school||"").toLowerCase().includes(q)).slice(0,4);
+                const campaigns=(s.campaigns||[]).filter(c=>(c.name||"").toLowerCase().includes(q)).slice(0,4);
+                const orders=(s.orders||[]).filter(o=>(o.name||"").toLowerCase().includes(q)||(o.contact||"").toLowerCase().includes(q)||(o.school||"").toLowerCase().includes(q)).slice(0,4);
+                const total=contacts.length+deals.length+campaigns.length+orders.length;
+                if(!total) return <div style={{padding:"28px 16px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No results for "{searchQuery}"</div>;
+                const Grp=({title,items,go,getLabel,getSub})=>items.length>0?(
+                  <div>
+                    <div style={{padding:"8px 16px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,background:B.surface,borderBottom:`1px solid ${B.border}`}}>{title}</div>
+                    {items.map((it,i)=>(
+                      <button key={i} onClick={()=>{go(it);setShowSearch(false);}} style={{display:"block",width:"100%",textAlign:"left",padding:"9px 16px",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
+                        <div style={{fontSize:12,color:B.text,fontWeight:500}}>{getLabel(it)}</div>
+                        {getSub&&<div style={{fontSize:10,color:B.muted,marginTop:1}}>{getSub(it)}</div>}
+                      </button>
+                    ))}
+                  </div>
+                ):null;
+                return(
+                  <div style={{maxHeight:400,overflowY:"auto"}}>
+                    <Grp title="CONTACTS" items={contacts} go={()=>setMod("prospecting")} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
+                    <Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
+                    <Grp title="CAMPAIGNS" items={campaigns} go={()=>setMod("marketing")} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
+                    <Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
+                  </div>
+                );
+              })()}
+              {searchQuery.trim().length<2&&<div style={{padding:"20px 16px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Type at least 2 characters to search · press <kbd style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 5px",fontFamily:"monospace"}}>Esc</kbd> to close</div>}
+            </div>
+          </div>
+        )}
 
         {/* TOASTS */}
         <div style={{position:"fixed",top:14,right:14,display:"flex",flexDirection:"column",gap:7,zIndex:9999,pointerEvents:"none"}}>
@@ -1611,6 +1688,8 @@ function ModDeals() {
     const d={...form,id:mkId(),value:Number(form.value||0),lastTouch:Date.now(),priority:"warm",touchHistory:[{id:mkId(),type:"quote",date:form.quoteDate||today(),note:"Quote sent",author:form.assignee}],competitor:null,zoho_synced:false};
     dispatch("ADD_DEAL",d);dispatch("LOG",{msg:`${cu?.name} added deal: ${d.name}`});
     toast("Deal added","success");setAdding(false);
+    const _dealZohoData={Deal_Name:d.name||d.contact,Amount:d.value||0,Stage:d.stage||"Quoted",Closing_Date:d.followUpDate||new Date(Date.now()+30*86400000).toISOString().slice(0,10),Description:d.notes||""};
+    fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[_dealZohoData]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:_zid});}).catch(()=>{});
   };
   const logTouch=()=>{
     if(!note.trim()||!sel_d) return;
@@ -2940,6 +3019,8 @@ function ModProspecting() {
   const [bulkSel,setBulkSel] = useState(new Set()); // selected contact IDs
   const [timelineContact,setTimelineContact] = useState(null); // contact id with timeline expanded
   const [bulkEnrolling,setBulkEnrolling] = useState(false);
+  const [noteContactId,setNoteContactId] = useState(null); // contact id with notes panel open
+  const [noteText,setNoteText] = useState("");
 
   const addLog=(msg,type="info")=>{
     const entry={id:mkId(),msg,type,ts:Date.now()};
@@ -3539,6 +3620,9 @@ function ModProspecting() {
           <div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <input type="checkbox" title="Select all visible contacts" checked={bulkSel.size>0&&(()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);return vis.length>0&&vis.every(c=>bulkSel.has(c.id));})()}
+                  onChange={()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);const allSel=vis.every(c=>bulkSel.has(c.id));setBulkSel(allSel?new Set():new Set(vis.map(c=>c.id)));}}
+                  style={{accentColor:B.orange,width:14,height:14,cursor:"pointer",flexShrink:0}}/>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>CONTACT DATABASE ({(s.contacts||[]).length})</div>
                 {bulkSel.size>0&&(
                   <div style={{display:"flex",gap:5,alignItems:"center"}}>
@@ -3870,14 +3954,36 @@ function ModProspecting() {
                           )}
                           <div style={{marginTop:6}}>
                             {c.optedOut?(
-                              <button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
+                              <button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:false}]}})}).catch(()=>{});}}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
                             ):(
-                              <button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
+                              <button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
                             )}
+                          </div>
+                          <div style={{marginTop:6}}>
+                            <button onClick={()=>setNoteContactId(noteContactId===c.id?null:c.id)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>✎ NOTES {(c.notes||[]).length>0?`(${c.notes.length})`:""}</button>
                           </div>
                         </div>
                         </div>
                       </div>
+                      {noteContactId===c.id&&(
+                        <div style={{marginTop:8,padding:"10px 12px",background:B.surface,borderTop:`1px solid ${B.border}`,borderRadius:"0 0 6px 6px"}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>NOTES</div>
+                          <div style={{display:"flex",gap:6,marginBottom:8}}>
+                            <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                            <button onClick={()=>{if(!noteText.trim())return;dispatch("UPDATE_CONTACT",{id:c.id,notes:[...(c.notes||[]),{id:mkId(),text:noteText.trim(),ts:Date.now(),author:"Matt"}]});setNoteText("");toast("Note added","success");}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",alignSelf:"flex-end",flexShrink:0}}>ADD NOTE</button>
+                          </div>
+                          {[...(c.notes||[])].sort((a,b)=>b.ts-a.ts).map(n=>(
+                            <div key={n.id} style={{display:"flex",gap:7,alignItems:"flex-start",padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{n.text}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{new Date(n.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"numeric",minute:"2-digit"})} · {n.author}</div>
+                              </div>
+                              <button onClick={()=>dispatch("UPDATE_CONTACT",{id:c.id,notes:(c.notes||[]).filter(x=>x.id!==n.id)})} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",padding:"2px 4px",flexShrink:0}}>✕</button>
+                            </div>
+                          ))}
+                          {(c.notes||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"6px 0"}}>No notes yet</div>}
+                        </div>
+                      )}
                     </div>
                   );})}
                   {(s.contacts||[]).length>100&&<div style={{textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Showing 100 of {(s.contacts||[]).length} — export CSV to see all</div>}
@@ -3940,6 +4046,43 @@ function ModProspecting() {
               ))}
             </div>
           </div>
+        </div>
+      )}
+
+      {/* BULK ACTION BAR */}
+      {bulkSel.size>0&&(
+        <div style={{position:"fixed",bottom:0,left:0,right:0,background:B.black,color:B.white,padding:"10px 24px",display:"flex",alignItems:"center",gap:12,zIndex:9000,boxShadow:"0 -4px 20px rgba(0,0,0,.25)",flexWrap:"wrap"}}>
+          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.orange,letterSpacing:.5,flexShrink:0}}>{bulkSel.size} CONTACTS SELECTED</span>
+          <div style={{position:"relative"}}>
+            <button onClick={()=>setBulkEnrolling(v=>!v)} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>ADD TO CAMPAIGN →</button>
+            {bulkEnrolling&&(
+              <div style={{position:"absolute",bottom:"100%",left:0,marginBottom:6,zIndex:30,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 -4px 12px rgba(0,0,0,.14)",minWidth:200,padding:6}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,padding:"3px 6px 6px"}}>ENROLL IN CAMPAIGN</div>
+                {(s.sequences||[]).map(seq=>(
+                  <button key={seq.id} onClick={()=>{
+                    const today=new Date().toISOString().slice(0,10);let enrolled=0;
+                    const updated={...seq,enrollments:[...(seq.enrollments||[])]};
+                    bulkSel.forEach(cid=>{if(!updated.enrollments.some(e=>e.contactId===cid)){updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today});dispatch("SCORE_CONTACT",{contactId:cid,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});enrolled++;}});
+                    dispatch("UPDATE_SEQUENCE",updated);setBulkEnrolling(false);setBulkSel(new Set());toast(`${enrolled} contacts enrolled in ${seq.name}`,"success");
+                  }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,cursor:"pointer",borderRadius:3}}>{seq.name}</button>
+                ))}
+                {(s.sequences||[]).length===0&&<div style={{padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
+                <button onClick={()=>setBulkEnrolling(false)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+              </div>
+            )}
+          </div>
+          <button onClick={()=>{setMod("emails");}} style={{background:"#ffffff20",color:B.white,border:"1px solid #ffffff30",borderRadius:4,padding:"6px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>BATCH EMAIL →</button>
+          <button onClick={()=>{
+            bulkSel.forEach(cid=>{
+              const c=(s.contacts||[]).find(x=>x.id===cid);
+              if(c&&!c.optedOut){
+                dispatch("UPDATE_CONTACT",{id:cid,optedOut:true});
+                if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}
+              }
+            });
+            toast(`${bulkSel.size} contacts opted out`,"info");setBulkSel(new Set());
+          }} style={{background:"#ff000020",color:"#ff6b6b",border:"1px solid #ff000030",borderRadius:4,padding:"6px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>OPT OUT ALL</button>
+          <button onClick={()=>setBulkSel(new Set())} style={{background:"none",color:"#ffffff70",border:"1px solid #ffffff30",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer",marginLeft:"auto"}}>✕ CLEAR</button>
         </div>
       )}
     </div>
@@ -4091,6 +4234,7 @@ function ModEmails() {
           setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sent"}:x));
           dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"contacted",lastOutreach:today()});
           dispatch("SCORE_CONTACT",{contactId:d.contactId,type:"sent",note:`Batch email sent`,campaignId:"batch"});
+          const _bc=(s.contacts||[]).find(c=>c.id===d.contactId);if(_bc?.zohoId) pushActivityToZoho(_bc,`Batch email sent: ${d.subject}`);
           sent++;setSentCount(sent);
         }else{setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));}
         await new Promise(r=>setTimeout(r,300));
@@ -5028,6 +5172,7 @@ function ModMarketing() {
           updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
         }
         dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
+        const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
         sent++;
       }else failed++;
     }
