@@ -4346,7 +4346,7 @@ function ModMarketing() {
       `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
       {json:true,tokens:800}
     );
-    const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:""}));
+    const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
     setCampDraft(c=>({...c,socialDrafts:posts}));
     setGenSocialRunning(false);
   };
@@ -4766,33 +4766,131 @@ function ModMarketing() {
 
           {/* New Plan Form */}
           {showNewPlanForm&&planDraft&&(
-            <div style={{maxWidth:700}} className="card" style2={{padding:20}}>
+            <div style={{maxWidth:760}}>
               <div className="card" style={{padding:20}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>NEW MARKETING PLAN</div>
-                  <GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);}}>CANCEL</GBtn>
+                  <GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);setMatchingContacts(null);}}>CANCEL</GBtn>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
                   <div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:4}}>Plan Name</Lbl><input value={planDraft.name} onChange={e=>setPlanDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Spring Track & Field 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                  <div><Lbl s={{marginBottom:4}}>Sport Focus</Lbl><select value={planDraft.sport} onChange={e=>setPlanDraft(d=>({...d,sport:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">-- Select Sport --</option>{SPORTS_LIST.map(sp=><option key={sp}>{sp}</option>)}</select></div>
-                  <div><Lbl s={{marginBottom:4}}>Segment</Lbl><select value={planDraft.segment} onChange={e=>setPlanDraft(d=>({...d,segment:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["All Levels","High School","College"].map(o=><option key={o}>{o}</option>)}</select></div>
                   <div><Lbl s={{marginBottom:4}}>Season Start</Lbl><input type="date" value={planDraft.seasonStart||""} onChange={e=>setPlanDraft(d=>({...d,seasonStart:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
                   <div><Lbl s={{marginBottom:4}}>Season End</Lbl><input type="date" value={planDraft.seasonEnd||""} onChange={e=>setPlanDraft(d=>({...d,seasonEnd:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-                </div>
-                <div style={{marginBottom:14}}>
-                  <Lbl s={{marginBottom:6}}>Target States / Areas</Lbl>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                    {STATES_LIST.map(st=>{const on=(planDraft.states||[]).includes(st);return(<button key={st} onClick={()=>setPlanDraft(d=>({...d,states:on?d.states.filter(x=>x!==st):[...(d.states||[]),st]}))} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);})}</div>
                 </div>
                 <div style={{marginBottom:16}}>
                   <Lbl s={{marginBottom:4}}>Goals</Lbl>
                   <textarea value={planDraft.goals||""} onChange={e=>setPlanDraft(d=>({...d,goals:e.target.value}))} rows={3} placeholder="e.g. Drive 20 quotes in Iowa T&F ADs before Jan buying window, build brand awareness..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
                 </div>
+
+                {/* ICP SECTION */}
+                <div style={{borderTop:`2px solid ${B.border}`,paddingTop:14,marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:12}}>IDEAL CUSTOMER PROFILE</div>
+
+                  {/* Sport Focus */}
+                  <div style={{marginBottom:14}}>
+                    <Lbl s={{marginBottom:6}}>SPORT FOCUS</Lbl>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {[["ALL SPORTS","all",B.orange],["ALL SCHOOL SPORTS","school",B.blue]].map(([label,val,col])=>{
+                        const on=(planDraft.icp?.sports||[]).includes(val);
+                        return(<button key={val} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,sports:on?[]:[val]}}))} style={{background:on?col:B.surface,color:on?B.white:B.muted,border:`2px solid ${on?col:B.border}`,borderRadius:4,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{label}</button>);
+                      })}
+                      {SPORTS_LIST.map(sp=>{
+                        const isMeta=(planDraft.icp?.sports||[]).includes("all")||(planDraft.icp?.sports||[]).includes("school");
+                        const on=!isMeta&&(planDraft.icp?.sports||[]).includes(sp);
+                        return(<button key={sp} onClick={()=>setPlanDraft(d=>{const cur=(d.icp?.sports||[]).filter(x=>x!=="all"&&x!=="school");const next=cur.includes(sp)?cur.filter(x=>x!==sp):[...cur,sp];return{...d,icp:{...d.icp,sports:next}};})} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:isMeta?`${B.muted}60`:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",opacity:isMeta?.5:1}}>{sp}</button>);
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Target Titles */}
+                  <div style={{marginBottom:14}}>
+                    <Lbl s={{marginBottom:6}}>TARGET TITLES</Lbl>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      {COMMON_TITLES.map(t=>{const on=(planDraft.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,titles:on?(d.icp?.titles||[]).filter(x=>x!==t):[...(d.icp?.titles||[]),t]}}))} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
+                    </div>
+                  </div>
+
+                  {/* Segment */}
+                  <div style={{marginBottom:14}}>
+                    <Lbl s={{marginBottom:6}}>SEGMENT / SCHOOL LEVEL</Lbl>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {SEGMENT_OPTIONS.map(sl=>(
+                        <button key={sl} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,schoolLevel:sl},segment:sl}))} style={{background:(planDraft.icp?.schoolLevel||"All School Levels")===sl?`${B.orange}14`:B.surface,color:(planDraft.icp?.schoolLevel||"All School Levels")===sl?B.orange:B.muted,border:`1px solid ${(planDraft.icp?.schoolLevel||"All School Levels")===sl?B.orange:B.border}`,borderRadius:3,padding:"6px 16px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Target Area — Region-first */}
+                  <div style={{marginBottom:14}}>
+                    <Lbl s={{marginBottom:6}}>TARGET AREA</Lbl>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:8}}>
+                      {Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{
+                        const sel=(planDraft.icp?.regions||[]).includes(r);
+                        return(
+                          <button key={r} onClick={()=>setPlanDraft(d=>{const cur=d.icp?.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const newStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];return{...d,icp:{...d.icp,regions:newRegions,states:newStates}};})} style={{background:sel?`${color}18`:B.surface,color:sel?color:B.muted,border:`2px solid ${sel?color:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?600:400,cursor:"pointer"}}>
+                            {r} <span style={{fontSize:9,opacity:.7}}>({rs.length})</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {(planDraft.icp?.regions||[]).length>0&&(
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4,padding:"8px",background:B.surface,borderRadius:4,border:`1px solid ${B.border}`}}>
+                        {[...new Set((planDraft.icp?.regions||[]).flatMap(r=>US_REGIONS[r]?.states||[]))].map(st=>{
+                          const on=(planDraft.icp?.states||[]).includes(st);
+                          const regionColor=Object.entries(US_REGIONS).find(([,v])=>v.states.includes(st))?.[1]?.color||B.orange;
+                          return(<button key={st} onClick={()=>setPlanDraft(d=>{const cur=d.icp?.states||[];const next=cur.includes(st)?cur.filter(x=>x!==st):[...cur,st];return{...d,icp:{...d.icp,states:next}};})} style={{background:on?`${regionColor}20`:B.white,color:on?regionColor:B.muted,border:`1px solid ${on?regionColor:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);
+                        })}
+                      </div>
+                    )}
+                    {(planDraft.icp?.states||[]).length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>{(planDraft.icp?.states||[]).length} state{(planDraft.icp?.states||[]).length!==1?"s":""} selected</div>}
+                  </div>
+
+                  {/* Buying Season Notes */}
+                  <div style={{marginBottom:10}}>
+                    <Lbl s={{marginBottom:4}}>Buying Season Notes</Lbl>
+                    <textarea value={planDraft.icp?.buyingSeasonNotes||""} onChange={e=>setPlanDraft(d=>({...d,icp:{...d.icp,buyingSeasonNotes:e.target.value}}))} rows={2} placeholder="e.g. Track ADs buy Nov-Jan for spring season..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
+                </div>
+
+                {/* FIND MATCHING CONTACTS */}
+                <div style={{marginBottom:16}}>
+                  <button onClick={()=>setMatchingContacts(findMatchingContacts(planDraft.icp))} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+                    ⊕ FIND MATCHING CONTACTS
+                  </button>
+                  {matchingContacts!==null&&(
+                    <div style={{marginTop:10,padding:"10px 14px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:6}}>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.purple,marginBottom:6}}>{matchingContacts.length} contacts match this ICP</div>
+                      {matchingContacts.length>0&&(
+                        <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
+                          {matchingContacts.slice(0,8).map(c=>{
+                            const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim();
+                            const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                            const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                            return(
+                              <div key={c.id} style={{display:"flex",gap:8,padding:"5px 8px",background:B.white,borderRadius:4,border:`1px solid ${B.border}`}}>
+                                <div style={{flex:1}}>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}</div>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}{c.state?` · ${c.state}`:""}</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {matchingContacts.length>8&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"4px 0"}}>...and {matchingContacts.length-8} more</div>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div style={{display:"flex",gap:8,marginBottom:planSuggestions?20:0}}>
                   <OBtn onClick={suggestCampaignPlan} disabled={planSuggestRunning||!planDraft.name}>
                     {planSuggestRunning?"✦ GENERATING...":"✦ SUGGEST CAMPAIGN PLAN"}
                   </OBtn>
-                  <OBtn onClick={()=>{if(!planDraft.name.trim()){toast("Add a plan name first","error");return;}const plan={id:mkId(),name:planDraft.name,sport:planDraft.sport,states:planDraft.states||[],segment:planDraft.segment,seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,createdAt:today()};dispatch("ADD_STRATEGY",plan);setShowNewPlanForm(false);setSelPlanId(plan.id);setPlanSuggestions(null);toast("Plan saved","success");}} col={B.green} disabled={!planDraft.name.trim()}>SAVE PLAN</OBtn>
+                  <OBtn onClick={()=>{
+                    if(!planDraft.name.trim()){toast("Add a plan name first","error");return;}
+                    const plan={id:mkId(),name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
+                    dispatch("ADD_STRATEGY",plan);setShowNewPlanForm(false);setSelPlanId(plan.id);setPlanSuggestions(null);setMatchingContacts(null);toast("Plan saved","success");
+                  }} col={B.green} disabled={!planDraft.name.trim()}>SAVE PLAN</OBtn>
                 </div>
                 {planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>AI building campaign ideas for this plan…</div>}
                 {planSuggestions&&planSuggestions.length>0&&(
@@ -4811,13 +4909,14 @@ function ModMarketing() {
                               </div>
                             </div>
                             <button onClick={()=>{
-                              const savedPlan={id:mkId(),name:planDraft.name,sport:planDraft.sport,states:planDraft.states||[],segment:planDraft.segment,seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,createdAt:today()};
+                              const savedPlan={id:mkId(),name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
                               dispatch("ADD_STRATEGY",savedPlan);
                               startNewCampaign(savedPlan);
                               setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal,channels:sug.channels||[],assetTypes:sug.assetTypes||[],planId:savedPlan.id}));
                               setShowNewPlanForm(false);
                               setTab("campaigns");
                               setPlanSuggestions(null);
+                              setMatchingContacts(null);
                               toast("Plan saved — complete the campaign wizard","success");
                             }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10,whiteSpace:"nowrap"}}>CREATE CAMPAIGN →</button>
                           </div>
@@ -4892,10 +4991,10 @@ function ModMarketing() {
                         })}
                       </div>
                     )}
-                    {/* AI suggest campaigns for this plan */}
+                    {/* AI suggest campaigns for this plan — Flighting multi-select */}
                     <div style={{marginTop:16}}>
                       <button onClick={async()=>{
-                        setPlanSuggestRunning(true);setPlanSuggestions(null);
+                        setPlanSuggestRunning(true);setPlanSuggestions(null);setFlightChecked({});setFlightDates({});
                         const result=await aiCall(
                           `You are a marketing strategist for ST1 Sports, a school/team sports equipment company.\n${ST1}\n\n`+
                           `MARKETING PLAN:\nPlan Name: ${selPlan.name}\nSport Focus: ${selPlan.sport||"General"}\n`+
@@ -4912,20 +5011,64 @@ function ModMarketing() {
                       </button>
                       {planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>Generating campaign ideas…</div>}
                       {planSuggestions&&planSuggestions.length>0&&(
-                        <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
-                          {planSuggestions.map((sug,i)=>(
-                            <div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${B.orange}`}}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                                <div style={{flex:1}}>
-                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
-                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
-                                  {sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
-                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}</div>
+                        <div style={{marginTop:12}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>SELECT CAMPAIGNS TO INCLUDE IN FLIGHT — check each and set dates</div>
+                          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                            {planSuggestions.map((sug,i)=>{
+                              const checked=!!flightChecked[i];
+                              const fd=flightDates[i]||{startDate:"",endDate:""};
+                              return(
+                                <div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${checked?B.green:B.border}`}}>
+                                  <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+                                    <input type="checkbox" checked={checked} onChange={()=>setFlightChecked(f=>({...f,[i]:!f[i]}))} style={{marginTop:3,flexShrink:0,accentColor:B.green,width:16,height:16}}/>
+                                    <div style={{flex:1}}>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
+                                      {sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
+                                      <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:checked?8:0}}>{(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}</div>
+                                      {checked&&(
+                                        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>START</span>
+                                            <input type="date" value={fd.startDate} onChange={e=>setFlightDates(f=>({...f,[i]:{...fd,startDate:e.target.value}}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                                          </div>
+                                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>END</span>
+                                            <input type="date" value={fd.endDate} onChange={e=>setFlightDates(f=>({...f,[i]:{...fd,endDate:e.target.value}}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
-                                <button onClick={()=>{startNewCampaign(selPlan);setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal,channels:sug.channels||[],assetTypes:sug.assetTypes||[]}));setTab("campaigns");}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10,whiteSpace:"nowrap"}}>CREATE CAMPAIGN →</button>
-                              </div>
+                              );
+                            })}
+                          </div>
+                          {Object.values(flightChecked).some(Boolean)&&(
+                            <div style={{marginTop:12}}>
+                              <button onClick={()=>{
+                                const checked=planSuggestions.filter((_,i)=>flightChecked[i]);
+                                const created=[];
+                                checked.forEach((_,ii)=>{
+                                  const idx=planSuggestions.indexOf(planSuggestions.filter((_,i)=>flightChecked[i])[ii]);
+                                  const realIdx=planSuggestions.findIndex((s,i)=>flightChecked[i]&&planSuggestions.filter((_,j)=>flightChecked[j]).indexOf(s)===ii);
+                                });
+                                planSuggestions.forEach((sug,i)=>{
+                                  if(!flightChecked[i]) return;
+                                  const fd=flightDates[i]||{};
+                                  const campId=mkId();
+                                  const planIcp=selPlan?.icp||{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""};
+                                  const camp={id:campId,name:sug.name,product:"Track & Field Equipment",audience:"Athletic Director",tone:"friendly",goal:sug.goal||"",repId:"",startDate:fd.startDate||today(),endDate:fd.endDate||"",touches:[],enrollments:[],socialPosts:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",adIds:[],channels:sug.channels||[],metrics:["Opens","Replies","Quotes Sent"],assetTypes:sug.assetTypes||[],icp:{...planIcp},planId:selPlan.id,ctx:"",status:"draft",createdAt:today(),color:CAMP_COLORS[campaigns.length%CAMP_COLORS.length]};
+                                  dispatch("ADD_CAMPAIGN",camp);
+                                  created.push(campId);
+                                });
+                                setFlightChecked({});setFlightDates({});setPlanSuggestions(null);
+                                toast(`Flight launched: ${created.length} campaign${created.length!==1?"s":""} created`,"success");
+                              }} style={{background:B.green,color:B.white,border:"none",borderRadius:4,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                                🚀 LAUNCH FLIGHT ({Object.values(flightChecked).filter(Boolean).length} campaign{Object.values(flightChecked).filter(Boolean).length!==1?"s":""})
+                              </button>
                             </div>
-                          ))}
+                          )}
                         </div>
                       )}
                     </div>
@@ -4990,9 +5133,9 @@ function ModMarketing() {
 
           {showNewCampForm&&campDraft&&(
             <div style={{maxWidth:900}}>
-              {/* Wizard stepper */}
+              {/* Wizard stepper — 4 steps: DEFINE, ASSETS NEEDED, BUILD ASSETS, SCHEDULE & LAUNCH */}
               <div style={{display:"flex",alignItems:"center",marginBottom:22,gap:0}}>
-                {[["1","DEFINE","Name & channels"],["2","ICP","Ideal customer"],["3","ASSETS","Choose assets"],["4","BUILD","Create content"],["5","LAUNCH","Activate"]].map(([n,label,sub],i)=>{
+                {[["1","DEFINE","Name & channels"],["2","ASSETS","Choose assets"],["3","BUILD","Create content"],["4","SCHEDULE","Set dates"],["5","LAUNCH","Activate"]].map(([n,label,sub],i)=>{
                   const done=campStep>Number(n);const active=campStep===Number(n);
                   return(<React.Fragment key={n}>
                     <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
@@ -5073,73 +5216,55 @@ function ModMarketing() {
                     )}
                   </div>
                 </div>
-                <div style={{display:"flex",justifyContent:"flex-end"}}>
-                  <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: ICP →</OBtn>
-                </div>
-              </div>
-              )}
-
-              {/* STEP 2: ICP */}
-              {campStep===2&&(
-              <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>2 — IDEAL CUSTOMER PROFILE</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Define exactly who this campaign targets. This guides both AI asset generation and contact matching.</div>
+                {/* ICP carried from plan — show summary if available */}
+                {campDraft.planId&&(()=>{
+                  const plan=strategies.find(p=>p.id===campDraft.planId);
+                  const icp=plan?.icp||campDraft.icp;
+                  if(!icp||(!(icp.sports||[]).length&&!(icp.titles||[]).length&&!(icp.states||[]).length)) return null;
+                  return(
+                    <div style={{padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:14}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:5}}>ICP FROM PLAN</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {(icp.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:`${B.orange}14`,borderRadius:3,padding:"2px 7px"}}>{sp}</span>)}
+                        {(icp.titles||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,borderRadius:3,padding:"2px 7px"}}>{t}</span>)}
+                        {(icp.states||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,background:B.surface,borderRadius:3,padding:"2px 7px"}}>{(icp.states||[]).length} states</span>}
+                      </div>
+                    </div>
+                  );
+                })()}
+                {/* Find matching contacts */}
                 <div style={{marginBottom:14}}>
-                  <Lbl s={{marginBottom:6}}>SPORT FOCUS — select all that apply</Lbl>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                    {SPORTS_LIST.map(sp=>{const on=(campDraft.icp?.sports||[]).includes(sp);return(<button key={sp} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,sports:on?c.icp.sports.filter(x=>x!==sp):[...(c.icp?.sports||[]),sp]}}))} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>);})}
-                  </div>
-                </div>
-                <div style={{marginBottom:14}}>
-                  <Lbl s={{marginBottom:6}}>TARGET TITLES — select or add</Lbl>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
-                    {COMMON_TITLES.map(t=>{const on=(campDraft.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,titles:on?c.icp.titles.filter(x=>x!==t):[...(c.icp?.titles||[]),t]}}))} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
-                  </div>
-                  {(campDraft.icp?.titles||[]).filter(t=>!COMMON_TITLES.includes(t)).length>0&&(
-                    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                      {(campDraft.icp?.titles||[]).filter(t=>!COMMON_TITLES.includes(t)).map(t=>(
-                        <span key={t} style={{background:`${B.blue}14`,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:3,padding:"3px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif",display:"flex",alignItems:"center",gap:4}}>
-                          {t}<button onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,titles:c.icp.titles.filter(x=>x!==t)}}))} style={{background:"none",border:"none",color:B.blue,cursor:"pointer",padding:0,fontSize:12,lineHeight:1}}>×</button>
-                        </span>
-                      ))}
+                  <button onClick={()=>setMatchingContacts(findMatchingContacts(campDraft.icp))} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+                    ⊕ FIND MATCHING CONTACTS
+                  </button>
+                  {matchingContacts!==null&&(
+                    <div style={{marginTop:8,padding:"10px 12px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5}}>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.purple,marginBottom:5}}>{matchingContacts.length} contacts match this ICP</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:160,overflowY:"auto"}}>
+                        {matchingContacts.slice(0,8).map(c=>{
+                          const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim();
+                          const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                          const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                          return(<div key={c.id} style={{display:"flex",gap:6,padding:"4px 6px",background:B.white,borderRadius:3,border:`1px solid ${B.border}`}}>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,fontWeight:500,flex:1}}>{name}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}{c.state?` · ${c.state}`:""}</span>
+                          </div>);
+                        })}
+                        {matchingContacts.length>8&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>...and {matchingContacts.length-8} more</div>}
+                      </div>
                     </div>
                   )}
                 </div>
-                <div style={{marginBottom:14}}>
-                  <Lbl s={{marginBottom:6}}>SCHOOL LEVEL</Lbl>
-                  <div style={{display:"flex",gap:8}}>
-                    {["High School","College","Both"].map(sl=>(
-                      <button key={sl} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,schoolLevel:sl}}))} style={{background:(campDraft.icp?.schoolLevel||"Both")===sl?`${B.orange}14`:B.surface,color:(campDraft.icp?.schoolLevel||"Both")===sl?B.orange:B.muted,border:`1px solid ${(campDraft.icp?.schoolLevel||"Both")===sl?B.orange:B.border}`,borderRadius:3,padding:"6px 16px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>
-                    ))}
-                  </div>
-                </div>
-                <div style={{marginBottom:14}}>
-                  <Lbl s={{marginBottom:6}}>TARGET STATES</Lbl>
-                  <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                    {STATES_LIST.map(st=>{const on=(campDraft.icp?.states||[]).includes(st);return(<button key={st} onClick={()=>setCampDraft(c=>({...c,icp:{...c.icp,states:on?c.icp.states.filter(x=>x!==st):[...(c.icp?.states||[]),st]}}))} style={{background:on?`${B.teal}14`:B.surface,color:on?B.teal:B.muted,border:`1px solid ${on?B.teal:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);})}
-                  </div>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-                  <div>
-                    <Lbl s={{marginBottom:4}}>Buying Season Notes</Lbl>
-                    <textarea value={campDraft.icp?.buyingSeasonNotes||""} onChange={e=>setCampDraft(c=>({...c,icp:{...c.icp,buyingSeasonNotes:e.target.value}}))} rows={2} placeholder="e.g. Track ADs buy Nov-Jan for spring season..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                  </div>
-                  <div>
-                    <Lbl s={{marginBottom:4}}>Additional ICP Notes</Lbl>
-                    <textarea value={campDraft.icp?.notes||""} onChange={e=>setCampDraft(c=>({...c,icp:{...c.icp,notes:e.target.value}}))} rows={2} placeholder="Pain points, objections, buying triggers..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                  </div>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
-                  <OBtn onClick={()=>setCampStep(3)}>NEXT: ASSETS NEEDED →</OBtn>
+                <div style={{display:"flex",justifyContent:"flex-end"}}>
+                  <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: ASSETS NEEDED →</OBtn>
                 </div>
               </div>
               )}
 
-              {/* STEP 3: ASSETS CHECKLIST */}
-              {campStep===3&&(
+              {/* STEP 2: ASSETS CHECKLIST */}
+              {campStep===2&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>3 — ASSETS NEEDED</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>2 — ASSETS NEEDED</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Select the asset types you want to build for this campaign. You'll generate them in the next step.</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20}}>
                   {ASSET_TYPE_OPTIONS.map(opt=>{
@@ -5153,16 +5278,16 @@ function ModMarketing() {
                 </div>
                 {(campDraft.assetTypes||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:12}}>Select at least one asset type to proceed.</div>}
                 <div style={{display:"flex",justifyContent:"space-between"}}>
-                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
-                  <OBtn onClick={()=>setCampStep(4)} disabled={(campDraft.assetTypes||[]).length===0}>NEXT: BUILD ASSETS →</OBtn>
+                  <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(3)} disabled={(campDraft.assetTypes||[]).length===0}>NEXT: BUILD ASSETS →</OBtn>
                 </div>
               </div>
               )}
 
-              {/* STEP 4: BUILD ASSETS */}
-              {campStep===4&&(
+              {/* STEP 3: BUILD ASSETS */}
+              {campStep===3&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>4 — BUILD ASSETS</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>3 — BUILD ASSETS</div>
                 <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
                   <OBtn onClick={generateAllAssets} disabled={genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning}>
                     {(genRunning||genSocialRunning||genAdRunning||genCallRunning||genMailRunning)?"✦ GENERATING ALL...":"✦ GENERATE ALL"}
@@ -5204,6 +5329,26 @@ function ModMarketing() {
                         <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                           {["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
                         </div>
+                        {/* Image generation */}
+                        <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE GENERATION</div>
+                          <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="Image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                            <button onClick={async()=>{
+                              const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
+                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true}:x)}));
+                              try{
+                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"lifestyle",sizeKey:"square"})});
+                                const d=await r.json();
+                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl||"",imageGenerating:false}:x)}));
+                              }catch(err){setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false}:x)}));}
+                            }} disabled={p.imageGenerating} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,opacity:p.imageGenerating?.7:1}}>
+                              {p.imageGenerating?"GENERATING...":"🎨 GENERATE IMAGE"}
+                            </button>
+                          </div>
+                          {p.imageGenerating&&<div style={{display:"flex",gap:6,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.purple}}><Spin/>Generating image…</div>}
+                          {p.imageUrl&&<img src={p.imageUrl} alt="Generated social post visual" style={{maxWidth:200,borderRadius:5,marginTop:4,border:`1px solid ${B.border}`}}/>}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -5243,19 +5388,101 @@ function ModMarketing() {
                 )}
                 {(()=>{
                   const types=campDraft.assetTypes||[];
-                  const hasEmail=types.some(t=>t==="email3"||t==="email5");
                   const hasContent=(campDraft.touches||[]).length>0||(campDraft.adCopy||"").trim()||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim()||(campDraft.socialDrafts||[]).length>0;
                   const canProceed=hasContent;
                   return(
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <GBtn onClick={()=>setCampStep(3)}>← BACK</GBtn>
+                      <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
                       <div>
                         {!canProceed&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6,textAlign:"right"}}>Generate at least one asset to continue</div>}
-                        <OBtn onClick={()=>setCampStep(5)} disabled={!canProceed}>NEXT: LAUNCH →</OBtn>
+                        <OBtn onClick={()=>setCampStep(4)} disabled={!canProceed}>NEXT: SCHEDULE →</OBtn>
                       </div>
                     </div>
                   );
                 })()}
+              </div>
+              )}
+
+              {/* STEP 4: SCHEDULE */}
+              {campStep===4&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:4}}>4 — SCHEDULE & DATES</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>Assign scheduled dates to each asset. Email touches auto-calculate from campaign start date but can be overridden.</div>
+                {/* Email touches schedule */}
+                {(campDraft.touches||[]).length>0&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL TOUCHES</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {campDraft.touches.map((t,i)=>{
+                        const base=campDraft.startDate||today();
+                        const autoDate=(()=>{const d=new Date(base);d.setDate(d.getDate()+(t.dayOffset||0));return d.toISOString().slice(0,10);})();
+                        const scheduled=t.scheduledDate||autoDate;
+                        return(
+                          <div key={t.id||i} style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,borderLeft:`3px solid ${B.orange}`}}>
+                            <div style={{flex:1}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} — DAY {t.dayOffset||0}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:2}}>{t.subject||`Email Touch ${t.step}`}</div>
+                            </div>
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>SEND DATE</span>
+                              <input type="date" value={scheduled} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,scheduledDate:e.target.value}:x)}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* Social drafts schedule */}
+                {(campDraft.socialDrafts||[]).length>0&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>📱 SOCIAL POSTS</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {campDraft.socialDrafts.map((p,i)=>(
+                        <div key={p.id||i} style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,borderLeft:`3px solid ${B.purple}`}}>
+                          <div style={{flex:1}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:1}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{(p.caption||"").slice(0,60)}{p.caption?.length>60?"...":""}</div>
+                          </div>
+                          <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>POST DATE</span>
+                            <input type="date" value={p.scheduledDate||""} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,scheduledDate:e.target.value}:x)}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Other assets schedule */}
+                {((campDraft.adCopy||"").trim()||(campDraft.callScript||"").trim()||(campDraft.directMail||"").trim())&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>OTHER ASSETS — PLANNED DATE</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {(campDraft.adCopy||"").trim()&&(
+                        <div style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
+                          <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⬛ Ad Copy</div>
+                          <input type="date" value={campDraft.adCopyDate||""} onChange={e=>setCampDraft(c=>({...c,adCopyDate:e.target.value}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                        </div>
+                      )}
+                      {(campDraft.callScript||"").trim()&&(
+                        <div style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
+                          <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>📞 Call Script</div>
+                          <input type="date" value={campDraft.callScriptDate||""} onChange={e=>setCampDraft(c=>({...c,callScriptDate:e.target.value}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                        </div>
+                      )}
+                      {(campDraft.directMail||"").trim()&&(
+                        <div style={{display:"flex",gap:10,alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
+                          <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>✉ Direct Mail Letter</div>
+                          <input type="date" value={campDraft.directMailDate||""} onChange={e=>setCampDraft(c=>({...c,directMailDate:e.target.value}))} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <GBtn onClick={()=>setCampStep(3)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(5)}>NEXT: LAUNCH →</OBtn>
+                </div>
               </div>
               )}
 
@@ -5734,7 +5961,8 @@ function ModMarketing() {
                             </div>
                             {!post.posted&&(
                               <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
-                                <OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>
+                                {(!post.scheduledDate||post.scheduledDate<=today())&&<OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>}
+                                {post.scheduledDate&&post.scheduledDate>today()&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,padding:"2px 4px",textAlign:"center"}}>SCHEDULED {post.scheduledDate}</div>}
                                 <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
                               </div>
                             )}
