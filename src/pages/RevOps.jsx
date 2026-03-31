@@ -3922,8 +3922,8 @@ const CAMP_STATUS_COLORS = {draft:B.muted,active:B.green,paused:B.yellow,complet
 
 function ModMarketing() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("dashboard");
-  // copy/strategy state
+  const [tab,setTab]=useState("campaigns");
+  // copy/strategy state (standalone copy/strategy generators)
   const [product,setProduct]=useState("Track & Field Equipment");
   const [audience,setAudience]=useState("Athletic Director");
   const [channel,setChannel]=useState("cold email");
@@ -3932,29 +3932,34 @@ function ModMarketing() {
   const [out,setOut]=useState("");
   const [running,setRunning]=useState(false);
 
-  // Dashboard / campaign state
+  // Campaign list / wizard state
   const [selCampId,setSelCampId]=useState(null);
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
-  const [campSubTab,setCampSubTab]=useState("execute");
-  const [campStep,setCampStep]=useState(1); // wizard step 1=strategy 2=assets 3=launch
+  // Campaign detail sub-tabs: overview | assets | execute | report
+  const [campSubTab,setCampSubTab]=useState("overview");
+  // Wizard steps: 1=strategy 2=assets 3=audience 4=launch
+  const [campStep,setCampStep]=useState(1);
   // Calendar
   const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
   const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
-  // Email tab within campaign
+  // Asset creation
   const [genRunning,setGenRunning]=useState(false);
+  const [genSocialRunning,setGenSocialRunning]=useState(false);
+  // Touch editing (assets tab)
   const [editingTouchIdx,setEditingTouchIdx]=useState(null);
   const [touchDraft,setTouchDraft]=useState({subject:"",body:""});
+  // Execute tab
   const [filterSport,setFilterSport]=useState("all");
-  const [enrollSel,setEnrollSel]=useState(new Set());
   const [sending,setSending]=useState(false);
   const [checkingReplies,setCheckingReplies]=useState(false);
   const [checkingOpens,setCheckingOpens]=useState(false);
   const [previewModal,setPreviewModal]=useState(null);
+  // Audience segmentation (wizard step 3)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
   const [selectedContacts,setSelectedContacts]=useState(new Set());
-  // Social tab
+  // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
 
@@ -3982,10 +3987,12 @@ function ModMarketing() {
   const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
 
   const startNewCampaign = () => {
-    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"]});
+    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],socialDrafts:[],adScript:"",callNotes:"",startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"]});
     setCampStep(1);
     setShowNewCampForm(true);
     setSelCampId(null);
+    setSegResult(null);
+    setSelectedContacts(new Set());
   };
 
   const generateTouches = async () => {
@@ -3995,7 +4002,7 @@ function ModMarketing() {
     const windowHint = SPORT_WINDOWS[campDraft.product?.split(" ")[0]]||"";
     const result = await aiCall(
       `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
-      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Channel: ${campDraft.channel}. Tone: ${campDraft.tone}.\n`+
+      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Channels: ${(campDraft.channels||[]).join(", ")||"email"}. Tone: ${campDraft.tone}.\n`+
       `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
       `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
       `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
@@ -4005,6 +4012,22 @@ function ModMarketing() {
     const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
     setCampDraft(c=>({...c,touches}));
     setGenRunning(false);
+  };
+
+  const generateSocialDrafts = async () => {
+    if(!campDraft) return;
+    setGenSocialRunning(true);
+    const result = await aiCall(
+      `Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
+      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Tone: ${campDraft.tone}.\n`+
+      `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
+      `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
+      {json:true,tokens:800}
+    );
+    const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:""}));
+    setCampDraft(c=>({...c,socialDrafts:posts}));
+    setGenSocialRunning(false);
   };
 
   // ── AI audience segmentation ──────────────────────────────────────────────────
@@ -4074,7 +4097,7 @@ function ModMarketing() {
     };
     dispatch("ADD_CAMPAIGN", camp);
     seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
-    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("execute");
+    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("overview");
     setSegResult(null); setSelectedContacts(new Set());
     toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
   };
@@ -4254,14 +4277,14 @@ function ModMarketing() {
     <div style={{padding:"22px 26px"}}>
       <PH title="CAMPAIGNS" sub="Unified hub — emails, social posts, ads & creative"/>
       <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap"}}>
-        {[["dashboard","CAMPAIGNS"],["calendar","CALENDAR"],["copy","COPY"],["strategy","STRATEGY"],["adengine","AD ENGINE"]].map(([id,l])=>(
+        {[["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["copy","COPY"],["strategy","STRATEGY"],["adengine","AD ENGINE"]].map(([id,l])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
         ))}
       </div>
 
       {tab==="adengine"&&<ModAds/>}
 
-      {tab==="dashboard"&&(
+      {tab==="campaigns"&&(
         <div>
           {!selCampId&&!showNewCampForm&&(
             <>
@@ -4283,7 +4306,7 @@ function ModMarketing() {
                     const replied=enrs.filter(e=>e.status==="replied").length;
                     const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
                     return(
-                      <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("email");}} className="card fu"
+                      <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("overview");}} className="card fu"
                         style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${camp.color||B.orange}`}}>
                         <div style={{padding:"14px 16px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -4314,16 +4337,16 @@ function ModMarketing() {
             <div style={{maxWidth:860}}>
               {/* Wizard stepper */}
               <div style={{display:"flex",alignItems:"center",marginBottom:22,gap:0}}>
-                {[["1","STRATEGY","Define goals & channels"],["2","ASSETS","Build your content"],["3","LAUNCH","Review & activate"]].map(([n,label,sub],i)=>{
+                {[["1","STRATEGY","Goals & channels"],["2","ASSETS","Build content"],["3","AUDIENCE","Select contacts"],["4","LAUNCH","Activate"]].map(([n,label,sub],i)=>{
                   const done=campStep>Number(n);const active=campStep===Number(n);
-                  return(<>
-                    <div key={n} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
+                  return(<React.Fragment key={n}>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1}}>
                       <div style={{width:32,height:32,borderRadius:"50%",background:done?B.green:active?B.orange:B.surface,border:`2px solid ${done?B.green:active?B.orange:B.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Russo One',sans-serif",fontSize:13,color:done||active?B.white:B.muted,cursor:done?"pointer":"default"}} onClick={()=>done&&setCampStep(Number(n))}>{done?"✓":n}</div>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:active?B.orange:B.muted,letterSpacing:.5,textAlign:"center"}}>{label}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"center"}}>{sub}</div>
                     </div>
-                    {i<2&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
-                  </>);
+                    {i<3&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
+                  </React.Fragment>);
                 })}
                 <div style={{marginLeft:"auto",paddingLeft:16}}><GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());setCampStep(1);}}>CANCEL</GBtn></div>
               </div>
@@ -4410,39 +4433,127 @@ function ModMarketing() {
                 )}
                 {/* Social channel */}
                 {(campDraft.channels||[]).includes("social")&&(
-                  <div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📱 SOCIAL MEDIA POSTS</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>You'll add and schedule social posts in the Execute step once the campaign is created.</div>
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>📱 SOCIAL MEDIA POSTS</div>
+                    <OBtn onClick={generateSocialDrafts} disabled={genSocialRunning} style={{marginBottom:12}}>
+                      {genSocialRunning?"✦ GENERATING...":"✦ AI GENERATE 3 SOCIAL CAPTIONS"}
+                    </OBtn>
+                    {(campDraft.socialDrafts||[]).length>0&&(campDraft.socialDrafts||[]).map((p,i)=>(
+                      <div key={p.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.purple}`}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:6}}>POST {i+1} — {(p.platforms||[]).join(", ").toUpperCase()}</div>
+                        <textarea value={p.caption||""} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,caption:e.target.value}:x)}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                        <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+                          {["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
                 {/* Paid ads channel */}
                 {(campDraft.channels||[]).includes("paid_ads")&&(
-                  <div style={{marginBottom:20,padding:"12px 14px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ PAID ADS</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Create ads in the Ad Engine tab, then link them to this campaign after it's created.</div>
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>⬛ PAID ADS COPY</div>
+                    <textarea value={campDraft.adScript||""} onChange={e=>setCampDraft(c=>({...c,adScript:e.target.value}))} rows={3} placeholder="Ad headline, primary text, CTA… or generate in Ad Engine tab after launch." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Full ad creative available in the Ad Engine tab once the campaign is active.</div>
                   </div>
                 )}
                 {/* SMS/Phone channels */}
                 {((campDraft.channels||[]).includes("sms")||(campDraft.channels||[]).includes("phone"))&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📞 CALL / SMS NOTES</div>
-                    <textarea value={campDraft.callNotes||""} onChange={e=>setCampDraft(c=>({...c,callNotes:e.target.value}))} rows={3} placeholder="Talking points, script outline, key messages..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📞 CALL / SMS TALK TRACK</div>
+                    <textarea value={campDraft.callNotes||""} onChange={e=>setCampDraft(c=>({...c,callNotes:e.target.value}))} rows={4} placeholder="Key talking points, opening line, objection responses, CTA…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
                   </div>
                 )}
-                <div style={{display:"flex",justifyContent:"space-between",marginTop:8}}>
+                {/* Newsletter channel */}
+                {(campDraft.channels||[]).includes("newsletter")&&(
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>📧 NEWSLETTER</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Use the email sequence above for your newsletter content, or create a batch send from the Batch Outreach module.</div>
+                  </div>
+                )}
+                {(campDraft.channels||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"16px 0",textAlign:"center"}}>← Go back to Step 1 and select channels to see asset options here</div>}
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:16}}>
                   <GBtn onClick={()=>setCampStep(1)}>← BACK</GBtn>
-                  <OBtn onClick={()=>setCampStep(3)}>NEXT: REVIEW & LAUNCH →</OBtn>
+                  <OBtn onClick={()=>setCampStep(3)}>NEXT: SELECT AUDIENCE →</OBtn>
                 </div>
               </div>
               )}
 
-              {/* STEP 3: LAUNCH */}
+              {/* STEP 3: AUDIENCE */}
               {campStep===3&&(
               <div className="card" style={{padding:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>3 — REVIEW & LAUNCH</div>
-                {/* Summary */}
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:6}}>3 — AUDIENCE</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
+                  <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
+                    {segRunning?"✦ ANALYZING...":"✦ AI SMART SEGMENT"}
+                  </button>
+                </div>
+                {segRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>AI matching contacts to campaign…</div>}
+                {!segRunning&&!segResult&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,marginBottom:16}}>
+                    Run Smart Segment to have AI find the best contacts for this campaign, or skip to launch and we'll enroll by audience keyword.
+                  </div>
+                )}
+                {segResult&&(
+                  <div style={{marginBottom:16}}>
+                    {segResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"8px 10px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5,marginBottom:10,lineHeight:1.5}}>{segResult.summary}</div>}
+                    {(()=>{
+                      const byFit={high:[],medium:[],low:[]};
+                      (segResult.segments||[]).forEach(sg=>{byFit[sg.fit]?.push(sg);});
+                      return [["high","BEST MATCH",B.green],["medium","GOOD MATCH",B.orange],["low","POSSIBLE",B.muted]].map(([fit,label,color])=>{
+                        if(!byFit[fit]?.length) return null;
+                        return(
+                          <div key={fit} style={{marginBottom:10}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color,letterSpacing:1}}>{label} ({byFit[fit].length})</div>
+                              <div style={{display:"flex",gap:6}}>
+                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.add(sg.contactId));return n;})} style={{background:"none",border:"none",color,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ ALL</button>
+                                <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.delete(sg.contactId));return n;})} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>− ALL</button>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:220,overflowY:"auto"}}>
+                              {byFit[fit].map(sg=>{
+                                const c=(s.contacts||[]).find(c=>c.id===sg.contactId);
+                                if(!c) return null;
+                                const checked=selectedContacts.has(sg.contactId);
+                                const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unknown";
+                                const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                                const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                                return(
+                                  <div key={sg.contactId} onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);checked?n.delete(sg.contactId):n.add(sg.contactId);return n;})}
+                                    style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 8px",borderRadius:5,background:checked?`${color}08`:B.surface,border:`1px solid ${checked?color:B.border}`,cursor:"pointer"}}>
+                                    <input type="checkbox" checked={checked} onChange={()=>{}} style={{marginTop:2,flexShrink:0,accentColor:color}}/>
+                                    <div style={{flex:1,minWidth:0}}>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}{c.email&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginLeft:5}}>✉</span>}</div>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
+                                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color,marginTop:1,fontStyle:"italic"}}>{sg.reason}</div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>{selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment</div>
+                  </div>
+                )}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
+                  <OBtn onClick={()=>setCampStep(4)}>NEXT: REVIEW & LAUNCH →</OBtn>
+                </div>
+              </div>
+              )}
+
+              {/* STEP 4: LAUNCH */}
+              {campStep===4&&(
+              <div className="card" style={{padding:20}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>4 — REVIEW & LAUNCH</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
-                  {[["Campaign",campDraft.name],["Goal",campDraft.goal||"—"],["Product",campDraft.product],["Audience",campDraft.audience||"All"],["Dates",`${campDraft.startDate}${campDraft.endDate?` → ${campDraft.endDate}`:""}`],["Tone",campDraft.tone]].map(([k,v])=>(
+                  {[["Campaign",campDraft.name||"Untitled"],["Goal",campDraft.goal||"—"],["Product",campDraft.product],["Audience",campDraft.audience||"All"],["Dates",`${campDraft.startDate}${campDraft.endDate?` → ${campDraft.endDate}`:""}`],["Tone",campDraft.tone]].map(([k,v])=>(
                     <div key={k} style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:2}}>{k.toUpperCase()}</div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{v}</div>
@@ -4454,71 +4565,21 @@ function ModMarketing() {
                   <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.channels||[]).map(ch=>{const c=CHANNELS.find(x=>x.id===ch);return<span key={ch} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"4px 10px"}}>{c?.icon} {c?.label}</span>;})}</div>
                 </div>
                 <div style={{marginBottom:14}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>TRACKING METRICS</div>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"4px 10px"}}>{m}</span>)}</div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>METRICS TO TRACK</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{(campDraft.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"4px 10px"}}>☑ {m}</span>)}</div>
                 </div>
-                <div style={{marginBottom:18}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>EMAIL TOUCHES</div>
-                  {campDraft.touches.length===0?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>None added — go back to Assets to generate</div>:<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{campDraft.touches.length} email touch{campDraft.touches.length!==1?"es":""} ready</div>}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:18}}>
+                  {(campDraft.channels||[]).includes("email")&&<div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{campDraft.touches.length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>EMAIL TOUCHES</div></div>}
+                  {(campDraft.channels||[]).includes("social")&&<div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.purple}}>{(campDraft.socialDrafts||[]).length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>SOCIAL POSTS</div></div>}
+                  <div style={{padding:"8px 12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.blue}}>{selectedContacts.size||"~"+(s.contacts||[]).length}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>CONTACTS</div></div>
                 </div>
-                {/* Smart segment */}
-                <div style={{marginBottom:18}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <Lbl>AUDIENCE — who gets enrolled?</Lbl>
-                    <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
-                      {segRunning?"✦ ANALYZING...":"✦ SMART SEGMENT"}
-                    </button>
+                <div style={{padding:"10px 14px",background:`${B.green}08`,border:`1px solid ${B.green}20`,borderRadius:6,marginBottom:18}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
+                    Launching will enroll <strong>{selectedContacts.size||(s.contacts||[]).filter(c=>campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0])).length} contacts</strong> and set the campaign to <strong>active</strong>. You can pause or edit at any time from the campaign detail view.
                   </div>
-                  {segRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"8px 0"}}><Spin/>AI matching contacts…</div>}
-                  {!segRunning&&!segResult&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>{(s.contacts||[]).length} contacts · run Smart Segment to find best matches, or launch to enroll by keyword</div>}
-                  {segResult&&(
-                    <div>
-                      {segResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"8px 10px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:5,marginBottom:10,lineHeight:1.5}}>{segResult.summary}</div>}
-                      {(()=>{
-                        const byFit={high:[],medium:[],low:[]};
-                        (segResult.segments||[]).forEach(sg=>{byFit[sg.fit]?.push(sg);});
-                        return [["high","BEST MATCH",B.green],["medium","GOOD MATCH",B.orange],["low","POSSIBLE",B.muted]].map(([fit,label,color])=>{
-                          if(!byFit[fit]?.length) return null;
-                          return(
-                            <div key={fit} style={{marginBottom:10}}>
-                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color,letterSpacing:1}}>{label} ({byFit[fit].length})</div>
-                                <div style={{display:"flex",gap:6}}>
-                                  <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.add(sg.contactId));return n;})} style={{background:"none",border:"none",color,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ ALL</button>
-                                  <button onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);byFit[fit].forEach(sg=>n.delete(sg.contactId));return n;})} style={{background:"none",border:"none",color:B.muted,fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>− ALL</button>
-                                </div>
-                              </div>
-                              <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
-                                {byFit[fit].map(sg=>{
-                                  const c=(s.contacts||[]).find(c=>c.id===sg.contactId);
-                                  if(!c) return null;
-                                  const checked=selectedContacts.has(sg.contactId);
-                                  const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unknown";
-                                  const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                                  const school=typeof c.school==="string"?c.school:c.school?.name||"";
-                                  return(
-                                    <div key={sg.contactId} onClick={()=>setSelectedContacts(sc=>{const n=new Set(sc);checked?n.delete(sg.contactId):n.add(sg.contactId);return n;})}
-                                      style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 8px",borderRadius:5,background:checked?`${color}08`:B.surface,border:`1px solid ${checked?color:B.border}`,cursor:"pointer"}}>
-                                      <input type="checkbox" checked={checked} onChange={()=>{}} style={{marginTop:2,flexShrink:0,accentColor:color}}/>
-                                      <div style={{flex:1,minWidth:0}}>
-                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}{c.email&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginLeft:5}}>✉</span>}</div>
-                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
-                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color,marginTop:1,fontStyle:"italic"}}>{sg.reason}</div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        });
-                      })()}
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>{selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment</div>
-                    </div>
-                  )}
                 </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
-                  <GBtn onClick={()=>setCampStep(2)}>← BACK</GBtn>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <GBtn onClick={()=>setCampStep(3)}>← BACK</GBtn>
                   <OBtn onClick={saveCampaign} style={{fontSize:13,padding:"10px 28px"}}>🚀 LAUNCH CAMPAIGN</OBtn>
                 </div>
               </div>
@@ -4546,11 +4607,64 @@ function ModMarketing() {
               </div>
               {/* Sub-tabs */}
               <div style={{display:"flex",gap:0,marginBottom:16,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",width:"fit-content"}}>
-                {[["strategy","📋 STRATEGY"],["assets","🛠 ASSETS"],["execute","▶ EXECUTE"]].map(([id,l])=>(
+                {[["overview","📊 OVERVIEW"],["assets","🛠 ASSETS"],["execute","▶ EXECUTE"],["report","📈 REPORT"]].map(([id,l])=>(
                   <button key={id} onClick={()=>setCampSubTab(id)} style={{background:campSubTab===id?B.orange:"transparent",color:campSubTab===id?B.white:B.muted,border:"none",padding:"8px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
-              {campSubTab==="email"&&(<>
+
+              {/* OVERVIEW TAB */}
+              {campSubTab==="overview"&&(
+                <div>
+                  {/* Goal + status card */}
+                  <div className="card" style={{padding:"14px 16px",marginBottom:14,borderLeft:`4px solid ${selCamp.color||B.orange}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16}}>
+                      <div style={{flex:1}}>
+                        {selCamp.goal&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>🎯 {selCamp.goal}</div>}
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+                          {(selCamp.channels||[]).map(ch=>{const c=CHANNELS.find(x=>x.id===ch);return<span key={ch} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"3px 8px"}}>{c?.icon} {c?.label}</span>;})}
+                        </div>
+                        {(selCamp.metrics||[]).length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+                          {(selCamp.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}10`,borderRadius:3,padding:"2px 7px"}}>☑ {m}</span>)}
+                        </div>}
+                      </div>
+                      <div style={{textAlign:"right",flexShrink:0}}>
+                        {selCamp.startDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{selCamp.startDate}{selCamp.endDate?` → ${selCamp.endDate}`:""}</div>}
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{selCamp.product}{selCamp.audience?` · ${selCamp.audience}`:""}</div>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Stats row */}
+                  {(()=>{
+                    const enrs=selCamp.enrollments||[];
+                    const activeN=enrs.filter(e=>e.status==="active").length;
+                    const sentN=enrs.reduce((n,e)=>n+(e.step||0),0);
+                    const openedN=enrs.filter(e=>e.openedAt).length;
+                    const repliedN=enrs.filter(e=>e.status==="replied").length;
+                    const doneN=enrs.filter(e=>e.status==="done").length;
+                    const todayStr=today();
+                    const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
+                    return(
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))",gap:8,marginBottom:16}}>
+                        {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["DUE TODAY",dueN,dueN>0?B.red:B.muted],["SENT",sentN,B.purple],["OPENED",openedN,B.teal||B.blue],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                          <div key={l} style={{background:B.white,border:`1px solid ${c}30`,borderRadius:6,padding:"10px 12px",textAlign:"center"}}>
+                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:c,lineHeight:1}}>{v}</div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:3}}>{l}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  {/* Quick actions */}
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <OBtn sm onClick={()=>setCampSubTab("execute")}>▶ GO TO EXECUTE</OBtn>
+                    <GBtn sm onClick={()=>setCampSubTab("assets")}>🛠 EDIT ASSETS</GBtn>
+                    <GBtn sm onClick={()=>setCampSubTab("report")}>📈 VIEW REPORT</GBtn>
+                  </div>
+                </div>
+              )}
+
+              {/* EXECUTE TAB */}
+              {campSubTab==="execute"&&(<>
               {(()=>{
                 const enrs=selCamp.enrollments||[];
                 const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
@@ -4681,102 +4795,211 @@ function ModMarketing() {
                   })}
               </div>
               </>)}
-              {campSubTab==="social"&&(
+              {/* ASSETS TAB */}
+              {campSubTab==="assets"&&(
                 <div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{(selCamp.socialPosts||[]).length} SOCIAL POSTS</div>
-                    <OBtn sm onClick={()=>setShowAddPost(!showAddPost)}>+ ADD POST</OBtn>
-                  </div>
-                  {showAddPost&&(
-                    <div className="card" style={{padding:14,marginBottom:14}}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                        <div><Lbl s={{marginBottom:4}}>Date</Lbl><input type="date" value={postDraft.date} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-                        <div><Lbl s={{marginBottom:4}}>Type</Lbl><select value={postDraft.type} onChange={e=>setPostDraft(d=>({...d,type:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["post","story","reel"].map(o=><option key={o}>{o}</option>)}</select></div>
-                      </div>
-                      <div style={{marginBottom:10}}>
-                        <Lbl s={{marginBottom:4}}>Platforms</Lbl>
-                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                          {["facebook","instagram","linkedin","twitter","tiktok"].map(p=>{const sel=(postDraft.platforms||[]).includes(p);return<button key={p} onClick={()=>setPostDraft(d=>({...d,platforms:sel?d.platforms.filter(x=>x!==p):[...d.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p}</button>;})}
-                        </div>
-                      </div>
-                      <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-                      <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                      <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
-                    </div>
-                  )}
-                  {(selCamp.socialPosts||[]).length===0&&!showAddPost&&(<div className="card" style={{padding:30,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No social posts yet — add posts to schedule them with this campaign</div>)}
-                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                    {(selCamp.socialPosts||[]).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(post=>(
-                      <div key={post.id} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${post.posted?B.green:B.orange}`}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                          <div style={{flex:1}}>
-                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
-                              {post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{post.date}</span>}
-                              {(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
-                              {post.posted&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>✓ POSTED</span>}
+                  {/* Email touches */}
+                  {(selCamp.touches||[]).length>0&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE — {selCamp.touches.length} TOUCH{selCamp.touches.length!==1?"ES":""}</div>
+                      <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
+                        {selCamp.touches.map((t,i)=>(
+                          <div key={t.id||i} className="card" style={{flex:"1 1 220px",padding:10,borderTop:`2px solid ${B.orange}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
+                              <button onClick={()=>editingTouchIdx===i?setEditingTouchIdx(null):openTouchEdit(i)}
+                                style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>
+                                {editingTouchIdx===i?"✕ CANCEL":"✎ EDIT"}
+                              </button>
                             </div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5,marginBottom:post.imageUrl?8:0}}>{post.caption}</div>
-                            {post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:200,borderRadius:4,marginTop:4}}/>}
-                          </div>
-                          {!post.posted&&(
-                            <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
-                              <OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>
-                              <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {campSubTab==="ads"&&(
-                <div>
-                  <div style={{marginBottom:16,padding:"12px 14px",background:`${B.orange}08`,border:`1px solid ${B.orange}20`,borderRadius:6}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Link ads from the Ad Engine to this campaign</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Create ads in the Ad Engine tab, then link them here for unified reporting.</div>
-                  </div>
-                  {(()=>{
-                    const linkedAds=(s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id));
-                    const unlinkable=(s.ads||[]).filter(a=>!(selCamp.adIds||[]).includes(a.id));
-                    return(<div>
-                      {linkedAds.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"20px 0",textAlign:"center"}}>No ads linked yet</div>}
-                      {linkedAds.map(ad=>(
-                        <div key={ad.id} className="card" style={{padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                          <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{ad.objective}</div></div>
-                          <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:(selCamp.adIds||[]).filter(id=>id!==ad.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>UNLINK</button>
-                        </div>
-                      ))}
-                      {unlinkable.length>0&&(<div style={{marginTop:12}}>
-                        <Lbl s={{marginBottom:8}}>LINK AN AD</Lbl>
-                        {unlinkable.slice(0,10).map(ad=>(
-                          <div key={ad.id} className="card fu" style={{padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:[...(selCamp.adIds||[]),ad.id]})}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{ad.objective}</div></div>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>+ LINK</span>
+                            {editingTouchIdx===i?(
+                              <div>
+                                <div style={{marginBottom:6}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
+                                  <input value={touchDraft.subject} onChange={e=>setTouchDraft(d=>({...d,subject:e.target.value}))}
+                                    style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                                <div style={{marginBottom:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
+                                  <textarea value={touchDraft.body} onChange={e=>setTouchDraft(d=>({...d,body:e.target.value}))}
+                                    rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/></div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
+                                <OBtn sm onClick={saveTouchEdit}>✓ SAVE EMAIL</OBtn>
+                              </div>
+                            ):(
+                              <>
+                                {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{t.body}</div>
+                              </>
+                            )}
                           </div>
                         ))}
-                      </div>)}
-                    </div>);
-                  })()}
-                </div>
-              )}
-              {campSubTab==="graphics"&&(
-                <div>
-                  <div style={{marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Images from social posts and linked ads in this campaign</div>
-                  {(()=>{
-                    const imgs=[
-                      ...(selCamp.socialPosts||[]).filter(p=>p.imageUrl).map(p=>({url:p.imageUrl,label:p.caption?.slice(0,40)||"Social post",type:"social"})),
-                      ...((s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id)&&a.imageUrl)).map(a=>({url:a.imageUrl,label:a.name||a.headline||"Ad",type:"ad"})),
-                    ];
-                    if(!imgs.length) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"30px 0",textAlign:"center"}}>No graphics yet — add social posts with images or link ads</div>;
-                    return(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
-                      {imgs.map((img,i)=>(
-                        <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
-                          <img src={img.url} alt={img.label} style={{width:"100%",aspectRatio:"1",objectFit:"cover",display:"block"}}/>
-                          <div style={{padding:"6px 8px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{img.label}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:img.type==="social"?B.orange:B.purple}}>{img.type.toUpperCase()}</div></div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Social posts */}
+                  <div style={{marginBottom:20}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1}}>📱 SOCIAL POSTS — {(selCamp.socialPosts||[]).length}</div>
+                      <OBtn sm onClick={()=>setShowAddPost(!showAddPost)}>+ ADD POST</OBtn>
+                    </div>
+                    {showAddPost&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                          <div><Lbl s={{marginBottom:4}}>Date</Lbl><input type="date" value={postDraft.date} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                          <div><Lbl s={{marginBottom:4}}>Type</Lbl><select value={postDraft.type} onChange={e=>setPostDraft(d=>({...d,type:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["post","story","reel"].map(o=><option key={o}>{o}</option>)}</select></div>
+                        </div>
+                        <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Platforms</Lbl>
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {["facebook","instagram","linkedin","twitter","tiktok"].map(p=>{const sel=(postDraft.platforms||[]).includes(p);return<button key={p} onClick={()=>setPostDraft(d=>({...d,platforms:sel?d.platforms.filter(x=>x!==p):[...d.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p}</button>;})}
+                          </div>
+                        </div>
+                        <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
+                        <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                        <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
+                      </div>
+                    )}
+                    {(selCamp.socialPosts||[]).length===0&&!showAddPost&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No social posts yet</div>}
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      {(selCamp.socialPosts||[]).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(post=>(
+                        <div key={post.id} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${post.posted?B.green:B.purple}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                            <div style={{flex:1}}>
+                              <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
+                                {post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{post.date}</span>}
+                                {(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
+                                {post.posted&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>✓ POSTED</span>}
+                              </div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{post.caption}</div>
+                              {post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:200,borderRadius:4,marginTop:6}}/>}
+                            </div>
+                            {!post.posted&&(
+                              <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
+                                <OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>
+                                <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))}
-                    </div>);
+                    </div>
+                  </div>
+                  {/* Linked Ads */}
+                  <div style={{marginBottom:20}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>⬛ LINKED ADS</div>
+                    {(()=>{
+                      const linkedAds=(s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id));
+                      const unlinkable=(s.ads||[]).filter(a=>!(selCamp.adIds||[]).includes(a.id));
+                      return(<div>
+                        {linkedAds.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No ads linked — create in Ad Engine tab, then link here.</div>}
+                        {linkedAds.map(ad=>(
+                          <div key={ad.id} className="card" style={{padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{ad.objective}</div></div>
+                            <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:(selCamp.adIds||[]).filter(id=>id!==ad.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>UNLINK</button>
+                          </div>
+                        ))}
+                        {unlinkable.length>0&&(<div style={{marginTop:8}}>
+                          <Lbl s={{marginBottom:6}}>LINK AN AD</Lbl>
+                          {unlinkable.slice(0,8).map(ad=>(
+                            <div key={ad.id} className="card fu" style={{padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:[...(selCamp.adIds||[]),ad.id]})}>
+                              <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{ad.objective}</div></div>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>+ LINK</span>
+                            </div>
+                          ))}
+                        </div>)}
+                      </div>);
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* REPORT TAB */}
+              {campSubTab==="report"&&(
+                <div>
+                  {/* KPI grid */}
+                  {(()=>{
+                    const enrs=selCamp.enrollments||[];
+                    const activeN=enrs.filter(e=>e.status==="active").length;
+                    const sentN=enrs.reduce((n,e)=>n+(e.step||0),0);
+                    const openedN=enrs.filter(e=>e.openedAt).length;
+                    const repliedN=enrs.filter(e=>e.status==="replied").length;
+                    const doneN=enrs.filter(e=>e.status==="done").length;
+                    const openRate=sentN>0?Math.round(openedN/Math.max(sentN,1)*100):0;
+                    const replyRate=sentN>0?Math.round(repliedN/Math.max(sentN,1)*100):0;
+                    return(
+                      <div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10,marginBottom:20}}>
+                          {[
+                            ["ENROLLED",enrs.length,B.blue,"Total contacts in campaign"],
+                            ["ACTIVE",activeN,B.orange,"Still in sequence"],
+                            ["EMAILS SENT",sentN,B.purple,"Total touches sent"],
+                            ["OPENS",openedN,B.teal||B.blue,`${openRate}% open rate`],
+                            ["REPLIES",repliedN,B.green,`${replyRate}% reply rate`],
+                            ["COMPLETED",doneN,B.muted,"Finished all touches"],
+                          ].map(([l,v,c,sub])=>(
+                            <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:24,color:c,lineHeight:1,marginBottom:4}}>{v}</div>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:2}}>{l}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:c}}>{sub}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {/* Progress bar */}
+                        {enrs.length>0&&(
+                          <div style={{marginBottom:20}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>ENROLLMENT STATUS</div>
+                            <div style={{display:"flex",height:12,borderRadius:6,overflow:"hidden",gap:1}}>
+                              {[["active",activeN,B.orange],["replied",repliedN,B.green],["done",doneN,B.muted]].map(([k,v,c])=>v>0&&(
+                                <div key={k} title={`${k}: ${v}`} style={{flex:v,background:c,minWidth:4}}/>
+                              ))}
+                            </div>
+                            <div style={{display:"flex",gap:12,marginTop:4}}>
+                              {[["Active",activeN,B.orange],["Replied",repliedN,B.green],["Done",doneN,B.muted]].map(([l,v,c])=>(
+                                <div key={l} style={{display:"flex",gap:4,alignItems:"center"}}>
+                                  <div style={{width:8,height:8,borderRadius:2,background:c}}/>
+                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{l} ({v})</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {/* Tracked metrics checklist */}
+                        {(selCamp.metrics||[]).length>0&&(
+                          <div style={{marginBottom:20}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>TRACKING METRICS</div>
+                            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                              {(selCamp.metrics||[]).map(m=>{
+                                const tracked=m==="Opens"?openedN:m==="Replies"?repliedN:m==="Emails Sent"?sentN:null;
+                                return(
+                                  <div key={m} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",minWidth:110}}>
+                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:2}}>☑ {m}</div>
+                                    {tracked!==null&&<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{tracked}</div>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {/* Recent activity */}
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>RECENT ACTIVITY</div>
+                  {(()=>{
+                    const allActs=(s.contacts||[])
+                      .flatMap(c=>(c.activity||[]).filter(a=>a.campaignId===selCamp.id).map(a=>({...a,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()})))
+                      .sort((a,b)=>b.ts-a.ts)
+                      .slice(0,15);
+                    if(!allActs.length) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 0"}}>No activity yet — launch the campaign and start sending.</div>;
+                    const typeColor={sent:B.purple,opened:B.blue,clicked:B.orange,replied:B.green,enrolled:B.muted,meeting:B.teal||B.blue,deal:B.green};
+                    return(
+                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                        {allActs.map(a=>(
+                          <div key={a.id} style={{display:"flex",gap:10,alignItems:"center",padding:"6px 10px",background:B.surface,borderRadius:5}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:typeColor[a.type]||B.muted,background:`${typeColor[a.type]||B.muted}14`,padding:"2px 6px",borderRadius:3,flexShrink:0}}>{a.type?.toUpperCase()}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{a.contactName}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{new Date(a.ts).toLocaleDateString()}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
                   })()}
                 </div>
               )}
