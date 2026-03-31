@@ -412,6 +412,7 @@ export default function App() {
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
     {id:"briefing",    icon:"◈", label:"Briefing",       badge:urgentCount(s)},
+    {id:"analytics",   icon:"▣", label:"Analytics"},
     {id:"revenue",     icon:"↑", label:"Revenue"},
     {id:"deals",       icon:"◫", label:"Deals"},
     {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
@@ -557,6 +558,7 @@ export default function App() {
 
           <main style={{flex:1,overflowY:"auto",background:B.pageBg}}>
             <ErrBound key={mod}>
+            {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModBriefing/>}
             {mod==="revenue"     && <ModRevenue/>}
             {mod==="deals"       && <ModDeals/>}
@@ -670,6 +672,11 @@ function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{backgr
 //  BRIEFING
 // ════════════════════════════════════════════════════════════════════════════
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
+
+function ModAnalytics() {
+  const {s}=useApp();
+  return <div style={{padding:"22px 26px"}}><PH title="ANALYTICS" sub="Cross-module performance dashboard"/></div>;
+}
 
 function ModBriefing() {
   const {s,dispatch,cu,setMod,toast}=useApp();
