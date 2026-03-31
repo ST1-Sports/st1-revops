@@ -1685,15 +1685,12 @@ function AyrsharePanel({addLog}) {
     try {
       const data = await safePost({action:"test"});
       if (data.ok) {
-        setTestResult({ok:true, user: data.user});
+        setTestResult({ok:true, user: data.user, workspaces: data.workspaces||[], firstWorkspaceId: data.firstWorkspaceId});
         addLog("Publer connected ✓","success");
         try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
       } else {
-        const msg = data.error?.includes("PUBLER_API_KEY")
-          ? "PUBLER_API_KEY not set in Vercel — add it under Settings → Environment Variables, then redeploy."
-          : (data.error || "Connection failed");
-        setTestResult({ok:false, error: msg});
-        addLog(`Publer: ${msg}`,"error");
+        setTestResult({ok:false, error: data.error || "Connection failed"});
+        addLog(`Publer: ${data.error}`,"error");
       }
     } catch(e) { setTestResult({ok:false, error:e.message}); }
     setTesting(false);
@@ -1727,7 +1724,18 @@ function AyrsharePanel({addLog}) {
 
       {testResult?.ok&&(
         <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
-          ✓ <strong>Publer connected</strong>{testResult.user?.name ? ` — ${testResult.user.name}` : ""}{testResult.user?.plan ? ` (${testResult.user.plan} plan)` : ""}
+          ✓ <strong>Publer connected</strong>{testResult.user?.name ? ` — ${testResult.user.name}` : ""}
+          {testResult.workspaces?.length>0&&(
+            <div style={{marginTop:8,borderTop:"1px solid #b7e4ca",paddingTop:8}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,marginBottom:6}}>WORKSPACE IDs — add to Vercel as PUBLER_WORKSPACE_ID</div>
+              {testResult.workspaces.map(w=>(
+                <div key={w.id} style={{display:"flex",justifyContent:"space-between",background:"#d4f0e0",borderRadius:4,padding:"4px 8px",marginBottom:4,fontFamily:"monospace",fontSize:10}}>
+                  <span style={{color:"#1a6b40"}}>{w.name||"Workspace"}</span>
+                  <span style={{userSelect:"all",color:"#1a6b40",fontWeight:700}}>{w.id}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {testResult?.ok===false&&(
@@ -1739,10 +1747,11 @@ function AyrsharePanel({addLog}) {
       <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>SETUP</div>
         {[
-          {n:"1",title:"Create Publer account",body:<>Sign up at <a href="https://publer.io" target="_blank" rel="noreferrer" style={{color:"#6B3FA0",fontWeight:700}}>publer.io</a> — <strong>Professional from $12/mo</strong>. Connect your social accounts in the Publer dashboard.</>},
-          {n:"2",title:"Get your API key",body:<>In Publer, go to <strong>Settings → API</strong> → copy your <strong>API Key</strong>. No app creation or approval needed.</>},
-          {n:"3",title:"Add to Vercel",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_API_KEY = your_key_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click Test Connection above.</span></>},
-          {n:"4",title:"Load accounts → add IDs to Vercel",body:<>Click <strong>Load Accounts</strong> below to see your connected social account IDs, then add each one to Vercel as shown.</>},
+          {n:"1",title:"Create Publer account (Business plan required)",body:<>Sign up at <a href="https://publer.com" target="_blank" rel="noreferrer" style={{color:"#6B3FA0",fontWeight:700}}>publer.com</a> — <strong>API requires Business plan</strong>. Connect your social accounts in the Publer dashboard.</>},
+          {n:"2",title:"Get your API key",body:<>In Publer, go to <strong>Settings → API</strong> → copy your <strong>API Key</strong>.</>},
+          {n:"3",title:"Add API key to Vercel + redeploy",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_API_KEY = your_key_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click <strong>Test Connection</strong> — your workspace ID will appear above.</span></>},
+          {n:"4",title:"Add workspace ID to Vercel + redeploy",body:<>Copy the workspace ID shown after Test Connection and add it:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_WORKSPACE_ID = your_workspace_id</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → then click Load Accounts below.</span></>},
+          {n:"5",title:"Load accounts → add IDs to Vercel",body:<>Click <strong>Load Accounts</strong> below to see your connected social account IDs, then add each one to Vercel as shown.</>},
         ].map(({n,title,body})=>(
           <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
             <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>

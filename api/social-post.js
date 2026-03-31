@@ -2,29 +2,32 @@
  * /api/social-post  — Social media posting via Publer
  *
  * Required env vars:
- *   PUBLER_API_KEY    — from app.publer.io → Settings → API
+ *   PUBLER_API_KEY         — from app.publer.com → Settings → API
+ *   PUBLER_WORKSPACE_ID    — from Load Accounts step (or Publer dashboard URL)
  *
- * Optional (per-platform account IDs):
+ * Optional (per-platform account IDs — get from Load Accounts):
  *   PUBLER_ACCOUNT_FACEBOOK / INSTAGRAM / LINKEDIN / TWITTER / TIKTOK
  *   PUBLER_ACCOUNT_IDS  — comma-separated fallback
  *
  * POST body actions:
- *   action="test"     → verify API key
- *   action="profiles" → list connected accounts
+ *   action="test"     → verify API key + list workspaces
+ *   action="profiles" → list connected social accounts
  *   (default)         → post or schedule
+ *
+ * NOTE: Publer API requires Business plan or higher.
  */
 
 const PUBLER_API = "https://app.publer.com/api/v1";
 
-async function publerRequest(path, method = "GET", body = null, apiKey) {
-  const opts = {
-    method,
-    headers: {
-      Authorization: `Bearer-API ${apiKey}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+async function publerRequest(path, method = "GET", body = null, apiKey, workspaceId = null) {
+  const headers = {
+    Authorization: `Bearer-API ${apiKey}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
   };
+  if (workspaceId) headers["Publer-Workspace-Id"] = workspaceId;
+
+  const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
   const r = await fetch(`${PUBLER_API}${path}`, opts);
@@ -52,31 +55,49 @@ export default async function handler(req, res) {
 
   const { post, platforms, mediaUrls, scheduleDate, isStory, link, action } = req.body || {};
 
-  // ── Test connection ──────────────────────────────────────────────────────────
+  // ── Test connection — fetch workspaces (no workspace header needed) ───────────
   if (action === "test") {
     try {
-      const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey);
+      const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
       if (ok) {
-        const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
-        return res.json({ ok: true, user: { name: `${accounts.length} account(s) connected`, plan: "Publer" } });
+        const workspaces = Array.isArray(data) ? data : (data.data || data.workspaces || []);
+        const names = workspaces.map(w => w.name || w.title || w.id).join(", ");
+        const firstId = workspaces[0]?.id;
+        return res.json({
+          ok: true,
+          user: {
+            name: `Connected — ${workspaces.length} workspace(s): ${names}`,
+            plan: "Publer",
+          },
+          workspaces: workspaces.map(w => ({ id: w.id, name: w.name || w.title })),
+          firstWorkspaceId: firstId,
+        });
       }
-      return res.status(400).json({ ok: false, error: data.message || data.error || JSON.stringify(data) });
+      return res.status(400).json({ ok: false, error: data.errors?.[0] || data.message || data.error || JSON.stringify(data) });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
     }
   }
 
+  // All other actions require a workspace ID
+  const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+  if (!workspaceId) {
+    return res.status(400).json({
+      error: "PUBLER_WORKSPACE_ID not set — click Test Connection to find your workspace ID, then add it to Vercel env vars.",
+    });
+  }
+
   // ── List accounts ────────────────────────────────────────────────────────────
   if (action === "profiles") {
     try {
-      const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey);
-      if (!ok) return res.status(400).json({ error: data.message || data.error || JSON.stringify(data) });
+      const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
+      if (!ok) return res.status(400).json({ error: data.errors?.[0] || data.message || data.error || JSON.stringify(data) });
       const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
       return res.json({
         ok: true,
         profiles: accounts.map(a => ({
           id: String(a.id),
-          service: (a.platform || a.social_network || a.type || "").toLowerCase(),
+          service: (a.provider || a.platform || a.type || "").toLowerCase(),
           name: a.name || a.username || a.display_name,
           avatar: a.picture || a.avatar,
           connected: !a.needs_reconnect,
@@ -124,7 +145,7 @@ export default async function handler(req, res) {
   if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
   try {
-    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey);
+    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
 
     if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
       const posts = data.posts || (data.id ? [data] : []);
@@ -140,7 +161,7 @@ export default async function handler(req, res) {
     }
 
     return res.status(400).json({
-      error: data.message || data.error || "Post failed",
+      error: data.errors?.[0] || data.message || data.error || "Post failed",
       backend: "publer",
       detail: data,
     });
