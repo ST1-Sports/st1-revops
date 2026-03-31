@@ -69,6 +69,7 @@ const SEED = {
   alerts: [],
   orders: [],
   templates: [],
+  reps: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -110,6 +111,7 @@ function useStore() {
           savedAds:     Array.isArray(p.savedAds)     ? p.savedAds     : [],
           socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
+          reps:         Array.isArray(p.reps)         ? p.reps         : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -255,6 +257,9 @@ function reducer(prev, action, payload) {
     case "ADD_TEMPLATE":        return {...prev, templates:[payload,...(prev.templates||[])]};
     case "UPDATE_TEMPLATE":     return {...prev, templates:(prev.templates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
     case "DEL_TEMPLATE":        return {...prev, templates:(prev.templates||[]).filter(t=>t.id!==payload)};
+    case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
+    case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
+    case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
@@ -411,9 +416,8 @@ export default function App() {
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
-    {id:"outreach",    icon:"✉", label:"Outreach"},
-    {id:"templates",   icon:"≈", label:"Email Templates"},
-    {id:"marketing",   icon:"✦", label:"Campaigns & Ads"},
+    {id:"emails",      icon:"✉", label:"Emails"},
+    {id:"marketing",   icon:"✦", label:"Campaigns"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"agent",       icon:"AI",label:"AI Agent"},
@@ -556,8 +560,7 @@ export default function App() {
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
-            {mod==="outreach"    && <ModBatchOutreach/>}
-            {mod==="templates"   && <ModTemplates/>}
+            {mod==="emails"      && <ModEmails/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -3588,6 +3591,291 @@ Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
+// ════════════════════════════════════════════════════════════════════════════
+//  EMAILS — unified sent history, templates, and batch outreach
+// ════════════════════════════════════════════════════════════════════════════
+function ModEmails() {
+  const {s,dispatch,toast}=useApp();
+  const [tab,setTab]=useState("sent");
+
+  // ── SENT HISTORY ──────────────────────────────────────────────────────────
+  const sentItems = (s.contacts||[])
+    .flatMap(c=>(c.activity||[])
+      .filter(a=>a.type==="sent"||a.type==="replied"||a.type==="opened"||a.type==="clicked")
+      .map(a=>({...a,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),contactEmail:c.email,school:typeof c.school==="string"?c.school:c.school?.name||"",sport:c.sport||""}))
+    )
+    .sort((a,b)=>b.ts-a.ts);
+
+  const typeColor={sent:B.blue,replied:B.green,opened:B.purple,clicked:B.orange};
+
+  // ── TEMPLATES ─────────────────────────────────────────────────────────────
+  const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
+  const [sel,setSel]=useState(allTemplates[0]?.id||null);
+  const [editing,setEditing]=useState(false);
+  const [form,setForm]=useState({name:"",subject:"",body:"",tags:[]});
+  const [tagInput,setTagInput]=useState("");
+  const current=allTemplates.find(t=>t.id===sel);
+  const isDefault=DEFAULT_TEMPLATES.some(t=>t.id===sel);
+  const startNew=()=>{setForm({name:"",subject:"",body:"",tags:[]});setEditing(true);setSel(null);};
+  const startEdit=()=>{if(!current||isDefault)return;setForm({name:current.name,subject:current.subject,body:current.body,tags:current.tags||[]});setEditing(true);};
+  const cancelEdit=()=>{setEditing(false);if(allTemplates.length)setSel(allTemplates[0].id);};
+  const saveTemplate=()=>{
+    if(!form.name||!form.subject||!form.body){toast("Name, subject and body required","error");return;}
+    if(sel&&!isDefault){dispatch("UPDATE_TEMPLATE",{id:sel,...form});toast("Template updated","success");}
+    else{const t={id:mkId(),...form};dispatch("ADD_TEMPLATE",t);setSel(t.id);toast("Template saved","success");}
+    setEditing(false);
+  };
+
+  // ── BATCH SEND ────────────────────────────────────────────────────────────
+  const contacts=s.contacts||[];
+  const [sportFilter,setSportFilter]=useState("");
+  const [stateFilter,setStateFilter]=useState("");
+  const [scoreFilter,setScoreFilter]=useState(0);
+  const [selContacts,setSelContacts]=useState(new Set());
+  const [tplId,setTplId]=useState(allTemplates[0]?.id||"");
+  const [drafts,setDrafts]=useState([]);
+  const [writing,setWriting]=useState(false);
+  const [sending,setSending]=useState(false);
+  const [sentCount,setSentCount]=useState(0);
+  const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
+  const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
+  const filtered=contacts.filter(c=>{
+    if(!c.email)return false;
+    if(sportFilter&&c.sport!==sportFilter)return false;
+    if(stateFilter&&c.state!==stateFilter)return false;
+    if((c.score||0)<scoreFilter)return false;
+    return true;
+  });
+  const togSel=(id)=>setSelContacts(ss=>{const n=new Set(ss);n.has(id)?n.delete(id):n.add(id);return n;});
+  const selAll=()=>setSelContacts(new Set(filtered.map(c=>c.id)));
+  const selNone=()=>setSelContacts(new Set());
+  const selectedList=filtered.filter(c=>selContacts.has(c.id));
+  const buildDrafts=async()=>{
+    if(!selectedList.length){toast("Select contacts first","error");return;}
+    const tpl=allTemplates.find(t=>t.id===tplId);
+    if(!tpl){toast("Select a template","error");return;}
+    setWriting(true);setDrafts([]);
+    const useAI=selectedList.length<=20;
+    if(useAI){
+      const prompt=`You are writing personalized emails for ST1 Sports (athletic equipment) for ${selectedList.length} recipients.\n\nTemplate:\nSubject: ${tpl.subject}\nBody: ${tpl.body}\n\nRecipients:\n${selectedList.map((c,i)=>`${i+1}. ${c.fullName||[c.firstName,c.lastName].filter(Boolean).join(" ")} | ${c.title||"coach"} | ${c.school||""} | ${c.state||""} | Sport: ${c.sport||"general"}`).join("\n")}\n\nFor each recipient personalize the subject and body by filling in {{name}}, {{school}}, and adding 1 specific sentence relevant to their sport/role.\nReturn JSON array: [{"index":1,"subject":"...","body":"..."}] with index matching the list above.`;
+      const raw=await aiCall(prompt,{json:true,tokens:4000});
+      if(Array.isArray(raw)){setDrafts(raw.map((r,i)=>{const c=selectedList[i];return{id:mkId(),contactId:c.id,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),toEmail:c.email,subject:r.subject||tpl.subject,body:r.body||tpl.body,status:"draft"};}));}
+      else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
+    }else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
+    setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
+  };
+  const sendAll=async()=>{
+    const toSend=drafts.filter(d=>d.status==="draft");
+    if(!toSend.length){toast("No drafts to send","error");return;}
+    setSending(true);setSentCount(0);let sent=0;
+    for(const d of toSend){
+      try{
+        setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sending"}:x));
+        const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:d.toEmail,to_name:d.contactName,subject:d.subject,body:d.body})});
+        const res=await r.json();
+        if(res.sent){
+          setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sent"}:x));
+          dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"contacted",lastOutreach:today()});
+          dispatch("SCORE_CONTACT",{contactId:d.contactId,type:"sent",note:`Batch email sent`,campaignId:"batch"});
+          sent++;setSentCount(sent);
+        }else{setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));}
+        await new Promise(r=>setTimeout(r,300));
+      }catch(e){setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:e.message}:x));}
+    }
+    setSending(false);toast(`${sent}/${toSend.length} emails sent`,sent>0?"success":"error");
+  };
+  const updDraft=(id,field,val)=>setDrafts(ds=>ds.map(d=>d.id===id?{...d,[field]:val}:d));
+
+  return(
+    <div style={{padding:"22px 26px"}}>
+      <PH title="EMAILS" sub="Sent history · reusable templates · batch outreach"/>
+      <div style={{display:"flex",gap:5,marginBottom:18}}>
+        {[["sent","✉ SENT"],["templates","≈ TEMPLATES"],["batch","⟶ BATCH SEND"]].map(([id,l])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── SENT HISTORY ────────────────────────────────────────────────────── */}
+      {tab==="sent"&&(
+        <div>
+          {sentItems.length===0?(
+            <div className="card" style={{padding:40,textAlign:"center"}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No emails sent yet</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Emails sent through campaigns or batch outreach will appear here.</div>
+              <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+                <OBtn sm onClick={()=>setTab("batch")}>BATCH SEND →</OBtn>
+              </div>
+            </div>
+          ):(
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>{sentItems.length} EVENTS</div>
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                {sentItems.slice(0,150).map(a=>{
+                  const c=typeColor[a.type]||B.muted;
+                  return(
+                    <div key={a.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"8px 12px",background:B.white,border:`1px solid ${B.border}`,borderLeft:`3px solid ${c}`,borderRadius:5}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:`${c}14`,padding:"2px 6px",borderRadius:3,flexShrink:0,marginTop:1}}>{a.type?.toUpperCase()}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{a.contactName}</div>
+                        {a.contactEmail&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{a.contactEmail}{a.school?` · ${a.school}`:""}</div>}
+                        {a.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,fontStyle:"italic"}}>{a.note}</div>}
+                      </div>
+                      <div style={{textAlign:"right",flexShrink:0}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{new Date(a.ts).toLocaleDateString()}</div>
+                        {a.campaignId&&a.campaignId!=="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,marginTop:2}}>CAMPAIGN</div>}
+                        {a.campaignId==="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,marginTop:2}}>BATCH</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── TEMPLATES ────────────────────────────────────────────────────────── */}
+      {tab==="templates"&&(
+        <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14,height:"calc(100vh - 200px)",overflow:"hidden"}}>
+          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+            <button onClick={startNew} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",marginBottom:6}}>+ NEW TEMPLATE</button>
+            {allTemplates.map(t=>(
+              <div key={t.id} onClick={()=>{setSel(t.id);setEditing(false);}} style={{padding:"9px 12px",borderRadius:6,cursor:"pointer",background:sel===t.id?B.orangeBg:B.white,border:`1px solid ${sel===t.id?B.orange:B.border}`,borderLeft:`3px solid ${sel===t.id?B.orange:B.border}`}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:sel===t.id?500:400,lineHeight:1.3}}>{t.name}</div>
+                {t.tags?.length>0&&<div style={{display:"flex",gap:3,flexWrap:"wrap",marginTop:4}}>{t.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:8}}>{tag}</span>)}</div>}
+              </div>
+            ))}
+          </div>
+          <div style={{overflowY:"auto"}}>
+            {editing?(
+              <div className="card" style={{padding:16}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                  <div><Lbl s={{marginBottom:4}}>TEMPLATE NAME</Lbl><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                  <div><Lbl s={{marginBottom:4}}>TAGS (comma-sep)</Lbl><input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                </div>
+                <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>SUBJECT LINE</Lbl><input value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>BODY — use {"{{name}}"}, {"{{school}}"} as placeholders</Lbl>
+                  <textarea value={form.body} onChange={e=>setForm(f=>({...f,body:e.target.value}))} rows={12} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.7}}/></div>
+                <div style={{display:"flex",gap:7}}><OBtn onClick={saveTemplate}>SAVE TEMPLATE</OBtn><GBtn onClick={cancelEdit}>CANCEL</GBtn></div>
+              </div>
+            ):current?(
+              <div className="card" style={{padding:16}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginBottom:4}}>{current.name}</div>
+                    {current.tags?.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{current.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:8}}>{tag}</span>)}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:7}}>
+                    <button onClick={()=>navigator.clipboard?.writeText(`Subject: ${current.subject}\n\n${current.body}`).catch(()=>{}).then(()=>toast("Copied","success"))} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>📋 COPY</button>
+                    {!isDefault&&<button onClick={startEdit} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>EDIT</button>}
+                    {!isDefault&&<button onClick={()=>{dispatch("DEL_TEMPLATE",sel);setSel(allTemplates[0]?.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>DEL</button>}
+                  </div>
+                </div>
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Subject: {current.subject}</div>
+                <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.7,margin:0,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>{current.body}</pre>
+                {isDefault&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Built-in template — create a custom copy to edit it.</div>}
+              </div>
+            ):<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Select a template</div>}
+          </div>
+        </div>
+      )}
+
+      {/* ── BATCH SEND ───────────────────────────────────────────────────────── */}
+      {tab==="batch"&&(
+        drafts.length===0?(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:16}}>
+            <div>
+              <div className="card" style={{padding:14,marginBottom:12}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>FILTER CONTACTS</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:10}}>
+                  <div><Lbl s={{marginBottom:3}}>SPORT</Lbl><select value={sportFilter} onChange={e=>setSportFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All sports</option>{sports.map(sp=><option key={sp}>{sp}</option>)}</select></div>
+                  <div><Lbl s={{marginBottom:3}}>STATE</Lbl><select value={stateFilter} onChange={e=>setStateFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All states</option>{states.map(st=><option key={st}>{st}</option>)}</select></div>
+                  <div><Lbl s={{marginBottom:3}}>MIN SCORE</Lbl><input type="number" min="0" max="200" value={scoreFilter} onChange={e=>setScoreFilter(Number(e.target.value)||0)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/></div>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{filtered.length} contacts match · {selContacts.size} selected</div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={selAll} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>SELECT ALL</button>
+                    <button onClick={selNone} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLEAR</button>
+                  </div>
+                </div>
+              </div>
+              <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                {filtered.slice(0,100).map(c=>(
+                  <div key={c.id} onClick={()=>togSel(c.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 12px",borderRadius:6,cursor:"pointer",background:selContacts.has(c.id)?B.orangeBg:B.white,border:`1px solid ${selContacts.has(c.id)?B.orange:B.border}`}}>
+                    <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${selContacts.has(c.id)?B.orange:B.border}`,background:selContacts.has(c.id)?B.orange:"none",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{selContacts.has(c.id)&&<span style={{color:B.white,fontSize:10,lineHeight:1}}>✓</span>}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
+                    </div>
+                    <div style={{textAlign:"right",flexShrink:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</div>
+                      {(c.score||0)>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>{c.score}pts</div>}
+                    </div>
+                  </div>
+                ))}
+                {filtered.length===0&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts match. Adjust filters or import contacts first.</div>}
+              </div>
+            </div>
+            <div>
+              <div className="card" style={{padding:14,marginBottom:12}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>SELECT TEMPLATE</div>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {allTemplates.map(t=>(
+                    <div key={t.id} onClick={()=>setTplId(t.id)} style={{padding:"8px 10px",borderRadius:5,cursor:"pointer",background:tplId===t.id?B.orangeBg:B.white,border:`1px solid ${tplId===t.id?B.orange:B.border}`}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:tplId===t.id?500:400}}>{t.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.subject}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="card" style={{padding:14}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:12}}>{selContacts.size} contacts selected · AI will personalize each email with their name and school.</div>
+                <OBtn onClick={buildDrafts} disabled={writing||selContacts.size===0} style={{width:"100%",marginBottom:7}}>{writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}</OBtn>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
+              </div>
+            </div>
+          </div>
+        ):(
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+                {drafts.length} drafts · {drafts.filter(d=>d.status==="sent").length} sent · {drafts.filter(d=>d.status==="failed").length} failed
+                {sending&&<span style={{color:B.orange,marginLeft:8}}>Sending {sentCount}...</span>}
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
+                <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>{sending?"SENDING...":"✉ SEND ALL DRAFTS"}</button>
+              </div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              {drafts.map(d=>{
+                const STATUS_C={draft:B.muted,sending:B.orange,sent:B.green,failed:B.red};
+                return(
+                  <div key={d.id} className="card" style={{padding:14,borderLeft:`3px solid ${STATUS_C[d.status]||B.muted}`}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.contactName} <span style={{color:B.muted,fontWeight:400}}>· {d.toEmail}</span></div>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:STATUS_C[d.status],background:`${STATUS_C[d.status]}18`,padding:"2px 7px",borderRadius:8,letterSpacing:.5,flexShrink:0}}>{d.status.toUpperCase()}</span>
+                    </div>
+                    {d.status==="draft"&&(
+                      <div>
+                        <input value={d.subject} onChange={e=>updDraft(d.id,"subject",e.target.value)} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:5}}/>
+                        <textarea value={d.body} onChange={e=>updDraft(d.id,"body",e.target.value)} rows={5} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                      </div>
+                    )}
+                    {d.status==="sent"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Sent successfully</div>}
+                    {d.status==="failed"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>✗ {d.error||"Send failed"}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+}
+
 function ModTemplates() {
   const {s,dispatch,toast}=useApp();
   const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
@@ -3987,7 +4275,7 @@ function ModMarketing() {
   const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
 
   const startNewCampaign = () => {
-    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],socialDrafts:[],adScript:"",callNotes:"",startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"]});
+    setCampDraft({name:"",product,audience,tone,ctx:"",touches:[],socialDrafts:[],adScript:"",callNotes:"",startDate:today(),endDate:"",goal:"",channels:[],metrics:["Opens","Replies","Quotes Sent"],repId:""});
     setCampStep(1);
     setShowNewCampForm(true);
     setSelCampId(null);
@@ -4080,9 +4368,9 @@ function ModMarketing() {
       name: campDraft.name||`${campDraft.product} — ${campDraft.audience}`,
       product: campDraft.product,
       audience: campDraft.audience,
-      channel: campDraft.channel,
       tone: campDraft.tone,
       goal: campDraft.goal||"",
+      repId: campDraft.repId||"",
       startDate: campDraft.startDate||todayStr,
       endDate: campDraft.endDate||"",
       touches: campDraft.touches,
@@ -4133,7 +4421,10 @@ function ModMarketing() {
     const touch = (camp.touches||[])[enroll.step];
     if(!touch) return {ok:false,reason:"no touch"};
     const co = s.company||{};
-    const sigParts=[co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
+    const rep = camp.repId ? (s.reps||[]).find(r=>r.id===camp.repId) : null;
+    const sigParts=rep
+      ? [rep.name,rep.title,rep.email,rep.phone,co.website].filter(Boolean)
+      : [co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
     const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
     const subject=mergeTags(touch.subject,c)||`Following up — ${camp.product||camp.name}`;
     const plainBody=mergeTags(touch.body,c)+sigText;
@@ -4313,7 +4604,8 @@ function ModMarketing() {
                             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,flex:1,paddingRight:8}}>{camp.name}</div>
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,padding:"2px 7px",borderRadius:3,letterSpacing:.5,flexShrink:0}}>{(camp.status||"draft").toUpperCase()}</span>
                           </div>
-                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{camp.product}{camp.audience?` · ${camp.audience}`:""}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{camp.product}{camp.audience?` · ${camp.audience}`:""}
+                            {camp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===camp.repId);return rep?<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>REP: {rep.name.split(" ")[0].toUpperCase()}</span>:null;})()}</div>
                           {(camp.startDate||camp.endDate)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{camp.startDate||""}{camp.endDate?` → ${camp.endDate}`:""}</div>}
                           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>✉ {(camp.touches||[]).length} touches</span>
@@ -4398,9 +4690,36 @@ function ModMarketing() {
                     ))}
                   </div>
                 </div>
-                <div style={{marginBottom:16}}>
-                  <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
-                  <textarea value={campDraft.ctx} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={2} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>Context / Angle</Lbl>
+                    <textarea value={campDraft.ctx} onChange={e=>setCampDraft(c=>({...c,ctx:e.target.value}))} rows={3} placeholder="Season timing, specific offer, competitive angle..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <div>
+                    <Lbl s={{marginBottom:4}}>ASSIGNED REP</Lbl>
+                    {(s.reps||[]).length===0?(
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 10px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,lineHeight:1.5}}>
+                        No reps yet — <button onClick={()=>dispatch("SET_MOD","settings")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",padding:0}}>add them in Settings →</button>
+                      </div>
+                    ):(
+                      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                        <button onClick={()=>setCampDraft(c=>({...c,repId:""}))} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:5,border:`2px solid ${!campDraft.repId?B.orange:B.border}`,background:!campDraft.repId?B.orangeBg:B.surface,cursor:"pointer"}}>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:!campDraft.repId?B.orange:B.muted}}>Company (no specific rep)</span>
+                          {!campDraft.repId&&<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>✓</span>}
+                        </button>
+                        {(s.reps||[]).map(rep=>(
+                          <button key={rep.id} onClick={()=>setCampDraft(c=>({...c,repId:rep.id}))} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:5,border:`2px solid ${campDraft.repId===rep.id?B.orange:B.border}`,background:campDraft.repId===rep.id?B.orangeBg:B.surface,cursor:"pointer"}}>
+                            <div style={{width:24,height:24,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <div style={{flex:1,textAlign:"left"}}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:campDraft.repId===rep.id?B.orange:B.text,fontWeight:500}}>{rep.name}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{rep.email}</div>
+                            </div>
+                            {campDraft.repId===rep.id&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>✓</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div style={{display:"flex",justifyContent:"flex-end"}}>
                   <OBtn onClick={()=>setCampStep(2)} disabled={!campDraft.name||!(campDraft.channels||[]).length}>NEXT: BUILD ASSETS →</OBtn>
@@ -4630,6 +4949,13 @@ function ModMarketing() {
                       <div style={{textAlign:"right",flexShrink:0}}>
                         {selCamp.startDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{selCamp.startDate}{selCamp.endDate?` → ${selCamp.endDate}`:""}</div>}
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{selCamp.product}{selCamp.audience?` · ${selCamp.audience}`:""}</div>
+                        {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
+                          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:6}}>
+                            <div style={{width:20,height:20,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,fontWeight:500}}>{rep.name}</span>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>· {rep.email}</span>
+                          </div>
+                        ):null;})()}
                       </div>
                     </div>
                   </div>
@@ -4665,6 +4991,16 @@ function ModMarketing() {
 
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
+              {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:12}}>
+                  <div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                  <div style={{flex:1}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending as <strong>{rep.name}</strong> · {rep.email}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:8}}>Replies feed {rep.name.split(" ")[0]}'s pipeline</span>
+                  </div>
+                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
+                </div>
+              ):null;})()}
               {(()=>{
                 const enrs=selCamp.enrollments||[];
                 const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
@@ -7035,7 +7371,14 @@ function ModSettings() {
   const {s,dispatch,toast}=useApp();
   const [ints,setInts]=useState({...s.integrations});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
+  const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
   const save=()=>{dispatch("SAVE_INTEGRATIONS",ints);dispatch("SAVE_COMPANY",co);toast("Settings saved","success");};
+  const saveRep=()=>{
+    if(!repForm?.name||!repForm?.email){toast("Name and email required","error");return;}
+    if(repForm.id){dispatch("UPDATE_REP",repForm);toast("Rep updated","success");}
+    else{dispatch("ADD_REP",{...repForm,id:mkId()});toast("Rep added","success");}
+    setRepForm(null);
+  };
 
   return (
     <div style={{padding:"22px 26px",maxWidth:680}}>
@@ -7075,6 +7418,51 @@ function ModSettings() {
           <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{step}</span></div>
         ))}
       </div>
+      {/* Sales Reps */}
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <Lbl c={B.blue}>Sales Reps</Lbl>
+          <button onClick={()=>setRepForm({name:"",email:"",title:"",phone:""})} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>+ ADD REP</button>
+        </div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
+          Reps can be assigned to campaigns. Their name and contact info will appear in outbound emails as the sender, and replies/leads will count toward their pipeline.
+        </div>
+        {repForm&&(
+          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:14,marginBottom:12}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:10}}>
+              {[["Name","name","text"],["Email","email","email"],["Title","title","text"],["Phone","phone","text"]].map(([l,k,t])=>(
+                <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
+                  <input type={t} value={repForm[k]||""} onChange={e=>setRepForm(f=>({...f,[k]:e.target.value}))}
+                    style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:7}}>
+              <OBtn sm onClick={saveRep}>SAVE</OBtn>
+              <GBtn sm onClick={()=>setRepForm(null)}>CANCEL</GBtn>
+            </div>
+          </div>
+        )}
+        {(s.reps||[]).length===0&&!repForm&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 0"}}>No reps added yet — add your sales team to assign campaigns.</div>}
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {(s.reps||[]).map(rep=>(
+            <div key={rep.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
+              <div style={{width:32,height:32,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{rep.name}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
+              </div>
+              <div style={{display:"flex",gap:5}}>
+                <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
+                <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
         <Lbl c={B.green} s={{marginBottom:11}}>Data Management</Lbl>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All data persists in your browser's localStorage across sessions. Export a backup before clearing.</div>
