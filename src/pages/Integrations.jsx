@@ -92,7 +92,19 @@ const DEMO_PRODUCTS = [
 export default function IntegrationsHub() {
   const [tab, setTab]     = useState("overview");
   const [creds, setCreds] = useState(loadCreds);
-  const [status, setStatus] = useState(() => ({slack:true, books:false, crm:false, woo:false, ...loadStatus()}));
+  const [status, setStatus] = useState(() => {
+    const saved = loadStatus();
+    const cr    = loadCreds();
+    return {
+      slack: true,
+      books: false,
+      crm:   false,
+      woo:   false,
+      ...saved,
+      // Restore WooCommerce automatically if credentials are saved
+      ...(cr.wooKey && cr.wooSecret ? {woo: true} : {}),
+    };
+  });
   const [testing,  setTesting]  = useState(null);
   const [log, setLog]     = useState([]);
   const [invoices,setInvoices]  = useState(DEMO_INVOICES);
@@ -152,6 +164,16 @@ export default function IntegrationsHub() {
   // Save creds to localStorage whenever they change
   useEffect(()=>saveCreds(creds),[creds]);
   useEffect(()=>saveStatus(status),[status]);
+
+  // Auto-verify Gmail silently on mount
+  useEffect(()=>{
+    if(gmailStatus) return; // already connected
+    fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:1})})
+      .then(r=>r.json()).then(d=>{
+        if(!d.error){ setGmailStatus(true); saveStatus({...loadStatus(),gmail:true}); setStatus(s=>({...s,gmail:true})); }
+      }).catch(()=>{});
+  // eslint-disable-next-line
+  },[]);
 
   const setC = (k,v) => setCreds(c=>({...c,[k]:v}));
 
