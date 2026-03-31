@@ -70,6 +70,7 @@ const SEED = {
   orders: [],
   templates: [],
   reps: [],
+  strategies: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -112,6 +113,7 @@ function useStore() {
           socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
+          strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -285,6 +287,9 @@ function reducer(prev, action, payload) {
     case "ADD_CAMPAIGN":    return {...prev, campaigns:[payload,...(prev.campaigns||[])]};
     case "UPDATE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
     case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
+    case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
+    case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
+    case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
     default:                  return prev;
   }
