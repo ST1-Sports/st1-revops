@@ -1674,9 +1674,9 @@ function AyrsharePanel({addLog}) {
       const data = await r.json();
       if (data.ok) {
         setTestResult({ok:true, user: data.user});
-        addLog("Buffer connected ✓","success");
+        addLog("Publer connected ✓","success");
         try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
-      } else { setTestResult({ok:false, error: data.error}); addLog(`Buffer: ${data.error}`,"error"); }
+      } else { setTestResult({ok:false, error: data.error}); addLog(`Publer: ${data.error}`,"error"); }
     } catch(e) { setTestResult({ok:false, error:e.message}); }
     setTesting(false);
   };
@@ -1686,7 +1686,7 @@ function AyrsharePanel({addLog}) {
     try {
       const r = await fetch("/api/social-post", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({action:"profiles"}) });
       const data = await r.json();
-      if (data.ok) { setProfiles(data.profiles||[]); addLog(`Loaded ${data.profiles?.length||0} Buffer profiles`,"success"); }
+      if (data.ok) { setProfiles(data.profiles||[]); addLog(`Loaded ${data.profiles?.length||0} Publer accounts`,"success"); }
       else { addLog(`Failed: ${data.error}`,"error"); }
     } catch(e) { addLog(e.message,"error"); }
     setLoadingProfiles(false);
@@ -1696,21 +1696,21 @@ function AyrsharePanel({addLog}) {
   const NET_ICONS  = {twitter:"𝕏",facebook:"f",instagram:"📷",linkedin:"in",tiktok:"T"};
 
   return (
-    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #1DA1F2"}}>
+    <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #6B3FA0"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
         <div>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING · BUFFER</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Schedule and post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok · $6/mo</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>SOCIAL PUBLISHING · PUBLER</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Schedule and post to Instagram, Facebook, LinkedIn, Twitter/X, TikTok · from $12/mo · No app creation needed</div>
         </div>
         <button onClick={testConnection} disabled={testing}
-          style={{background:testing?B.surface:"#1DA1F2",color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
+          style={{background:testing?B.surface:"#6B3FA0",color:testing?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
           {testing?"TESTING…":"TEST CONNECTION"}
         </button>
       </div>
 
       {testResult?.ok&&(
         <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:6,padding:"10px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,lineHeight:1.6}}>
-          ✓ <strong>Buffer connected</strong> — {testResult.user?.name} ({testResult.user?.plan} plan)
+          ✓ <strong>Publer connected</strong>{testResult.user?.name ? ` — ${testResult.user.name}` : ""}{testResult.user?.plan ? ` (${testResult.user.plan} plan)` : ""}
         </div>
       )}
       {testResult?.ok===false&&(
@@ -1722,10 +1722,10 @@ function AyrsharePanel({addLog}) {
       <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>SETUP</div>
         {[
-          {n:"1",title:"Create Buffer account",body:<>Sign up at <a href="https://buffer.com" target="_blank" rel="noreferrer" style={{color:"#1DA1F2",fontWeight:700}}>buffer.com</a> — <strong>Essentials $6/mo</strong>. Connect your social accounts inside Buffer.</>},
-          {n:"2",title:"Get your access token",body:<>Go to <a href="https://buffer.com/developers/apps" target="_blank" rel="noreferrer" style={{color:"#1DA1F2",fontWeight:700}}>buffer.com/developers/apps</a> → <strong>Create an app</strong> → fill any name/URL → copy the <strong>Access Token</strong>.</>},
-          {n:"3",title:"Add to Vercel",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>BUFFER_ACCESS_TOKEN = your_token_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click Test Connection above.</span></>},
-          {n:"4",title:"Load profiles → add IDs to Vercel",body:<>Click <strong>Load Profiles</strong> below to see your connected account IDs, then add each one to Vercel as shown.</>},
+          {n:"1",title:"Create Publer account",body:<>Sign up at <a href="https://publer.io" target="_blank" rel="noreferrer" style={{color:"#6B3FA0",fontWeight:700}}>publer.io</a> — <strong>Professional from $12/mo</strong>. Connect your social accounts in the Publer dashboard.</>},
+          {n:"2",title:"Get your API key",body:<>In Publer, go to <strong>Settings → API</strong> → copy your <strong>API Key</strong>. No app creation or approval needed.</>},
+          {n:"3",title:"Add to Vercel",body:<>Add to Vercel env vars:<br/><code style={{background:"#f0f0f0",padding:"2px 7px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>PUBLER_API_KEY = your_key_here</code><br/><span style={{color:B.muted,fontSize:10}}>Redeploy → click Test Connection above.</span></>},
+          {n:"4",title:"Load accounts → add IDs to Vercel",body:<>Click <strong>Load Accounts</strong> below to see your connected social account IDs, then add each one to Vercel as shown.</>},
         ].map(({n,title,body})=>(
           <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
             <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
@@ -1735,10 +1735,10 @@ function AyrsharePanel({addLog}) {
 
         <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12,marginTop:4}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>YOUR BUFFER PROFILES</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>YOUR PUBLER ACCOUNTS</div>
             <button onClick={loadProfiles} disabled={loadingProfiles}
               style={{background:loadingProfiles?B.surface:B.orangeBg,color:loadingProfiles?B.muted:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
-              {loadingProfiles?"LOADING…":"⟳ LOAD PROFILES"}
+              {loadingProfiles?"LOADING…":"⟳ LOAD ACCOUNTS"}
             </button>
           </div>
           {profiles.length>0&&(
@@ -1756,18 +1756,18 @@ function AyrsharePanel({addLog}) {
                   <div style={{textAlign:"right"}}>
                     <div style={{fontFamily:"monospace",fontSize:9,color:B.muted,userSelect:"all",marginBottom:2}}>{p.id}</div>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>
-                      → <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>BUFFER_PROFILE_{(p.service||"").toUpperCase()}</code>
+                      → <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>PUBLER_ACCOUNT_{(p.service||"").toUpperCase()}</code>
                     </div>
                   </div>
                 </div>
               ))}
-              <div style={{background:"#e8f0fa",borderRadius:5,padding:"9px 12px",fontSize:10,color:B.blue,marginTop:4,lineHeight:1.6}}>
-                Copy each ID and add to Vercel as the env var shown (e.g. <code style={{background:"#d0e4f7",padding:"1px 4px",borderRadius:2}}>BUFFER_PROFILE_INSTAGRAM = abc123</code>). Redeploy and posts will route to the right accounts.
+              <div style={{background:B.purpleBg,borderRadius:5,padding:"9px 12px",fontSize:10,color:B.purple,marginTop:4,lineHeight:1.6}}>
+                Copy each ID and add to Vercel as the env var shown (e.g. <code style={{background:"#e8dcf5",padding:"1px 4px",borderRadius:2}}>PUBLER_ACCOUNT_INSTAGRAM = 123456</code>). Redeploy and posts will route to the right accounts.
               </div>
             </div>
           )}
           {profiles.length===0&&!loadingProfiles&&(
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>Add your access token to Vercel, redeploy, then click Load Profiles</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>Add your API key to Vercel, redeploy, then click Load Accounts</div>
           )}
         </div>
       </div>
