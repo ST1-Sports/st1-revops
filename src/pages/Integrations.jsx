@@ -1726,18 +1726,39 @@ function AyrsharePanel({addLog}) {
       </div>
 
       {option==="make"&&(
-        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7}}>
-          <strong>Make setup (~5 min):</strong>
-          <ol style={{margin:"6px 0 0 16px",padding:0,lineHeight:2.2}}>
-            <li>Sign up at <a href="https://www.make.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>make.com</a> — free trial, then $9/mo Core plan</li>
-            <li>Create a new <strong>Scenario</strong></li>
-            <li>Add a <strong>Webhooks → Custom webhook</strong> trigger — copy the webhook URL</li>
-            <li>Add modules for each platform: <em>Facebook Pages → Create a Post</em>, <em>Instagram → Create a Photo Post</em>, <em>LinkedIn → Create a Share</em>, etc.</li>
-            <li>Map these fields from the webhook: <code style={{background:"#eee",padding:"1px 4px",borderRadius:2}}>post</code> → message, <code style={{background:"#eee",padding:"1px 4px",borderRadius:2}}>mediaUrls[0]</code> → image URL</li>
-            <li>Add <code style={{background:"#eee",padding:"1px 5px",borderRadius:3}}>MAKE_WEBHOOK_URL</code> to Vercel env vars, redeploy, then Test Connection</li>
-          </ol>
-          <div style={{marginTop:8,background:"#e8f0fa",borderRadius:4,padding:"8px 10px",fontSize:10,color:B.blue}}>
-            💡 Make handles all the platform OAuth for you — just connect your accounts in the Make modules. No separate app registrations needed.
+        <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>STEP-BY-STEP MAKE SETUP</div>
+          {[
+            {n:"1",title:"Create account",body:<>Sign up at <a href="https://www.make.com" target="_blank" rel="noreferrer" style={{color:B.purple,fontWeight:700}}>make.com</a> — free trial, then <strong>Core plan $9/mo</strong></>},
+            {n:"2",title:"New Scenario → Webhook trigger",body:<>Create a new scenario → search <strong>Webhooks</strong> → pick <strong>Custom webhook</strong> → click Add → name it "ST1 Social Post" → Save. Copy the webhook URL shown — you'll need it for step 6.</>},
+            {n:"3",title:"Add a Router",body:<>Click the <strong>+</strong> after the webhook → add <strong>Flow Control → Router</strong>. This splits the post into one path per platform.</>},
+            {n:"4",title:"Add platform modules + filters",body:<>
+              <div style={{marginTop:6,display:"flex",flexDirection:"column",gap:7}}>
+                {[
+                  ["Facebook","Facebook Pages → Create a Post","contains(1.platforms[]; \"facebook\")","Message: {{1.post}}  |  Photo URL: {{1.mediaUrls[1]}}"],
+                  ["Instagram","Instagram for Business → Create a Photo Post","contains(1.platforms[]; \"instagram\")","Caption: {{1.post}}  |  Image URL: {{1.mediaUrls[1]}}"],
+                  ["LinkedIn","LinkedIn → Create a Company Update","contains(1.platforms[]; \"linkedin\")","Commentary: {{1.post}}  |  Media URL: {{1.mediaUrls[1]}}"],
+                  ["Twitter/X","Twitter → Create a Tweet","contains(1.platforms[]; \"twitter\")","Status: {{1.post}}  |  Media: {{1.mediaUrls[1]}}"],
+                ].map(([plat,mod,filter,fields])=>(
+                  <div key={plat} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 11px"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:5}}>{plat}</div>
+                    <div style={{fontSize:10,marginBottom:3}}><strong>Module:</strong> {mod}</div>
+                    <div style={{fontSize:10,marginBottom:3}}><strong>Router filter:</strong> <code style={{background:"#f0f0f0",padding:"1px 5px",borderRadius:2,fontFamily:"monospace"}}>{filter}</code></div>
+                    <div style={{fontSize:10,color:B.muted}}><strong>Fields:</strong> {fields}</div>
+                  </div>
+                ))}
+              </div>
+            </>},
+            {n:"5",title:"Scheduling (optional)",body:<>To support scheduled posts: right-click the router → add a <strong>Sleep</strong> module before each platform branch. Duration: <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2,fontFamily:"monospace"}}>{"{{max(0; formatDate(1.scheduleDate; \"X\") - now)}}"}</code> seconds. Wrap in a filter: only run if <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2,fontFamily:"monospace"}}>{"{{1.scheduleDate}}"}</code> is not empty.</>},
+            {n:"6",title:"Add webhook URL to Vercel + redeploy",body:<>In Vercel → your project → Settings → Environment Variables, add:<br/><code style={{background:"#f0f0f0",padding:"3px 8px",borderRadius:3,fontFamily:"monospace",fontSize:10,display:"inline-block",marginTop:4}}>MAKE_WEBHOOK_URL = https://hook.us1.make.com/xxxx</code><br/><span style={{color:B.muted}}>Then Redeploy → come back here → click <strong>Test Connection</strong>.</span></>},
+          ].map(({n,title,body})=>(
+            <div key={n} style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-start"}}>
+              <div style={{width:22,height:22,borderRadius:"50%",background:B.orange,color:B.white,fontFamily:"'Russo One',sans-serif",fontSize:10,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{n}</div>
+              <div style={{flex:1}}><div style={{fontWeight:600,marginBottom:3,lineHeight:1.4}}>{title}</div><div style={{color:B.muted,lineHeight:1.7,fontSize:10}}>{body}</div></div>
+            </div>
+          ))}
+          <div style={{background:"#e8f0fa",borderRadius:5,padding:"9px 12px",fontSize:10,color:B.blue,lineHeight:1.6}}>
+            💡 Make handles all platform OAuth — just connect your Facebook/Instagram/LinkedIn/Twitter accounts inside each module. No developer app registrations needed.
           </div>
         </div>
       )}
