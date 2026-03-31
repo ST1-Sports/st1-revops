@@ -1594,6 +1594,7 @@ function ModDeals() {
   const [note,setNote]=useState("");
   const [drafting,setDrafting]=useState(false);
   const [draft,setDraft]=useState("");
+  const [dealNoteText,setDealNoteText]=useState("");
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
   const pool=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
@@ -1735,6 +1736,25 @@ Under 80 words. Include subject line. Warm tone.`);
                     <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {USERS.find(u=>u.id===t.author)?.name||t.author}</div></div>
                   </div>
                 ))}
+              </div>
+            </div>
+            <div className="card" style={{padding:13}}>
+              <Lbl s={{marginBottom:7}}>Notes ({(sel_d.notes_list||[]).length})</Lbl>
+              <div style={{display:"flex",gap:6,marginBottom:8}}>
+                <textarea value={dealNoteText} onChange={e=>setDealNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                <OBtn sm col={B.orange} onClick={()=>{if(!dealNoteText.trim())return;dispatch("UPDATE_DEAL",{id:sel_d.id,notes_list:[...(sel_d.notes_list||[]),{id:mkId(),text:dealNoteText.trim(),ts:Date.now(),author:cu?.name||"Matt"}]});setDealNoteText("");toast("Note added","success");}}>ADD</OBtn>
+              </div>
+              <div style={{maxHeight:150,overflowY:"auto"}}>
+                {[...(sel_d.notes_list||[])].sort((a,b)=>b.ts-a.ts).map(n=>(
+                  <div key={n.id} style={{display:"flex",gap:7,alignItems:"flex-start",padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{n.text}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{new Date(n.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} · {n.author}</div>
+                    </div>
+                    <button onClick={()=>dispatch("UPDATE_DEAL",{id:sel_d.id,notes_list:(sel_d.notes_list||[]).filter(x=>x.id!==n.id)})} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",padding:"2px 4px",flexShrink:0}}>✕</button>
+                  </div>
+                ))}
+                {(sel_d.notes_list||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"6px 0"}}>No notes yet</div>}
               </div>
             </div>
           </div>
@@ -6745,6 +6765,234 @@ function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const 
 function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&(logoUrl?<img src={logoUrl} style={{position:"absolute",top:py,left:px,maxHeight:32,maxWidth:120,objectFit:"contain"}} alt="Logo"/>:<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
 
 // ════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+//  UNIFIED CONTENT CALENDAR
+// ════════════════════════════════════════════════════════════════════════════
+function ModCalendar() {
+  const {s,setMod}=useApp();
+  const now=new Date();
+  const [calYear,setCalYear]=useState(now.getFullYear());
+  const [calMonth,setCalMonth]=useState(now.getMonth());
+  const [view,setView]=useState("month"); // "month"|"week"
+  const [selDay,setSelDay]=useState(null); // "YYYY-MM-DD"
+  const [filterEmail,setFilterEmail]=useState(true);
+  const [filterSocial,setFilterSocial]=useState(true);
+  const [filterAd,setFilterAd]=useState(true);
+  const [filterCall,setFilterCall]=useState(true);
+
+  const MONTH_NAMES=["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const DAY_NAMES=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+  // Build all events
+  const allEvents=[];
+  (s.campaigns||[]).forEach(camp=>{
+    // Email touches
+    if(camp.startDate && (camp.touches||[]).length>0){
+      camp.touches.forEach(touch=>{
+        const d=new Date(camp.startDate);
+        d.setDate(d.getDate()+(touch.dayOffset||0));
+        const dateStr=d.toISOString().slice(0,10);
+        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Day ${touch.dayOffset||0}`,campId:camp.id});
+      });
+    }
+    // Social drafts
+    (camp.socialDrafts||[]).forEach(p=>{
+      const dateStr=(p.scheduledDate||p.date||"").slice(0,10);
+      if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||p.subject||"Social Post").slice(0,40),color:"#9333ea",campName:camp.name,subLabel:"Draft",campId:camp.id});
+    });
+    // Campaign social posts
+    (camp.socialPosts||[]).forEach(p=>{
+      const dateStr=(p.date||"").slice(0,10);
+      if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:camp.name,subLabel:(p.platforms||[]).join(", ")||"Social",campId:camp.id});
+    });
+  });
+  // Standalone social posts
+  (s.socialPosts||[]).forEach(p=>{
+    const dateStr=(p.date||"").slice(0,10);
+    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+  });
+
+  const filtered=allEvents.filter(ev=>{
+    if(ev.type==="email"&&!filterEmail) return false;
+    if(ev.type==="social"&&!filterSocial) return false;
+    if(ev.type==="ad"&&!filterAd) return false;
+    if(ev.type==="call"&&!filterCall) return false;
+    return true;
+  });
+
+  const getEventsForDay=(dateStr)=>filtered.filter(ev=>ev.date===dateStr);
+
+  // Month stats
+  const monthStr=`${calYear}-${String(calMonth+1).padStart(2,"0")}`;
+  const monthEmails=filtered.filter(ev=>ev.type==="email"&&ev.date.startsWith(monthStr)).length;
+  const monthSocial=filtered.filter(ev=>ev.type==="social"&&ev.date.startsWith(monthStr)).length;
+  const monthAds=filtered.filter(ev=>ev.type==="ad"&&ev.date.startsWith(monthStr)).length;
+
+  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
+  const firstDay=new Date(calYear,calMonth,1).getDay();
+
+  const navPrev=()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);setSelDay(null);};
+  const navNext=()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);setSelDay(null);};
+
+  // Week view helpers
+  const getWeekStart=()=>{
+    const ref=selDay?new Date(selDay+"T00:00:00"):new Date(calYear,calMonth,1);
+    const d=new Date(ref);d.setDate(d.getDate()-d.getDay());return d;
+  };
+  const HOURS=Array.from({length:15},(_,i)=>i+6); // 6am-8pm
+
+  return(
+    <div style={{padding:"22px 26px"}}>
+      <PH title="CONTENT CALENDAR" sub="All scheduled emails, social posts, and campaign content in one view"
+        action={<div style={{display:"flex",gap:8}}><button onClick={()=>setMod("social")} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>+ ADD POST</button><button onClick={()=>setMod("marketing")} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>+ ADD EMAIL TOUCH</button></div>}/>
+
+      {/* Summary bar */}
+      <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"9px 16px",marginBottom:14,display:"flex",gap:18,alignItems:"center",flexWrap:"wrap"}}>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>THIS MONTH:</span>
+        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.orange}}><strong>{monthEmails}</strong> emails</span>
+        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#9333ea"}}><strong>{monthSocial}</strong> social posts</span>
+        {monthAds>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.blue}}><strong>{monthAds}</strong> ads</span>}
+      </div>
+
+      {/* Controls */}
+      <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+        <button onClick={navPrev} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontSize:14,color:B.text}}>‹</button>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,minWidth:160,textAlign:"center",letterSpacing:.3}}>{MONTH_NAMES[calMonth]} {calYear}</div>
+        <button onClick={navNext} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontSize:14,color:B.text}}>›</button>
+        <div style={{display:"flex",gap:4,marginLeft:10}}>
+          {[["month","MONTH"],["week","WEEK"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:10,flexWrap:"wrap"}}>
+          {[["email","Email","#f97316",filterEmail,setFilterEmail],["social","Social","#9333ea",filterSocial,setFilterSocial],["ad","Ads",B.blue,filterAd,setFilterAd],["call","Calls",B.teal,filterCall,setFilterCall]].map(([type,label,col,active,setter])=>(
+            <button key={type} onClick={()=>setter(v=>!v)} style={{background:active?`${col}15`:B.white,color:active?col:B.muted,border:`1px solid ${active?col+"40":B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>{label}</button>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:14}}>
+        <div style={{flex:1,minWidth:0}}>
+          {/* ── MONTH VIEW ── */}
+          {view==="month"&&(
+            <div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:2}}>
+                {DAY_NAMES.map(d=><div key={d} style={{textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,padding:"5px 0",letterSpacing:.5}}>{d.toUpperCase()}</div>)}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+                {Array(firstDay).fill(null).map((_,i)=><div key={`e${i}`} style={{background:B.surface,minHeight:100,borderRadius:4}}/>)}
+                {Array(daysInMonth).fill(null).map((_,i)=>{
+                  const d=i+1;
+                  const dateStr=`${calYear}-${String(calMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+                  const dayEvents=getEventsForDay(dateStr);
+                  const isToday=now.getFullYear()===calYear&&now.getMonth()===calMonth&&now.getDate()===d;
+                  const isSel=selDay===dateStr;
+                  return(
+                    <div key={d} onClick={()=>setSelDay(isSel?null:dateStr)} style={{background:isSel?`${B.orange}08`:B.white,border:`1px solid ${isSel?B.orange:isToday?B.orange+"60":B.border}`,borderRadius:4,padding:"5px 6px",minHeight:100,cursor:"pointer",transition:"border-color .12s"}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
+                      {dayEvents.slice(0,3).map((ev,ei)=>(
+                        <div key={ei} style={{background:`${ev.color}15`,borderLeft:`2px solid ${ev.color}`,padding:"2px 5px",borderRadius:2,marginBottom:2}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:ev.color,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.type.toUpperCase()}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.label}</div>
+                        </div>
+                      ))}
+                      {dayEvents.length>3&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:2}}>+{dayEvents.length-3} more</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ── WEEK VIEW ── */}
+          {view==="week"&&(()=>{
+            const weekStart=getWeekStart();
+            const weekDays=Array.from({length:7},(_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d;});
+            return(
+              <div style={{overflowX:"auto"}}>
+                <div style={{display:"grid",gridTemplateColumns:`60px repeat(7,1fr)`,gap:2,minWidth:600}}>
+                  <div/>
+                  {weekDays.map((d,i)=>{
+                    const isToday=d.toDateString()===now.toDateString();
+                    return<div key={i} style={{textAlign:"center",padding:"6px 4px",background:isToday?`${B.orange}10`:B.surface,borderRadius:"4px 4px 0 0",border:`1px solid ${isToday?B.orange+"50":B.border}`,borderBottom:"none"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{["SUN","MON","TUE","WED","THU","FRI","SAT"][d.getDay()]}</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:isToday?B.orange:B.text}}>{d.getDate()}</div>
+                    </div>;
+                  })}
+                  {HOURS.map(h=>(
+                    <React.Fragment key={h}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"right",paddingRight:6,paddingTop:8}}>{h===12?"12pm":h>12?`${h-12}pm`:`${h}am`}</div>
+                      {weekDays.map((d,di)=>{
+                        const dateStr=d.toISOString().slice(0,10);
+                        const hourEvents=getEventsForDay(dateStr).filter((_,ei)=>ei%HOURS.length===h-6);
+                        return<div key={di} style={{border:`1px solid ${B.border}`,borderRadius:2,minHeight:40,padding:2,background:d.toDateString()===now.toDateString()?`${B.orange}04`:B.white}}>
+                          {hourEvents.map((ev,ei)=>(
+                            <div key={ei} style={{background:`${ev.color}18`,borderLeft:`2px solid ${ev.color}`,padding:"2px 5px",borderRadius:2,marginBottom:2}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:ev.color}}>{ev.type.toUpperCase()}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.label}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:7,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.campName}</div>
+                            </div>
+                          ))}
+                        </div>;
+                      })}
+                    </React.Fragment>
+                  ))}
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:10,justifyContent:"center"}}>
+                  <button onClick={()=>{const d=new Date(weekStart);d.setDate(d.getDate()-7);setSelDay(d.toISOString().slice(0,10));}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 16px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>‹ Prev Week</button>
+                  <button onClick={()=>{const d=new Date(weekStart);d.setDate(d.getDate()+7);setSelDay(d.toISOString().slice(0,10));}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 16px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>Next Week ›</button>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
+        {/* Day detail panel */}
+        {selDay&&view==="month"&&(()=>{
+          const dayEvents=getEventsForDay(selDay);
+          const byType={email:[],social:[],ad:[],call:[]};
+          dayEvents.forEach(ev=>{(byType[ev.type]||(byType.call)).push(ev);});
+          return(
+            <div style={{width:280,flexShrink:0}}>
+              <div className="card" style={{padding:13,position:"sticky",top:0}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,marginBottom:10}}>{new Date(selDay+"T00:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
+                {dayEvents.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"20px 0"}}>No content scheduled</div>}
+                {[["email","Email","#f97316"],["social","Social","#9333ea"],["ad","Ads",B.blue],["call","Calls",B.teal]].map(([type,label,col])=>{
+                  const evts=byType[type]||[];if(!evts.length)return null;
+                  return(
+                    <div key={type} style={{marginBottom:12}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,letterSpacing:1,marginBottom:5}}>{label.toUpperCase()} ({evts.length})</div>
+                      {evts.map((ev,i)=>(
+                        <div key={i} style={{background:`${col}10`,borderLeft:`2px solid ${col}`,padding:"6px 8px",borderRadius:3,marginBottom:4}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3}}>{ev.label}</div>
+                          {ev.subLabel&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{ev.subLabel}</div>}
+                          {ev.campName&&ev.campId&&<button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:col,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",padding:"2px 0",display:"block",marginTop:3,letterSpacing:.3}}>↗ {ev.campName} →</button>}
+                          {ev.campName&&!ev.campId&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{ev.campName}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Legend */}
+      <div style={{display:"flex",gap:14,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>TYPES:</span>
+        {[["Email","#f97316"],["Social","#9333ea"],["Ads",B.blue],["Calls",B.teal]].map(([l,col])=>(
+          <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
+            <div style={{width:10,height:10,borderRadius:2,background:col,flexShrink:0}}/>
+            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{l}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 //  SOCIAL MEDIA
 // ════════════════════════════════════════════════════════════════════════════
 const PLATFORM_COLORS = {instagram:"#E4405F",facebook:"#1877F2",linkedin:"#0A66C2",twitter:"#1DA1F2",tiktok:"#010101"};
