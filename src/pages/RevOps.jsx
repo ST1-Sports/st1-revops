@@ -674,8 +674,364 @@ function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{backgr
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 
 function ModAnalytics() {
-  const {s}=useApp();
-  return <div style={{padding:"22px 26px"}}><PH title="ANALYTICS" sub="Cross-module performance dashboard"/></div>;
+  const {s,setMod}=useApp();
+  const [tab,setTab]=useState("overview");
+
+  const deals=s.deals||[];
+  const invoices=s.invoices||[];
+  const campaigns=s.campaigns||[];
+  const contacts=s.contacts||[];
+  const reps=s.reps||[];
+
+  const closedStages=["Closed Won","Closed Lost","PO Received"];
+  const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
+  const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
+  const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
+  const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
+  const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
+
+  const fmt$K=(n)=>{if(n>=1000)return "$"+(n/1000).toFixed(1)+"K";return "$"+Math.round(n).toLocaleString();}
+
+  const TABS=[["overview","Overview"],["campaigns","Campaigns"],["pipeline","Pipeline"],["hotleads","Hot Leads"],["emails","Emails"]];
+
+  return (
+    <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
+      <PH title="ANALYTICS" sub="Revenue, pipeline, campaigns, and lead performance"/>
+      <div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`}}>
+        {TABS.map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
+
+      {tab==="overview"&&(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
+            <KCard l="Total Revenue" v={"$"+totalRevenue.toLocaleString()} c={B.green} sub="from paid invoices"/>
+            <KCard l="Open Pipeline" v={fmt$K(openPipeline)} c={B.orange} sub={`${openDeals.length} active deals`}/>
+            <KCard l="Active Campaigns" v={activeCampaigns} c={B.purple}/>
+            <KCard l="Hot Leads" v={hotLeads} c={B.red} sub="score >= 40"/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <div className="card" style={{padding:14}}>
+              <Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {[...deals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
+                  <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                      <div style={{marginTop:3}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
+                    </div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0,marginLeft:9}}>{fmt$K(d.value||0)}</div>
+                  </div>
+                ))}
+                {deals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals yet</div>}
+              </div>
+            </div>
+            <div className="card" style={{padding:14}}>
+              <Lbl s={{marginBottom:10}}>Top Campaigns by Replies</Lbl>
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {[...campaigns].map(camp=>{
+                  const enrs=camp.enrollments||[];
+                  return{...camp,replied:enrs.filter(e=>e.status==="replied").length,opened:enrs.filter(e=>e.openedAt).length,enrolled:enrs.length};
+                }).sort((a,b)=>b.replied-a.replied).slice(0,3).map(camp=>(
+                  <div key={camp.id} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{camp.name}</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>ENROLLED <span style={{color:B.text}}>{camp.enrolled}</span></span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue}}>OPENED <span style={{color:B.text}}>{camp.opened}</span></span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>REPLIED <span style={{color:B.text}}>{camp.replied}</span></span>
+                    </div>
+                  </div>
+                ))}
+                {campaigns.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==="campaigns"&&(
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+            <thead>
+              <tr style={{background:B.surface}}>
+                {["NAME","CHANNELS","ENROLLED","SENT","OPENED","REPLIED","DONE","REP","DEALS"].map(h=>(
+                  <th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"8px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {campaigns.map(camp=>{
+                const enrs=camp.enrollments||[];
+                const enrolled=enrs.length;
+                const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
+                const opened=enrs.filter(e=>e.openedAt).length;
+                const replied=enrs.filter(e=>e.status==="replied").length;
+                const done=enrs.filter(e=>e.status==="done").length;
+                const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
+                const rep=USERS.find(u=>u.id===camp.repId);
+                const campDeals=deals.filter(d=>d.campaignId===camp.id);
+                const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
+                return(
+                  <tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
+                    <td style={{padding:"9px 10px"}}>
+                      <div style={{fontWeight:500,color:B.text}}>{camp.name}</div>
+                      <div style={{fontSize:9,color:B.muted,marginTop:2}}>{camp.product||""}</div>
+                      <div style={{marginTop:4,height:4,background:B.border,borderRadius:2,width:80}}>
+                        <div style={{height:"100%",width:`${sentPct}%`,background:B.purple,borderRadius:2}}/>
+                      </div>
+                      <div style={{fontSize:8,color:B.muted,marginTop:2}}>{sentPct}% sent</div>
+                    </td>
+                    <td style={{padding:"9px 10px"}}>
+                      <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                        {(camp.channels||[]).map(ch=>(
+                          <span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>{ch}</span>
+                        ))}
+                        {!(camp.channels||[]).length&&<span style={{color:B.muted,fontSize:9}}>—</span>}
+                      </div>
+                    </td>
+                    <td style={{padding:"9px 10px",color:B.text}}>{enrolled}</td>
+                    <td style={{padding:"9px 10px",color:B.purple,fontWeight:500}}>{sent}</td>
+                    <td style={{padding:"9px 10px",color:B.blue,fontWeight:500}}>{opened}</td>
+                    <td style={{padding:"9px 10px",color:B.green,fontWeight:500}}>{replied}</td>
+                    <td style={{padding:"9px 10px",color:B.muted}}>{done}</td>
+                    <td style={{padding:"9px 10px",color:B.muted}}>{rep?rep.name.split(" ")[0]:camp.repId||"—"}</td>
+                    <td style={{padding:"9px 10px"}}>
+                      {campDeals.length>0?(
+                        <div>
+                          <div style={{fontWeight:500,color:B.orange}}>{campDeals.length}</div>
+                          <div style={{fontSize:9,color:B.muted}}>{fmt$K(campDealVal)}</div>
+                        </div>
+                      ):<span style={{color:B.muted}}>—</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {campaigns.length===0&&(
+                <tr><td colSpan={9} style={{padding:"32px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tab==="pipeline"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:18}}>
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:12}}>Pipeline by Stage</Lbl>
+            {(()=>{
+              const stageMap={};
+              deals.forEach(d=>{
+                if(!stageMap[d.stage]) stageMap[d.stage]={count:0,value:0};
+                stageMap[d.stage].count++;
+                stageMap[d.stage].value+=(d.value||0);
+              });
+              const entries=Object.entries(stageMap).sort((a,b)=>b[1].value-a[1].value);
+              const maxVal=Math.max(...entries.map(e=>e[1].value),1);
+              if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
+              return entries.map(([stage,{count,value}])=>(
+                <div key={stage} style={{marginBottom:10}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:8,height:8,borderRadius:2,background:DSC[stage]||B.muted,flexShrink:0}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage}</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{count} deal{count!==1?"s":""}</span>
+                    </div>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:DSC[stage]||B.muted}}>{fmt$K(value)}</span>
+                  </div>
+                  <div style={{height:6,background:B.border,borderRadius:3}}>
+                    <div style={{height:"100%",width:`${Math.round(value/maxVal*100)}%`,background:DSC[stage]||B.muted,borderRadius:3}}/>
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <div className="card" style={{padding:16}}>
+              <Lbl s={{marginBottom:12}}>Pipeline by Product</Lbl>
+              {(()=>{
+                const prodMap={};
+                deals.forEach(d=>{const p=d.product||"Other";if(!prodMap[p])prodMap[p]={count:0,value:0};prodMap[p].count++;prodMap[p].value+=(d.value||0);});
+                const entries=Object.entries(prodMap).sort((a,b)=>b[1].value-a[1].value);
+                if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
+                return entries.map(([prod,{count,value}])=>(
+                  <div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{prod}</div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deal{count!==1?"s":""}</div>
+                    </div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$K(value)}</div>
+                  </div>
+                ));
+              })()}
+            </div>
+            <div className="card" style={{padding:16}}>
+              <Lbl s={{marginBottom:12}}>Pipeline by Rep</Lbl>
+              {(()=>{
+                const repMap={};
+                deals.forEach(d=>{const rid=d.repId||d.assignee||"unassigned";if(!repMap[rid])repMap[rid]={count:0,value:0};repMap[rid].count++;repMap[rid].value+=(d.value||0);});
+                const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
+                if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
+                return entries.map(([rid,{count,value}])=>{
+                  const u=USERS.find(u=>u.id===rid)||reps.find(r=>r.id===rid);
+                  const avg=count>0?Math.round(value/count):0;
+                  return(
+                    <div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{u?.name||rid}</div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deals · avg {fmt$K(avg)}</div>
+                      </div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.blue}}>{fmt$K(value)}</div>
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+          </div>
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:10}}>Deals with Campaign Attribution</Lbl>
+            {deals.filter(d=>d.campaignId).length===0?(
+              <div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                {deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0)).map(d=>{
+                  const camp=campaigns.find(c=>c.id===d.campaignId);
+                  return(
+                    <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+                      <div>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
+                          <Pill v={d.stage} sc={DSC} bc={DBG}/>
+                        </div>
+                        {camp&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>✦ {camp.name}</span>}
+                      </div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$K(d.value||0)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {tab==="hotleads"&&(
+        <div>
+          {(()=>{
+            const tiers=[
+              {label:"READY",min:60,color:B.green,bg:B.greenBg},
+              {label:"WARM",min:30,color:B.orange,bg:B.orangeBg},
+              {label:"ENGAGED",min:10,color:B.blue,bg:B.blueBg},
+            ];
+            const sorted=[...contacts].filter(c=>(c.score||0)>=10).sort((a,b)=>(b.score||0)-(a.score||0));
+            if(sorted.length===0) return <div style={{color:B.muted,fontSize:12,padding:"40px 0",textAlign:"center"}}>No leads with engagement score &gt;= 10 yet</div>;
+            return tiers.map(tier=>{
+              const group=sorted.filter(c=>{const sc=c.score||0;if(tier.label==="READY")return sc>=60;if(tier.label==="WARM")return sc>=30&&sc<60;return sc>=10&&sc<30;});
+              if(group.length===0) return null;
+              return(
+                <div key={tier.label} style={{marginBottom:20}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 12px",background:tier.bg,borderRadius:5,borderLeft:`3px solid ${tier.color}`}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:tier.color,letterSpacing:2,fontWeight:700}}>{tier.label}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:tier.color}}>{group.length} contacts</span>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {group.map(c=>{
+                      const lastAct=(c.activity||[]).sort((a,b)=>b.ts-a.ts)[0];
+                      const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+                      const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                      const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                      const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+                      const sc=c.score||0;
+                      const scoreColor=sc>=60?B.green:sc>=30?B.orange:B.blue;
+                      return(
+                        <div key={c.id} className="card" style={{padding:"10px 12px",borderLeft:`3px solid ${scoreColor}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                            <div style={{flex:1}}>
+                              <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3,flexWrap:"wrap"}}>
+                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{name}</span>
+                                {sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{sport}</span>}
+                              </div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{title}{title&&school?" · ":""}{school}{c.state?` · ${c.state}`:""}</div>
+                              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+                                <div style={{flex:1,height:5,background:B.border,borderRadius:3,maxWidth:120}}>
+                                  <div style={{height:"100%",width:`${Math.min(sc,100)}%`,background:scoreColor,borderRadius:3}}/>
+                                </div>
+                                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:scoreColor}}>{sc} pts</span>
+                              </div>
+                              {lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
+                              <OBtn sm col={B.blue} onClick={()=>setMod("emails")}>EMAIL →</OBtn>
+                              <OBtn sm col={B.green} onClick={()=>setMod("deals")}>DEAL +</OBtn>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            });
+          })()}
+        </div>
+      )}
+
+      {tab==="emails"&&(
+        <div>
+          {(()=>{
+            const allActivity=contacts.flatMap(c=>c.activity||[]);
+            const totalSent=allActivity.filter(a=>a.type==="sent").length;
+            const totalOpened=allActivity.filter(a=>a.type==="opened").length;
+            const totalReplied=allActivity.filter(a=>a.type==="replied").length;
+            const openRate=totalSent>0?Math.round(totalOpened/totalSent*100):0;
+            const replyRate=totalSent>0?Math.round(totalReplied/totalSent*100):0;
+            return(
+              <div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
+                  <KCard l="Total Sent" v={totalSent} c={B.purple}/>
+                  <KCard l="Total Opened" v={totalOpened} c={B.blue}/>
+                  <KCard l="Total Replied" v={totalReplied} c={B.green}/>
+                  <KCard l="Open Rate" v={`${openRate}%`} c={B.teal}/>
+                  <KCard l="Reply Rate" v={`${replyRate}%`} c={B.orange}/>
+                </div>
+                <div className="card" style={{padding:14}}>
+                  <Lbl s={{marginBottom:10}}>Campaigns with Email Channel — by Reply Rate</Lbl>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+                    <thead>
+                      <tr style={{background:B.surface}}>
+                        {["CAMPAIGN","ENROLLED","SENT","OPEN RATE","REPLY RATE"].map(h=>(
+                          <th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...campaigns].filter(camp=>(camp.channels||[]).some(ch=>ch.includes("email"))||(camp.touches||[]).length>0).map(camp=>{
+                        const enrs=camp.enrollments||[];
+                        const enrolled=enrs.length;
+                        const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
+                        const opened=enrs.filter(e=>e.openedAt).length;
+                        const replied=enrs.filter(e=>e.status==="replied").length;
+                        return{...camp,enrolled,sent,openR:sent>0?Math.round(opened/sent*100):0,replyR:sent>0?Math.round(replied/sent*100):0};
+                      }).sort((a,b)=>b.replyR-a.replyR).map(camp=>(
+                        <tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
+                          <td style={{padding:"8px 10px",fontWeight:500,color:B.text}}>{camp.name}</td>
+                          <td style={{padding:"8px 10px",color:B.muted}}>{camp.enrolled}</td>
+                          <td style={{padding:"8px 10px",color:B.purple,fontWeight:500}}>{camp.sent}</td>
+                          <td style={{padding:"8px 10px",color:B.blue,fontWeight:500}}>{camp.openR}%</td>
+                          <td style={{padding:"8px 10px",color:B.green,fontWeight:500}}>{camp.replyR}%</td>
+                        </tr>
+                      ))}
+                      {campaigns.length===0&&<tr><td colSpan={5} style={{padding:"24px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ModBriefing() {
@@ -1238,7 +1594,7 @@ function ModDeals() {
   const [note,setNote]=useState("");
   const [drafting,setDrafting]=useState(false);
   const [draft,setDraft]=useState("");
-  const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:""});
+  const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
   const pool=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
   const list=pool.filter(d=>{
@@ -1297,19 +1653,21 @@ Under 80 words. Include subject line. Warm tone.`);
             {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><select value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{opts.map(o=><option key={o}>{o}</option>)}</select></div>
             ))}
+            <div><Lbl s={{marginBottom:3}}>Source Campaign</Lbl><select value={form.campaignId} onChange={e=>setForm(f=>({...f,campaignId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— None —</option>{(s.campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           <div style={{display:"flex",gap:7,marginTop:10}}><OBtn onClick={addDeal}>SAVE</OBtn><GBtn onClick={()=>setAdding(false)}>CANCEL</GBtn></div>
         </div>
       )}
       <div style={{display:"grid",gridTemplateColumns:sel_d?"1fr 370px":"1fr",gap:13}}>
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {list.map(d=>{const ov=d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage);return(
+          {list.map(d=>{const ov=d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage);const dCamp=d.campaignId?(s.campaigns||[]).find(c=>c.id===d.campaignId):null;return(
             <div key={d.id} onClick={()=>setSel(sel===d.id?null:d.id)} className="card" style={{padding:"9px 12px",cursor:"pointer",borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,background:sel===d.id?B.surface:B.white}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
                     <Pill v={d.stage} sc={DSC} bc={DBG}/>
+                    {dCamp&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 5px",borderRadius:3}}>✦ {dCamp.name}</span>}
                   </div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact} · {d.school} · {d.state}</div>
                   <div style={{display:"flex",gap:7,marginTop:3,alignItems:"center"}}>
@@ -1346,6 +1704,13 @@ Under 80 words. Include subject line. Warm tone.`);
                 {DEAL_STAGES.map(st=>(
                   <button key={st} onClick={()=>{dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
                 ))}
+              </div>
+              <div style={{marginBottom:9}}>
+                <Lbl s={{marginBottom:4}}>Source Campaign</Lbl>
+                <select value={sel_d.campaignId||""} onChange={e=>dispatch("UPDATE_DEAL",{id:sel_d.id,campaignId:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                  <option value="">— None —</option>
+                  {(s.campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
               </div>
               <div style={{display:"flex",gap:6,marginBottom:9}}>
                 <input type="date" value={sel_d.followUpDate||""} onChange={e=>dispatch("UPDATE_DEAL",{id:sel_d.id,followUpDate:e.target.value})} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
@@ -2573,6 +2938,7 @@ function ModProspecting() {
   const [flaggingContact,setFlaggingContact] = useState(null);
   const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
   const [bulkSel,setBulkSel] = useState(new Set()); // selected contact IDs
+  const [timelineContact,setTimelineContact] = useState(null); // contact id with timeline expanded
   const [bulkEnrolling,setBulkEnrolling] = useState(false);
 
   const addLog=(msg,type="info")=>{
@@ -3390,12 +3756,36 @@ function ModProspecting() {
                             {c.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>☎ {c.phone}</span>}
                           </div>
                           {(c.activity||[]).length>0&&(
-                            <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
+                            <div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
                               {(c.activity||[]).slice(0,4).map((a,i)=>(
                                 <span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>
                                   {a.type==="replied"?"💬 replied":a.type==="clicked"?"🖱 clicked":a.type==="opened"?"👁 opened":a.type==="sent"?"📤 sent":a.type==="enrolled"?"📋 enrolled":a.type}
                                 </span>
                               ))}
+                              <button onClick={e=>{e.stopPropagation();setTimelineContact(timelineContact===c.id?null:c.id);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"1px 6px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,cursor:"pointer",letterSpacing:.5}}>{timelineContact===c.id?"▲ HIDE":"▼ TIMELINE"}</button>
+                            </div>
+                          )}
+                          {timelineContact===c.id&&(c.activity||[]).length>0&&(
+                            <div style={{marginTop:8,background:B.surface,borderRadius:5,padding:"8px 10px"}}>
+                              <Lbl s={{marginBottom:6}}>Activity Timeline</Lbl>
+                              <div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:180,overflowY:"auto"}}>
+                                {[...(c.activity||[])].sort((a,b)=>b.ts-a.ts).map((a,i)=>{
+                                  const icon={sent:"✉",opened:"👁",replied:"↩",enrolled:"★",meeting:"🤝",deal:"💰",clicked:"🖱"}[a.type]||"·";
+                                  const typeColor={sent:B.purple,opened:B.blue,replied:B.green,enrolled:B.orange,meeting:B.teal,deal:B.green,clicked:B.yellow}[a.type]||B.muted;
+                                  return(
+                                    <div key={a.id||i} style={{display:"flex",gap:7,alignItems:"flex-start",padding:"3px 0",borderBottom:`1px solid ${B.border}22`}}>
+                                      <span style={{fontSize:10,flexShrink:0,marginTop:1}}>{icon}</span>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{display:"flex",alignItems:"center",gap:5,flexWrap:"wrap"}}>
+                                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:typeColor,background:`${typeColor}15`,padding:"1px 4px",borderRadius:2}}>{a.type.toUpperCase()}</span>
+                                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{new Date(a.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</span>
+                                        </div>
+                                        {a.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginTop:2,lineHeight:1.4}}>{a.note}</div>}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
                             </div>
                           )}
                         </div>
