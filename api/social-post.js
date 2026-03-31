@@ -14,13 +14,13 @@
  *   (default)         → post or schedule
  */
 
-const PUBLER_API = "https://app.publer.io/api/v1";
+const PUBLER_API = "https://app.publer.com/api/v1";
 
 async function publerRequest(path, method = "GET", body = null, apiKey) {
   const opts = {
     method,
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer-API ${apiKey}`,
       "Content-Type": "application/json",
       Accept: "application/json",
     },
@@ -55,13 +55,10 @@ export default async function handler(req, res) {
   // ── Test connection ──────────────────────────────────────────────────────────
   if (action === "test") {
     try {
-      const { ok, data } = await publerRequest("/user", "GET", null, apiKey);
+      const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey);
       if (ok) {
-        const user = data.user || data;
-        return res.json({
-          ok: true,
-          user: { name: user.name || user.display_name, email: user.email, plan: user.plan },
-        });
+        const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
+        return res.json({ ok: true, user: { name: `${accounts.length} account(s) connected`, plan: "Publer" } });
       }
       return res.status(400).json({ ok: false, error: data.message || data.error || JSON.stringify(data) });
     } catch (e) {
@@ -72,14 +69,14 @@ export default async function handler(req, res) {
   // ── List accounts ────────────────────────────────────────────────────────────
   if (action === "profiles") {
     try {
-      const { ok, data } = await publerRequest("/social_accounts", "GET", null, apiKey);
+      const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey);
       if (!ok) return res.status(400).json({ error: data.message || data.error || JSON.stringify(data) });
       const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
       return res.json({
         ok: true,
         profiles: accounts.map(a => ({
           id: String(a.id),
-          service: (a.platform || a.social_network || "").toLowerCase(),
+          service: (a.platform || a.social_network || a.type || "").toLowerCase(),
           name: a.name || a.username || a.display_name,
           avatar: a.picture || a.avatar,
           connected: !a.needs_reconnect,
@@ -120,13 +117,14 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  const payload = { account_ids: accountIds, text: postText };
+  const payload = { accounts: accountIds, text: postText };
   if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-  if (isStory) payload.type = "STORY";
+  else payload.publish_at = "now";
+  if (isStory) payload.content_type = "story";
   if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
   try {
-    const { ok, data } = await publerRequest("/post", "POST", payload, apiKey);
+    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey);
 
     if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
       const posts = data.posts || (data.id ? [data] : []);
