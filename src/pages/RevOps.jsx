@@ -3175,20 +3175,20 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch ALL records from a Zoho CRM module using COQL (bypasses 2000-record page limit)
+  // Fetch ALL records from a Zoho CRM module using standard pagination (no record cap)
   const zohoFetchAll = async (module, fields, onProgress) => {
-    let all = []; let offset = 0;
+    let all = []; let page = 1;
     const fList = fields.join(",");
     while(true) {
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",
-          body:{select_query:`SELECT ${fList} FROM ${module} LIMIT 200 OFFSET ${offset}`}
-        })}).then(r=>r.json());
+        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+      }).then(r=>r.json());
       const batch = res.data||[];
       all = [...all,...batch];
       if(onProgress) onProgress(all.length);
       if(!res.info?.more_records || batch.length<200) break;
-      offset += 200;
+      page++;
+      await new Promise(r=>setTimeout(r,150)); // rate-limit buffer between pages
     }
     return all;
   };
@@ -9351,45 +9351,6 @@ function ModSettings() {
   return (
     <div style={{padding:"22px 26px",maxWidth:760}}>
       <PH title="SETTINGS" sub="Company profile, integrations, and data management"/>
-
-      {/* INTEGRATIONS HEALTH */}
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.teal}`}}>
-        <Lbl c={B.teal} s={{marginBottom:12}}>INTEGRATIONS</Lbl>
-        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          {/* Gmail */}
-          <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>✉</span>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL</span>
-            </div>
-            <div style={{marginBottom:8}}>
-              {gmailStatus===null?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:12}}>CHECKING...</span>
-              ):gmailStatus?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:12}}>● CONNECTED</span>
-              ):(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"3px 8px",borderRadius:12}}>✗ NOT CONNECTED</span>
-              )}
-            </div>
-            <a href="/integrations" style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>Configure →</a>
-          </div>
-          {/* Zoho CRM */}
-          <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>⚡</span>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>ZOHO CRM</span>
-            </div>
-            <div style={{marginBottom:8}}>
-              {(s.integrations?.zohoToken||s.integrations?.zohoCrmToken)?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:12}}>● TOKEN SET</span>
-              ):(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"3px 8px",borderRadius:12}}>✗ NOT CONFIGURED</span>
-              )}
-            </div>
-            <button onClick={()=>document.getElementById("zoho-section")?.scrollIntoView({behavior:"smooth"})} style={{background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,cursor:"pointer",padding:0}}>Configure →</button>
-          </div>
-        </div>
-      </div>
 
       {/* Company Profile */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
