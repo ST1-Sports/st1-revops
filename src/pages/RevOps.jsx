@@ -4731,7 +4731,7 @@ function ModMarketing() {
                 <div className="card" style={{padding:40,textAlign:"center"}}>
                   <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:8}}>No plans yet — build a marketing plan to organize your campaigns</div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>A marketing plan defines your sport focus, target area, segment, and goals — then AI suggests campaigns to achieve them.</div>
-                  <OBtn onClick={()=>{setPlanDraft({name:"",sport:"",states:[],segment:"All Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);}}>+ CREATE FIRST PLAN</OBtn>
+                  <OBtn onClick={()=>{setPlanDraft({name:"",icp:{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""},seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setMatchingContacts(null);}}>+ CREATE FIRST PLAN</OBtn>
                 </div>
               ):(
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
