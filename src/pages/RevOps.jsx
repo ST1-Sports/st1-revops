@@ -4257,6 +4257,11 @@ function ModMarketing() {
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+  // Matching contacts (ICP filter)
+  const [matchingContacts,setMatchingContacts]=useState(null);
+  // Flighting (plan detail multi-select)
+  const [flightChecked,setFlightChecked]=useState({});
+  const [flightDates,setFlightDates]=useState({});
 
   const campaigns = s.campaigns || [];
   const strategies = s.strategies || [];
@@ -4276,13 +4281,14 @@ function ModMarketing() {
   const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
 
   const startNewCampaign = (fromPlan=null) => {
+    const planIcp = fromPlan?.icp || {sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:"",notes:""};
     setCampDraft({
       name:"",product:"Track & Field Equipment",audience:"Athletic Director",tone:"friendly",ctx:"",
       touches:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",
-      startDate:today(),endDate:"",goal:"",channels:[],
+      startDate:today(),endDate:"",goal:"",channels:fromPlan?.channels||[],
       metrics:["Opens","Replies","Quotes Sent"],repId:"",
       planId:fromPlan?.id||"",
-      icp:{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
+      icp:{...planIcp},
       assetTypes:[],
     });
     setCampStep(1);
@@ -4290,6 +4296,24 @@ function ModMarketing() {
     setSelCampId(null);
     setSegResult(null);
     setSelectedContacts(new Set());
+    setMatchingContacts(null);
+  };
+
+  const findMatchingContacts = (icp) => {
+    const contacts = s.contacts||[];
+    const sports = icp?.sports||[];
+    const titles = icp?.titles||[];
+    const states = icp?.states||[];
+    const matched = contacts.filter(c=>{
+      const cSport = (typeof c.sport==="string"?c.sport:c.sport?.name||"").toLowerCase();
+      const cTitle = (typeof c.title==="string"?c.title:c.title?.name||"").toLowerCase();
+      const cState = (typeof c.state==="string"?c.state:c.state||"").toUpperCase();
+      const sportMatch = sports.length===0||sports.includes("all")||sports.includes("school")||sports.some(sp=>cSport===sp.toLowerCase()||cSport.includes(sp.toLowerCase()));
+      const titleMatch = titles.length===0||titles.some(t=>cTitle.includes(t.toLowerCase()));
+      const stateMatch = states.length===0||states.includes(cState);
+      return sportMatch&&titleMatch&&stateMatch;
+    });
+    return matched;
   };
 
   const generateTouches = async () => {
@@ -4680,7 +4704,8 @@ function ModMarketing() {
     {id:"callscript",label:"Call Script"},
     {id:"directmail",label:"Direct Mail Letter"},
   ];
-  const COMMON_TITLES = ["Athletic Director","Head Coach","Assistant Coach","Procurement Manager","Principal"];
+  const COMMON_TITLES = ["Athletic Director","Head Coach","Assistant Coach","Procurement Manager","Principal","Club Director","League Administrator"];
+  const SEGMENT_OPTIONS = ["High School","College","All School Levels","Youth / Club Sports","Professional / Semi-Pro"];
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -4700,7 +4725,7 @@ function ModMarketing() {
             <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{strategies.length} PLAN{strategies.length!==1?"S":""}</div>
-                <OBtn sm onClick={()=>{setPlanDraft({name:"",sport:"",states:[],segment:"All Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);}}>+ NEW PLAN</OBtn>
+                <OBtn sm onClick={()=>{setPlanDraft({name:"",icp:{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""},segment:"All School Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);setMatchingContacts(null);}}>+ NEW PLAN</OBtn>
               </div>
               {strategies.length===0?(
                 <div className="card" style={{padding:40,textAlign:"center"}}>
