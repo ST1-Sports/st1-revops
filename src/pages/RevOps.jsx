@@ -393,6 +393,7 @@ export default function App() {
         all=[...all,...batch];
         if(!res.info?.more_records||batch.length<200) break;
         page++;
+        await new Promise(r=>setTimeout(r,150)); // rate-limit buffer between pages
       }
       return all;
     };
@@ -406,11 +407,14 @@ export default function App() {
         const now=Date.now();
         const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
         const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
-        const existing=new Set((s.contacts||[]).map(c=>c.id));
-        const toAdd=[...contacts,...leads].filter(c=>!existing.has(c.id));
+        const existingIds=new Set((s.contacts||[]).map(c=>c.id));
+        const allZoho=[...contacts,...leads];
+        const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
+        const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
         if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
+        toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{...c}));
         dispatch("SET_CONTACTS_LAST_SYNC",now);
-        if(force) toast(`Synced ${toAdd.length} new record(s) from Zoho CRM`,"success");
+        if(force) toast(`Zoho CRM: ${toAdd.length} added, ${toUpdate.length} updated (${allZoho.length} total)`, "success");
       } catch(e){
         console.error("CRM sync failed:",e);
         if(force) toast(`CRM sync failed: ${e.message}`,"error");
@@ -4257,7 +4261,8 @@ function ModEmails() {
           const _bc=(s.contacts||[]).find(c=>c.id===d.contactId);if(_bc?.zohoId) pushActivityToZoho(_bc,`Batch email sent: ${d.subject}`);
           sent++;setSentCount(sent);
         }else{setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));}
-        await new Promise(r=>setTimeout(r,300));
+        // 15-second gap between sends to avoid spam filters
+        if(sent<toSend.length) await new Promise(r=>setTimeout(r,15000));
       }catch(e){setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:e.message}:x));}
     }
     setSending(false);toast(`${sent}/${toSend.length} emails sent`,sent>0?"success":"error");
@@ -5194,6 +5199,8 @@ function ModMarketing() {
         dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
         const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
         sent++;
+        // 15-second gap between sends to avoid spam filters
+        if(sent<due.length) await new Promise(r=>setTimeout(r,15000));
       }else failed++;
     }
     // Single batch dispatch — no stale overwrites
@@ -7606,7 +7613,7 @@ function ModAds() {
         }),
       });
       const data = await r.json();
-      // Ayrshare returns status:"success" or "scheduled" on success.
+      // Social posting API returns status:"success" or "scheduled" on success.
       // It can also return status:"success" WITH errors[] if individual platforms fail.
       const platformErrors = Array.isArray(data.errors) ? data.errors : [];
       const isSuccess = (data.status === "success" || data.status === "scheduled") && !data.error;
@@ -8357,12 +8364,10 @@ function ModAds() {
                   </div>
                 )}
 
-                {/* No API key warning */}
-                {socialResult?.error?.includes("AYRSHARE_API_KEY")&&(
+                {/* Social API error warning */}
+                {socialResult?.error&&(
                   <div style={{marginTop:10,background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.6}}>
-                    <strong>Ayrshare not connected.</strong> Get a free API key at{" "}
-                    <a href="https://app.ayrshare.com" target="_blank" rel="noreferrer" style={{color:"#c47a00",fontWeight:700}}>app.ayrshare.com</a>,
-                    then add <code style={{background:"#ffe8a0",padding:"1px 5px",borderRadius:3}}>AYRSHARE_API_KEY</code> to your Vercel environment variables and redeploy.
+                    <strong>Post failed:</strong> {socialResult.error}
                   </div>
                 )}
               </div>
@@ -9368,21 +9373,6 @@ function ModSettings() {
             </div>
             <a href="/integrations" style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>Configure →</a>
           </div>
-          {/* Ayrshare */}
-          <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>📱</span>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>SOCIAL (AYRSHARE)</span>
-            </div>
-            <div style={{marginBottom:8}}>
-              {s.integrations?.ayrshareKey?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:12}}>● KEY SET</span>
-              ):(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"3px 8px",borderRadius:12}}>✗ NO KEY — add in settings</span>
-              )}
-            </div>
-            <button onClick={()=>document.getElementById("ayrshare-section")?.scrollIntoView({behavior:"smooth"})} style={{background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,cursor:"pointer",padding:0}}>Configure →</button>
-          </div>
           {/* Zoho CRM */}
           <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
             <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
@@ -9423,7 +9413,7 @@ function ModSettings() {
       <div id="zoho-section" className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
         <Lbl c={B.purple} s={{marginBottom:12}}>Zoho / Slack Integration</Lbl>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
-          {[["Zoho Books Token","zohoToken","password"],["Zoho Books Org ID","zohoOrgId","text"],["Zoho CRM Token","zohoCrmToken","password"],["Slack Channel","slackChannel","text"],["Ayrshare API Key","ayrshareKey","password"]].map(([l,k,t])=>(
+          {[["Zoho Books Token","zohoToken","password"],["Zoho Books Org ID","zohoOrgId","text"],["Zoho CRM Token","zohoCrmToken","password"],["Slack Channel","slackChannel","text"]].map(([l,k,t])=>(
             <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={t} value={ints[k]||""} onChange={e=>setInts(i=>({...i,[k]:e.target.value}))} placeholder={k.includes("Token")?"Paste OAuth token...":""} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
           ))}
         </div>
@@ -9481,7 +9471,7 @@ function ModSettings() {
       </div>
 
       {/* BRAND ASSETS */}
-      <div id="ayrshare-section" className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
+      <div id="brand-assets-section" className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <Lbl c={B.orange}>BRAND ASSETS</Lbl>
         </div>
