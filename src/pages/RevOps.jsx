@@ -4224,8 +4224,8 @@ function ModMarketing() {
   const [selCampId,setSelCampId]=useState(null);
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
-  // Campaign detail sub-tabs: overview | assets | execute | report
-  const [campSubTab,setCampSubTab]=useState("overview");
+  // Campaign detail sub-tabs: strategy | assets | execute | report
+  const [campSubTab,setCampSubTab]=useState("strategy");
   // Wizard steps: 1=strategy 2=assets 3=audience 4=launch
   const [campStep,setCampStep]=useState(1);
   // Calendar
@@ -4385,7 +4385,7 @@ function ModMarketing() {
     };
     dispatch("ADD_CAMPAIGN", camp);
     seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
-    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("overview");
+    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("strategy");
     setSegResult(null); setSelectedContacts(new Set());
     toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
   };
@@ -4449,11 +4449,25 @@ function ModMarketing() {
     if(!due.length){toast("No emails due today","info");return;}
     setSending(true);
     let sent=0,failed=0;
+    // Build updated enrollments array in memory to avoid stale-closure overwrite
+    const updatedEnrollments=[...(camp.enrollments||[])];
     for(const enroll of due){
       const res=await sendOneEmail(camp,enroll);
-      if(res.ok){markContacted(campId,enroll.contactId);sent++;}
-      else failed++;
+      if(res.ok){
+        const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
+        if(idx>=0){
+          const nextStep=enroll.step+1;
+          const done=nextStep>=(camp.touches||[]).length;
+          const nextTouch=(camp.touches||[])[nextStep];
+          const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+          updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
+        }
+        dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
+        sent++;
+      }else failed++;
     }
+    // Single batch dispatch — no stale overwrites
+    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
     setSending(false);
     toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
   };
@@ -4597,7 +4611,7 @@ function ModMarketing() {
                     const replied=enrs.filter(e=>e.status==="replied").length;
                     const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
                     return(
-                      <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("overview");}} className="card fu"
+                      <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("strategy");}} className="card fu"
                         style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${camp.color||B.orange}`}}>
                         <div style={{padding:"14px 16px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -4926,40 +4940,79 @@ function ModMarketing() {
               </div>
               {/* Sub-tabs */}
               <div style={{display:"flex",gap:0,marginBottom:16,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",width:"fit-content"}}>
-                {[["overview","📊 OVERVIEW"],["assets","🛠 ASSETS"],["execute","▶ EXECUTE"],["report","📈 REPORT"]].map(([id,l])=>(
+                {[["strategy","📋 STRATEGY"],["assets","🛠 ASSETS"],["execute","▶ EXECUTE"],["report","📈 REPORT"]].map(([id,l])=>(
                   <button key={id} onClick={()=>setCampSubTab(id)} style={{background:campSubTab===id?B.orange:"transparent",color:campSubTab===id?B.white:B.muted,border:"none",padding:"8px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
 
-              {/* OVERVIEW TAB */}
-              {campSubTab==="overview"&&(
+              {/* STRATEGY TAB */}
+              {campSubTab==="strategy"&&(
                 <div>
-                  {/* Goal + status card */}
-                  <div className="card" style={{padding:"14px 16px",marginBottom:14,borderLeft:`4px solid ${selCamp.color||B.orange}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16}}>
-                      <div style={{flex:1}}>
-                        {selCamp.goal&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>🎯 {selCamp.goal}</div>}
-                        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
-                          {(selCamp.channels||[]).map(ch=>{const c=CHANNELS.find(x=>x.id===ch);return<span key={ch} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"3px 8px"}}>{c?.icon} {c?.label}</span>;})}
+                  {/* Strategy header — goal prominent */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                    {/* Left: Goal + context */}
+                    <div className="card" style={{padding:"14px 16px",borderLeft:`4px solid ${selCamp.color||B.orange}`}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>CAMPAIGN GOAL</div>
+                      {selCamp.goal
+                        ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,fontWeight:600,lineHeight:1.4,marginBottom:10}}>{selCamp.goal}</div>
+                        : <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:10,fontStyle:"italic"}}>No goal set — click Edit to add one</div>}
+                      {selCamp.ctx&&(
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>CONTEXT / ANGLE</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>{selCamp.ctx}</div>
                         </div>
-                        {(selCamp.metrics||[]).length>0&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
-                          {(selCamp.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}10`,borderRadius:3,padding:"2px 7px"}}>☑ {m}</span>)}
-                        </div>}
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        {selCamp.startDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{selCamp.startDate}{selCamp.endDate?` → ${selCamp.endDate}`:""}</div>}
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{selCamp.product}{selCamp.audience?` · ${selCamp.audience}`:""}</div>
-                        {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
-                          <div style={{display:"flex",alignItems:"center",gap:5,marginTop:6}}>
-                            <div style={{width:20,height:20,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
-                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,fontWeight:500}}>{rep.name}</span>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>· {rep.email}</span>
+                      )}
+                    </div>
+                    {/* Right: Details */}
+                    <div className="card" style={{padding:"14px 16px"}}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        {[["PRODUCT",selCamp.product],["AUDIENCE",selCamp.audience||"All"],["TONE",(selCamp.tone||"—")],["DATES",`${selCamp.startDate||""}${selCamp.endDate?` → ${selCamp.endDate}`:""}`||"—"]].map(([k,v])=>(
+                          <div key={k}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{k}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{v||"—"}</div>
                           </div>
-                        ):null;})()}
+                        ))}
                       </div>
+                      {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
+                        <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:7}}>
+                          <div style={{width:24,height:24,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                          <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{rep.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{rep.email}</div></div>
+                        </div>
+                      ):null;})()}
                     </div>
                   </div>
-                  {/* Stats row */}
+                  {/* Channels */}
+                  {(selCamp.channels||[]).length>0&&(
+                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CHANNELS</div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        {(selCamp.channels||[]).map(ch=>{
+                          const c=CHANNELS.find(x=>x.id===ch);
+                          const assetCount=ch==="email"?(selCamp.touches||[]).length:ch==="social"?(selCamp.socialPosts||[]).length:ch==="paid_ads"?(selCamp.adIds||[]).length:0;
+                          return(
+                            <div key={ch} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6}}>
+                              <span style={{fontSize:16}}>{c?.icon}</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{c?.label}</div>
+                                {assetCount>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{assetCount} ASSET{assetCount!==1?"S":""}</div>}
+                              </div>
+                              {assetCount===0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>NO ASSETS YET</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {/* Metrics to track */}
+                  {(selCamp.metrics||[]).length>0&&(
+                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>METRICS TO TRACK</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                        {(selCamp.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}20`,borderRadius:4,padding:"4px 10px"}}>☑ {m}</span>)}
+                      </div>
+                    </div>
+                  )}
+                  {/* Quick stats */}
                   {(()=>{
                     const enrs=selCamp.enrollments||[];
                     const activeN=enrs.filter(e=>e.status==="active").length;
@@ -4970,8 +5023,8 @@ function ModMarketing() {
                     const todayStr=today();
                     const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
                     return(
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(100px,1fr))",gap:8,marginBottom:16}}>
-                        {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["DUE TODAY",dueN,dueN>0?B.red:B.muted],["SENT",sentN,B.purple],["OPENED",openedN,B.teal||B.blue],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:8,marginBottom:14}}>
+                        {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["DUE TODAY",dueN,dueN>0?B.red:B.muted],["SENT",sentN,B.purple],["OPENED",openedN,B.blue],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
                           <div key={l} style={{background:B.white,border:`1px solid ${c}30`,borderRadius:6,padding:"10px 12px",textAlign:"center"}}>
                             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:c,lineHeight:1}}>{v}</div>
                             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:3}}>{l}</div>
@@ -4980,11 +5033,11 @@ function ModMarketing() {
                       </div>
                     );
                   })()}
-                  {/* Quick actions */}
+                  {/* Actions */}
                   <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                    <OBtn sm onClick={()=>setCampSubTab("execute")}>▶ GO TO EXECUTE</OBtn>
-                    <GBtn sm onClick={()=>setCampSubTab("assets")}>🛠 EDIT ASSETS</GBtn>
-                    <GBtn sm onClick={()=>setCampSubTab("report")}>📈 VIEW REPORT</GBtn>
+                    <OBtn sm onClick={()=>setCampSubTab("execute")} disabled={(selCamp.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||today())<=today()).length===0}>▶ EXECUTE{(selCamp.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||today())<=today()).length>0?` (${(selCamp.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||today())<=today()).length} DUE)`:""}</OBtn>
+                    <GBtn sm onClick={()=>setCampSubTab("assets")}>🛠 ASSETS</GBtn>
+                    <GBtn sm onClick={()=>setCampSubTab("report")}>📈 REPORT</GBtn>
                   </div>
                 </div>
               )}
