@@ -7172,11 +7172,13 @@ function ModSocial() {
   const [genRunning,setGenRunning]=useState(false);
 
   const generateSocialImage=async()=>{
-    if(!imgPrompt.trim()){toast("Enter an image prompt","error");return;}
+    if(!imgPrompt.trim()&&!caption.trim()){toast("Add a caption or image prompt first","error");return;}
     setImgGenRunning(true);
+    const captionContext=caption.trim()?`\nPost caption for context: "${caption.trim().slice(0,200)}"`:""
+    const fullPrompt=(imgPrompt.trim()||"Lifestyle sports action shot")+captionContext;
     try{
       const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:imgPrompt,style:"lifestyle",sizeKey:"square"})});
+        body:JSON.stringify({prompt:fullPrompt,style:"lifestyle",sizeKey:"square"})});
       const d=await r.json();
       if(d.imageUrl){setImageUrl(d.imageUrl);toast("Image generated!","success");}
       else toast(d.error||"Image gen failed","error");
@@ -7217,10 +7219,11 @@ function ModSocial() {
 
   const generateCaption=async()=>{
     setGenRunning(true);
-    const r=await aiCall(
-      `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`,
-      {tokens:300}
-    );
+    const direction=caption.trim();
+    const prompt=direction
+      ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction but make it more engaging and punchy.\nPlatforms: ${platforms.join(", ")||"general social"}.\nInclude relevant hashtags. Under 150 words.\n\nDraft to improve:\n${direction}`
+      : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`;
+    const r=await aiCall(prompt,{tokens:300});
     if(r) setCaption(r);
     setGenRunning(false);
   };
@@ -7429,7 +7432,7 @@ function ModSocial() {
               </div>
               {imgMode==="generate"&&(
                 <div style={{display:"flex",gap:6}}>
-                  <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder="e.g. Track & field hurdles at sunrise, vibrant action shot" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                  <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder={caption.trim()?`Visual for: "${caption.trim().slice(0,60)}${caption.length>60?"…":""}" — or describe something specific`:"Describe the image you want, or just hit Generate to match your caption"} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
                     onKeyDown={e=>e.key==="Enter"&&generateSocialImage()}/>
                   <button onClick={generateSocialImage} disabled={imgGenRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",opacity:imgGenRunning?.7:1}}>
                     {imgGenRunning?"GENERATING...":"GENERATE"}
