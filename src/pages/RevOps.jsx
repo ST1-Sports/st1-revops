@@ -7704,6 +7704,27 @@ function ModSocial() {
         <div>
           <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
+            {(s.socialPosts||[]).some(p=>(p.publerPostIds||[]).length>0)&&(
+              <button onClick={async()=>{
+                setSyncingStats(true);
+                const posts=(s.socialPosts||[]).filter(p=>(p.publerPostIds||[]).length>0);
+                for(const p of posts){
+                  try{
+                    const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"stats",postId:p.publerPostIds[0]})});
+                    const d=await r.json();
+                    if(d.ok&&d.raw){
+                      const raw=d.raw;
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,stats:{likes:raw.like_count||raw.likes||0,comments:raw.comment_count||raw.comments||0,impressions:raw.impression_count||raw.impressions||0,reach:raw.reach_count||raw.reach||0,shares:raw.share_count||raw.shares||0}});
+                    }
+                  }catch{}
+                  await new Promise(r=>setTimeout(r,300));
+                }
+                setSyncingStats(false);toast("Stats synced","success");
+              }} disabled={syncingStats}
+                style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer"}}>
+                {syncingStats?"SYNCING...":"↻ SYNC STATS"}
+              </button>
+            )}
             <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
               {["all","scheduled","published","draft"].map(st=>(
                 <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st.toUpperCase()}</button>
@@ -7739,14 +7760,64 @@ function ModSocial() {
                       </div>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>
                     </div>
-                    {p._source==="standalone"&&(
-                      <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer",flexShrink:0}}>✕</button>
-                    )}
+                    <div style={{display:"flex",flexDirection:"column",gap:4,flexShrink:0}}>
+                      {p.status!=="published"&&(
+                        <button onClick={()=>setEditingPost({...p})} style={{background:`${B.blue}10`,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.blue,cursor:"pointer"}}>✎ EDIT</button>
+                      )}
+                      {p._source==="standalone"&&(
+                        <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
+                      )}
+                      {(p.publerPostIds||[]).length>0&&(
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"right"}}>
+                          {p.stats?.likes!==undefined&&<div>❤ {p.stats.likes||0} · 💬 {p.stats.comments||0}</div>}
+                          {p.stats?.impressions!==undefined&&<div>👁 {p.stats.impressions||0}</div>}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Edit post modal */}
+      {editingPost&&(
+        <div onClick={()=>setEditingPost(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <div onClick={e=>e.stopPropagation()} className="fu" style={{background:B.white,borderRadius:10,padding:24,width:500,maxWidth:"95vw",maxHeight:"90vh",overflow:"auto"}}>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,marginBottom:16}}>EDIT POST</div>
+            <div style={{marginBottom:12}}>
+              <Lbl s={{marginBottom:6}}>PLATFORMS</Lbl>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {SOCIAL_PLATFORMS.map(pl=>{const on=(editingPost.platforms||[]).includes(pl);const col=PLATFORM_COLORS[pl];return(<button key={pl} onClick={()=>setEditingPost(p=>({...p,platforms:on?(p.platforms||[]).filter(x=>x!==pl):[...(p.platforms||[]),pl]}))}>
+                  <span style={{background:on?col:B.surface,color:on?"#fff":B.muted,border:`2px solid ${on?col:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,cursor:"pointer",display:"inline-block"}}>{pl.charAt(0).toUpperCase()+pl.slice(1)}</span>
+                </button>);
+                })}
+              </div>
+            </div>
+            <div style={{marginBottom:12}}>
+              <Lbl s={{marginBottom:6}}>CAPTION</Lbl>
+              <textarea value={editingPost.caption||""} onChange={e=>setEditingPost(p=>({...p,caption:e.target.value}))}
+                rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:12}}>
+              <div style={{flex:1}}>
+                <Lbl s={{marginBottom:5}}>DATE</Lbl>
+                <input type="date" value={editingPost.date||""} onChange={e=>setEditingPost(p=>({...p,date:e.target.value}))}
+                  style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              </div>
+              <div style={{flex:1}}>
+                <Lbl s={{marginBottom:5}}>TIME</Lbl>
+                <input type="time" value={editingPost.time||"09:00"} onChange={e=>setEditingPost(p=>({...p,time:e.target.value}))}
+                  style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <GBtn onClick={()=>setEditingPost(null)}>CANCEL</GBtn>
+              <OBtn onClick={()=>{dispatch("UPDATE_SOCIAL_POST",editingPost);setEditingPost(null);toast("Post updated","success");}}>SAVE CHANGES</OBtn>
+            </div>
+          </div>
         </div>
       )}
 
@@ -9891,6 +9962,69 @@ function ModSettings() {
           ))}
         </div>
       </div>
+
+            {/* USERS & ACCESS */}
+            <div className="card" style={{padding:20,marginBottom:20}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>USERS & ACCESS</div>
+                <OBtn sm onClick={()=>dispatch("ADD_APP_USER",{
+                  id:mkId(),name:"",email:"",role:"rep",color:B.blue,initials:"",pinSet:false,pin:"",_editing:true
+                })}>+ ADD USER</OBtn>
+              </div>
+              {/* Hardcoded legacy users */}
+              <div style={{marginBottom:10}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>SYSTEM USERS</div>
+                {USERS.map(u=>(
+                  <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",background:B.surface,borderRadius:5,marginBottom:4}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span></div>
+                    <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{u.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email} · PIN via env var</div></div>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}14`,padding:"2px 7px",borderRadius:3}}>{u.role?.toUpperCase()}</span>
+                  </div>
+                ))}
+              </div>
+              {/* Dynamic app users */}
+              {(s.appUsers||[]).length>0&&(
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>ADDITIONAL USERS</div>
+                  {(s.appUsers||[]).map(u=>(
+                    <div key={u.id} style={{background:B.surface,borderRadius:5,padding:"10px 12px",marginBottom:6}}>
+                      {u._editing?(
+                        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                          <div style={{display:"flex",gap:8}}>
+                            <input placeholder="Full name" value={u.name} onChange={e=>dispatch("UPDATE_APP_USER",{...u,name:e.target.value,initials:e.target.value.split(" ").map(w=>w[0]||"").join("").slice(0,2).toUpperCase()})}
+                              style={{flex:2,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                            <input placeholder="Email" value={u.email} onChange={e=>dispatch("UPDATE_APP_USER",{...u,email:e.target.value})}
+                              style={{flex:3,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                            <select value={u.role} onChange={e=>dispatch("UPDATE_APP_USER",{...u,role:e.target.value})}
+                              style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                              {["owner","admin","rep","viewer"].map(r=><option key={r} value={r}>{r}</option>)}
+                            </select>
+                          </div>
+                          <div style={{display:"flex",gap:6}}>
+                            <OBtn sm onClick={()=>{
+                              if(!u.name.trim()||!u.email.trim()){toast("Name and email required","error");return;}
+                              dispatch("UPDATE_APP_USER",{...u,_editing:false});
+                              toast(`${u.name} added — they'll set their PIN on first login`,"success");
+                            }}>✓ SAVE USER</OBtn>
+                            {u.pinSet&&<GBtn onClick={()=>{dispatch("UPDATE_APP_USER",{...u,pin:"",pinSet:false});toast("PIN reset — user must set new PIN on next login","info");}}>RESET PIN</GBtn>}
+                            <button onClick={()=>dispatch("DELETE_APP_USER",u.id)} style={{marginLeft:"auto",background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
+                          </div>
+                        </div>
+                      ):(
+                        <div style={{display:"flex",alignItems:"center",gap:10}}>
+                          <div style={{width:28,height:28,borderRadius:"50%",background:u.color||B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials||"?"}</span></div>
+                          <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{u.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email}</div></div>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:u.pinSet?B.green:B.orange,background:u.pinSet?`${B.green}14`:`${B.orange}14`,padding:"2px 7px",borderRadius:3}}>{u.pinSet?"PIN SET":"NEEDS PIN"}</span>
+                          <button onClick={()=>dispatch("UPDATE_APP_USER",{...u,_editing:true})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
+                          <button onClick={()=>{if(window.confirm(`Remove ${u.name}?`))dispatch("DELETE_APP_USER",u.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(s.appUsers||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"12px 0"}}>No additional users — click + ADD USER to invite someone.</div>}
+            </div>
     </div>
   );
 }
