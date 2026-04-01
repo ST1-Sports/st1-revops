@@ -80,6 +80,38 @@ export default async function handler(req, res) {
     }
   }
 
+  // ── Raw debug — try a minimal post and return the full Publer response ────────
+  if (action === "debug_post") {
+    const workspaceId = process.env.PUBLER_WORKSPACE_ID || "";
+    const firstAccountId = (
+      process.env.PUBLER_ACCOUNT_FACEBOOK ||
+      process.env.PUBLER_ACCOUNT_INSTAGRAM ||
+      process.env.PUBLER_ACCOUNT_LINKEDIN ||
+      process.env.PUBLER_ACCOUNT_TWITTER ||
+      process.env.PUBLER_ACCOUNT_TIKTOK ||
+      (process.env.PUBLER_ACCOUNT_IDS || "").split(",")[0]
+    )?.trim();
+
+    const headers = {
+      Authorization: `Bearer-API ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    if (workspaceId) headers["Publer-Workspace-Id"] = workspaceId;
+
+    const testPayload = { post: { type: "feed", text: "ST1 RevOps test", accounts: firstAccountId ? [{ id: firstAccountId }] : [] } };
+
+    const r = await fetch(`${PUBLER_API}/posts`, { method: "POST", headers, body: JSON.stringify(testPayload) });
+    const rawText = await r.text();
+    return res.json({
+      httpStatus: r.status,
+      accountUsed: firstAccountId || "NONE",
+      workspaceId: workspaceId || "NONE",
+      payload: testPayload,
+      rawResponse: rawText.slice(0, 1000),
+    });
+  }
+
   // All other actions require a workspace ID
   const workspaceId = process.env.PUBLER_WORKSPACE_ID;
   if (!workspaceId) {
