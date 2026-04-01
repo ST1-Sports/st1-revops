@@ -1786,7 +1786,7 @@ Under 80 words. Include subject line. Warm tone.`);
               <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
               <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
                 {DEAL_STAGES.map(st=>(
-                  <button key={st} onClick={()=>{dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+                  <button key={st} onClick={()=>{dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
                 ))}
               </div>
               <div style={{marginBottom:9}}>
@@ -3187,6 +3187,10 @@ function ModProspecting() {
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
       }).then(r=>r.json());
+      // Surface COQL errors instead of silently returning empty
+      if(res.code && res.code !== "SUCCESS" && !Array.isArray(res.data)) {
+        throw new Error(`Zoho COQL error [${res.code}]: ${res.message||"unknown error"}`);
+      }
       const batch = res.data||[];
       if(!batch.length) break;
       all = [...all,...batch];
@@ -3202,15 +3206,18 @@ function ModProspecting() {
     setZohoPulling(true); setZohoPullResult(null);
     toast("Pulling from Zoho CRM — fetching all records...","info");
     try {
-      // Fetch contacts and leads with full pagination
-      setZohoPullResult({contacts:0,leads:0,added:0,updated:0,loading:true});
-      const [contactRows, leadRows] = await Promise.all([
+      // Fetch contacts, leads, and deals with full pagination
+      setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
+      const [contactRows, leadRows, dealRows] = await Promise.all([
         zohoFetchAll("Contacts",
           ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"],
           n=>setZohoPullResult(r=>({...r,contacts:n}))),
         zohoFetchAll("Leads",
           ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"],
           n=>setZohoPullResult(r=>({...r,leads:n}))),
+        zohoFetchAll("Deals",
+          ["Deal_Name","Amount","Stage","Closing_Date","Account_Name","Contact_Name","Description","Modified_Time","Created_Time"],
+          n=>setZohoPullResult(r=>({...r,deals:n}))),
       ]);
       const now = Date.now();
       const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
@@ -3272,8 +3279,25 @@ function ModProspecting() {
       if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
       toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
       dispatch("SET_CONTACTS_LAST_SYNC",now);
-      setZohoPullResult({contacts:contacts.length, leads:leads.length, added:toAdd.length, updated:toUpdate.length});
-      toast(`${toAdd.length} new · ${toUpdate.length} updated from Zoho CRM`,"success");
+      // Sync Deals from Zoho — add new, update stage on existing
+      const existingDeals = s.deals||[];
+      const existingDealZohoIds = new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
+      const stageMap = {"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
+      let dealsAdded=0, dealsUpdated=0;
+      dealRows.forEach(zd=>{
+        const zStage = typeof zd.Stage==="string" ? zd.Stage : zd.Stage?.name||"Quoted";
+        const localStage = DEAL_STAGES.includes(zStage) ? zStage : (stageMap[zStage]||"Quoted");
+        if(existingDealZohoIds.has(zd.id)){
+          const local=existingDeals.find(d=>d.zohoId===zd.id);
+          if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}
+        } else {
+          const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
+          dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:new Date(zd.Modified_Time||zd.Created_Time||now).getTime()||now,priority:"warm",touchHistory:[],source:"zoho-crm"});
+          dealsAdded++;
+        }
+      });
+      setZohoPullResult({contacts:contacts.length, leads:leads.length, deals:dealRows.length, added:toAdd.length, updated:toUpdate.length, dealsAdded, dealsUpdated});
+      toast(`${toAdd.length} new contacts · ${toUpdate.length} updated · ${dealsAdded} new deals · ${dealsUpdated} deal stages synced`,"success");
     } catch(e) {
       toast(`Zoho pull failed: ${e.message.slice(0,80)}`,"error");
     }
