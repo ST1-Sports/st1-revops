@@ -7178,8 +7178,8 @@ function ModSocial() {
   const generateSocialImage=async()=>{
     if(!imgPrompt.trim()&&!caption.trim()){toast("Add a caption or image prompt first","error");return;}
     setImgGenRunning(true);
-    const captionContext=caption.trim()?`\nPost caption for context: "${caption.trim().slice(0,200)}"`:""
-    const fullPrompt=(imgPrompt.trim()||"Lifestyle sports action shot")+captionContext;
+    // Use typed prompt if provided, otherwise derive from caption
+    const fullPrompt=imgPrompt.trim()||`Social media visual for this post: "${caption.trim().slice(0,200)}"${caption.length>200?"…":""}`;
     try{
       const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt:fullPrompt,style:imgStyle,sizeKey:"square"})});
@@ -7234,9 +7234,10 @@ function ModSocial() {
     const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
     const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
     const direction=caption.trim();
+    const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts, no analysis. Just the post.`;
     const prompt=direction
-      ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.\n\nDraft to improve:\n${direction}`
-      : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.`;
+      ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
     const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
@@ -7456,9 +7457,25 @@ function ModSocial() {
             {/* Image */}
             <div className="card" style={{padding:14,marginBottom:14}}>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>IMAGE (optional)</div>
+              {/* Brand assets quick-pick */}
+              {(s.brandAssets||[]).filter(a=>a.url).length>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>YOUR BRAND ASSETS</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {(s.brandAssets||[]).filter(a=>a.url).map(a=>(
+                      <button key={a.id} onClick={()=>{setImageUrl(a.url);setImgMode("upload");}} title={a.name}
+                        style={{padding:0,border:`2px solid ${imageUrl===a.url?B.orange:B.border}`,borderRadius:5,overflow:"hidden",background:"none",cursor:"pointer",flexShrink:0}}>
+                        {a.url.startsWith("data:image")||/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(a.url)?
+                          <img src={a.url} alt={a.name} style={{width:44,height:44,objectFit:"cover",display:"block"}}/>:
+                          <div style={{width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center",background:B.surface,fontSize:18}}>📄</div>}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {/* AI Generate */}
               <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} rows={2}
-                placeholder={caption.trim()?`Describe the visual — or leave blank to match your caption automatically`:"Describe the image e.g. 'Track hurdles at sunrise, cinematic lighting'"}
+                placeholder={caption.trim()?caption.trim().slice(0,120)+(caption.length>120?"…":""):"Describe the image e.g. 'Track hurdles at sunrise, cinematic lighting'"}
                 style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:8}}/>
               <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
                 <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
