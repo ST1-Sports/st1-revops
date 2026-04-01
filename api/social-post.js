@@ -138,14 +138,18 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
+  // For immediate posts Publer just needs no scheduled_at — do NOT send publish_at:"now"
+  // which causes a 500. For scheduled posts send a valid ISO timestamp.
   const payload = { accounts: accountIds, text: postText };
   if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-  else payload.publish_at = "now";
   if (isStory) payload.content_type = "story";
   if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
+  console.log("[social-post] payload →", JSON.stringify({...payload, accounts: payload.accounts}));
+
   try {
-    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
+    const { ok, status: httpStatus, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
+    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 300));
 
     if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
       const posts = data.posts || (data.id ? [data] : []);
@@ -160,8 +164,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // Extract the most meaningful error string from Publer's response
+    const errMsg = (
+      data.errors?.[0]?.message || data.errors?.[0] ||
+      data.message || data.error ||
+      (typeof data === "string" ? data.slice(0, 200) : null) ||
+      `Publer HTTP ${httpStatus}`
+    );
     return res.status(400).json({
-      error: data.errors?.[0] || data.message || data.error || "Post failed",
+      error: errMsg,
       backend: "publer",
       detail: data,
     });
