@@ -118,6 +118,8 @@ function useStore() {
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
           pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
+          appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
+          contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
         };
       }
     } catch {}
@@ -304,7 +306,7 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
+    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[]};
     default:                  return prev;
   }
 }
@@ -4986,74 +4988,81 @@ function ModMarketing() {
     return matched;
   };
 
+  // saveCampAsset — saves generated content to campDraft (wizard) or selCamp (detail)
+  const saveCampAsset = (patch) => {
+    if(campDraft) setCampDraft(c=>({...c,...patch}));
+    else if(selCamp) dispatch("UPDATE_CAMPAIGN",{...selCamp,...patch});
+  };
+
   const generateTouches = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenRunning(true);
-    const contacts = s.contacts||[];
-    const windowHint = SPORT_WINDOWS[campDraft.product?.split(" ")[0]]||"";
+    const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
+    const repLine = (() => { const rep = [...USERS,...(s.appUsers||[])].find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
     const result = await aiCall(
       `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
-      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Channels: ${(campDraft.channels||[]).join(", ")||"email"}. Tone: ${campDraft.tone}.\n`+
-      `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Product: ${ctx.product}. Audience: ${ctx.audience}. Channels: ${(ctx.channels||[]).join(", ")||"email"}. Tone: ${ctx.tone||"friendly"}.\n`+
+      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+      `${repLine?`${repLine}\n`:""}`+
       `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
       `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
       `Each touch under 100 words. Use {{firstName}} {{orgName}} merge tags. Step 2 references no reply to step 1. Step 3 is a final check-in.`,
       {json:true,tokens:1200}
     );
     const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
-    setCampDraft(c=>({...c,touches}));
+    saveCampAsset({touches});
     setGenRunning(false);
   };
 
   const generateSocialDrafts = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenSocialRunning(true);
     const result = await aiCall(
       `Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
-      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Tone: ${campDraft.tone}.\n`+
-      `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
+      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
       `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
       {json:true,tokens:800}
     );
     const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
-    setCampDraft(c=>({...c,socialDrafts:posts}));
+    saveCampAsset({socialDrafts:posts});
     setGenSocialRunning(false);
   };
 
   const generateAdCopy = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenAdRunning(true);
     const result = await aiCall(
-      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors and coaches"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors and coaches"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
       {tokens:600}
     );
-    setCampDraft(c=>({...c,adCopy:result||""}));
+    saveCampAsset({adCopy:result||""});
     setGenAdRunning(false);
   };
 
   const generateCallScript = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenCallRunning(true);
     const result = await aiCall(
-      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Include: opening line, value prop (30 secs), 3 common objections with responses, closing CTA. Under 300 words.`,
       {tokens:800}
     );
-    setCampDraft(c=>({...c,callScript:result||""}));
+    saveCampAsset({callScript:result||""});
     setGenCallRunning(false);
   };
 
   const generateDirectMail = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenMailRunning(true);
     const result = await aiCall(
-      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Format as a professional letter. Include: compelling headline, 3 bullet benefits, social proof line, clear CTA, signature. Use {{firstName}} {{orgName}} merge tags. Under 250 words.`,
       {tokens:700}
     );
-    setCampDraft(c=>({...c,directMail:result||""}));
+    saveCampAsset({directMail:result||""});
     setGenMailRunning(false);
   };
 
@@ -6508,6 +6517,16 @@ function ModMarketing() {
               {/* STRATEGY TAB */}
               {campSubTab==="strategy"&&(
                 <div>
+                  {/* Launch banner for draft/no-enrollment campaigns */}
+                  {(selCamp.status==="draft"||(selCamp.enrollments||[]).length===0)&&(selCamp.touches||[]).length>0&&(
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:`${B.orange}10`,border:`1px solid ${B.orange}30`,borderRadius:6,marginBottom:14}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5,marginBottom:2}}>READY TO LAUNCH</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>This campaign has {(selCamp.touches||[]).length} emails ready. Enroll contacts and activate it.</div>
+                      </div>
+                      <OBtn onClick={()=>{setCampDraft({...selCamp});setShowNewCampForm(true);setCampStep(5);setSelCampId(null);}}>🚀 ENROLL & LAUNCH</OBtn>
+                    </div>
+                  )}
                   {/* Plan link */}
                   {selCamp.planId&&(()=>{const plan=strategies.find(p=>p.id===selCamp.planId);return plan?(<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:12,cursor:"pointer"}} onClick={()=>{setSelPlanId(plan.id);setSelCampId(null);setTab("plans");}}>Part of plan: <strong>{plan.name}</strong> — view plan →</div>):null;})()}
                   {/* Strategy header — inline editable */}
@@ -6548,56 +6567,44 @@ function ModMarketing() {
                       </div>
                     </div>
                   </div>
-                  {/* ICP */}
-                  {selCamp.icp&&(()=>{
-                    const icp=selCamp.icp;
-                    const hasSports=(icp.sports||[]).length>0;
-                    const hasTitles=(icp.titles||[]).length>0;
-                    const hasStates=(icp.states||[]).length>0;
-                    if(!hasSports&&!hasTitles&&!hasStates&&!icp.schoolLevel) return null;
-                    return(
-                      <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>IDEAL CUSTOMER PROFILE</div>
-                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                          {hasSports&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SPORTS</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:`${B.orange}14`,borderRadius:3,padding:"2px 7px"}}>{sp}</span>)}</div></div>}
-                          {hasTitles&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>TITLES</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.titles||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,borderRadius:3,padding:"2px 7px"}}>{t}</span>)}</div></div>}
-                          {icp.schoolLevel&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SCHOOL LEVEL</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{icp.schoolLevel}</div></div>}
-                          {hasStates&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>STATES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(icp.states||[]).join(", ")}</div></div>}
-                        </div>
-                        {icp.buyingSeasonNotes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>BUYING SEASON NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.buyingSeasonNotes}</div></div>}
-                        {icp.notes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>ICP NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.notes}</div></div>}
-                      </div>
-                    );
-                  })()}
-                  {/* Channels */}
-                  {(selCamp.channels||[]).length>0&&(
-                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CHANNELS</div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                        {(selCamp.channels||[]).map(ch=>{
-                          const c=CHANNELS.find(x=>x.id===ch);
-                          const assetCount=ch==="email"?(selCamp.touches||[]).length:ch==="social"?(selCamp.socialPosts||[]).length:ch==="paid_ads"?(selCamp.adIds||[]).length:0;
-                          return(
-                            <div key={ch} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6}}>
-                              <span style={{fontSize:16}}>{c?.icon}</span>
-                              <div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{c?.label}</div>
-                                {assetCount>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{assetCount} ASSET{assetCount!==1?"S":""}</div>}
-                              </div>
-                              {assetCount===0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>NO ASSETS YET</span>}
-                            </div>
-                          );
-                        })}
+                  {/* Channels — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CHANNELS</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {CHANNELS.map(ch=>{
+                        const on=(selCamp.channels||[]).includes(ch.id);
+                        return(<button key={ch.id} onClick={()=>{const cur=selCamp.channels||[];const next=on?cur.filter(x=>x!==ch.id):[...cur,ch.id];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,channels:next});}} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{ch.icon} {ch.label}</button>);
+                      })}
+                    </div>
+                  </div>
+                  {/* ICP — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:10}}>IDEAL CUSTOMER PROFILE</div>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>SPORTS</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {SPORTS_LIST.slice(0,12).map(sp=>{const on=(selCamp.icp?.sports||[]).includes(sp);return(<button key={sp} onClick={()=>{const cur=(selCamp.icp?.sports||[]);const next=on?cur.filter(x=>x!==sp):[...cur,sp];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),sports:next}});}} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>);})}
                       </div>
                     </div>
-                  )}
-                  {/* Metrics to track */}
-                  {(selCamp.metrics||[]).length>0&&(
-                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>METRICS TO TRACK</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                        {(selCamp.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}20`,borderRadius:4,padding:"4px 10px"}}>☑ {m}</span>)}
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>TARGET TITLES</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {COMMON_TITLES.map(t=>{const on=(selCamp.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>{const cur=(selCamp.icp?.titles||[]);const next=on?cur.filter(x=>x!==t):[...cur,t];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),titles:next}});}} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
                       </div>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>SCHOOL LEVEL</div>
+                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                        {SEGMENT_OPTIONS.map(sl=>{const on=(selCamp.icp?.schoolLevel||"All School Levels")===sl;return(<button key={sl} onClick={()=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),schoolLevel:sl}})} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"4px 12px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>);})}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Metrics — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>METRICS TO TRACK</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {METRICS.map(m=>{const on=(selCamp.metrics||[]).includes(m);return(<button key={m} onClick={()=>{const cur=selCamp.metrics||[];const next=on?cur.filter(x=>x!==m):[...cur,m];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,metrics:next});}} style={{background:on?`${B.blue}10`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{on?"☑":"☐"} {m}</button>);})}
+                    </div>
                     </div>
                   )}
                   {/* Quick stats */}
@@ -6784,6 +6791,18 @@ function ModMarketing() {
               {/* ASSETS TAB */}
               {campSubTab==="assets"&&(
                 <div>
+                  {/* AI Generation panel — always visible in detail assets tab */}
+                  <div className="card" style={{padding:"14px 16px",marginBottom:18,borderLeft:`4px solid ${B.purple}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>✦ AI CONTENT GENERATION</div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                      <OBtn sm onClick={generateTouches} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE / REGEN EMAILS"}</OBtn>
+                      <button onClick={generateSocialDrafts} disabled={genSocialRunning} style={{background:genSocialRunning?B.muted:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genSocialRunning?.7:1}}>{genSocialRunning?"GENERATING...":"✦ SOCIAL POSTS"}</button>
+                      <button onClick={generateAdCopy} disabled={genAdRunning} style={{background:genAdRunning?B.muted:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genAdRunning?.7:1}}>{genAdRunning?"GENERATING...":"✦ AD COPY"}</button>
+                      <button onClick={generateCallScript} disabled={genCallRunning} style={{background:genCallRunning?B.muted:B.blue,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genCallRunning?.7:1}}>{genCallRunning?"GENERATING...":"✦ CALL SCRIPT"}</button>
+                      <button onClick={generateDirectMail} disabled={genMailRunning} style={{background:genMailRunning?B.muted:B.teal,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genMailRunning?.7:1}}>{genMailRunning?"GENERATING...":"✦ DIRECT MAIL"}</button>
+                    </div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Uses the campaign goal, product, audience, and rep from the Strategy tab.</div>
+                  </div>
                   {/* Email touches */}
                   {(selCamp.touches||[]).length>0&&(
                     <div style={{marginBottom:20}}>
