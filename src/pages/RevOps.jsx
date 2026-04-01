@@ -3201,36 +3201,41 @@ function ModProspecting() {
     return all;
   };
 
-  // ── Full fetch: COQL cursor (no record cap) ────────────────────────────────────
-  // Requires ZohoCRM.coql.READ OAuth scope. Falls back to REST GET (max 2,000).
-  // To enable: add ZohoCRM.coql.READ in Zoho API Console → regenerate refresh token → update ZOHO_REFRESH_TOKEN in Vercel.
+  // ── Full fetch: date-range chunking (no COQL scope needed) ───────────────────
+  // Splits the pull into monthly windows from 2019 to now. Each window fetches
+  // up to 2,000 records (10 pages × 200), so as long as you added <2,000 records
+  // in any single month this covers everything without any special OAuth scope.
   const zohoFetchAll = async (module, fields, onProgress) => {
-    const fList = [...new Set(["id", ...fields])].join(",");
-    try {
-      let all = []; let lastId = null;
-      while(true) {
-        const where = lastId ? ` WHERE id > '${lastId}'` : '';
-        const query = `SELECT ${fList} FROM ${module}${where} ORDER BY id ASC LIMIT 200`;
-        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
-        }).then(r=>r.json());
-        if(!Array.isArray(res.data)) {
-          const detail = res.message||res.code||res.error||JSON.stringify(res).slice(0,100);
-          throw new Error(`COQL unavailable (${res._http_status||"?"}): ${detail}`);
-        }
-        const batch = res.data;
-        if(!batch.length) break;
-        all = [...all,...batch];
-        if(onProgress) onProgress(all.length);
-        lastId = batch[batch.length-1].id;
-        if(batch.length<200) break;
-        await new Promise(r=>setTimeout(r,250));
+    const fList = [...new Set(["id","Created_Time",...fields])].join(",");
+    const now = new Date();
+    const chunks = [];
+    for(let y = 2019; y <= now.getFullYear(); y++) {
+      for(let m = 0; m < 12; m++) {
+        const start = new Date(Date.UTC(y,m,1));
+        if(start > now) break;
+        const end   = new Date(Date.UTC(y,m+1,1));
+        chunks.push({start:start.toISOString(), end:end.toISOString()});
       }
-      return all;
-    } catch(coqlErr) {
-      console.warn("[zohoFetchAll] COQL failed:", coqlErr.message);
-      throw coqlErr; // let caller handle — don't silently cap at 2,000 for full pull
     }
+    let all = [];
+    for(const chunk of chunks) {
+      let page = 1;
+      while(true) {
+        const criteria = encodeURIComponent(`(Created_Time:between:${chunk.start}:${chunk.end})`);
+        const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
+        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint,method:"GET"})
+        }).then(r=>r.json());
+        if(!Array.isArray(res.data)||!res.data.length) break;
+        all = [...all,...res.data];
+        if(onProgress) onProgress(all.length);
+        if(!res.info?.more_records||res.data.length<200) break;
+        page++;
+        await new Promise(r=>setTimeout(r,150));
+      }
+      await new Promise(r=>setTimeout(r,100));
+    }
+    return all;
   };
 
   // ── Shared record processing + dispatch ───────────────────────────────────────
@@ -3295,31 +3300,23 @@ function ModProspecting() {
     setZohoPulling(false);
   };
 
-  // ── FULL PULL — COQL cursor, no record cap ────────────────────────────────────
-  // Requires ZohoCRM.coql.READ scope. If missing, shows instructions.
+  // ── FULL PULL — date-range chunks (2019→now), no special OAuth scope needed ──
   const [fullPulling,setFullPulling] = useState(false);
-  const [coqlScopeError,setCoqlScopeError] = useState(false);
   const pullFromZohoFull = async () => {
-    setFullPulling(true); setZohoPullResult(null); setCoqlScopeError(false);
-    toast("Full pull from Zoho CRM (COQL cursor — no record cap)...","info");
+    setFullPulling(true); setZohoPullResult(null);
+    toast("Full pull from Zoho CRM (all records since 2019, monthly chunks)...","info");
     setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
     try {
-      const [contactRows,leadRows,dealRows] = await Promise.all([
-        zohoFetchAll("Contacts",CONTACT_FIELDS,n=>setZohoPullResult(r=>({...r,contacts:n}))),
-        zohoFetchAll("Leads",LEAD_FIELDS,n=>setZohoPullResult(r=>({...r,leads:n}))),
-        zohoFetchAll("Deals",DEAL_FIELDS,n=>setZohoPullResult(r=>({...r,deals:n}))),
-      ]);
+      // Run sequentially (not parallel) to avoid rate-limit hammering on full pull
+      const contactRows = await zohoFetchAll("Contacts",CONTACT_FIELDS,n=>setZohoPullResult(r=>({...r,contacts:n})));
+      const leadRows    = await zohoFetchAll("Leads",LEAD_FIELDS,n=>setZohoPullResult(r=>({...r,leads:n})));
+      const dealRows    = await zohoFetchAll("Deals",DEAL_FIELDS,n=>setZohoPullResult(r=>({...r,deals:n})));
       const result = processAndDispatchZohoRows(contactRows,leadRows,dealRows,Date.now());
       setZohoPullResult(result);
       toast(`Full pull done: ${result.added} new · ${result.updated} updated · ${result.contacts+result.leads} total`,"success");
     } catch(e) {
       setZohoPullResult(null);
-      if(e.message.includes("COQL")||e.message.includes("scope")||e.message.includes("401")) {
-        setCoqlScopeError(true);
-        toast("COQL scope missing — see instructions below to enable unlimited pull","error");
-      } else {
-        toast(`Full pull failed: ${e.message.slice(0,80)}`,"error");
-      }
+      toast(`Full pull failed: ${e.message.slice(0,80)}`,"error");
     }
     setFullPulling(false);
   };
@@ -3599,13 +3596,6 @@ function ModProspecting() {
                     ? `⟳ Fetching… ${zohoPullResult.contacts||0} contacts · ${zohoPullResult.leads||0} leads so far`
                     : `✓ ${zohoPullResult.contacts} contacts · ${zohoPullResult.leads} leads · ${zohoPullResult.added} new · ${zohoPullResult.updated||0} updated`
                   }
-                </div>
-              )}
-              {coqlScopeError&&(
-                <div style={{background:"#fff8e1",border:`1px solid ${B.orange}`,borderRadius:6,padding:10,marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,lineHeight:1.6}}>
-                  <div style={{fontWeight:700,color:B.orange,marginBottom:4}}>⚠ Full pull requires extra OAuth scope</div>
-                  <div style={{color:B.dark,marginBottom:6}}>Your Zoho OAuth app is missing the <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZohoCRM.coql.READ</code> scope.</div>
-                  <div style={{color:B.muted}}>To fix: go to <strong>api-console.zoho.com</strong> → your OAuth app → <em>Scopes</em> → add <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZohoCRM.coql.READ</code> → regenerate the refresh token → update <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZOHO_REFRESH_TOKEN</code> in Vercel env vars. Then retry.</div>
                 </div>
               )}
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
