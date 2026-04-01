@@ -3175,20 +3175,20 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch ALL records from a Zoho CRM module using COQL (bypasses 2000-record page limit)
+  // Fetch ALL records from a Zoho CRM module using standard pagination (no record cap)
   const zohoFetchAll = async (module, fields, onProgress) => {
-    let all = []; let offset = 0;
+    let all = []; let page = 1;
     const fList = fields.join(",");
     while(true) {
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",
-          body:{select_query:`SELECT ${fList} FROM ${module} LIMIT 200 OFFSET ${offset}`}
-        })}).then(r=>r.json());
+        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+      }).then(r=>r.json());
       const batch = res.data||[];
       all = [...all,...batch];
       if(onProgress) onProgress(all.length);
       if(!res.info?.more_records || batch.length<200) break;
-      offset += 200;
+      page++;
+      await new Promise(r=>setTimeout(r,150)); // rate-limit buffer between pages
     }
     return all;
   };
