@@ -55,7 +55,7 @@ export default async function handler(req, res) {
       });
     }
 
-    const { post, platforms, mediaUrls, scheduleDate, isStory, link, action } = req.body || {};
+    const { post, platforms, mediaUrls, scheduleDate, isStory, link, action, postNow } = req.body || {};
 
     // ── Test connection — fetch workspaces (no workspace header needed) ───────────
     if (action === "test") {
@@ -84,6 +84,15 @@ export default async function handler(req, res) {
         status: "not_configured",
         error: "PUBLER_WORKSPACE_ID not set — go to Integrations → Test Connection to find your workspace ID, then add it to Vercel.",
       });
+    }
+
+    // ── Fetch post stats ─────────────────────────────────────────────────────────
+    if (action === "stats") {
+      const { postId } = req.body;
+      if (!postId) return res.json({ ok: false, error: "postId required" });
+      const { ok, data } = await publerRequest(`/posts/${postId}`, "GET", null, apiKey, workspaceId);
+      if (!ok) return res.json({ ok: false, error: data.error || data.message || "Failed to fetch stats" });
+      return res.json({ ok: true, raw: data });
     }
 
     // ── List accounts ────────────────────────────────────────────────────────────
@@ -135,8 +144,13 @@ export default async function handler(req, res) {
     const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
     const payload = { accounts: accountIds, text: postText };
-    if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-    else payload.publish_at = "now";
+    if (scheduleDate && !postNow) {
+      payload.scheduled_at = new Date(scheduleDate).toISOString();
+    } else {
+      // Set to current time so Publer publishes immediately.
+      // Omitting scheduled_at makes Publer fall back to its default queue time (e.g. 9am).
+      payload.scheduled_at = new Date().toISOString();
+    }
     if (isStory) payload.content_type = "story";
     if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
@@ -145,7 +159,7 @@ export default async function handler(req, res) {
     if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
       const posts = data.posts || (data.id ? [data] : []);
       return res.json({
-        status: scheduleDate ? "scheduled" : "success",
+        status: (scheduleDate && !postNow) ? "scheduled" : "success",
         backend: "publer",
         postIds: posts.map(p => p.id).filter(Boolean),
         scheduled: !!scheduleDate,

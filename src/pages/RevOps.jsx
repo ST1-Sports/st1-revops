@@ -76,6 +76,7 @@ const SEED = {
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
   brandAssets: [],
   savedAds: [],
+  appUsers: [],
   socialPosts: [],
   campaigns: [],
 };
@@ -114,6 +115,7 @@ function useStore() {
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
           strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
+          appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -304,6 +306,9 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
+    case "ADD_APP_USER":    return {...prev, appUsers:[payload,...(prev.appUsers||[])]};
+    case "UPDATE_APP_USER": return {...prev, appUsers:(prev.appUsers||[]).map(u=>u.id===payload.id?{...u,...payload}:u)};
+    case "DELETE_APP_USER": return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.id!==payload)};
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
     default:                  return prev;
   }
@@ -437,7 +442,7 @@ export default function App() {
     return()=>window.removeEventListener("keydown",handler);
   },[]);
 
-  if (!s.currentUserId) return <Login dispatch={dispatch}/>;
+  if (!s.currentUserId) return <Login dispatch={dispatch} appUsers={s.appUsers||[]}/>;
 
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
@@ -674,24 +679,38 @@ export default function App() {
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
-function Login({dispatch}) {
+function Login({dispatch, appUsers=[]}) {
+  const allUsers = [...USERS, ...appUsers];
   const [sel,setSel]=useState(null);
   const [pin,setPin]=useState("");
+  const [confirmPin,setConfirmPin]=useState("");
   const [shake,setShake]=useState(false);
   const [loading,setLoading]=useState(false);
+
+  const isAppUser = sel && appUsers.some(u=>u.id===sel.id);
+  const needsPinSetup = isAppUser && !sel.pinSet;
+
   const doLogin=async()=>{
     if(!sel||pin.length<4) return;
+    if(needsPinSetup&&confirmPin.length<4) return;
     setLoading(true);
-    try {
+    if(isAppUser){
+      if(needsPinSetup){
+        if(confirmPin!==pin){setConfirmPin("");setShake(true);setTimeout(()=>setShake(false),500);setLoading(false);return;}
+        dispatch("UPDATE_APP_USER",{...sel,pin:btoa(pin),pinSet:true});
+        dispatch("LOGIN",sel.id);setLoading(false);return;
+      }
+      if(btoa(pin)!==sel.pin){setPin("");setShake(true);setTimeout(()=>setShake(false),500);setLoading(false);return;}
+      dispatch("LOGIN",sel.id);setLoading(false);return;
+    }
+    try{
       const r=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:sel.id,pin})});
       if(r.ok){dispatch("LOGIN",sel.id);}
       else{setPin("");setShake(true);setTimeout(()=>setShake(false),500);}
-    } catch {
-      setPin("");setShake(true);setTimeout(()=>setShake(false),500);
-    } finally {
-      setLoading(false);
-    }
+    }catch{setPin("");setShake(true);setTimeout(()=>setShake(false),500);}
+    finally{setLoading(false);}
   };
+
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
@@ -706,11 +725,11 @@ function Login({dispatch}) {
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>SELECT USER</div>
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
-            {USERS.map(u=>(
-              <button key={u.id} onClick={()=>{setSel(u);setPin("");}}
-                style={{background:sel?.id===u.id?`${u.color}10`:B.surface,border:`1px solid ${sel?.id===u.id?u.color:B.border}`,borderRadius:6,padding:"9px 13px",display:"flex",alignItems:"center",gap:9,textAlign:"left"}}>
-                <div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span>
+            {allUsers.map(u=>(
+              <button key={u.id} onClick={()=>{setSel(u);setPin("");setConfirmPin("");}}
+                style={{background:sel?.id===u.id?`${u.color||B.orange}10`:B.surface,border:`1px solid ${sel?.id===u.id?u.color||B.orange:B.border}`,borderRadius:6,padding:"9px 13px",display:"flex",alignItems:"center",gap:9,textAlign:"left"}}>
+                <div style={{width:30,height:30,borderRadius:"50%",background:u.color||B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{(u.initials||u.name?.split(" ").map(w=>w[0]).join("").slice(0,2)||"?").toUpperCase()}</span>
                 </div>
                 <div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{u.name}</div>
@@ -722,15 +741,30 @@ function Login({dispatch}) {
         </div>
         {sel&&(
           <div className={shake?"shk fu":"fu"} style={{marginBottom:14}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>PIN</div>
-            <input type="password" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}
-              placeholder="••••" maxLength={4}
+            {needsPinSetup&&(
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10,textAlign:"center",padding:"7px 10px",background:`${B.orange}10`,borderRadius:5}}>
+                Welcome {sel.name.split(" ")[0]}! Set your PIN to continue.
+              </div>
+            )}
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>
+              {needsPinSetup?"SET YOUR PIN":"PIN"}
+            </div>
+            <input type="password" value={pin} onChange={e=>setPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!needsPinSetup&&doLogin()}
+              placeholder="••••" maxLength={4} autoFocus
               style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:15,letterSpacing:6,textAlign:"center"}}/>
+            {needsPinSetup&&pin.length===4&&(
+              <div style={{marginTop:8}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:5}}>CONFIRM PIN</div>
+                <input type="password" value={confirmPin} onChange={e=>setConfirmPin(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doLogin()}
+                  placeholder="••••" maxLength={4} autoFocus
+                  style={{width:"100%",background:B.surface,border:`1px solid ${shake?B.red:B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:15,letterSpacing:6,textAlign:"center"}}/>
+              </div>
+            )}
           </div>
         )}
-        <button onClick={doLogin} disabled={!sel||pin.length<4||loading}
-          style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
-          {loading?"CHECKING…":"SIGN IN →"}
+        <button onClick={doLogin} disabled={!sel||pin.length<4||(needsPinSetup&&(confirmPin.length<4))||loading}
+          style={{width:"100%",background:(sel&&pin.length>=4&&(!needsPinSetup||confirmPin.length>=4))?B.orange:B.border,color:(sel&&pin.length>=4&&(!needsPinSetup||confirmPin.length>=4))?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
+          {loading?"CHECKING…":needsPinSetup?"SET PIN & SIGN IN →":"SIGN IN →"}
         </button>
       </div>
     </div>
@@ -7513,6 +7547,8 @@ function ModSocial() {
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
+  const [editingPost,setEditingPost]=useState(null); // post being edited
+  const [syncingStats,setSyncingStats]=useState(false);
 
   const campaigns=s.campaigns||[];
 
@@ -7572,10 +7608,11 @@ function ModSocial() {
     // Try Publer in the background
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl&&imageUrl.startsWith("http")?[imageUrl]:undefined,scheduleDate:useDate?`${useDate}T${scheduleTime}:00`:undefined,isStory:postType==="story",link:linkUrl||undefined})});
+        body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl&&imageUrl.startsWith("http")?[imageUrl]:undefined,scheduleDate:useDate?`${useDate}T${scheduleTime}:00`:undefined,isStory:postType==="story",link:linkUrl||undefined,postNow:postNow})});
       const data=await r.json();
       const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
-      toast(ok?(useDate?`Scheduled for ${useDate}!`:"Posted!"):`Saved locally — ${data.error||"Publer not configured"}`,ok?"success":"info");
+      if(ok&&(data.postIds||[]).length>0) dispatch("UPDATE_SOCIAL_POST",{id:post.id,publerPostIds:data.postIds});
+      toast(ok?(useDate?`Scheduled for ${useDate}!`:"Posted to Publer!"):`Saved locally — ${data.error||"Publer not configured"}`,ok?"success":"info");
     }catch{toast("Saved locally — couldn't reach Publer","info");}
     setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
     setTab("posts");
