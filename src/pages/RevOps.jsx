@@ -9370,21 +9370,13 @@ function ModSettings() {
         <OBtn onClick={save}>SAVE SETTINGS</OBtn>
       </div>
 
-      {/* Zoho/integrations */}
-      <div id="zoho-section" className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
-        <Lbl c={B.purple} s={{marginBottom:12}}>Zoho / Slack Integration</Lbl>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
-          {[["Zoho Books Token","zohoToken","password"],["Zoho Books Org ID","zohoOrgId","text"],["Zoho CRM Token","zohoCrmToken","password"],["Slack Channel","slackChannel","text"]].map(([l,k,t])=>(
-            <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={t} value={ints[k]||""} onChange={e=>setInts(i=>({...i,[k]:e.target.value}))} placeholder={k.includes("Token")?"Paste OAuth token...":""} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-          ))}
+      {/* Integrations pointer */}
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
+        <Lbl c={B.purple} s={{marginBottom:8}}>Integrations</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
+          Zoho CRM, Zoho Books, Gmail, Slack, and WooCommerce are configured on the Integrations page.
         </div>
-        <OBtn onClick={save}>SAVE SETTINGS</OBtn>
-      </div>
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
-        <Lbl c={B.blue} s={{marginBottom:11}}>How to Get Zoho OAuth Tokens</Lbl>
-        {[["1","Go to api-console.zoho.com"],["2","Click Self Client → Create"],["3","Scopes: ZohoBooks.invoices.ALL, ZohoCRM.modules.Contacts.ALL"],["4","Click Generate Code → copy the token"],["5","For Org ID: Zoho Books → Settings → Organization Profile"]].map(([n,step])=>(
-          <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{step}</span></div>
-        ))}
+        <a href="/integrations" style={{display:"inline-block",background:B.purple,color:B.white,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,textDecoration:"none"}}>GO TO INTEGRATIONS →</a>
       </div>
       {/* Sales Reps */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
