@@ -102,7 +102,7 @@ export default async function handler(req, res) {
     // Correct Publer bulk format: networks + accounts as objects
     const testPayload = {
       bulk: {
-        state: "published",
+        state: "scheduled",
         posts: [{
           networks: { instagram: { type: "status", text: "ST1 RevOps debug test" } },
           accounts: firstAccountId ? [{ id: firstAccountId }] : [],
@@ -202,7 +202,7 @@ export default async function handler(req, res) {
 
   const payload = {
     bulk: {
-      state: scheduleDate ? "scheduled" : "published",
+      state: "scheduled",
       posts: [{ networks, accounts: accountObjs }],
     },
   };
