@@ -9331,65 +9331,19 @@ function BrandAssetAddForm({dispatch,toast,s}) {
 
 function ModSettings() {
   const {s,dispatch,toast,setMod}=useApp();
-  const [ints,setInts]=useState({...s.integrations});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
   const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
-  const [gmailStatus,setGmailStatus]=useState(null); // null=checking, true=ok, false=error
-  const save=()=>{dispatch("SAVE_INTEGRATIONS",ints);dispatch("SAVE_COMPANY",co);toast("Settings saved","success");};
+  const save=()=>{dispatch("SAVE_COMPANY",co);toast("Settings saved","success");};
   const saveRep=()=>{
     if(!repForm?.name||!repForm?.email){toast("Name and email required","error");return;}
     if(repForm.id){dispatch("UPDATE_REP",repForm);toast("Rep updated","success");}
     else{dispatch("ADD_REP",{...repForm,id:mkId()});toast("Rep added","success");}
     setRepForm(null);
   };
-  useEffect(()=>{
-    fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})})
-      .then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
-      .catch(()=>setGmailStatus(false));
-  },[]);
 
   return (
     <div style={{padding:"22px 26px",maxWidth:760}}>
       <PH title="SETTINGS" sub="Company profile, integrations, and data management"/>
-
-      {/* INTEGRATIONS HEALTH */}
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.teal}`}}>
-        <Lbl c={B.teal} s={{marginBottom:12}}>INTEGRATIONS</Lbl>
-        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-          {/* Gmail */}
-          <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>✉</span>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL</span>
-            </div>
-            <div style={{marginBottom:8}}>
-              {gmailStatus===null?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:12}}>CHECKING...</span>
-              ):gmailStatus?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:12}}>● CONNECTED</span>
-              ):(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"3px 8px",borderRadius:12}}>✗ NOT CONNECTED</span>
-              )}
-            </div>
-            <a href="/integrations" style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>Configure →</a>
-          </div>
-          {/* Zoho CRM */}
-          <div style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
-              <span style={{fontSize:16}}>⚡</span>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>ZOHO CRM</span>
-            </div>
-            <div style={{marginBottom:8}}>
-              {(s.integrations?.zohoToken||s.integrations?.zohoCrmToken)?(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:12}}>● TOKEN SET</span>
-              ):(
-                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"3px 8px",borderRadius:12}}>✗ NOT CONFIGURED</span>
-              )}
-            </div>
-            <button onClick={()=>document.getElementById("zoho-section")?.scrollIntoView({behavior:"smooth"})} style={{background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,cursor:"pointer",padding:0}}>Configure →</button>
-          </div>
-        </div>
-      </div>
 
       {/* Company Profile */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
@@ -9409,21 +9363,13 @@ function ModSettings() {
         <OBtn onClick={save}>SAVE SETTINGS</OBtn>
       </div>
 
-      {/* Zoho/integrations */}
-      <div id="zoho-section" className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
-        <Lbl c={B.purple} s={{marginBottom:12}}>Zoho / Slack Integration</Lbl>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
-          {[["Zoho Books Token","zohoToken","password"],["Zoho Books Org ID","zohoOrgId","text"],["Zoho CRM Token","zohoCrmToken","password"],["Slack Channel","slackChannel","text"]].map(([l,k,t])=>(
-            <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={t} value={ints[k]||""} onChange={e=>setInts(i=>({...i,[k]:e.target.value}))} placeholder={k.includes("Token")?"Paste OAuth token...":""} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-          ))}
+      {/* Integrations pointer */}
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
+        <Lbl c={B.purple} s={{marginBottom:8}}>Integrations</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
+          Zoho CRM, Zoho Books, Gmail, Slack, and WooCommerce are configured on the Integrations page.
         </div>
-        <OBtn onClick={save}>SAVE SETTINGS</OBtn>
-      </div>
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
-        <Lbl c={B.blue} s={{marginBottom:11}}>How to Get Zoho OAuth Tokens</Lbl>
-        {[["1","Go to api-console.zoho.com"],["2","Click Self Client → Create"],["3","Scopes: ZohoBooks.invoices.ALL, ZohoCRM.modules.Contacts.ALL"],["4","Click Generate Code → copy the token"],["5","For Org ID: Zoho Books → Settings → Organization Profile"]].map(([n,step])=>(
-          <div key={n} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{n}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{step}</span></div>
-        ))}
+        <a href="/integrations" style={{display:"inline-block",background:B.purple,color:B.white,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,textDecoration:"none"}}>GO TO INTEGRATIONS →</a>
       </div>
       {/* Sales Reps */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
