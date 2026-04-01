@@ -3177,13 +3177,35 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch ALL records from a Zoho CRM module using COQL cursor pagination.
-  // Falls back to standard REST GET (capped at 2,000) if COQL fails.
+  // ── Incremental fetch: records modified since a timestamp ─────────────────────
+  // Uses /search?criteria=(Modified_Time:greater_than:ISO) — no COQL scope needed.
+  // Each incremental sync fetches only records modified since last sync, so it
+  // stays well under 2,000 for normal daily use.
+  const zohoFetchSince = async (module, fields, sinceMs, onProgress) => {
+    const fList = [...new Set(["id","Modified_Time",...fields])].join(",");
+    const dt = new Date(sinceMs).toISOString(); // e.g. 2024-01-15T00:00:00.000Z
+    let all = []; let page = 1;
+    while(true) {
+      const criteria = encodeURIComponent(`(Modified_Time:greater_than:${dt})`);
+      const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
+      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service:"crm",endpoint,method:"GET"})
+      }).then(r=>r.json());
+      if(!Array.isArray(res.data)||!res.data.length) break;
+      all = [...all,...res.data];
+      if(onProgress) onProgress(all.length);
+      if(!res.info?.more_records||res.data.length<200) break;
+      page++;
+      await new Promise(r=>setTimeout(r,150));
+    }
+    return all;
+  };
+
+  // ── Full fetch: COQL cursor (no record cap) ────────────────────────────────────
+  // Requires ZohoCRM.coql.READ OAuth scope. Falls back to REST GET (max 2,000).
+  // To enable: add ZohoCRM.coql.READ in Zoho API Console → regenerate refresh token → update ZOHO_REFRESH_TOKEN in Vercel.
   const zohoFetchAll = async (module, fields, onProgress) => {
     const fList = [...new Set(["id", ...fields])].join(",");
-
-    // ── COQL cursor attempt ────────────────────────────────────────────────────
-    // Requires ZohoCRM.coql.READ scope. If it fails we fall back to REST below.
     try {
       let all = []; let lastId = null;
       while(true) {
@@ -3192,10 +3214,9 @@ function ModProspecting() {
         const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
           body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
         }).then(r=>r.json());
-        // Catch ANY response that is not a successful data array
         if(!Array.isArray(res.data)) {
-          const detail = res.message||res.code||res.error||JSON.stringify(res).slice(0,120);
-          throw new Error(`COQL failed (${res._http_status||"?"}): ${detail}`);
+          const detail = res.message||res.code||res.error||JSON.stringify(res).slice(0,100);
+          throw new Error(`COQL unavailable (${res._http_status||"?"}): ${detail}`);
         }
         const batch = res.data;
         if(!batch.length) break;
@@ -3207,126 +3228,100 @@ function ModProspecting() {
       }
       return all;
     } catch(coqlErr) {
-      console.warn("[zohoFetchAll] COQL failed, falling back to REST GET:", coqlErr.message);
-      toast(`Zoho COQL unavailable (${coqlErr.message.slice(0,60)}) — falling back, results may be limited to 2,000`,"warn");
+      console.warn("[zohoFetchAll] COQL failed:", coqlErr.message);
+      throw coqlErr; // let caller handle — don't silently cap at 2,000 for full pull
     }
-
-    // ── Standard REST GET fallback (max 2,000 due to Zoho OFFSET limit) ────────
-    let all = []; let page = 1;
-    while(true) {
-      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
-      }).then(r=>r.json());
-      if(!Array.isArray(res.data)||!res.data.length) break;
-      all = [...all,...res.data];
-      if(onProgress) onProgress(all.length);
-      if(!res.info?.more_records||res.data.length<200) break;
-      page++;
-      await new Promise(r=>setTimeout(r,200));
-    }
-    return all;
   };
 
+  // ── Shared record processing + dispatch ───────────────────────────────────────
+  const processAndDispatchZohoRows = (contactRows, leadRows, dealRows, now) => {
+    const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
+    const scoreLeadFromZoho = (l) => {
+      let score=0; const acts=[];
+      const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
+      const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
+      if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
+      const calls=Number(l.No_of_Calls)||0;
+      if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
+      const chats=Number(l.No_of_Chats)||0;
+      if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
+      if(l.Last_Activity_Time){const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);score+=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});}
+      const src=zs(l.Lead_Source); if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
+      const rating=zs(l.Rating); const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
+      return {score:Math.min(200,score),activity:acts,priority};
+    };
+    const contacts = contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+    const leads = leadRows.map(l=>{const {score,activity,priority}=scoreLeadFromZoho(l);return{id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm-lead",zohoStatus:zs(l.Lead_Status),zohoSource:zs(l.Lead_Source),zohoRating:zs(l.Rating),zohoId:l.id,confidence:"medium",priority,outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",score,activity,importedAt:now};});
+    const all=[...contacts,...leads];
+    const existing=new Set((s.contacts||[]).map(c=>c.id));
+    const toAdd=all.filter(c=>!existing.has(c.id));
+    const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
+    if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
+    toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
+    dispatch("SET_CONTACTS_LAST_SYNC",now);
+    // Deals
+    const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
+    const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
+    let dealsAdded=0,dealsUpdated=0;
+    dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}}else{dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+    return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
+  };
+
+  const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];
+  const LEAD_FIELDS    = ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"];
+  const DEAL_FIELDS    = ["Deal_Name","Amount","Stage","Closing_Date","Account_Name","Contact_Name","Description","Modified_Time","Created_Time"];
+
+  // ── INCREMENTAL SYNC — only records created/modified since last sync ────────────
+  // Fast, reliable, always stays under 2,000. Use this for daily syncs.
   const pullFromZoho = async () => {
+    const lastSync = s.contactsLastSync;
+    if(!lastSync) { return pullFromZohoFull(); } // first-ever run → full pull
     setZohoPulling(true); setZohoPullResult(null);
-    toast("Pulling from Zoho CRM — fetching all records...","info");
+    const sinceLabel = new Date(lastSync).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+    toast(`Syncing new Zoho records since ${sinceLabel}...`,"info");
+    setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
     try {
-      // Fetch contacts, leads, and deals with full pagination
-      setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
-      const [contactRows, leadRows, dealRows] = await Promise.all([
-        zohoFetchAll("Contacts",
-          ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"],
-          n=>setZohoPullResult(r=>({...r,contacts:n}))),
-        zohoFetchAll("Leads",
-          ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"],
-          n=>setZohoPullResult(r=>({...r,leads:n}))),
-        zohoFetchAll("Deals",
-          ["Deal_Name","Amount","Stage","Closing_Date","Account_Name","Contact_Name","Description","Modified_Time","Created_Time"],
-          n=>setZohoPullResult(r=>({...r,deals:n}))),
+      const [contactRows,leadRows,dealRows] = await Promise.all([
+        zohoFetchSince("Contacts",CONTACT_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,contacts:n}))),
+        zohoFetchSince("Leads",LEAD_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,leads:n}))),
+        zohoFetchSince("Deals",DEAL_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,deals:n}))),
       ]);
-      const now = Date.now();
-      const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
-      const scoreLeadFromZoho = (l) => {
-        let score=0; const acts=[];
-        const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
-        const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
-        if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
-        const calls=Number(l.No_of_Calls)||0;
-        if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
-        const chats=Number(l.No_of_Chats)||0;
-        if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
-        if(l.Last_Activity_Time){
-          const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);
-          const recency=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;
-          score+=recency;
-          acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});
-        }
-        const src=zs(l.Lead_Source);
-        if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
-        const rating=zs(l.Rating);
-        const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
-        return {score:Math.min(200,score),activity:acts,priority};
-      };
-      toast(`Found ${contactRows.length} contacts + ${leadRows.length} leads — importing...`,"info");
-      const contacts = contactRows.map(c=>({
-        id:"zoho_c_"+c.id,
-        firstName:zs(c.First_Name), lastName:zs(c.Last_Name),
-        fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),
-        email:zs(c.Email), phone:zs(c.Phone),
-        title:zs(c.Title), school:zs(c.Account_Name),
-        city:zs(c.Mailing_City), state:zs(c.Mailing_State),
-        orgType:"school", source:"zoho-crm",
-        zohoSource:zs(c.Lead_Source),
-        confidence:"high", outreachStatus:"new", importedAt:now,
-      }));
-      const leads = leadRows.map(l=>{
-        const {score,activity,priority}=scoreLeadFromZoho(l);
-        return {
-          id:"zoho_l_"+l.id,
-          firstName:zs(l.First_Name), lastName:zs(l.Last_Name),
-          fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),
-          email:zs(l.Email), phone:zs(l.Phone),
-          title:zs(l.Title), school:zs(l.Company),
-          city:zs(l.City), state:zs(l.State),
-          orgType:"school", source:"zoho-crm-lead",
-          zohoStatus:zs(l.Lead_Status), zohoSource:zs(l.Lead_Source),
-          zohoRating:zs(l.Rating), zohoId:l.id,
-          confidence:"medium", priority,
-          outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",
-          score, activity, importedAt:now,
-        };
-      });
-      const all=[...contacts,...leads];
-      const existing=new Set((s.contacts||[]).map(c=>c.id));
-      const toAdd=all.filter(c=>!existing.has(c.id));
-      // Update existing leads with fresh Zoho data
-      const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
-      if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
-      toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
-      dispatch("SET_CONTACTS_LAST_SYNC",now);
-      // Sync Deals from Zoho — add new, update stage on existing
-      const existingDeals = s.deals||[];
-      const existingDealZohoIds = new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
-      const stageMap = {"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
-      let dealsAdded=0, dealsUpdated=0;
-      dealRows.forEach(zd=>{
-        const zStage = typeof zd.Stage==="string" ? zd.Stage : zd.Stage?.name||"Quoted";
-        const localStage = DEAL_STAGES.includes(zStage) ? zStage : (stageMap[zStage]||"Quoted");
-        if(existingDealZohoIds.has(zd.id)){
-          const local=existingDeals.find(d=>d.zohoId===zd.id);
-          if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}
-        } else {
-          const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
-          dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:new Date(zd.Modified_Time||zd.Created_Time||now).getTime()||now,priority:"warm",touchHistory:[],source:"zoho-crm"});
-          dealsAdded++;
-        }
-      });
-      setZohoPullResult({contacts:contacts.length, leads:leads.length, deals:dealRows.length, added:toAdd.length, updated:toUpdate.length, dealsAdded, dealsUpdated});
-      toast(`${toAdd.length} new contacts · ${toUpdate.length} updated · ${dealsAdded} new deals · ${dealsUpdated} deal stages synced`,"success");
+      const result = processAndDispatchZohoRows(contactRows,leadRows,dealRows,Date.now());
+      setZohoPullResult(result);
+      toast(`Sync done: ${result.added} new · ${result.updated} updated · ${result.dealsAdded} new deals`,"success");
     } catch(e) {
-      toast(`Zoho pull failed: ${e.message.slice(0,80)}`,"error");
+      toast(`Zoho sync failed: ${e.message.slice(0,80)}`,"error");
     }
     setZohoPulling(false);
+  };
+
+  // ── FULL PULL — COQL cursor, no record cap ────────────────────────────────────
+  // Requires ZohoCRM.coql.READ scope. If missing, shows instructions.
+  const [fullPulling,setFullPulling] = useState(false);
+  const [coqlScopeError,setCoqlScopeError] = useState(false);
+  const pullFromZohoFull = async () => {
+    setFullPulling(true); setZohoPullResult(null); setCoqlScopeError(false);
+    toast("Full pull from Zoho CRM (COQL cursor — no record cap)...","info");
+    setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
+    try {
+      const [contactRows,leadRows,dealRows] = await Promise.all([
+        zohoFetchAll("Contacts",CONTACT_FIELDS,n=>setZohoPullResult(r=>({...r,contacts:n}))),
+        zohoFetchAll("Leads",LEAD_FIELDS,n=>setZohoPullResult(r=>({...r,leads:n}))),
+        zohoFetchAll("Deals",DEAL_FIELDS,n=>setZohoPullResult(r=>({...r,deals:n}))),
+      ]);
+      const result = processAndDispatchZohoRows(contactRows,leadRows,dealRows,Date.now());
+      setZohoPullResult(result);
+      toast(`Full pull done: ${result.added} new · ${result.updated} updated · ${result.contacts+result.leads} total`,"success");
+    } catch(e) {
+      setZohoPullResult(null);
+      if(e.message.includes("COQL")||e.message.includes("scope")||e.message.includes("401")) {
+        setCoqlScopeError(true);
+        toast("COQL scope missing — see instructions below to enable unlimited pull","error");
+      } else {
+        toast(`Full pull failed: ${e.message.slice(0,80)}`,"error");
+      }
+    }
+    setFullPulling(false);
   };
 
   const [rescoring,setRescoring]=useState(false);
@@ -3593,6 +3588,11 @@ function ModProspecting() {
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
                 Pulls Contacts and Leads from Zoho CRM. Leads are auto-scored from their Zoho activity: call count, chat count, lead status, last activity date, and lead source.
               </div>
+              {s.contactsLastSync&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>
+                  Last sync: {new Date(s.contactsLastSync).toLocaleString()}
+                </div>
+              )}
               {zohoPullResult&&(
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:zohoPullResult.loading?B.orange:B.green,marginBottom:8}}>
                   {zohoPullResult.loading
@@ -3601,11 +3601,21 @@ function ModProspecting() {
                   }
                 </div>
               )}
+              {coqlScopeError&&(
+                <div style={{background:"#fff8e1",border:`1px solid ${B.orange}`,borderRadius:6,padding:10,marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,lineHeight:1.6}}>
+                  <div style={{fontWeight:700,color:B.orange,marginBottom:4}}>⚠ Full pull requires extra OAuth scope</div>
+                  <div style={{color:B.dark,marginBottom:6}}>Your Zoho OAuth app is missing the <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZohoCRM.coql.READ</code> scope.</div>
+                  <div style={{color:B.muted}}>To fix: go to <strong>api-console.zoho.com</strong> → your OAuth app → <em>Scopes</em> → add <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZohoCRM.coql.READ</code> → regenerate the refresh token → update <code style={{background:"#f5f5f5",padding:"1px 4px",borderRadius:3}}>ZOHO_REFRESH_TOKEN</code> in Vercel env vars. Then retry.</div>
+                </div>
+              )}
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||rescoring}>
-                  {zohoPulling?"PULLING...":"↓ PULL ZOHO CONTACTS + LEADS"}
+                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||fullPulling||rescoring}>
+                  {zohoPulling?"SYNCING...":"↓ SYNC NEW RECORDS"}
                 </OBtn>
-                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling}>
+                <OBtn sm color={B.teal} onClick={pullFromZohoFull} disabled={zohoPulling||fullPulling||rescoring}>
+                  {fullPulling?"PULLING ALL...":"↓ FULL INITIAL PULL"}
+                </OBtn>
+                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling||fullPulling}>
                   {rescoring?"RESCORING...":"↺ RESCORE FROM ZOHO ACTIVITY"}
                 </OBtn>
               </div>
