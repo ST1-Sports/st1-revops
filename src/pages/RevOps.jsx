@@ -7170,6 +7170,7 @@ function ModSocial() {
   const [imgMode,setImgMode]=useState("generate"); // "generate" | "upload" | "url"
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
+  const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
 
   const generateSocialImage=async()=>{
     if(!imgPrompt.trim()&&!caption.trim()){toast("Add a caption or image prompt first","error");return;}
@@ -7220,10 +7221,11 @@ function ModSocial() {
   const generateCaption=async()=>{
     setGenRunning(true);
     const direction=caption.trim();
+    const lengthGuide={short:"1-2 sentences, punchy and direct, max 40 words",medium:"3-5 sentences with context and hashtags, max 100 words",long:"full post with a hook, body, call to action, and hashtags, max 220 words"}[postLength];
     const prompt=direction
-      ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction but make it more engaging and punchy.\nPlatforms: ${platforms.join(", ")||"general social"}.\nInclude relevant hashtags. Under 150 words.\n\nDraft to improve:\n${direction}`
-      : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`;
-    const r=await aiCall(prompt,{tokens:300});
+      ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.\n\nDraft to improve:\n${direction}`
+      : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.`;
+    const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
   };
@@ -7413,9 +7415,14 @@ function ModSocial() {
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                  {genRunning?"✦ WRITING...":"✦ AI WRITE"}
-                </button>
+                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                  {["short","medium","long"].map(l=>(
+                    <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
+                  ))}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1,marginLeft:4}}>
+                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  </button>
+                </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
