@@ -36,11 +36,7 @@ const B = {
 
 const STORE = "st1_revops_v2";
 
-const USERS = [
-  {id:"matt",  name:"Matt Stone",   email:"matt@st1sports.com",  role:"owner", initials:"MS", color:B.orange},
-  {id:"rep2",  name:"Alex Rivera",  email:"alex@st1sports.com",  role:"rep",   initials:"AR", color:B.blue},
-  {id:"rep3",  name:"Jordan Wells", email:"jordan@st1sports.com",role:"rep",   initials:"JW", color:B.purple},
-];
+const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
 
 const mkId   = () => Math.random().toString(36).slice(2,9);
 const today  = () => new Date().toISOString().slice(0,10);
@@ -306,7 +302,7 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[]};
+    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
 }
@@ -4897,6 +4893,8 @@ function ModMarketing() {
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
   const [selectedContacts,setSelectedContacts]=useState(new Set());
+  const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
+  const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
@@ -4998,7 +4996,7 @@ function ModMarketing() {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenRunning(true);
     const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
-    const repLine = (() => { const rep = [...USERS,...(s.appUsers||[])].find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
+    const repLine = (() => { const rep = (s.reps||[]).find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
     const result = await aiCall(
       `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
       `Product: ${ctx.product}. Audience: ${ctx.audience}. Channels: ${(ctx.channels||[]).join(", ")||"email"}. Tone: ${ctx.tone||"friendly"}.\n`+
@@ -5494,7 +5492,7 @@ function ModMarketing() {
             // Build last 7 days
             const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));return d.toISOString().slice(0,10);});
             // All users (USERS + appUsers) who have campaigns
-            const allUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            const allUsers=(s.reps||[]);
             // Build a map: repId -> Set of campaignIds
             const repCampIds={};
             (s.campaigns||[]).forEach(camp=>{
@@ -6562,7 +6560,7 @@ function ModMarketing() {
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>REP / SENDER</div>
                         <select value={selCamp.repId||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,repId:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}>
                           <option value="">— No rep assigned —</option>
-                          {[...USERS,...(s.appUsers||[])].map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                          {(s.reps||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
                         </select>
                       </div>
                     </div>
@@ -6731,6 +6729,75 @@ function ModMarketing() {
                   </div>
                 ))}
               </div>
+              {/* ── Enroll contacts panel ── */}
+              {(()=>{
+                const enrolledIds=new Set((selCamp.enrollments||[]).map(e=>e.contactId));
+                const q=(enrollSearch||"").toLowerCase().trim();
+                // Filter contacts by search (name/title/school/email/state) and not already enrolled
+                const matchingContacts=(s.contacts||[]).filter(c=>{
+                  if(enrolledIds.has(c.id)) return false;
+                  if(!q) return true;
+                  return [c.fullName,c.firstName,c.lastName,c.title,c.school,c.email,c.state,c.city].some(v=>(v||"").toLowerCase().includes(q));
+                });
+                // Also support enroll-from-list
+                const enrollList=enrollListId?(s.contactLists||[]).find(l=>l.id===enrollListId):null;
+                const listContacts=enrollList?(enrollList.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean).filter(c=>!enrolledIds.has(c.id)):[];
+                const toEnroll=enrollListId?listContacts:matchingContacts;
+
+                const doEnroll=()=>{
+                  if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
+                  const todayStr=today();
+                  const updated={...selCamp};
+                  let count=0;
+                  toEnroll.forEach(c=>{
+                    if(!updated.enrollments.some(e=>e.contactId===c.id)){
+                      updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}];
+                      dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
+                      count++;
+                    }
+                  });
+                  dispatch("UPDATE_CAMPAIGN",updated);
+                  toast(`${count} contacts enrolled in ${selCamp.name}`,"success");
+                  setEnrollSearch(""); setEnrollListId("");
+                };
+
+                return(
+                  <div className="card" style={{padding:"12px 14px",marginBottom:16,borderLeft:`3px solid ${B.purple}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:1,marginBottom:10}}>+ ENROLL CONTACTS</div>
+                    <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                      <input value={enrollSearch} onChange={e=>{setEnrollSearch(e.target.value);setEnrollListId("");}}
+                        placeholder="Search by name, title, school, state, email…"
+                        style={{flex:1,minWidth:200,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>or</span>
+                      <select value={enrollListId} onChange={e=>{setEnrollListId(e.target.value);setEnrollSearch("");}}
+                        style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,color:enrollListId?B.text:B.muted,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+                        <option value="">— pick a contact list —</option>
+                        {(s.contactLists||[]).map(l=><option key={l.id} value={l.id}>{l.name} ({(l.contactIds||[]).length})</option>)}
+                      </select>
+                    </div>
+                    {(q||enrollListId)&&(
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{toEnroll.length} contact{toEnroll.length!==1?"s":""} match{toEnroll.length===1?"es":""} · not yet enrolled</div>
+                        {toEnroll.slice(0,6).map(c=>(
+                          <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                            <div style={{flex:1}}>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{c.title}{c.school?` · ${c.school}`:""}{c.state?` · ${c.state}`:""}</span>
+                            </div>
+                            {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>✉</span>}
+                          </div>
+                        ))}
+                        {toEnroll.length>6&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"4px 0"}}>…and {toEnroll.length-6} more</div>}
+                      </div>
+                    )}
+                    <OBtn sm onClick={doEnroll} disabled={!toEnroll.length&&(!!q||!!enrollListId)}>
+                      {toEnroll.length>0?`ENROLL ${toEnroll.length} CONTACT${toEnroll.length!==1?"S":""}`:enrollListId||q?"NO NEW CONTACTS":"ENROLL ALL CONTACTS"}
+                    </OBtn>
+                    {!q&&!enrollListId&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:10}}>Search or pick a list above, or enroll everyone</span>}
+                  </div>
+                );
+              })()}
+
               {/* Enrolled contacts */}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({selCamp.enrollments.length})</div>
@@ -7079,7 +7146,7 @@ function ModMarketing() {
           </div>
           {/* Rep color key */}
           {(()=>{
-            const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            const repUsers=(s.reps||[]);
             const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
             if(!activeReps.length) return null;
             return(
@@ -7399,7 +7466,7 @@ function ModCalendar() {
       {/* Rep color key */}
       {(()=>{
         const campaigns=s.campaigns||[];
-        const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+        const repUsers=(s.reps||[]);
         const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
         if(!activeReps.length) return null;
         return(
