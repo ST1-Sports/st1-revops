@@ -76,6 +76,7 @@ const SEED = {
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
   brandAssets: [],
   savedAds: [],
+  contactLists: [],
   appUsers: [],
   socialPosts: [],
   campaigns: [],
@@ -116,6 +117,7 @@ function useStore() {
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
           strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
           appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
+          contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -306,6 +308,9 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
+    case "ADD_CONTACT_LIST":    return {...prev, contactLists:[payload,...(prev.contactLists||[])]};
+    case "UPDATE_CONTACT_LIST": return {...prev, contactLists:(prev.contactLists||[]).map(l=>l.id===payload.id?{...l,...payload}:l)};
+    case "DELETE_CONTACT_LIST": return {...prev, contactLists:(prev.contactLists||[]).filter(l=>l.id!==payload)};
     case "ADD_APP_USER":    return {...prev, appUsers:[payload,...(prev.appUsers||[])]};
     case "UPDATE_APP_USER": return {...prev, appUsers:(prev.appUsers||[]).map(u=>u.id===payload.id?{...u,...payload}:u)};
     case "DELETE_APP_USER": return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.id!==payload)};
@@ -3068,9 +3073,14 @@ function ModProspecting() {
   const [zohoPullResult, setZohoPullResult] = useState(null);
 
   // Import-list state
-  const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
+  const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|mapping|preview
   const [importRows,setImportRows]   = useState([]);
   const [importSel,setImportSel]     = useState(new Set());
+  const [importRawRows,setImportRawRows] = useState([]);
+  const [importHeaders,setImportHeaders] = useState([]);
+  const [importMapping,setImportMapping] = useState({});
+  const [importListName,setImportListName] = useState("");
+  const [importPreview,setImportPreview] = useState([]);
   const [enrollingContact,setEnrollingContact] = useState(null);
   const [flaggingContact,setFlaggingContact] = useState(null);
   const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
@@ -3211,26 +3221,34 @@ function ModProspecting() {
 
   // Fetch ALL records from a Zoho CRM module using standard pagination (no record cap)
   const zohoFetchAll = async (module, fields, onProgress) => {
-    // Zoho standard pagination caps at page 10 (2,000 records).
-    // Work around by fetching in yearly Created_Time slices — each year has far fewer than 2,000 records.
+    // Use MONTHLY time slices so each bucket stays well under Zoho's 2,000-record search cap.
+    // Yearly slices fail when a bulk import lands all records in one year.
     const fList = [...new Set([...fields,"Created_Time"])].join(",");
     let all = [];
-    const nowYear = new Date().getFullYear();
+    const now = new Date();
+    const nowYear = now.getFullYear();
+    const nowMonth = now.getMonth() + 1; // 1-based
     for (let year = 2015; year <= nowYear; year++) {
-      const criteria = encodeURIComponent(`(Created_Time:between:${year}-01-01,${year}-12-31)`);
-      let page = 1;
-      while(true) {
-        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:`/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`,method:"GET"})
-        }).then(r=>r.json());
-        const batch = res.data||[];
-        all = [...all,...batch];
-        if(onProgress) onProgress(all.length);
-        if(!res.info?.more_records || batch.length<200) break;
-        page++;
-        await new Promise(r=>setTimeout(r,200));
+      const maxMonth = year === nowYear ? nowMonth : 12;
+      for (let month = 1; month <= maxMonth; month++) {
+        const mm = String(month).padStart(2,"0");
+        const lastDay = new Date(year, month, 0).getDate(); // last day of month
+        const dd = String(lastDay).padStart(2,"0");
+        const criteria = encodeURIComponent(`(Created_Time:between:${year}-${mm}-01,${year}-${mm}-${dd})`);
+        let page = 1;
+        while(true) {
+          const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+            body:JSON.stringify({service:"crm",endpoint:`/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+          }).then(r=>r.json());
+          const batch = res.data||[];
+          all = [...all,...batch];
+          if(onProgress) onProgress(all.length);
+          if(!res.info?.more_records || batch.length<200) break;
+          page++;
+          await new Promise(r=>setTimeout(r,200));
+        }
+        await new Promise(r=>setTimeout(r,80)); // brief pause between months
       }
-      if(year < nowYear) await new Promise(r=>setTimeout(r,100));
     }
     // Deduplicate by Zoho record id
     const seen = new Set();
@@ -3370,49 +3388,55 @@ function ModProspecting() {
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
   };
 
-  const handleListUpload=async(e)=>{
-    const file=e.target.files[0];
-    if(!file)return;
-    e.target.value="";
-    setImportPhase("parsing");setImportRows([]);
-    try {
-      const buf=await toBuffer(file);
-      const wb=XLSX.read(buf,{type:"array"});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      const csvText=XLSX.utils.sheet_to_csv(ws);
-      const lines=csvText.split("\n").filter(l=>l.trim()).slice(0,201);
-      if(lines.length<2){toast("File appears empty","error");setImportPhase("idle");return;}
-      const result=await aiCall(
-        `CRM export (Zoho or similar). Map and normalize contacts.\n\nCSV:\n${lines.join("\n")}\n\n`+
-        `For each data row extract: firstName, lastName, fullName, email, phone, title (job role/position), school (org/company name), city, state (2-letter), `+
-        `orgType (school|club|district|company), sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
-        `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
-        `tags (array: include "multi-sport" if multiple sports implied, "club-director" if club org director, etc.), `+
-        `outreachWindow (best 2-month window to reach out for purchasing decisions based on their sport — e.g. "Nov–Jan" for T&F). `+
-        `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. `+
-        `Skip blank rows and header rows. Use empty string for unknown fields.`,
-        {json:true,tokens:4000}
-      );
-      if(Array.isArray(result)&&result.length>0){
-        const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
-          ...c,
-          id:mkId(),
-          confidence:"medium",
-          outreachStatus:"new",
-          importedAt:Date.now(),
-        }));
-        setImportRows(mapped);
-        setImportSel(new Set(mapped.map(c=>c.id)));
-        setImportPhase("preview");
-        toast(`${mapped.length} contacts mapped — review below`,"success");
-      } else {
-        toast("Could not extract contacts from this file","error");
-        setImportPhase("idle");
+  // AUTO-DETECT mapping hints
+  const FIELD_HINTS = {
+    firstName:["first name","firstname","first_name","given name","fname"],
+    lastName:["last name","lastname","last_name","surname","family name","lname"],
+    fullName:["full name","fullname","name","contact name"],
+    email:["email","email address","e-mail","emailaddress"],
+    phone:["phone","phone number","mobile","telephone","cell","tel"],
+    title:["title","job title","position","role","jobtitle"],
+    school:["school","company","organization","account name","org","institution","employer","account"],
+    city:["city","town"],
+    state:["state","province","region"],
+    sport:["sport","sports","sport type"],
+    tags:["tags","tag","labels","category","categories"],
+  };
+
+  const autoDetectMapping = (headers) => {
+    const map = {};
+    headers.forEach(h => {
+      const hl = (h||"").toLowerCase().trim();
+      for (const [field, hints] of Object.entries(FIELD_HINTS)) {
+        if (hints.some(hint => hl === hint || hl.includes(hint))) {
+          if (!Object.values(map).includes(field)) { map[h] = field; break; }
+        }
       }
-    } catch(err) {
-      toast(`Import error: ${err.message}`,"error");
-      setImportPhase("idle");
-    }
+      if (!map[h]) map[h] = "__ignore__";
+    });
+    return map;
+  };
+
+  const handleListUpload = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    e.target.value = "";
+    setImportPhase("parsing");
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, {type:"array"});
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:""});
+        if (!rows.length) { toast("File is empty","error"); setImportPhase("idle"); return; }
+        const headers = (rows[0]||[]).map(String);
+        const dataRows = rows.slice(1).filter(r => r.some(cell => String(cell||"").trim()));
+        setImportRawRows(dataRows);
+        setImportHeaders(headers);
+        setImportMapping(autoDetectMapping(headers));
+        setImportPhase("mapping");
+      } catch(err) { toast("Could not read file: "+err.message,"error"); setImportPhase("idle"); }
+    };
+    reader.readAsArrayBuffer(file);
   };
 
   const handleApolloUpload=async(e)=>{
@@ -3463,17 +3487,40 @@ function ModProspecting() {
     }
   };
 
-  const commitListImport=async(pushZoho=false)=>{
-    const selected=importRows.filter(c=>importSel.has(c.id));
-    const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
-    const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
-    const dupes=selected.length-toAdd.length;
-    dispatch("ADD_CONTACTS",toAdd);
-    toast(`Imported ${toAdd.length} contacts${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
-    setImportPhase("idle");setImportRows([]);setImportSel(new Set());
-    if(pushZoho&&toAdd.length>0){
-      await pushToZohoLeads(toAdd);
+  const commitListImport = () => {
+    const SYSTEM_FIELDS = ["firstName","lastName","fullName","email","phone","title","school","city","state","sport","tags"];
+    const now = Date.now();
+    const mapped = importRawRows.map((row, ri) => {
+      const obj = {};
+      importHeaders.forEach((h, hi) => {
+        const field = importMapping[h];
+        if (!field || field === "__ignore__") return;
+        const val = String(row[hi]||"").trim();
+        if (!val) return;
+        if (field === "tags") obj.tags = val.split(/[,;|]/).map(t=>t.trim()).filter(Boolean);
+        else obj[field] = val;
+      });
+      // Build fullName from parts if not mapped directly
+      if (!obj.fullName && (obj.firstName || obj.lastName)) obj.fullName = `${obj.firstName||""} ${obj.lastName||""}`.trim();
+      if (!obj.firstName && obj.fullName) { const parts = obj.fullName.split(" "); obj.firstName = parts[0]; obj.lastName = parts.slice(1).join(" "); }
+      return { id:mkId(), ...obj, source:"list-import", confidence:"medium", outreachStatus:"new", importedAt:now };
+    }).filter(c => c.fullName || c.email);
+
+    if (!mapped.length) { toast("No valid contacts found in file","error"); return; }
+    dispatch("ADD_CONTACTS", mapped);
+
+    // Save as named list if name provided
+    const listName = importListName.trim();
+    if (listName) {
+      dispatch("ADD_CONTACT_LIST", {
+        id: mkId(), name: listName, createdAt: now,
+        contactIds: mapped.map(c=>c.id),
+        source: "import", count: mapped.length,
+      });
     }
+
+    toast(`${mapped.length} contacts imported${listName?` → saved as "${listName}"`:""}`, "success");
+    setImportPhase("idle"); setImportRawRows([]); setImportHeaders([]); setImportMapping({}); setImportListName(""); setImportPreview([]);
   };
 
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
