@@ -7181,7 +7181,7 @@ function ModSocial() {
     const fullPrompt=(imgPrompt.trim()||"Lifestyle sports action shot")+captionContext;
     try{
       const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:fullPrompt,style:"lifestyle",sizeKey:"square"})});
+        body:JSON.stringify({prompt:fullPrompt,style:"REALISTIC",sizeKey:"square"})});
       const d=await r.json();
       if(d.imageUrl){setImageUrl(d.imageUrl);toast("Image generated!","success");}
       else toast(d.error||"Image gen failed","error");
