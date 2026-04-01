@@ -7454,42 +7454,43 @@ function ModSocial() {
               })()}
             </div>
             {/* Image */}
-            <div style={{marginBottom:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <Lbl>IMAGE (optional)</Lbl>
-                <div style={{display:"flex",gap:4}}>
-                  {[["generate","✦ AI GENERATE"],["upload","↑ UPLOAD"],["url","LINK"]].map(([mode,label])=>(
-                    <button key={mode} onClick={()=>{setImgMode(mode);if(mode!=="url")setImageUrl("");}} style={{background:imgMode===mode?B.orange:B.surface,color:imgMode===mode?B.white:B.muted,border:`1px solid ${imgMode===mode?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>{label}</button>
-                  ))}
-                </div>
+            <div className="card" style={{padding:14,marginBottom:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>IMAGE (optional)</div>
+              {/* AI Generate */}
+              <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} rows={2}
+                placeholder={caption.trim()?`Describe the visual — or leave blank to match your caption automatically`:"Describe the image e.g. 'Track hurdles at sunrise, cinematic lighting'"}
+                style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:8}}/>
+              <div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
+                <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
+                  {["REALISTIC","GENERAL","DESIGN","RENDER_3D","STYLIZED","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
+                </select>
+                <OBtn onClick={generateSocialImage} disabled={imgGenRunning} style={{flexShrink:0}}>
+                  {imgGenRunning?"GENERATING...":"✦ GENERATE"}
+                </OBtn>
               </div>
-              {imgMode==="generate"&&(
-                <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                    {[["REALISTIC","📷 Realistic"],["GENERAL","🖼 General"],["DESIGN","✏ Design"],["RENDER_3D","📦 3D Render"],["STYLIZED","🎨 Stylized"],["AUTO","✦ Auto"]].map(([val,label])=>(
-                      <button key={val} onClick={()=>setImgStyle(val)} style={{background:imgStyle===val?B.purple:B.surface,color:imgStyle===val?B.white:B.muted,border:`1px solid ${imgStyle===val?B.purple:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{label}</button>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:6}}>
-                    <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder={caption.trim()?`Visual for: "${caption.trim().slice(0,60)}${caption.length>60?"…":""}" — or describe something specific`:"Describe the image you want, or just hit Generate to match your caption"} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
-                      onKeyDown={e=>e.key==="Enter"&&generateSocialImage()}/>
-                    <button onClick={generateSocialImage} disabled={imgGenRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",opacity:imgGenRunning?.7:1}}>
-                      {imgGenRunning?"GENERATING...":"GENERATE"}
-                    </button>
+              {/* Generated result */}
+              {imageUrl&&imageUrl.startsWith("http")&&imgMode==="generate"&&(
+                <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
+                  <img src={imageUrl} alt="Generated" style={{width:90,height:90,objectFit:"cover",borderRadius:6,border:`1px solid ${B.border}`,flexShrink:0}}/>
+                  <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:3,display:"inline-block"}}>✓ READY TO POST</span>
+                    <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.png`;a.click();}} style={{background:B.blueBg,color:B.blue,border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
+                    <button onClick={()=>{setImageUrl("");setImgMode("generate");}} style={{background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textAlign:"left"}}>Clear</button>
                   </div>
                 </div>
               )}
-              {imgMode==="upload"&&(
-                <label style={{display:"flex",alignItems:"center",gap:10,background:B.surface,border:`2px dashed ${B.border}`,borderRadius:6,padding:"14px 16px",cursor:"pointer"}}>
-                  <span style={{fontSize:22}}>🖼</span>
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Click to upload an image (JPG, PNG, GIF, WEBP)</span>
-                  <input type="file" accept="image/*" onChange={handleImgUpload} style={{display:"none"}}/>
+              {/* Upload or paste URL */}
+              <div style={{borderTop:`1px solid ${B.border}`,paddingTop:10,display:"flex",gap:8,alignItems:"center"}}>
+                <label style={{display:"flex",alignItems:"center",gap:6,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",cursor:"pointer",flexShrink:0}}>
+                  <span style={{fontSize:13}}>↑</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3}}>UPLOAD</span>
+                  <input type="file" accept="image/*" onChange={e=>{handleImgUpload(e);setImgMode("upload");}} style={{display:"none"}}/>
                 </label>
-              )}
-              {imgMode==="url"&&(
-                <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-              )}
-              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:160,borderRadius:6,objectFit:"cover",width:"100%"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
+                <input value={imgMode==="url"?imageUrl:""} onChange={e=>{setImageUrl(e.target.value);setImgMode("url");}} placeholder="or paste an image URL…"
+                  style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+              {/* Preview for upload/url */}
+              {imageUrl&&imgMode!=="generate"&&<img src={imageUrl} style={{marginTop:8,maxHeight:140,borderRadius:6,objectFit:"cover",width:"100%"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
