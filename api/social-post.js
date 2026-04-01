@@ -99,9 +99,9 @@ export default async function handler(req, res) {
     };
     if (workspaceId) headers["Publer-Workspace-Id"] = workspaceId;
 
-    const testPayload = { post: { type: "feed", text: "ST1 RevOps test", accounts: firstAccountId ? [{ id: firstAccountId }] : [] } };
+    const testPayload = { accounts: firstAccountId ? [firstAccountId] : [], text: "ST1 RevOps debug test" };
 
-    const r = await fetch(`${PUBLER_API}/posts`, { method: "POST", headers, body: JSON.stringify(testPayload) });
+    const r = await fetch(`${PUBLER_API}/posts/schedule`, { method: "POST", headers, body: JSON.stringify(testPayload) });
     const rawText = await r.text();
     return res.json({
       httpStatus: r.status,
@@ -171,26 +171,18 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Publer API: POST /posts with { post: { type, text, accounts:[{id, scheduled_at?}], media? } }
-  const accountObjs = accountIds.map(id => {
-    const obj = { id: String(id) };
-    if (scheduleDate) obj.scheduled_at = new Date(scheduleDate).toISOString();
-    return obj;
-  });
-
-  const postPayload = {
-    type: "feed",
+  // Publer /posts/schedule: flat accounts array (string IDs), optional scheduled_at at top level
+  const payload = {
+    accounts: accountIds.map(id => String(id)),
     text: postText,
-    accounts: accountObjs,
   };
-  if (publicMediaUrls.length) postPayload.media = publicMediaUrls.map(url => ({ url }));
-
-  const payload = { post: postPayload };
+  if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
+  if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
   console.log("[social-post] payload →", JSON.stringify(payload).slice(0, 500));
 
   try {
-    const { ok, status: httpStatus, data } = await publerRequest("/posts", "POST", payload, apiKey, workspaceId);
+    const { ok, status: httpStatus, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
     console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 500));
 
     if (ok) {
