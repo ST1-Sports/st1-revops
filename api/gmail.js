@@ -15,35 +15,15 @@ export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
 };
 
-// Per-account token cache: keyed by refresh token string
-const _tokenCache = {};
+let _token = null;
+let _tokenExpiry = 0;
 
-// Resolve which refresh token to use for a given sender email.
-// sender_email=josh@st1sports.com → GMAIL_REFRESH_TOKEN_JOSH
-// No sender / unknown → GMAIL_REFRESH_TOKEN (default / Matt's account)
-function getRefreshToken(senderEmail) {
-  if (senderEmail) {
-    const name = senderEmail.split("@")[0].toUpperCase();
-    const envKey = `GMAIL_REFRESH_TOKEN_${name}`;
-    if (process.env[envKey]) return process.env[envKey];
-  }
-  return process.env.GMAIL_REFRESH_TOKEN || null;
-}
+async function getToken() {
+  if (_token && Date.now() < _tokenExpiry - 60_000) return _token;
 
-async function getToken(senderEmail) {
-  const refreshToken = getRefreshToken(senderEmail);
-  if (!refreshToken) {
-    const hint = senderEmail
-      ? `GMAIL_REFRESH_TOKEN_${senderEmail.split("@")[0].toUpperCase()} or GMAIL_REFRESH_TOKEN`
-      : "GMAIL_REFRESH_TOKEN";
-    throw new Error(`Gmail not configured — visit /api/gmail-setup${senderEmail ? `?rep=${senderEmail.split("@")[0]}` : ""} and add ${hint} to Vercel env vars`);
-  }
-  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET) {
+  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET || !process.env.GMAIL_REFRESH_TOKEN) {
     throw new Error("Gmail not configured — visit /api/gmail-setup");
   }
-
-  const cache = _tokenCache[refreshToken];
-  if (cache && Date.now() < cache.expiry - 60_000) return cache.token;
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -51,15 +31,16 @@ async function getToken(senderEmail) {
     body: new URLSearchParams({
       client_id:     process.env.GMAIL_CLIENT_ID,
       client_secret: process.env.GMAIL_CLIENT_SECRET,
-      refresh_token: refreshToken,
+      refresh_token: process.env.GMAIL_REFRESH_TOKEN,
       grant_type:    "refresh_token",
     }).toString(),
   });
 
   const data = await res.json();
   if (!data.access_token) throw new Error(`Gmail token refresh failed: ${JSON.stringify(data)}`);
-  _tokenCache[refreshToken] = { token: data.access_token, expiry: Date.now() + (data.expires_in || 3600) * 1000 };
-  return data.access_token;
+  _token = data.access_token;
+  _tokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
+  return _token;
 }
 
 function extractHeader(headers, name) {
@@ -98,13 +79,12 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId, from_name, from_email, reply_to, sender_email } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
   try {
-    // Use sender_email (rep's account) if provided, otherwise fall back to default
-    const token = await getToken(sender_email || from_email || null);
+    const token = await getToken();
     const auth  = { Authorization: `Bearer ${token}` };
 
     // ── LIST: fetch recent messages ───────────────────────────────────────────
@@ -175,8 +155,6 @@ export default async function handler(req, res) {
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
       const lines = [
         `To: ${toHeader}`,
-        ...(from_email ? [`From: ${from_name ? `${from_name} <${from_email}>` : from_email}`] : []),
-        ...(reply_to || from_email ? [`Reply-To: ${reply_to || from_email}`] : []),
         ...(cc ? [`Cc: ${cc}`] : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
