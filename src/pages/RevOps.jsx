@@ -36,11 +36,7 @@ const B = {
 
 const STORE = "st1_revops_v2";
 
-const USERS = [
-  {id:"matt",  name:"Matt Stone",   email:"matt@st1sports.com",  role:"owner", initials:"MS", color:B.orange},
-  {id:"rep2",  name:"Alex Rivera",  email:"alex@st1sports.com",  role:"rep",   initials:"AR", color:B.blue},
-  {id:"rep3",  name:"Jordan Wells", email:"jordan@st1sports.com",role:"rep",   initials:"JW", color:B.purple},
-];
+const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
 
 const mkId   = () => Math.random().toString(36).slice(2,9);
 const today  = () => new Date().toISOString().slice(0,10);
@@ -118,6 +114,8 @@ function useStore() {
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
           pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
+          appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
+          contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
         };
       }
     } catch {}
@@ -304,7 +302,7 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[]};
+    case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
 }
@@ -3175,156 +3173,148 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch ALL records from a Zoho CRM module using COQL cursor pagination.
-  // Falls back to standard REST GET (capped at 2,000) if COQL fails.
-  const zohoFetchAll = async (module, fields, onProgress) => {
-    const fList = [...new Set(["id", ...fields])].join(",");
-
-    // ── COQL cursor attempt ────────────────────────────────────────────────────
-    // Requires ZohoCRM.coql.READ scope. If it fails we fall back to REST below.
-    try {
-      let all = []; let lastId = null;
-      while(true) {
-        const where = lastId ? ` WHERE id > '${lastId}'` : '';
-        const query = `SELECT ${fList} FROM ${module}${where} ORDER BY id ASC LIMIT 200`;
-        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
-        }).then(r=>r.json());
-        // Catch ANY response that is not a successful data array
-        if(!Array.isArray(res.data)) {
-          const detail = res.message||res.code||res.error||JSON.stringify(res).slice(0,120);
-          throw new Error(`COQL failed (${res._http_status||"?"}): ${detail}`);
-        }
-        const batch = res.data;
-        if(!batch.length) break;
-        all = [...all,...batch];
-        if(onProgress) onProgress(all.length);
-        lastId = batch[batch.length-1].id;
-        if(batch.length<200) break;
-        await new Promise(r=>setTimeout(r,250));
-      }
-      return all;
-    } catch(coqlErr) {
-      console.warn("[zohoFetchAll] COQL failed, falling back to REST GET:", coqlErr.message);
-      toast(`Zoho COQL unavailable (${coqlErr.message.slice(0,60)}) — falling back, results may be limited to 2,000`,"warn");
-    }
-
-    // ── Standard REST GET fallback (max 2,000 due to Zoho OFFSET limit) ────────
+  // ── Incremental fetch: records modified since a timestamp ─────────────────────
+  // Uses /search?criteria=(Modified_Time:greater_than:ISO) — no COQL scope needed.
+  // Each incremental sync fetches only records modified since last sync, so it
+  // stays well under 2,000 for normal daily use.
+  const zohoFetchSince = async (module, fields, sinceMs, onProgress) => {
+    const fList = [...new Set(["id","Modified_Time",...fields])].join(",");
+    const dt = new Date(sinceMs).toISOString(); // e.g. 2024-01-15T00:00:00.000Z
     let all = []; let page = 1;
     while(true) {
+      const criteria = encodeURIComponent(`(Modified_Time:greater_than:${dt})`);
+      const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+        body:JSON.stringify({service:"crm",endpoint,method:"GET"})
       }).then(r=>r.json());
       if(!Array.isArray(res.data)||!res.data.length) break;
       all = [...all,...res.data];
       if(onProgress) onProgress(all.length);
       if(!res.info?.more_records||res.data.length<200) break;
       page++;
-      await new Promise(r=>setTimeout(r,200));
+      await new Promise(r=>setTimeout(r,150));
     }
     return all;
   };
 
+  // ── Full fetch: date-range chunking (no COQL scope needed) ───────────────────
+  // Splits the pull into monthly windows from 2019 to now. Each window fetches
+  // up to 2,000 records (10 pages × 200), so as long as you added <2,000 records
+  // in any single month this covers everything without any special OAuth scope.
+  const zohoFetchAll = async (module, fields, onProgress) => {
+    const fList = [...new Set(["id","Created_Time",...fields])].join(",");
+    const now = new Date();
+    const chunks = [];
+    for(let y = 2019; y <= now.getFullYear(); y++) {
+      for(let m = 0; m < 12; m++) {
+        const start = new Date(Date.UTC(y,m,1));
+        if(start > now) break;
+        const end   = new Date(Date.UTC(y,m+1,1));
+        chunks.push({start:start.toISOString(), end:end.toISOString()});
+      }
+    }
+    let all = [];
+    for(const chunk of chunks) {
+      let page = 1;
+      while(true) {
+        const criteria = encodeURIComponent(`(Created_Time:between:${chunk.start}:${chunk.end})`);
+        const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
+        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint,method:"GET"})
+        }).then(r=>r.json());
+        if(!Array.isArray(res.data)||!res.data.length) break;
+        all = [...all,...res.data];
+        if(onProgress) onProgress(all.length);
+        if(!res.info?.more_records||res.data.length<200) break;
+        page++;
+        await new Promise(r=>setTimeout(r,150));
+      }
+      await new Promise(r=>setTimeout(r,100));
+    }
+    return all;
+  };
+
+  // ── Shared record processing + dispatch ───────────────────────────────────────
+  const processAndDispatchZohoRows = (contactRows, leadRows, dealRows, now) => {
+    const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
+    const scoreLeadFromZoho = (l) => {
+      let score=0; const acts=[];
+      const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
+      const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
+      if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
+      const calls=Number(l.No_of_Calls)||0;
+      if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
+      const chats=Number(l.No_of_Chats)||0;
+      if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
+      if(l.Last_Activity_Time){const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);score+=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});}
+      const src=zs(l.Lead_Source); if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
+      const rating=zs(l.Rating); const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
+      return {score:Math.min(200,score),activity:acts,priority};
+    };
+    const contacts = contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+    const leads = leadRows.map(l=>{const {score,activity,priority}=scoreLeadFromZoho(l);return{id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm-lead",zohoStatus:zs(l.Lead_Status),zohoSource:zs(l.Lead_Source),zohoRating:zs(l.Rating),zohoId:l.id,confidence:"medium",priority,outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",score,activity,importedAt:now};});
+    const all=[...contacts,...leads];
+    const existing=new Set((s.contacts||[]).map(c=>c.id));
+    const toAdd=all.filter(c=>!existing.has(c.id));
+    const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
+    if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
+    toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
+    dispatch("SET_CONTACTS_LAST_SYNC",now);
+    // Deals
+    const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
+    const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
+    let dealsAdded=0,dealsUpdated=0;
+    dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}}else{dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+    return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
+  };
+
+  const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];
+  const LEAD_FIELDS    = ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"];
+  const DEAL_FIELDS    = ["Deal_Name","Amount","Stage","Closing_Date","Account_Name","Contact_Name","Description","Modified_Time","Created_Time"];
+
+  // ── INCREMENTAL SYNC — only records created/modified since last sync ────────────
+  // Fast, reliable, always stays under 2,000. Use this for daily syncs.
   const pullFromZoho = async () => {
+    const lastSync = s.contactsLastSync;
+    if(!lastSync) { return pullFromZohoFull(); } // first-ever run → full pull
     setZohoPulling(true); setZohoPullResult(null);
-    toast("Pulling from Zoho CRM — fetching all records...","info");
+    const sinceLabel = new Date(lastSync).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+    toast(`Syncing new Zoho records since ${sinceLabel}...`,"info");
+    setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
     try {
-      // Fetch contacts, leads, and deals with full pagination
-      setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
-      const [contactRows, leadRows, dealRows] = await Promise.all([
-        zohoFetchAll("Contacts",
-          ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"],
-          n=>setZohoPullResult(r=>({...r,contacts:n}))),
-        zohoFetchAll("Leads",
-          ["First_Name","Last_Name","Email","Phone","Title","Company","City","State","Lead_Source","Lead_Status","Rating","No_of_Calls","No_of_Chats","Last_Activity_Time","Modified_Time","Created_Time","Description","Converted"],
-          n=>setZohoPullResult(r=>({...r,leads:n}))),
-        zohoFetchAll("Deals",
-          ["Deal_Name","Amount","Stage","Closing_Date","Account_Name","Contact_Name","Description","Modified_Time","Created_Time"],
-          n=>setZohoPullResult(r=>({...r,deals:n}))),
+      const [contactRows,leadRows,dealRows] = await Promise.all([
+        zohoFetchSince("Contacts",CONTACT_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,contacts:n}))),
+        zohoFetchSince("Leads",LEAD_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,leads:n}))),
+        zohoFetchSince("Deals",DEAL_FIELDS,lastSync,n=>setZohoPullResult(r=>({...r,deals:n}))),
       ]);
-      const now = Date.now();
-      const zs = v => typeof v==="string"?v:v?.name||v?.display_value||"";
-      const scoreLeadFromZoho = (l) => {
-        let score=0; const acts=[];
-        const STATUS_PTS={"Contacted":{pts:15,type:"sent"},"Follow Up":{pts:25,type:"clicked"},"Qualified":{pts:45,type:"opened"},"Proposal Sent":{pts:35,type:"sent"},"Negotiation":{pts:60,type:"replied"},"Customer":{pts:100,type:"replied"}};
-        const st=zs(l.Lead_Status); const sp=STATUS_PTS[st];
-        if(sp?.pts){score+=sp.pts;acts.push({id:mkId(),type:sp.type,ts:now,note:`Zoho status: ${st}`,campaignId:"zoho"});}
-        const calls=Number(l.No_of_Calls)||0;
-        if(calls>0){score+=calls*15;acts.push({id:mkId(),type:"meeting",ts:now,note:`${calls} call${calls>1?"s":""} in Zoho`,campaignId:"zoho"});}
-        const chats=Number(l.No_of_Chats)||0;
-        if(chats>0){score+=chats*10;acts.push({id:mkId(),type:"clicked",ts:now,note:`${chats} chat${chats>1?"s":""} in Zoho`,campaignId:"zoho"});}
-        if(l.Last_Activity_Time){
-          const daysAgo=Math.round((now-new Date(l.Last_Activity_Time).getTime())/86400000);
-          const recency=daysAgo<7?20:daysAgo<30?10:daysAgo<90?5:0;
-          score+=recency;
-          acts.push({id:mkId(),type:"sent",ts:new Date(l.Last_Activity_Time).getTime(),note:`Last activity ${daysAgo}d ago`,campaignId:"zoho"});
-        }
-        const src=zs(l.Lead_Source);
-        if(["Web Site","Website","Chat","External Referral","Word of mouth","Internal Seminar","Public Relations"].includes(src))score+=10;
-        const rating=zs(l.Rating);
-        const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
-        return {score:Math.min(200,score),activity:acts,priority};
-      };
-      toast(`Found ${contactRows.length} contacts + ${leadRows.length} leads — importing...`,"info");
-      const contacts = contactRows.map(c=>({
-        id:"zoho_c_"+c.id,
-        firstName:zs(c.First_Name), lastName:zs(c.Last_Name),
-        fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),
-        email:zs(c.Email), phone:zs(c.Phone),
-        title:zs(c.Title), school:zs(c.Account_Name),
-        city:zs(c.Mailing_City), state:zs(c.Mailing_State),
-        orgType:"school", source:"zoho-crm",
-        zohoSource:zs(c.Lead_Source),
-        confidence:"high", outreachStatus:"new", importedAt:now,
-      }));
-      const leads = leadRows.map(l=>{
-        const {score,activity,priority}=scoreLeadFromZoho(l);
-        return {
-          id:"zoho_l_"+l.id,
-          firstName:zs(l.First_Name), lastName:zs(l.Last_Name),
-          fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),
-          email:zs(l.Email), phone:zs(l.Phone),
-          title:zs(l.Title), school:zs(l.Company),
-          city:zs(l.City), state:zs(l.State),
-          orgType:"school", source:"zoho-crm-lead",
-          zohoStatus:zs(l.Lead_Status), zohoSource:zs(l.Lead_Source),
-          zohoRating:zs(l.Rating), zohoId:l.id,
-          confidence:"medium", priority,
-          outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",
-          score, activity, importedAt:now,
-        };
-      });
-      const all=[...contacts,...leads];
-      const existing=new Set((s.contacts||[]).map(c=>c.id));
-      const toAdd=all.filter(c=>!existing.has(c.id));
-      // Update existing leads with fresh Zoho data
-      const toUpdate=all.filter(c=>existing.has(c.id)&&c.source==="zoho-crm-lead");
-      if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
-      toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,zohoStatus:c.zohoStatus,zohoSource:c.zohoSource,zohoRating:c.zohoRating,outreachStatus:c.outreachStatus}));
-      dispatch("SET_CONTACTS_LAST_SYNC",now);
-      // Sync Deals from Zoho — add new, update stage on existing
-      const existingDeals = s.deals||[];
-      const existingDealZohoIds = new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
-      const stageMap = {"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
-      let dealsAdded=0, dealsUpdated=0;
-      dealRows.forEach(zd=>{
-        const zStage = typeof zd.Stage==="string" ? zd.Stage : zd.Stage?.name||"Quoted";
-        const localStage = DEAL_STAGES.includes(zStage) ? zStage : (stageMap[zStage]||"Quoted");
-        if(existingDealZohoIds.has(zd.id)){
-          const local=existingDeals.find(d=>d.zohoId===zd.id);
-          if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}
-        } else {
-          const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
-          dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:new Date(zd.Modified_Time||zd.Created_Time||now).getTime()||now,priority:"warm",touchHistory:[],source:"zoho-crm"});
-          dealsAdded++;
-        }
-      });
-      setZohoPullResult({contacts:contacts.length, leads:leads.length, deals:dealRows.length, added:toAdd.length, updated:toUpdate.length, dealsAdded, dealsUpdated});
-      toast(`${toAdd.length} new contacts · ${toUpdate.length} updated · ${dealsAdded} new deals · ${dealsUpdated} deal stages synced`,"success");
+      const result = processAndDispatchZohoRows(contactRows,leadRows,dealRows,Date.now());
+      setZohoPullResult(result);
+      toast(`Sync done: ${result.added} new · ${result.updated} updated · ${result.dealsAdded} new deals`,"success");
     } catch(e) {
-      toast(`Zoho pull failed: ${e.message.slice(0,80)}`,"error");
+      toast(`Zoho sync failed: ${e.message.slice(0,80)}`,"error");
     }
     setZohoPulling(false);
+  };
+
+  // ── FULL PULL — date-range chunks (2019→now), no special OAuth scope needed ──
+  const [fullPulling,setFullPulling] = useState(false);
+  const pullFromZohoFull = async () => {
+    setFullPulling(true); setZohoPullResult(null);
+    toast("Full pull from Zoho CRM (all records since 2019, monthly chunks)...","info");
+    setZohoPullResult({contacts:0,leads:0,deals:0,added:0,updated:0,loading:true});
+    try {
+      // Run sequentially (not parallel) to avoid rate-limit hammering on full pull
+      const contactRows = await zohoFetchAll("Contacts",CONTACT_FIELDS,n=>setZohoPullResult(r=>({...r,contacts:n})));
+      const leadRows    = await zohoFetchAll("Leads",LEAD_FIELDS,n=>setZohoPullResult(r=>({...r,leads:n})));
+      const dealRows    = await zohoFetchAll("Deals",DEAL_FIELDS,n=>setZohoPullResult(r=>({...r,deals:n})));
+      const result = processAndDispatchZohoRows(contactRows,leadRows,dealRows,Date.now());
+      setZohoPullResult(result);
+      toast(`Full pull done: ${result.added} new · ${result.updated} updated · ${result.contacts+result.leads} total`,"success");
+    } catch(e) {
+      setZohoPullResult(null);
+      toast(`Full pull failed: ${e.message.slice(0,80)}`,"error");
+    }
+    setFullPulling(false);
   };
 
   const [rescoring,setRescoring]=useState(false);
@@ -3591,6 +3581,11 @@ function ModProspecting() {
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
                 Pulls Contacts and Leads from Zoho CRM. Leads are auto-scored from their Zoho activity: call count, chat count, lead status, last activity date, and lead source.
               </div>
+              {s.contactsLastSync&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>
+                  Last sync: {new Date(s.contactsLastSync).toLocaleString()}
+                </div>
+              )}
               {zohoPullResult&&(
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:zohoPullResult.loading?B.orange:B.green,marginBottom:8}}>
                   {zohoPullResult.loading
@@ -3600,10 +3595,13 @@ function ModProspecting() {
                 </div>
               )}
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||rescoring}>
-                  {zohoPulling?"PULLING...":"↓ PULL ZOHO CONTACTS + LEADS"}
+                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||fullPulling||rescoring}>
+                  {zohoPulling?"SYNCING...":"↓ SYNC NEW RECORDS"}
                 </OBtn>
-                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling}>
+                <OBtn sm color={B.teal} onClick={pullFromZohoFull} disabled={zohoPulling||fullPulling||rescoring}>
+                  {fullPulling?"PULLING ALL...":"↓ FULL INITIAL PULL"}
+                </OBtn>
+                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling||fullPulling}>
                   {rescoring?"RESCORING...":"↺ RESCORE FROM ZOHO ACTIVITY"}
                 </OBtn>
               </div>
@@ -4895,6 +4893,8 @@ function ModMarketing() {
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
   const [selectedContacts,setSelectedContacts]=useState(new Set());
+  const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
+  const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
@@ -4986,74 +4986,81 @@ function ModMarketing() {
     return matched;
   };
 
+  // saveCampAsset — saves generated content to campDraft (wizard) or selCamp (detail)
+  const saveCampAsset = (patch) => {
+    if(campDraft) setCampDraft(c=>({...c,...patch}));
+    else if(selCamp) dispatch("UPDATE_CAMPAIGN",{...selCamp,...patch});
+  };
+
   const generateTouches = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenRunning(true);
-    const contacts = s.contacts||[];
-    const windowHint = SPORT_WINDOWS[campDraft.product?.split(" ")[0]]||"";
+    const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
+    const repLine = (() => { const rep = (s.reps||[]).find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
     const result = await aiCall(
       `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
-      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Channels: ${(campDraft.channels||[]).join(", ")||"email"}. Tone: ${campDraft.tone}.\n`+
-      `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Product: ${ctx.product}. Audience: ${ctx.audience}. Channels: ${(ctx.channels||[]).join(", ")||"email"}. Tone: ${ctx.tone||"friendly"}.\n`+
+      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+      `${repLine?`${repLine}\n`:""}`+
       `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
       `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
       `Each touch under 100 words. Use {{firstName}} {{orgName}} merge tags. Step 2 references no reply to step 1. Step 3 is a final check-in.`,
       {json:true,tokens:1200}
     );
     const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
-    setCampDraft(c=>({...c,touches}));
+    saveCampAsset({touches});
     setGenRunning(false);
   };
 
   const generateSocialDrafts = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenSocialRunning(true);
     const result = await aiCall(
       `Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
-      `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Tone: ${campDraft.tone}.\n`+
-      `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
+      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
       `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
       {json:true,tokens:800}
     );
     const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
-    setCampDraft(c=>({...c,socialDrafts:posts}));
+    saveCampAsset({socialDrafts:posts});
     setGenSocialRunning(false);
   };
 
   const generateAdCopy = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenAdRunning(true);
     const result = await aiCall(
-      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors and coaches"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors and coaches"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
       {tokens:600}
     );
-    setCampDraft(c=>({...c,adCopy:result||""}));
+    saveCampAsset({adCopy:result||""});
     setGenAdRunning(false);
   };
 
   const generateCallScript = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenCallRunning(true);
     const result = await aiCall(
-      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Include: opening line, value prop (30 secs), 3 common objections with responses, closing CTA. Under 300 words.`,
       {tokens:800}
     );
-    setCampDraft(c=>({...c,callScript:result||""}));
+    saveCampAsset({callScript:result||""});
     setGenCallRunning(false);
   };
 
   const generateDirectMail = async () => {
-    if(!campDraft) return;
+    const ctx = campDraft || selCamp; if(!ctx) return;
     setGenMailRunning(true);
     const result = await aiCall(
-      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${campDraft.product}. Audience: ${campDraft.audience||"Athletic Directors"}. Tone: ${campDraft.tone}.\n${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
+      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
       `Format as a professional letter. Include: compelling headline, 3 bullet benefits, social proof line, clear CTA, signature. Use {{firstName}} {{orgName}} merge tags. Under 250 words.`,
       {tokens:700}
     );
-    setCampDraft(c=>({...c,directMail:result||""}));
+    saveCampAsset({directMail:result||""});
     setGenMailRunning(false);
   };
 
@@ -5485,7 +5492,7 @@ function ModMarketing() {
             // Build last 7 days
             const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));return d.toISOString().slice(0,10);});
             // All users (USERS + appUsers) who have campaigns
-            const allUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            const allUsers=(s.reps||[]);
             // Build a map: repId -> Set of campaignIds
             const repCampIds={};
             (s.campaigns||[]).forEach(camp=>{
@@ -6508,6 +6515,16 @@ function ModMarketing() {
               {/* STRATEGY TAB */}
               {campSubTab==="strategy"&&(
                 <div>
+                  {/* Launch banner for draft/no-enrollment campaigns */}
+                  {(selCamp.status==="draft"||(selCamp.enrollments||[]).length===0)&&(selCamp.touches||[]).length>0&&(
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",background:`${B.orange}10`,border:`1px solid ${B.orange}30`,borderRadius:6,marginBottom:14}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5,marginBottom:2}}>READY TO LAUNCH</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>This campaign has {(selCamp.touches||[]).length} emails ready. Enroll contacts and activate it.</div>
+                      </div>
+                      <OBtn onClick={()=>{setCampDraft({...selCamp});setShowNewCampForm(true);setCampStep(5);setSelCampId(null);}}>🚀 ENROLL & LAUNCH</OBtn>
+                    </div>
+                  )}
                   {/* Plan link */}
                   {selCamp.planId&&(()=>{const plan=strategies.find(p=>p.id===selCamp.planId);return plan?(<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:12,cursor:"pointer"}} onClick={()=>{setSelPlanId(plan.id);setSelCampId(null);setTab("plans");}}>Part of plan: <strong>{plan.name}</strong> — view plan →</div>):null;})()}
                   {/* Strategy header — inline editable */}
@@ -6543,61 +6560,49 @@ function ModMarketing() {
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>REP / SENDER</div>
                         <select value={selCamp.repId||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,repId:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}>
                           <option value="">— No rep assigned —</option>
-                          {[...USERS,...(s.appUsers||[])].map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                          {(s.reps||[]).map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
                         </select>
                       </div>
                     </div>
                   </div>
-                  {/* ICP */}
-                  {selCamp.icp&&(()=>{
-                    const icp=selCamp.icp;
-                    const hasSports=(icp.sports||[]).length>0;
-                    const hasTitles=(icp.titles||[]).length>0;
-                    const hasStates=(icp.states||[]).length>0;
-                    if(!hasSports&&!hasTitles&&!hasStates&&!icp.schoolLevel) return null;
-                    return(
-                      <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>IDEAL CUSTOMER PROFILE</div>
-                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                          {hasSports&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SPORTS</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:`${B.orange}14`,borderRadius:3,padding:"2px 7px"}}>{sp}</span>)}</div></div>}
-                          {hasTitles&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>TITLES</div><div style={{display:"flex",flexWrap:"wrap",gap:4}}>{(icp.titles||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,borderRadius:3,padding:"2px 7px"}}>{t}</span>)}</div></div>}
-                          {icp.schoolLevel&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>SCHOOL LEVEL</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{icp.schoolLevel}</div></div>}
-                          {hasStates&&<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:4}}>STATES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(icp.states||[]).join(", ")}</div></div>}
-                        </div>
-                        {icp.buyingSeasonNotes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>BUYING SEASON NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.buyingSeasonNotes}</div></div>}
-                        {icp.notes&&<div style={{marginTop:8}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>ICP NOTES</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.5}}>{icp.notes}</div></div>}
-                      </div>
-                    );
-                  })()}
-                  {/* Channels */}
-                  {(selCamp.channels||[]).length>0&&(
-                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CHANNELS</div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                        {(selCamp.channels||[]).map(ch=>{
-                          const c=CHANNELS.find(x=>x.id===ch);
-                          const assetCount=ch==="email"?(selCamp.touches||[]).length:ch==="social"?(selCamp.socialPosts||[]).length:ch==="paid_ads"?(selCamp.adIds||[]).length:0;
-                          return(
-                            <div key={ch} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6}}>
-                              <span style={{fontSize:16}}>{c?.icon}</span>
-                              <div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{c?.label}</div>
-                                {assetCount>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{assetCount} ASSET{assetCount!==1?"S":""}</div>}
-                              </div>
-                              {assetCount===0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>NO ASSETS YET</span>}
-                            </div>
-                          );
-                        })}
+                  {/* Channels — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CHANNELS</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {CHANNELS.map(ch=>{
+                        const on=(selCamp.channels||[]).includes(ch.id);
+                        return(<button key={ch.id} onClick={()=>{const cur=selCamp.channels||[];const next=on?cur.filter(x=>x!==ch.id):[...cur,ch.id];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,channels:next});}} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{ch.icon} {ch.label}</button>);
+                      })}
+                    </div>
+                  </div>
+                  {/* ICP — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:10}}>IDEAL CUSTOMER PROFILE</div>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>SPORTS</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {SPORTS_LIST.slice(0,12).map(sp=>{const on=(selCamp.icp?.sports||[]).includes(sp);return(<button key={sp} onClick={()=>{const cur=(selCamp.icp?.sports||[]);const next=on?cur.filter(x=>x!==sp):[...cur,sp];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),sports:next}});}} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>);})}
                       </div>
                     </div>
-                  )}
-                  {/* Metrics to track */}
-                  {(selCamp.metrics||[]).length>0&&(
-                    <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>METRICS TO TRACK</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                        {(selCamp.metrics||[]).map(m=><span key={m} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,background:`${B.blue}10`,border:`1px solid ${B.blue}20`,borderRadius:4,padding:"4px 10px"}}>☑ {m}</span>)}
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>TARGET TITLES</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {COMMON_TITLES.map(t=>{const on=(selCamp.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>{const cur=(selCamp.icp?.titles||[]);const next=on?cur.filter(x=>x!==t):[...cur,t];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),titles:next}});}} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
                       </div>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>SCHOOL LEVEL</div>
+                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                        {SEGMENT_OPTIONS.map(sl=>{const on=(selCamp.icp?.schoolLevel||"All School Levels")===sl;return(<button key={sl} onClick={()=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,icp:{...(selCamp.icp||{}),schoolLevel:sl}})} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"4px 12px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>);})}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Metrics — editable */}
+                  <div className="card" style={{padding:"12px 16px",marginBottom:12}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>METRICS TO TRACK</div>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {METRICS.map(m=>{const on=(selCamp.metrics||[]).includes(m);return(<button key={m} onClick={()=>{const cur=selCamp.metrics||[];const next=on?cur.filter(x=>x!==m):[...cur,m];dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,metrics:next});}} style={{background:on?`${B.blue}10`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{on?"☑":"☐"} {m}</button>);})}
+                    </div>
                     </div>
                   )}
                   {/* Quick stats */}
@@ -6724,6 +6729,75 @@ function ModMarketing() {
                   </div>
                 ))}
               </div>
+              {/* ── Enroll contacts panel ── */}
+              {(()=>{
+                const enrolledIds=new Set((selCamp.enrollments||[]).map(e=>e.contactId));
+                const q=(enrollSearch||"").toLowerCase().trim();
+                // Filter contacts by search (name/title/school/email/state) and not already enrolled
+                const matchingContacts=(s.contacts||[]).filter(c=>{
+                  if(enrolledIds.has(c.id)) return false;
+                  if(!q) return true;
+                  return [c.fullName,c.firstName,c.lastName,c.title,c.school,c.email,c.state,c.city].some(v=>(v||"").toLowerCase().includes(q));
+                });
+                // Also support enroll-from-list
+                const enrollList=enrollListId?(s.contactLists||[]).find(l=>l.id===enrollListId):null;
+                const listContacts=enrollList?(enrollList.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean).filter(c=>!enrolledIds.has(c.id)):[];
+                const toEnroll=enrollListId?listContacts:matchingContacts;
+
+                const doEnroll=()=>{
+                  if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
+                  const todayStr=today();
+                  const updated={...selCamp};
+                  let count=0;
+                  toEnroll.forEach(c=>{
+                    if(!updated.enrollments.some(e=>e.contactId===c.id)){
+                      updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}];
+                      dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
+                      count++;
+                    }
+                  });
+                  dispatch("UPDATE_CAMPAIGN",updated);
+                  toast(`${count} contacts enrolled in ${selCamp.name}`,"success");
+                  setEnrollSearch(""); setEnrollListId("");
+                };
+
+                return(
+                  <div className="card" style={{padding:"12px 14px",marginBottom:16,borderLeft:`3px solid ${B.purple}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:1,marginBottom:10}}>+ ENROLL CONTACTS</div>
+                    <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+                      <input value={enrollSearch} onChange={e=>{setEnrollSearch(e.target.value);setEnrollListId("");}}
+                        placeholder="Search by name, title, school, state, email…"
+                        style={{flex:1,minWidth:200,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>or</span>
+                      <select value={enrollListId} onChange={e=>{setEnrollListId(e.target.value);setEnrollSearch("");}}
+                        style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,color:enrollListId?B.text:B.muted,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+                        <option value="">— pick a contact list —</option>
+                        {(s.contactLists||[]).map(l=><option key={l.id} value={l.id}>{l.name} ({(l.contactIds||[]).length})</option>)}
+                      </select>
+                    </div>
+                    {(q||enrollListId)&&(
+                      <div style={{marginBottom:10}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{toEnroll.length} contact{toEnroll.length!==1?"s":""} match{toEnroll.length===1?"es":""} · not yet enrolled</div>
+                        {toEnroll.slice(0,6).map(c=>(
+                          <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                            <div style={{flex:1}}>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{c.title}{c.school?` · ${c.school}`:""}{c.state?` · ${c.state}`:""}</span>
+                            </div>
+                            {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>✉</span>}
+                          </div>
+                        ))}
+                        {toEnroll.length>6&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"4px 0"}}>…and {toEnroll.length-6} more</div>}
+                      </div>
+                    )}
+                    <OBtn sm onClick={doEnroll} disabled={!toEnroll.length&&(!!q||!!enrollListId)}>
+                      {toEnroll.length>0?`ENROLL ${toEnroll.length} CONTACT${toEnroll.length!==1?"S":""}`:enrollListId||q?"NO NEW CONTACTS":"ENROLL ALL CONTACTS"}
+                    </OBtn>
+                    {!q&&!enrollListId&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:10}}>Search or pick a list above, or enroll everyone</span>}
+                  </div>
+                );
+              })()}
+
               {/* Enrolled contacts */}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({selCamp.enrollments.length})</div>
@@ -6784,6 +6858,18 @@ function ModMarketing() {
               {/* ASSETS TAB */}
               {campSubTab==="assets"&&(
                 <div>
+                  {/* AI Generation panel — always visible in detail assets tab */}
+                  <div className="card" style={{padding:"14px 16px",marginBottom:18,borderLeft:`4px solid ${B.purple}`}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>✦ AI CONTENT GENERATION</div>
+                    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
+                      <OBtn sm onClick={generateTouches} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE / REGEN EMAILS"}</OBtn>
+                      <button onClick={generateSocialDrafts} disabled={genSocialRunning} style={{background:genSocialRunning?B.muted:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genSocialRunning?.7:1}}>{genSocialRunning?"GENERATING...":"✦ SOCIAL POSTS"}</button>
+                      <button onClick={generateAdCopy} disabled={genAdRunning} style={{background:genAdRunning?B.muted:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genAdRunning?.7:1}}>{genAdRunning?"GENERATING...":"✦ AD COPY"}</button>
+                      <button onClick={generateCallScript} disabled={genCallRunning} style={{background:genCallRunning?B.muted:B.blue,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genCallRunning?.7:1}}>{genCallRunning?"GENERATING...":"✦ CALL SCRIPT"}</button>
+                      <button onClick={generateDirectMail} disabled={genMailRunning} style={{background:genMailRunning?B.muted:B.teal,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genMailRunning?.7:1}}>{genMailRunning?"GENERATING...":"✦ DIRECT MAIL"}</button>
+                    </div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Uses the campaign goal, product, audience, and rep from the Strategy tab.</div>
+                  </div>
                   {/* Email touches */}
                   {(selCamp.touches||[]).length>0&&(
                     <div style={{marginBottom:20}}>
@@ -7060,7 +7146,7 @@ function ModMarketing() {
           </div>
           {/* Rep color key */}
           {(()=>{
-            const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            const repUsers=(s.reps||[]);
             const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
             if(!activeReps.length) return null;
             return(
@@ -7380,7 +7466,7 @@ function ModCalendar() {
       {/* Rep color key */}
       {(()=>{
         const campaigns=s.campaigns||[];
-        const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+        const repUsers=(s.reps||[]);
         const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
         if(!activeReps.length) return null;
         return(
@@ -7403,6 +7489,249 @@ function ModCalendar() {
 // ════════════════════════════════════════════════════════════════════════════
 const PLATFORM_COLORS = {instagram:"#E4405F",facebook:"#1877F2",linkedin:"#0A66C2",twitter:"#1DA1F2",tiktok:"#010101"};
 const SOCIAL_PLATFORMS = ["instagram","facebook","linkedin","twitter","tiktok"];
+const PLATFORM_LIMITS  = {twitter:280,instagram:2200,facebook:63206,linkedin:3000,tiktok:2200};
+
+// ── Social Image Editor ─────────────────────────────────────────────────────
+// Full-featured image generator + layer compositor for social posts.
+// Generates background via Ideogram, then lets user drag text/logo layers
+// and export a flattened 1080×1080 JPEG.
+function SocialImageEditor({value, onChange, brandAssets, toast}) {
+  const CW=560,CH=560;
+  const [bgImg,setBgImg]=useState(value||"");
+  const [layers,setLayers]=useState([]);
+  const [selId,setSelId]=useState(null);
+  const [drag,setDrag]=useState(null);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgStyle,setImgStyle]=useState("REALISTIC");
+  const [genRunning,setGenRunning]=useState(false);
+  const [showModal,setShowModal]=useState(false);
+
+  const addText=()=>{
+    const id=mkId();
+    setLayers(ls=>[...ls,{id,type:"text",x:Math.round(CW/2-80),y:CH-80,w:160,h:44,content:"ST1 Sports",fontSize:22,color:"#FFFFFF",bgColor:"rgba(0,0,0,0.55)",bgPad:6,fontWeight:"bold"}]);
+    setSelId(id);
+  };
+  const addLogo=(url,name)=>{
+    const id=mkId();
+    setLayers(ls=>[...ls,{id,type:"logo",x:20,y:20,w:100,h:100,content:url,opacity:1,name:name||"logo"}]);
+    setSelId(id);
+  };
+  const updLayer=(id,upd)=>setLayers(ls=>ls.map(l=>l.id===id?{...l,...upd}:l));
+  const delLayer=(id)=>{setLayers(ls=>ls.filter(l=>l.id!==id));if(selId===id)setSelId(null);};
+
+  useEffect(()=>{
+    if(!drag)return;
+    const onMove=e=>{
+      const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
+      if(drag.mode==="move"){updLayer(drag.id,{x:Math.max(0,Math.min(CW-drag.lw,drag.lx+dx)),y:Math.max(0,Math.min(CH-drag.lh,drag.ly+dy))});}
+      else{updLayer(drag.id,{w:Math.max(40,drag.lw+dx),h:Math.max(20,drag.lh+dy)});}
+    };
+    const onUp=()=>setDrag(null);
+    window.addEventListener("mousemove",onMove);window.addEventListener("mouseup",onUp);
+    return()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
+  },[drag]);
+
+  const startDrag=(e,id,mode)=>{
+    e.preventDefault();e.stopPropagation();
+    const l=layers.find(x=>x.id===id);
+    setSelId(id);
+    setDrag({id,mode,sx:e.clientX,sy:e.clientY,lx:l.x,ly:l.y,lw:l.w,lh:l.h});
+  };
+
+  const generateBg=async()=>{
+    if(!imgPrompt.trim()){toast("Enter a prompt","error");return;}
+    setGenRunning(true);
+    try{
+      const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:imgPrompt,style:imgStyle,sizeKey:"square"})});
+      const d=await r.json();
+      if(d.imageUrl){setBgImg(d.imageUrl);onChange(d.imageUrl);}
+      else toast(d.error||"Failed","error");
+    }catch{toast("Failed","error");}
+    setGenRunning(false);
+  };
+
+  const exportComposite=()=>{
+    if(!bgImg){toast("No background image","error");return;}
+    const scale=1080/CW;
+    const canvas=document.createElement("canvas");
+    canvas.width=1080;canvas.height=1080;
+    const ctx=canvas.getContext("2d");
+    const drawTexts=()=>{
+      layers.filter(l=>l.type==="text").forEach(layer=>{
+        ctx.save();
+        if(layer.bgColor&&layer.bgColor!=="transparent"){
+          ctx.fillStyle=layer.bgColor;
+          const p=(layer.bgPad||0)*scale;
+          ctx.fillRect(layer.x*scale-p,layer.y*scale-p,layer.w*scale+p*2,layer.h*scale+p*2);
+        }
+        const fs=layer.fontSize*scale;
+        ctx.font=`${layer.fontWeight||"bold"} ${fs}px Arial,sans-serif`;
+        ctx.fillStyle=layer.color;
+        ctx.textAlign="center";ctx.textBaseline="middle";
+        layer.content.split("\n").forEach((line,i,arr)=>{
+          ctx.fillText(line,(layer.x+layer.w/2)*scale,(layer.y+layer.h/2)*scale+(i-(arr.length-1)/2)*fs*1.25);
+        });
+        ctx.restore();
+      });
+      try{
+        const url=canvas.toDataURL("image/jpeg",0.92);
+        onChange(url);setBgImg(url);setLayers([]);setSelId(null);
+        toast("✓ Layers applied!","success");
+      }catch{toast("Export failed — download the background then re-upload it first","error");}
+    };
+    const logos=layers.filter(l=>l.type==="logo");
+    let rem=logos.length;
+    const bg=new Image();bg.crossOrigin="anonymous";
+    bg.onload=()=>{
+      ctx.drawImage(bg,0,0,1080,1080);
+      if(!rem){drawTexts();return;}
+      logos.forEach(layer=>{
+        const img=new Image();img.crossOrigin="anonymous";
+        img.onload=()=>{
+          ctx.save();ctx.globalAlpha=layer.opacity;
+          ctx.drawImage(img,layer.x*scale,layer.y*scale,layer.w*scale,layer.h*scale);
+          ctx.restore();rem--;if(!rem)drawTexts();
+        };
+        img.onerror=()=>{rem--;if(!rem)drawTexts();};
+        img.src=layer.content;
+      });
+    };
+    bg.onerror=()=>toast("Background failed to load","error");
+    bg.src=bgImg;
+  };
+
+  const selLayer=layers.find(l=>l.id===selId);
+
+  return(
+    <div>
+      <div style={{marginBottom:10}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>BACKGROUND IMAGE</div>
+        <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} rows={2}
+          placeholder="Describe the background image (or upload / paste URL below)"
+          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:6}}/>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{flex:1,minWidth:100,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}>
+            {["REALISTIC","GENERAL","DESIGN","RENDER_3D","STYLIZED","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
+          </select>
+          <OBtn onClick={generateBg} disabled={genRunning} style={{flexShrink:0}}>{genRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+          <label style={{display:"flex",alignItems:"center",gap:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 9px",cursor:"pointer",flexShrink:0}}>
+            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>↑ UPLOAD</span>
+            <input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(!f)return;const rd=new FileReader();rd.onload=ev=>{setBgImg(ev.target.result);onChange(ev.target.result);};rd.readAsDataURL(f);}} style={{display:"none"}}/>
+          </label>
+          <input placeholder="paste URL…" onBlur={e=>{const v=e.target.value.trim();if(v.startsWith("http")){setBgImg(v);onChange(v);e.target.value="";}}}
+            style={{width:110,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:10}}/>
+        </div>
+      </div>
+      {bgImg&&(
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+            <button onClick={addText} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>+ TEXT</button>
+            {(brandAssets||[]).filter(a=>a.url).length>0&&(
+              <>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,flexShrink:0}}>LOGOS →</span>
+                {(brandAssets||[]).filter(a=>a.url).map(a=>(
+                  <button key={a.id} onClick={()=>addLogo(a.url,a.name)} title={`Add ${a.name}`}
+                    style={{padding:2,border:`1px solid ${B.border}`,borderRadius:4,background:B.surface,cursor:"pointer",flexShrink:0}}>
+                    {(a.url.startsWith("data:image")||/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(a.url))?
+                      <img src={a.url} style={{width:28,height:28,objectFit:"contain",display:"block"}} alt={a.name}/>:
+                      <div style={{width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📄</div>}
+                  </button>
+                ))}
+              </>
+            )}
+            <div style={{marginLeft:"auto",display:"flex",gap:5}}>
+              <button onClick={()=>setShowModal(true)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>⛶ EXPAND</button>
+              {layers.length>0&&<OBtn onClick={exportComposite} style={{flexShrink:0}}>✓ APPLY LAYERS</OBtn>}
+            </div>
+          </div>
+          <div style={{position:"relative",width:"100%",paddingBottom:"100%",borderRadius:6,overflow:"hidden",border:`1px solid ${B.border}`,cursor:"default",userSelect:"none"}}
+            onClick={()=>setSelId(null)}>
+            <div style={{position:"absolute",inset:0}}>
+              <img src={bgImg} alt="bg" style={{width:"100%",height:"100%",objectFit:"cover",display:"block",pointerEvents:"none"}}/>
+              {layers.map(layer=>{
+                const isSelected=selId===layer.id;
+                const pct=(v,dim)=>`${(v/dim*100).toFixed(2)}%`;
+                return(
+                  <div key={layer.id}
+                    style={{position:"absolute",left:pct(layer.x,CW),top:pct(layer.y,CH),width:pct(layer.w,CW),height:pct(layer.h,CH),
+                      cursor:"move",border:`2px solid ${isSelected?B.orange:"transparent"}`,boxSizing:"border-box",borderRadius:3}}
+                    onMouseDown={e=>startDrag(e,layer.id,"move")}
+                    onClick={e=>{e.stopPropagation();setSelId(layer.id);}}>
+                    {layer.type==="text"?(
+                      <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                        background:layer.bgColor||"transparent",padding:`${layer.bgPad||0}px`,boxSizing:"border-box",
+                        fontFamily:"Arial,sans-serif",fontWeight:layer.fontWeight||"bold",color:layer.color,
+                        textAlign:"center",whiteSpace:"pre-wrap",lineHeight:1.2,overflow:"hidden",pointerEvents:"none",
+                        fontSize:`clamp(8px,${(layer.fontSize/CW*100).toFixed(2)}vw,72px)`}}>
+                        {layer.content}
+                      </div>
+                    ):(
+                      <img src={layer.content} alt={layer.name} style={{width:"100%",height:"100%",objectFit:"contain",display:"block",opacity:layer.opacity,pointerEvents:"none"}}/>
+                    )}
+                    {isSelected&&(
+                      <>
+                        <div onMouseDown={e=>startDrag(e,layer.id,"resize")}
+                          style={{position:"absolute",bottom:-6,right:-6,width:14,height:14,background:B.orange,borderRadius:2,cursor:"se-resize",zIndex:10}}/>
+                        <button onClick={e=>{e.stopPropagation();delLayer(layer.id);}}
+                          style={{position:"absolute",top:-8,right:-8,width:18,height:18,background:B.red,color:"#fff",border:"none",borderRadius:"50%",cursor:"pointer",fontSize:11,lineHeight:"18px",textAlign:"center",padding:0,zIndex:10}}>✕</button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {layers.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Drag to move · corner handle to resize · hit APPLY LAYERS to export</div>}
+          {selLayer&&(
+            <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 12px"}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>{selLayer.type==="text"?"TEXT LAYER":"LOGO LAYER"}</div>
+              {selLayer.type==="text"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                  <input value={selLayer.content} onChange={e=>updLayer(selId,{content:e.target.value})}
+                    style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                    placeholder="Text content"/>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      SIZE
+                      <input type="range" min={8} max={80} value={selLayer.fontSize} onChange={e=>updLayer(selId,{fontSize:+e.target.value})} style={{width:80,marginLeft:4}}/>
+                      <span style={{minWidth:26}}>{selLayer.fontSize}px</span>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      TEXT
+                      <input type="color" value={selLayer.color.startsWith("rgba")?"#ffffff":selLayer.color} onChange={e=>updLayer(selId,{color:e.target.value})} style={{width:26,height:22,padding:0,border:"none",cursor:"pointer",background:"none"}}/>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      BG
+                      <input type="color" value={"#000000"} onChange={e=>{const h=e.target.value,r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),bv=parseInt(h.slice(5,7),16);updLayer(selId,{bgColor:`rgba(${r},${g},${bv},0.6)`});}} style={{width:26,height:22,padding:0,border:"none",cursor:"pointer",background:"none"}}/>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer"}}>
+                      <input type="checkbox" checked={selLayer.bgColor==="transparent"} onChange={e=>updLayer(selId,{bgColor:e.target.checked?"transparent":"rgba(0,0,0,0.55)"})}/>
+                      No background
+                    </label>
+                  </div>
+                </div>
+              )}
+              {selLayer.type==="logo"&&(
+                <label style={{display:"flex",alignItems:"center",gap:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                  OPACITY
+                  <input type="range" min={10} max={100} value={Math.round(selLayer.opacity*100)} onChange={e=>updLayer(selId,{opacity:e.target.value/100})} style={{width:100,marginLeft:4}}/>
+                  <span>{Math.round(selLayer.opacity*100)}%</span>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {showModal&&bgImg&&(
+        <div onClick={()=>setShowModal(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out"}}>
+          <img src={bgImg} alt="full" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
+          <button onClick={e=>{e.stopPropagation();setShowModal(false);}} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer"}}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
@@ -7420,9 +7749,12 @@ function ModSocial() {
   const [linkedCampId,setLinkedCampId]=useState("");
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
+  const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
+  const [editingPost,setEditingPost]=useState(null); // post being edited in modal
+  const [syncingStats,setSyncingStats]=useState(false);
 
   const campaigns=s.campaigns||[];
 
@@ -7446,10 +7778,18 @@ function ModSocial() {
 
   const generateCaption=async()=>{
     setGenRunning(true);
-    const r=await aiCall(
-      `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`,
-      {tokens:300}
-    );
+    const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
+    const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
+    const target=lengthTargets[postLength];
+    const effectiveChars=Math.min(target.chars,hardLimit);
+    const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
+    const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
+    const direction=caption.trim();
+    const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
+    const prompt=direction
+      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
+    const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
   };
@@ -7459,23 +7799,37 @@ function ModSocial() {
     if(!caption.trim()){toast("Caption is required","error");return;}
     setPosting(true);
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
+    // Always save locally first so the post is never lost
+    const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
+    dispatch("ADD_SOCIAL_POST",post);
+    if(linkedCampId){
+      const camp=campaigns.find(c=>c.id===linkedCampId);
+      if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
+    }
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
       const data=await r.json();
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
-        const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:scheduleAt?"scheduled":"published",postType,campaignId:linkedCampId||""};
-        dispatch("ADD_SOCIAL_POST",post);
+        const finalStatus=scheduleAt?"scheduled":"published";
+        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:finalStatus,publerPostIds:data.postIds||[]});
         if(linkedCampId){
           const camp=campaigns.find(c=>c.id===linkedCampId);
-          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
+          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:finalStatus}]});
         }
-        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted!","success");
-        setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
-        setTab("posts");
-      }else{toast(data.error||"Post failed","error");}
-    }catch{toast("Post failed","error");}
+        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted to Publer!","success");
+      }else{
+        const errMsg=data.error||"Publer rejected the post";
+        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
+        toast(`Saved locally — Publer failed: ${errMsg.slice(0,80)}`,"warn");
+      }
+    }catch(err){
+      dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
+      toast(`Saved locally — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
+    }
+    setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+    setTab("posts");
     setPosting(false);
   };
 
@@ -7583,20 +7937,38 @@ function ModSocial() {
           ):(
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filtered.map(p=>{
-                const sc={scheduled:B.blue,published:B.green,draft:B.muted}[p.status]||B.muted;
+                const isLocalOnly=p.status==="local_only";
+                const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
+                const retryPost=async()=>{
+                  try{
+                    const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+                      body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined})});
+                    const data=await r.json();
+                    const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
+                    if(ok){dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});toast("Posted!","success");}
+                    else{
+                      const detail=data.detail?JSON.stringify(data.detail).slice(0,120):"";
+                      const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,publerError:msg});
+                      toast(msg,"error");
+                    }
+                  }catch(e){toast("Publer unreachable: "+e.message,"error");}
+                };
                 return(
-                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
                     {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
                         {(p.platforms||[]).map(pl=>(
                           <span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
                         ))}
-                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{(p.status||"draft").toUpperCase()}</span>
+                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{isLocalOnly?"⚠ PUBLER FAILED":(p.status||"draft").toUpperCase()}</span>
                         {p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
                         {p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
                         {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
+                        {isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
                       </div>
+                      {isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>
                     </div>
                     {p._source==="standalone"&&(
@@ -7639,18 +8011,22 @@ function ModSocial() {
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                  {genRunning?"✦ WRITING...":"✦ AI WRITE"}
-                </button>
+                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  {["short","medium","long"].map(l=>(
+                    <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
+                  ))}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
+                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  </button>
+                </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
             </div>
             {/* Image */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:5}}>IMAGE URL (optional)</Lbl>
-              <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:120,borderRadius:6,objectFit:"cover"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
+              <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
+              <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}/>
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
@@ -9624,14 +10000,93 @@ function ModSettings() {
         <OBtn onClick={save}>SAVE SETTINGS</OBtn>
       </div>
 
-      {/* Integrations pointer */}
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
-        <Lbl c={B.purple} s={{marginBottom:8}}>Integrations</Lbl>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
-          Zoho CRM, Zoho Books, Gmail, Slack, and WooCommerce are configured on the Integrations page.
-        </div>
-        <a href="/integrations" style={{display:"inline-block",background:B.purple,color:B.white,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,textDecoration:"none"}}>GO TO INTEGRATIONS →</a>
-      </div>
+      {/* Email & Social connection status */}
+      {(()=>{
+        const [gmailInfo,setGmailInfo]=useState(null); // {email} or {error}
+        const [gmailChecking,setGmailChecking]=useState(false);
+        const [publerInfo,setPublerInfo]=useState(null);
+        const [publerChecking,setPublerChecking]=useState(false);
+
+        const checkGmail=async()=>{
+          setGmailChecking(true);setGmailInfo(null);
+          try{
+            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})}).then(r=>r.json());
+            setGmailInfo(d.error?{error:d.error}:{email:d.email});
+          }catch(e){setGmailInfo({error:e.message});}
+          setGmailChecking(false);
+        };
+        const checkPubler=async()=>{
+          setPublerChecking(true);setPublerInfo(null);
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
+            setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
+          }catch(e){setPublerInfo({error:e.message});}
+          setPublerChecking(false);
+        };
+
+        useEffect(()=>{checkGmail();checkPubler();},[]);
+
+        const failedPosts=(s.socialPosts||[]).filter(p=>p.status==="local_only");
+
+        return(
+          <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
+            <Lbl c={B.green} s={{marginBottom:12}}>Email & Social Status</Lbl>
+
+            {/* Gmail */}
+            <div style={{marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
+                <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
+              </div>
+              {gmailInfo&&(
+                gmailInfo.error
+                  ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                    ✕ Not connected — {gmailInfo.error}
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                  </div>
+                  :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+                    ✓ Connected as <strong>{gmailInfo.email}</strong>
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>All campaign emails send FROM this account. Rep name &amp; email appear in the signature — replies go back to this inbox.</div>
+                  </div>
+              )}
+              {!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+            </div>
+
+            {/* Publer */}
+            <div style={{marginBottom:failedPosts.length>0?14:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>PUBLER (social media posting)</div>
+                <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+              </div>
+              {publerInfo&&(
+                publerInfo.error
+                  ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                    ✕ Not connected — {publerInfo.error}
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set PUBLER_API_KEY and PUBLER_WORKSPACE_ID in Vercel env vars. Get them from app.publer.com → Settings → API.</div>
+                  </div>
+                  :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+                    ✓ Connected — {publerInfo.name}
+                  </div>
+              )}
+              {!publerInfo&&!publerChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+            </div>
+
+            {/* Failed posts */}
+            {failedPosts.length>0&&(
+              <div style={{background:`${B.red}06`,border:`1px solid ${B.red}20`,borderRadius:5,padding:"10px 12px"}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:.5,marginBottom:6}}>{failedPosts.length} POST{failedPosts.length!==1?"S":""} FAILED TO REACH PUBLER</div>
+                {failedPosts.map(p=>(
+                  <div key={p.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.caption?.slice(0,60)}…</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{p.date}</span>
+                  </div>
+                ))}
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Go to Social → All Posts to retry each one.</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {/* Sales Reps */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>

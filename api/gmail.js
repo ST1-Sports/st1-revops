@@ -87,7 +87,22 @@ export default async function handler(req, res) {
     const token = await getToken();
     const auth  = { Authorization: `Bearer ${token}` };
 
-    // ── LIST: fetch recent messages ───────────────────────────────────────────
+    // ── PROFILE: return connected account email ───────────────────────────────
+    if (action === "profile") {
+      const profileRes = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        { headers: auth }
+      );
+      const profile = await profileRes.json();
+      if (!profileRes.ok) return res.status(profileRes.status).json({ error: profile.error?.message || "Profile fetch failed" });
+      return res.json({
+        email: profile.emailAddress,
+        messagesTotal: profile.messagesTotal,
+        threadsTotal: profile.threadsTotal,
+      });
+    }
+
+
     if (action === "list") {
       const q = query || "newer_than:14d category:primary -from:me";
       const listRes = await fetch(

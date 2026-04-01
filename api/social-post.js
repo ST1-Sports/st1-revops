@@ -31,12 +31,13 @@ async function publerRequest(path, method = "GET", body = null, apiKey, workspac
   if (body) opts.body = JSON.stringify(body);
 
   const r = await fetch(`${PUBLER_API}${path}`, opts);
+  const cloned = r.clone();
   let data;
   try {
     data = await r.json();
   } catch {
-    const text = await r.text().catch(() => "");
-    data = { error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+    const text = await cloned.text().catch(() => "");
+    data = { error: `HTTP ${r.status}: ${text.slice(0, 500)}` };
   }
   return { ok: r.ok, status: r.status, data };
 }
@@ -138,14 +139,18 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  const payload = { accounts: accountIds, text: postText };
+  // Publer expects account_ids as integers. Omit scheduled_at for immediate posts.
+  const numericAccountIds = accountIds.map(id => parseInt(id, 10)).filter(n => !isNaN(n));
+  const payload = { account_ids: numericAccountIds.length ? numericAccountIds : accountIds, text: postText };
   if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-  else payload.publish_at = "now";
   if (isStory) payload.content_type = "story";
   if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
 
+  console.log("[social-post] payload →", JSON.stringify({...payload, account_ids: payload.account_ids}));
+
   try {
-    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
+    const { ok, status: httpStatus, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
+    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 300));
 
     if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
       const posts = data.posts || (data.id ? [data] : []);
@@ -160,8 +165,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // Extract the most meaningful error string from Publer's response
+    const errMsg = (
+      data.errors?.[0]?.message || data.errors?.[0] ||
+      data.message || data.error ||
+      (typeof data === "string" ? data.slice(0, 200) : null) ||
+      `Publer HTTP ${httpStatus}`
+    );
     return res.status(400).json({
-      error: data.errors?.[0] || data.message || data.error || "Post failed",
+      error: errMsg,
       backend: "publer",
       detail: data,
     });
