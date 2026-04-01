@@ -3177,20 +3177,30 @@ function ModProspecting() {
 
   // Fetch ALL records from a Zoho CRM module using standard pagination (no record cap)
   const zohoFetchAll = async (module, fields, onProgress) => {
-    let all = []; let page = 1;
-    const fList = fields.join(",");
-    while(true) {
-      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
-      }).then(r=>r.json());
-      const batch = res.data||[];
-      all = [...all,...batch];
-      if(onProgress) onProgress(all.length);
-      if(!res.info?.more_records || batch.length<200) break;
-      page++;
-      await new Promise(r=>setTimeout(r,150)); // rate-limit buffer between pages
+    // Zoho standard pagination caps at page 10 (2,000 records).
+    // Work around by fetching in yearly Created_Time slices — each year has far fewer than 2,000 records.
+    const fList = [...new Set([...fields,"Created_Time"])].join(",");
+    let all = [];
+    const nowYear = new Date().getFullYear();
+    for (let year = 2015; year <= nowYear; year++) {
+      const criteria = encodeURIComponent(`(Created_Time:between:${year}-01-01,${year}-12-31)`);
+      let page = 1;
+      while(true) {
+        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint:`/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+        }).then(r=>r.json());
+        const batch = res.data||[];
+        all = [...all,...batch];
+        if(onProgress) onProgress(all.length);
+        if(!res.info?.more_records || batch.length<200) break;
+        page++;
+        await new Promise(r=>setTimeout(r,200));
+      }
+      if(year < nowYear) await new Promise(r=>setTimeout(r,100));
     }
-    return all;
+    // Deduplicate by Zoho record id
+    const seen = new Set();
+    return all.filter(r=>{ if(seen.has(r.id)) return false; seen.add(r.id); return true; });
   };
 
   const pullFromZoho = async () => {
@@ -4790,7 +4800,7 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
 // ════════════════════════════════════════════════════════════════════════════
 
 const CAMP_COLORS = ["#F37321","#1A5FA8","#1E8F4E","#6B3FA0","#C0392B","#C77800"];
-const CAMP_STATUS_COLORS = {draft:B.muted,active:B.green,paused:B.yellow,completed:B.blue};
+const CAMP_STATUS_COLORS = {draft:B.muted,active:B.green,running:B.green,paused:"#f5a623",completed:B.blue};
 
 const CAMP_TEMPLATES = [
   {id:"tf_spring", name:"Track & Field Spring Push", product:"Track & Field Equipment", goal:"10 new quotes from ADs before spring season", channels:["email","social"], metrics:["Opens","Replies","Quotes Sent"], tone:"friendly", ctx:"Spring season purchasing window — ADs finalizing equipment budgets", assetTypes:["email3","social3"]},
@@ -4838,6 +4848,7 @@ function ModMarketing() {
   const [checkingReplies,setCheckingReplies]=useState(false);
   const [checkingOpens,setCheckingOpens]=useState(false);
   const [previewModal,setPreviewModal]=useState(null);
+  const autoSentRef = React.useRef(new Set()); // track auto-send keys per campaign+date
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -4850,6 +4861,18 @@ function ModMarketing() {
   // Flighting (plan detail multi-select)
   const [flightChecked,setFlightChecked]=useState({});
   const [flightDates,setFlightDates]=useState({});
+
+  // Auto-send due emails when execute tab is open and campaign is running
+  useEffect(()=>{
+    if(campSubTab!=="execute"||!selCampId||sending) return;
+    const camp=(s.campaigns||[]).find(c=>c.id===selCampId);
+    if(!camp||camp.status!=="running") return;
+    const key=`${selCampId}-${today()}`;
+    if(autoSentRef.current.has(key)) return;
+    const todayStr=today();
+    const due=(camp.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr);
+    if(due.length>0){autoSentRef.current.add(key);sendDueEmails(selCampId);}
+  },[selCampId,campSubTab]);
 
   const campaigns = s.campaigns || [];
   const strategies = s.strategies || [];
@@ -4938,9 +4961,14 @@ function ModMarketing() {
     setGenRunning(true);
     const contacts = s.contacts||[];
     const windowHint = SPORT_WINDOWS[campDraft.product?.split(" ")[0]]||"";
+    const rep = campDraft.repId ? (s.reps||[]).find(r=>r.id===campDraft.repId) : null;
+    const repLine = rep
+      ? `The emails are written BY and signed by ${rep.name}${rep.title?`, ${rep.title}`:""}${rep.email?` (${rep.email})`:""}. Use "${rep.name.split(" ")[0]}" in first-person throughout (e.g. "I'm ${rep.name.split(" ")[0]} from ST1 Sports"). Signature should be just "${rep.name}" — do not include a separate signature block, it will be appended automatically.\n`
+      : ``;
     const result = await aiCall(
       `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
       `Product: ${campDraft.product}. Audience: ${campDraft.audience}. Channels: ${(campDraft.channels||[]).join(", ")||"email"}. Tone: ${campDraft.tone}.\n`+
+      repLine+
       `${campDraft.ctx?`Context: ${campDraft.ctx}.\n`:""}`+
       `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
       `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
@@ -5113,15 +5141,15 @@ function ModMarketing() {
       icp: campDraft.icp||{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
       planId: campDraft.planId||"",
       ctx: campDraft.ctx||"",
-      status: "active",
+      status: "running",
       createdAt: todayStr,
       color: CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
     };
     dispatch("ADD_CAMPAIGN", camp);
     seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
-    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("strategy");
+    setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("execute");
     setSegResult(null); setSelectedContacts(new Set());
-    toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
+    toast(`Campaign launched · ${seg.length} contacts enrolled — sending due emails now…`,"success");
   };
 
   const markContacted = (campId, contactId) => {
@@ -6423,14 +6451,33 @@ function ModMarketing() {
 
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
+              {/* Status banner */}
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:selCamp.status==="running"?`${B.green}10`:`${B.muted}08`,border:`1px solid ${selCamp.status==="running"?B.green:B.border}`,borderRadius:6,marginBottom:14}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:selCamp.status==="running"?B.green:B.muted,flexShrink:0,
+                  boxShadow:selCamp.status==="running"?`0 0 6px ${B.green}`:"none"}}/>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:selCamp.status==="running"?B.green:B.muted,letterSpacing:.5,fontWeight:700}}>
+                  {selCamp.status==="running"?"● RUNNING":`${(selCamp.status||"active").toUpperCase()}`}
+                </span>
+                {selCamp.status!=="running"&&(
+                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,status:"running"})}
+                    style={{marginLeft:"auto",background:B.green,color:B.white,border:"none",borderRadius:4,padding:"4px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>
+                    ▶ ACTIVATE
+                  </button>
+                )}
+                {selCamp.status==="running"&&(
+                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,status:"paused"})}
+                    style={{marginLeft:"auto",background:B.surface,color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>
+                    ⏸ PAUSE
+                  </button>
+                )}
+              </div>
               {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:12}}>
                   <div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                   <div style={{flex:1}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending as <strong>{rep.name}</strong> · {rep.email}</span>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:8}}>Replies feed {rep.name.split(" ")[0]}'s pipeline</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:8}}>Replies → {rep.name.split(" ")[0]}'s pipeline</span>
                   </div>
-                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
                 </div>
               ):null;})()}
               {(()=>{
@@ -6440,34 +6487,64 @@ function ModMarketing() {
                 const doneN=enrs.filter(e=>e.status==="done").length;
                 const activeN=enrs.filter(e=>e.status==="active").length;
                 const openedN=enrs.filter(e=>e.openedAt).length;
+                const todayStr=today();
+                const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
                 return(
-                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
-                      <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                  <div>
+                    <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+                      {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal||B.blue],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                        <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
+                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                        </div>
+                      ))}
+                      {sending?(
+                        <div style={{display:"flex",alignItems:"center",gap:7,padding:"6px 14px",background:`${B.green}10`,border:`1px solid ${B.green}`,borderRadius:5,alignSelf:"center"}}>
+                          <Spin/><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.3}}>SENDING EMAILS…</span>
+                        </div>
+                      ):dueN>0?(
+                        <button onClick={()=>sendDueEmails(selCamp.id)} disabled={sending}
+                          style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                          ▶ SEND {dueN} DUE NOW
+                        </button>
+                      ):null}
+                      <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
+                        style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                        {checkingReplies?"CHECKING...":"↻ REPLIES"}
+                      </button>
+                      <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
+                        style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                        {checkingOpens?"CHECKING...":"👁 OPENS"}
+                      </button>
+                    </div>
+                    {/* Campaign schedule table */}
+                    {(selCamp.touches||[]).length>0&&(
+                      <div style={{marginBottom:16}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>CAMPAIGN SCHEDULE</div>
+                        <div style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 2fr 100px 60px 60px",background:B.surface,padding:"6px 12px",borderBottom:`1px solid ${B.border}`}}>
+                            {["EMAIL","SUBJECT","SEND DATE","SENT","DUE"].map(h=>(
+                              <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{h}</div>
+                            ))}
+                          </div>
+                          {(selCamp.touches||[]).map((t,i)=>{
+                            const sentN2=enrs.filter(e=>(e.step||0)>i).length;
+                            const dueN2=enrs.filter(e=>e.status==="active"&&(e.step||0)===i&&(e.nextDate||todayStr)<=todayStr).length;
+                            const sendDate=selCamp.startDate?new Date(new Date(selCamp.startDate).getTime()+(t.dayOffset||0)*86400000).toLocaleDateString("en-US",{month:"short",day:"numeric"}):`Day ${t.dayOffset||0}`;
+                            const isPast=sentN2===enrs.length||new Date(selCamp.startDate||todayStr).getTime()+(t.dayOffset||0)*86400000<Date.now();
+                            return(
+                              <div key={t.id||i} style={{display:"grid",gridTemplateColumns:"1fr 2fr 100px 60px 60px",padding:"8px 12px",borderBottom:i<(selCamp.touches||[]).length-1?`1px solid ${B.border}`:"none",background:dueN2>0?`${B.green}06`:"transparent"}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.3}}>EMAIL {i+1}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{t.subject||"(no subject)"}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:isPast?B.muted:B.blue}}>{sendDate}</div>
+                                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:sentN2>0?B.purple:B.muted}}>{sentN2}</div>
+                                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:dueN2>0?B.green:B.muted}}>{dueN2>0?dueN2:"-"}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
-                    ))}
-                    {(()=>{
-                      const todayStr=today();
-                      const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
-                      return(
-                        <>
-                          <button onClick={()=>sendDueEmails(selCamp.id)} disabled={sending||dueN===0}
-                            style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
-                          </button>
-                          <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
-                            style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingReplies?"CHECKING...":"↻ REPLIES"}
-                          </button>
-                          <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
-                            style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingOpens?"CHECKING...":"👁 OPENS"}
-                          </button>
-                        </>
-                      );
-                    })()}
+                    )}
                   </div>
                 );
               })()}
@@ -6764,17 +6841,31 @@ function ModMarketing() {
                             </div>
                           </div>
                         )}
-                        {/* Tracked metrics checklist */}
-                        {(selCamp.metrics||[]).length>0&&(
+                        {/* Per-touch performance table */}
+                        {(selCamp.touches||[]).length>0&&(
                           <div style={{marginBottom:20}}>
-                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>TRACKING METRICS</div>
-                            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-                              {(selCamp.metrics||[]).map(m=>{
-                                const tracked=m==="Opens"?openedN:m==="Replies"?repliedN:m==="Emails Sent"?sentN:null;
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>EMAIL PERFORMANCE BY TOUCH</div>
+                            <div style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+                              <div style={{display:"grid",gridTemplateColumns:"80px 2fr 80px 60px 60px 60px 60px",background:B.surface,padding:"6px 12px",borderBottom:`1px solid ${B.border}`}}>
+                                {["TOUCH","SUBJECT","SEND DATE","SENT","OPENS","OPEN%","REPLIES"].map(h=>(
+                                  <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{h}</div>
+                                ))}
+                              </div>
+                              {(selCamp.touches||[]).map((t,i)=>{
+                                const sentN2=enrs.filter(e=>(e.step||0)>i).length;
+                                const openN2=enrs.filter(e=>(e.step||0)>i&&e.openedAt).length;
+                                const replyN2=enrs.filter(e=>e.status==="replied"&&(e.step||0)>i).length;
+                                const openPct=sentN2>0?Math.round(openN2/sentN2*100):0;
+                                const sendDate=selCamp.startDate?new Date(new Date(selCamp.startDate).getTime()+(t.dayOffset||0)*86400000).toLocaleDateString("en-US",{month:"short",day:"numeric"}):`Day ${t.dayOffset||0}`;
                                 return(
-                                  <div key={m} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",minWidth:110}}>
-                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:2}}>☑ {m}</div>
-                                    {tracked!==null&&<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{tracked}</div>}
+                                  <div key={t.id||i} style={{display:"grid",gridTemplateColumns:"80px 2fr 80px 60px 60px 60px 60px",padding:"8px 12px",borderBottom:i<(selCamp.touches||[]).length-1?`1px solid ${B.border}`:"none",background:i%2===0?"transparent":`${B.surface}`}}>
+                                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.3}}>EMAIL {i+1}</div>
+                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",paddingRight:8}}>{t.subject||"—"}</div>
+                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sendDate}</div>
+                                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:sentN2>0?B.purple:B.muted}}>{sentN2||"—"}</div>
+                                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:openN2>0?B.blue:B.muted}}>{openN2||"—"}</div>
+                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:openPct>0?B.blue:B.muted}}>{openPct>0?`${openPct}%`:"—"}</div>
+                                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:replyN2>0?B.green:B.muted}}>{replyN2||"—"}</div>
                                   </div>
                                 );
                               })}
