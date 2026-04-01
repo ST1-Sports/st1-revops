@@ -105,7 +105,7 @@ export default async function handler(req, res) {
         state: "scheduled",
         posts: [{
           networks: { instagram: { type: "status", text: "ST1 RevOps debug test" } },
-          accounts: firstAccountId ? [{ id: firstAccountId }] : [],
+          accounts: firstAccountId ? [{ id: firstAccountId, scheduled_at: new Date().toISOString() }] : [],
         }],
       },
     };
@@ -194,11 +194,13 @@ export default async function handler(req, res) {
     if (publicMediaUrls.length) networks[pl].media_urls = publicMediaUrls;
   }
 
-  const accountObjs = accountIds.map(id => {
-    const obj = { id: String(id) };
-    if (scheduleDate) obj.scheduled_at = new Date(scheduleDate).toISOString();
-    return obj;
-  });
+  const accountObjs = accountIds.map(id => ({
+    id: String(id),
+    // For immediate posts use now; for scheduled posts use the requested time
+    scheduled_at: scheduleDate
+      ? new Date(scheduleDate).toISOString()
+      : new Date().toISOString(),
+  }));
 
   const payload = {
     bulk: {
