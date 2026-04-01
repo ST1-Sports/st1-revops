@@ -3175,20 +3175,25 @@ function ModProspecting() {
     setZohoPushing(false);
   };
 
-  // Fetch ALL records from a Zoho CRM module using standard pagination (no record cap)
+  // Fetch ALL records from a Zoho CRM module using COQL cursor pagination.
+  // Uses WHERE id > lastId to bypass Zoho's 2,000-record OFFSET cap entirely.
   const zohoFetchAll = async (module, fields, onProgress) => {
-    let all = []; let page = 1;
-    const fList = fields.join(",");
+    const fList = [...new Set(["id", ...fields])].join(",");
+    let all = [];
+    let lastId = null;
     while(true) {
+      const where = lastId ? ` WHERE id > '${lastId}'` : '';
+      const query = `SELECT ${fList} FROM ${module}${where} ORDER BY id ASC LIMIT 200`;
       const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+        body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
       }).then(r=>r.json());
       const batch = res.data||[];
+      if(!batch.length) break;
       all = [...all,...batch];
       if(onProgress) onProgress(all.length);
-      if(!res.info?.more_records || batch.length<200) break;
-      page++;
-      await new Promise(r=>setTimeout(r,150)); // rate-limit buffer between pages
+      lastId = batch[batch.length-1].id;
+      if(batch.length<200) break;
+      await new Promise(r=>setTimeout(r,250));
     }
     return all;
   };
@@ -5079,15 +5084,34 @@ function ModMarketing() {
 
   const saveCampaign = () => {
     const types = campDraft?.assetTypes||[];
-    const hasEmail = types.some(t=>t==="email3"||t==="email5");
     const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
     if(!campDraft) return;
     if(types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching","error");return;}
     const contacts = s.contacts||[];
-    const seg = segResult
-      ? contacts.filter(c=>selectedContacts.has(c.id))
-      : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
     const todayStr = today();
+    const startDate = campDraft.startDate||todayStr;
+    const batchSize = campDraft.batchSize||25;
+    const audienceMode = campDraft.audienceMode||"ai";
+    let seg;
+    let enrollments;
+    if(audienceMode==="list"&&campDraft.audienceListId){
+      const list=(s.contactLists||[]).find(l=>l.id===campDraft.audienceListId);
+      const listIds=list?.contactIds||[];
+      seg=contacts.filter(c=>listIds.includes(c.id));
+      // Stagger: contact at index i gets startDate + floor(i/batchSize) days
+      enrollments=seg.map((c,i)=>{
+        const dayOffset=Math.floor(i/batchSize);
+        const startD=new Date(startDate);
+        startD.setDate(startD.getDate()+dayOffset);
+        const enrollDate=startD.toISOString().slice(0,10);
+        return {contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:enrollDate};
+      });
+    } else {
+      seg = segResult
+        ? contacts.filter(c=>selectedContacts.has(c.id))
+        : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
+      enrollments=seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}));
+    }
     const campId = mkId();
     const camp = {
       id: campId,
@@ -5097,10 +5121,10 @@ function ModMarketing() {
       tone: campDraft.tone,
       goal: campDraft.goal||"",
       repId: campDraft.repId||"",
-      startDate: campDraft.startDate||todayStr,
+      startDate,
       endDate: campDraft.endDate||"",
       touches: campDraft.touches,
-      enrollments: seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr})),
+      enrollments,
       socialPosts: [],
       socialDrafts: campDraft.socialDrafts||[],
       adCopy: campDraft.adCopy||"",
@@ -5113,7 +5137,10 @@ function ModMarketing() {
       icp: campDraft.icp||{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
       planId: campDraft.planId||"",
       ctx: campDraft.ctx||"",
-      status: "active",
+      audienceMode,
+      audienceListId: campDraft.audienceListId||"",
+      batchSize,
+      status: "running",
       createdAt: todayStr,
       color: CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
     };
@@ -6261,9 +6288,41 @@ function ModMarketing() {
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,padding:"6px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,textAlign:"center"}}>{selectedContacts.size} contact{selectedContacts.size!==1?"s":""} selected for enrollment</div>
                   </div>
                 )}
+                {/* Audience mode: AI MATCH vs FROM LIST */}
+                <div style={{marginBottom:16}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>AUDIENCE SOURCE</div>
+                  <div style={{display:"flex",gap:0,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",width:"fit-content",marginBottom:12}}>
+                    {[["ai","AI MATCH"],["list","FROM LIST"]].map(([mode,label])=>(
+                      <button key={mode} onClick={()=>setCampDraft(c=>({...c,audienceMode:mode}))} style={{background:(campDraft.audienceMode||"ai")===mode?B.orange:"transparent",color:(campDraft.audienceMode||"ai")===mode?B.white:B.muted,border:"none",padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{label}</button>
+                    ))}
+                  </div>
+                  {(campDraft.audienceMode||"ai")==="list"&&(
+                    <div>
+                      {(s.contactLists||[]).length===0?(
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>No contact lists found — create lists in the Contacts section first.</div>
+                      ):(
+                        <select value={campDraft.audienceListId||""} onChange={e=>setCampDraft(c=>({...c,audienceListId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:campDraft.audienceListId?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",marginBottom:8}}>
+                          <option value="">— select a contact list —</option>
+                          {(s.contactLists||[]).map(list=>(
+                            <option key={list.id} value={list.id}>{list.name} ({(list.contactIds||[]).length} contacts)</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {/* Batch size */}
+                <div style={{marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,flexShrink:0}}>BATCH SIZE</div>
+                  <input type="number" min={1} max={500} value={campDraft.batchSize||25} onChange={e=>setCampDraft(c=>({...c,batchSize:Math.max(1,parseInt(e.target.value)||25)}))} style={{width:80,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>contacts per day — stagger enrollment (first batch starts day 0, next on day 1, etc.)</span>
+                </div>
                 <div style={{padding:"10px 14px",background:`${B.green}08`,border:`1px solid ${B.green}20`,borderRadius:6,marginBottom:18}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
-                    Launching will enroll <strong>{selectedContacts.size||(s.contacts||[]).filter(c=>campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0])).length} contacts</strong> and set the campaign to <strong>active</strong>.
+                    {(campDraft.audienceMode||"ai")==="list"&&campDraft.audienceListId
+                      ? (()=>{const lst=(s.contactLists||[]).find(l=>l.id===campDraft.audienceListId);const cnt=(lst?.contactIds||[]).length;return <span>Launching will enroll <strong>{cnt} contacts</strong> from list <strong>{lst?.name||""}</strong>, staggered in batches of <strong>{campDraft.batchSize||25}</strong> per day.</span>;})()
+                      : <span>Launching will enroll <strong>{selectedContacts.size||(s.contacts||[]).filter(c=>campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0])).length} contacts</strong> and set the campaign to <strong>active</strong>.</span>
+                    }
                   </div>
                 </div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
