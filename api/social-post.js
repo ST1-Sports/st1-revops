@@ -139,47 +139,34 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Publer API: accounts is array of objects {id, scheduled_at?}
-  // For immediate posts omit scheduled_at. For scheduled posts add it per-account.
+  // Publer API: POST /posts with { post: { type, text, accounts:[{id, scheduled_at?}], media? } }
   const accountObjs = accountIds.map(id => {
     const obj = { id: String(id) };
     if (scheduleDate) obj.scheduled_at = new Date(scheduleDate).toISOString();
     return obj;
   });
 
-  // Build networks object — one entry per platform with appropriate type
-  const netTypeMap = { facebook:"feed", instagram:"feed", linkedin:"status", twitter:"status", tiktok:"video" };
-  const activePlatforms = platforms?.length
-    ? platforms.filter(p => platformMap[p])
-    : Object.keys(platformMap).filter(p => platformMap[p]);
-  const networks = {};
-  for (const pl of (activePlatforms.length ? activePlatforms : ["facebook"])) {
-    networks[pl] = { type: netTypeMap[pl] || "feed", text: postText };
-  }
-
-  const postObj = { networks, accounts: accountObjs };
-  if (publicMediaUrls.length) postObj.media = publicMediaUrls.map(url => ({ url }));
-  if (isStory) postObj.content_type = "story";
-
-  const payload = {
-    bulk: {
-      state: scheduleDate ? "scheduled" : "published",
-      posts: [postObj],
-    },
+  const postPayload = {
+    type: "feed",
+    text: postText,
+    accounts: accountObjs,
   };
+  if (publicMediaUrls.length) postPayload.media = publicMediaUrls.map(url => ({ url }));
+
+  const payload = { post: postPayload };
 
   console.log("[social-post] payload →", JSON.stringify(payload).slice(0, 500));
 
   try {
-    const { ok, status: httpStatus, data } = await publerRequest("/posts/schedule/publish", "POST", payload, apiKey, workspaceId);
-    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 300));
+    const { ok, status: httpStatus, data } = await publerRequest("/posts", "POST", payload, apiKey, workspaceId);
+    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 500));
 
     if (ok) {
-      const posts = data.posts || data.data || (data.id ? [data] : []);
+      const posts = Array.isArray(data) ? data : (data.posts || data.data || (data.id ? [data] : []));
       return res.json({
         status: scheduleDate ? "scheduled" : "success",
         backend: "publer",
-        postIds: Array.isArray(posts) ? posts.map(p => p.id).filter(Boolean) : [],
+        postIds: posts.map(p => p.id).filter(Boolean),
         scheduled: !!scheduleDate,
         ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0
           ? { _warning: "Image skipped — must be a public HTTPS URL." }
@@ -187,14 +174,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // Surface the most meaningful error string, plus the full raw response for debugging
     const errMsg = (
-      data.errors?.[0]?.message || data.errors?.[0] ||
+      data.errors?.[0]?.message || (typeof data.errors?.[0] === "string" ? data.errors[0] : null) ||
       data.message || data.error ||
       (typeof data === "string" ? data.slice(0, 200) : null) ||
       `Publer HTTP ${httpStatus}`
     );
     return res.status(400).json({
-      error: errMsg,
+      error: `[${httpStatus}] ${errMsg}`,
       backend: "publer",
       detail: data,
     });
