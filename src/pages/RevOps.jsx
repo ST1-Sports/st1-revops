@@ -7168,6 +7168,8 @@ function ModSocial() {
   const [imgPrompt,setImgPrompt]=useState("");
   const [imgGenRunning,setImgGenRunning]=useState(false);
   const [imgMode,setImgMode]=useState("generate"); // "generate" | "upload" | "url"
+  const [posting,setPosting]=useState(false);
+  const [genRunning,setGenRunning]=useState(false);
 
   const generateSocialImage=async()=>{
     if(!imgPrompt.trim()){toast("Enter an image prompt","error");return;}
