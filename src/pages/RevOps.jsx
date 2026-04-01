@@ -7165,8 +7165,30 @@ function ModSocial() {
   const [scheduleTime,setScheduleTime]=useState("09:00");
   const [linkUrl,setLinkUrl]=useState("");
   const [linkedCampId,setLinkedCampId]=useState("");
-  const [posting,setPosting]=useState(false);
-  const [genRunning,setGenRunning]=useState(false);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgGenRunning,setImgGenRunning]=useState(false);
+  const [imgMode,setImgMode]=useState("generate"); // "generate" | "upload" | "url"
+
+  const generateSocialImage=async()=>{
+    if(!imgPrompt.trim()){toast("Enter an image prompt","error");return;}
+    setImgGenRunning(true);
+    try{
+      const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:imgPrompt,style:"lifestyle",sizeKey:"square"})});
+      const d=await r.json();
+      if(d.imageUrl){setImageUrl(d.imageUrl);toast("Image generated!","success");}
+      else toast(d.error||"Image gen failed","error");
+    }catch{toast("Image gen failed","error");}
+    setImgGenRunning(false);
+  };
+
+  const handleImgUpload=e=>{
+    const file=e.target.files?.[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=ev=>setImageUrl(ev.target.result);
+    reader.readAsDataURL(file);
+  };
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
@@ -7395,9 +7417,34 @@ function ModSocial() {
             </div>
             {/* Image */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:5}}>IMAGE URL (optional)</Lbl>
-              <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:120,borderRadius:6,objectFit:"cover"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                <Lbl>IMAGE (optional)</Lbl>
+                <div style={{display:"flex",gap:4}}>
+                  {[["generate","✦ AI GENERATE"],["upload","↑ UPLOAD"],["url","LINK"]].map(([mode,label])=>(
+                    <button key={mode} onClick={()=>{setImgMode(mode);if(mode!=="url")setImageUrl("");}} style={{background:imgMode===mode?B.orange:B.surface,color:imgMode===mode?B.white:B.muted,border:`1px solid ${imgMode===mode?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>{label}</button>
+                  ))}
+                </div>
+              </div>
+              {imgMode==="generate"&&(
+                <div style={{display:"flex",gap:6}}>
+                  <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder="e.g. Track & field hurdles at sunrise, vibrant action shot" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                    onKeyDown={e=>e.key==="Enter"&&generateSocialImage()}/>
+                  <button onClick={generateSocialImage} disabled={imgGenRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",opacity:imgGenRunning?.7:1}}>
+                    {imgGenRunning?"GENERATING...":"GENERATE"}
+                  </button>
+                </div>
+              )}
+              {imgMode==="upload"&&(
+                <label style={{display:"flex",alignItems:"center",gap:10,background:B.surface,border:`2px dashed ${B.border}`,borderRadius:6,padding:"14px 16px",cursor:"pointer"}}>
+                  <span style={{fontSize:22}}>🖼</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Click to upload an image (JPG, PNG, GIF, WEBP)</span>
+                  <input type="file" accept="image/*" onChange={handleImgUpload} style={{display:"none"}}/>
+                </label>
+              )}
+              {imgMode==="url"&&(
+                <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              )}
+              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:160,borderRadius:6,objectFit:"cover",width:"100%"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
