@@ -139,21 +139,30 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Publer expects account_ids as integers. Omit scheduled_at for immediate posts.
-  const numericAccountIds = accountIds.map(id => parseInt(id, 10)).filter(n => !isNaN(n));
-  const payload = { account_ids: numericAccountIds.length ? numericAccountIds : accountIds, text: postText };
-  if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-  if (isStory) payload.content_type = "story";
-  if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
+  // Publer API: POST /posts with { post: { type, text, accounts:[{id, scheduled_at?}], media? } }
+  const accountObjs = accountIds.map(id => {
+    const obj = { id: String(id) };
+    if (scheduleDate) obj.scheduled_at = new Date(scheduleDate).toISOString();
+    return obj;
+  });
 
-  console.log("[social-post] payload →", JSON.stringify({...payload, account_ids: payload.account_ids}));
+  const postPayload = {
+    type: "feed",
+    text: postText,
+    accounts: accountObjs,
+  };
+  if (publicMediaUrls.length) postPayload.media = publicMediaUrls.map(url => ({ url }));
+
+  const payload = { post: postPayload };
+
+  console.log("[social-post] payload →", JSON.stringify(payload).slice(0, 500));
 
   try {
-    const { ok, status: httpStatus, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
-    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 300));
+    const { ok, status: httpStatus, data } = await publerRequest("/posts", "POST", payload, apiKey, workspaceId);
+    console.log("[social-post] publer →", httpStatus, JSON.stringify(data).slice(0, 500));
 
-    if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
-      const posts = data.posts || (data.id ? [data] : []);
+    if (ok) {
+      const posts = Array.isArray(data) ? data : (data.posts || data.data || (data.id ? [data] : []));
       return res.json({
         status: scheduleDate ? "scheduled" : "success",
         backend: "publer",
@@ -165,15 +174,15 @@ export default async function handler(req, res) {
       });
     }
 
-    // Extract the most meaningful error string from Publer's response
+    // Surface the most meaningful error string, plus the full raw response for debugging
     const errMsg = (
-      data.errors?.[0]?.message || data.errors?.[0] ||
+      data.errors?.[0]?.message || (typeof data.errors?.[0] === "string" ? data.errors[0] : null) ||
       data.message || data.error ||
       (typeof data === "string" ? data.slice(0, 200) : null) ||
       `Publer HTTP ${httpStatus}`
     );
     return res.status(400).json({
-      error: errMsg,
+      error: `[${httpStatus}] ${errMsg}`,
       backend: "publer",
       detail: data,
     });
