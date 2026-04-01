@@ -3087,6 +3087,8 @@ function ModProspecting() {
   const [bulkSel,setBulkSel] = useState(new Set()); // selected contact IDs
   const [timelineContact,setTimelineContact] = useState(null); // contact id with timeline expanded
   const [bulkEnrolling,setBulkEnrolling] = useState(false);
+  const [bulkListOpen,setBulkListOpen] = useState(false);
+  const [newListName,setNewListName] = useState("");
   const [noteContactId,setNoteContactId] = useState(null); // contact id with notes panel open
   const [noteText,setNoteText] = useState("");
 
@@ -3806,6 +3808,53 @@ function ModProspecting() {
                           ))}
                           {(s.sequences||[]).length===0&&<div style={{padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
                           <button onClick={()=>setBulkEnrolling(false)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:4}}>Cancel</button>
+                        </div>
+                      )}
+                    </div>
+                    {/* Add to list */}
+                    <div style={{position:"relative"}}>
+                      <button onClick={()=>{setBulkListOpen(v=>!v);setBulkEnrolling(false);}}
+                        style={{background:B.blue,color:B.white,border:"none",borderRadius:3,padding:"3px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>📋 ADD TO LIST ▾</button>
+                      {bulkListOpen&&(
+                        <div style={{position:"absolute",left:0,top:"100%",zIndex:30,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:220,padding:8}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>ADD {bulkSel.size} CONTACTS TO…</div>
+                          {/* Existing lists */}
+                          {(s.contactLists||[]).map(list=>(
+                            <button key={list.id} onClick={()=>{
+                              const ids=[...bulkSel];
+                              const existing=new Set(list.contactIds||[]);
+                              const merged=[...existing,...ids.filter(id=>!existing.has(id))];
+                              dispatch("UPDATE_CONTACT_LIST",{...list,contactIds:merged,count:merged.length});
+                              setBulkListOpen(false);setBulkSel(new Set());
+                              toast(`${ids.length} contacts added to "${list.name}"`,"success");
+                            }} style={{display:"flex",justifyContent:"space-between",alignItems:"center",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,cursor:"pointer",borderRadius:3}}>
+                              <span>📋 {list.name}</span>
+                              <span style={{fontSize:9,color:B.muted}}>{(list.contactIds||[]).length}</span>
+                            </button>
+                          ))}
+                          {/* Create new list */}
+                          <div style={{borderTop:`1px solid ${B.border}`,marginTop:6,paddingTop:6}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:5}}>NEW LIST</div>
+                            <div style={{display:"flex",gap:5}}>
+                              <input value={newListName} onChange={e=>setNewListName(e.target.value)}
+                                onKeyDown={e=>{
+                                  if(e.key==="Enter"&&newListName.trim()){
+                                    dispatch("ADD_CONTACT_LIST",{id:mkId(),name:newListName.trim(),createdAt:Date.now(),contactIds:[...bulkSel],source:"manual",count:bulkSel.size});
+                                    toast(`"${newListName.trim()}" created with ${bulkSel.size} contacts`,"success");
+                                    setBulkListOpen(false);setBulkSel(new Set());setNewListName("");
+                                  }
+                                }}
+                                placeholder="List name…" autoFocus
+                                style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text}}/>
+                              <button onClick={()=>{
+                                if(!newListName.trim()) return;
+                                dispatch("ADD_CONTACT_LIST",{id:mkId(),name:newListName.trim(),createdAt:Date.now(),contactIds:[...bulkSel],source:"manual",count:bulkSel.size});
+                                toast(`"${newListName.trim()}" created with ${bulkSel.size} contacts`,"success");
+                                setBulkListOpen(false);setBulkSel(new Set());setNewListName("");
+                              }} style={{background:B.blue,color:B.white,border:"none",borderRadius:4,padding:"5px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>✓</button>
+                            </div>
+                          </div>
+                          <button onClick={()=>setBulkListOpen(false)} style={{display:"block",width:"100%",textAlign:"center",background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"4px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",marginTop:6}}>Cancel</button>
                         </div>
                       )}
                     </div>
