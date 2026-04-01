@@ -4837,6 +4837,7 @@ function ModMarketing() {
   const [selPlanId,setSelPlanId]=useState(null);
   const [showNewPlanForm,setShowNewPlanForm]=useState(false);
   const [planDraft,setPlanDraft]=useState(null);
+  const [editingPlanId,setEditingPlanId]=useState(null);
   const [planSuggestRunning,setPlanSuggestRunning]=useState(false);
   const [planSuggestions,setPlanSuggestions]=useState(null);
 
@@ -5136,8 +5137,11 @@ function ModMarketing() {
         : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
       enrollments=seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}));
     }
-    const campId = mkId();
+    const isEditing = !!campDraft.id;
+    const campId = campDraft.id || mkId();
+    const existingCamp = isEditing ? campaigns.find(c=>c.id===campId) : null;
     const camp = {
+      ...(existingCamp||{}),
       id: campId,
       name: campDraft.name||`${campDraft.product} — ${campDraft.audience}`,
       product: campDraft.product,
@@ -5149,12 +5153,12 @@ function ModMarketing() {
       endDate: campDraft.endDate||"",
       touches: campDraft.touches,
       enrollments,
-      socialPosts: [],
+      socialPosts: existingCamp?.socialPosts||[],
       socialDrafts: campDraft.socialDrafts||[],
       adCopy: campDraft.adCopy||"",
       callScript: campDraft.callScript||"",
       directMail: campDraft.directMail||"",
-      adIds: [],
+      adIds: existingCamp?.adIds||[],
       channels: campDraft.channels||[],
       metrics: campDraft.metrics||[],
       assetTypes: campDraft.assetTypes||[],
@@ -5164,15 +5168,16 @@ function ModMarketing() {
       audienceMode,
       audienceListId: campDraft.audienceListId||"",
       batchSize,
-      status: "running",
-      createdAt: todayStr,
-      color: CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
+      status: isEditing ? (existingCamp?.status||"running") : "running",
+      createdAt: existingCamp?.createdAt||todayStr,
+      color: existingCamp?.color||CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
     };
-    dispatch("ADD_CAMPAIGN", camp);
-    seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
+    if(isEditing) dispatch("UPDATE_CAMPAIGN", camp);
+    else dispatch("ADD_CAMPAIGN", camp);
+    if(!isEditing) seg.forEach(c=>dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:campId,note:`Enrolled in ${camp.name}`}));
     setShowNewCampForm(false); setCampDraft(null); setCampStep(1); setSelCampId(campId); setCampSubTab("strategy");
     setSegResult(null); setSelectedContacts(new Set());
-    toast(`Campaign created · ${seg.length} contacts enrolled`,"success");
+    toast(isEditing ? `Campaign updated` : `Campaign created · ${seg.length} contacts enrolled`,"success");
   };
 
   const markContacted = (campId, contactId) => {
@@ -5564,7 +5569,8 @@ function ModMarketing() {
                             {linkedCamps>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{linkedCamps} campaign{linkedCamps!==1?"s":""}</span>}
                           </div>
                         </div>
-                        <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"flex-end"}}>
+                        <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${plan.name}"?`)){dispatch("DEL_STRATEGY",plan.id);}}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
                           <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>OPEN →</span>
                         </div>
                       </div>
@@ -5580,8 +5586,8 @@ function ModMarketing() {
             <div style={{maxWidth:760}}>
               <div className="card" style={{padding:20}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>NEW MARKETING PLAN</div>
-                  <GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);setMatchingContacts(null);}}>CANCEL</GBtn>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>{editingPlanId?"EDIT MARKETING PLAN":"NEW MARKETING PLAN"}</div>
+                  <GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);setMatchingContacts(null);setEditingPlanId(null);if(editingPlanId)setSelPlanId(editingPlanId);}}>CANCEL</GBtn>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
                   <div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:4}}>Plan Name</Lbl><input value={planDraft.name} onChange={e=>setPlanDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Spring Track & Field 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
@@ -5699,9 +5705,11 @@ function ModMarketing() {
                   </OBtn>
                   <OBtn onClick={()=>{
                     if(!planDraft.name.trim()){toast("Add a plan name first","error");return;}
-                    const plan={id:mkId(),name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
-                    dispatch("ADD_STRATEGY",plan);setShowNewPlanForm(false);setSelPlanId(plan.id);setPlanSuggestions(null);setMatchingContacts(null);toast("Plan saved","success");
-                  }} col={B.green} disabled={!planDraft.name.trim()}>SAVE PLAN</OBtn>
+                    const planId=editingPlanId||mkId();
+                    const plan={id:planId,name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
+                    if(editingPlanId){dispatch("UPDATE_STRATEGY",plan);setEditingPlanId(null);}else{dispatch("ADD_STRATEGY",plan);}
+                    setShowNewPlanForm(false);setSelPlanId(planId);setPlanSuggestions(null);setMatchingContacts(null);toast(editingPlanId?"Plan updated":"Plan saved","success");
+                  }} col={B.green} disabled={!planDraft.name.trim()}>{editingPlanId?"UPDATE PLAN":"SAVE PLAN"}</OBtn>
                 </div>
                 {planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>AI building campaign ideas for this plan…</div>}
                 {planSuggestions&&planSuggestions.length>0&&(
@@ -5753,6 +5761,7 @@ function ModMarketing() {
                 </div>
                 <div style={{display:"flex",gap:8}}>
                   <OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ CAMPAIGN FROM PLAN</OBtn>
+                  <button onClick={()=>{setPlanDraft({...selPlan,icp:selPlan.icp||{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""}});setEditingPlanId(selPlan.id);setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}}>✏ EDIT</button>
                   <button onClick={()=>{if(window.confirm("Delete this plan?")){{dispatch("DEL_STRATEGY",selPlan.id);setSelPlanId(null);}}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
                 </div>
               </div>
@@ -5938,7 +5947,8 @@ function ModMarketing() {
                             {(camp.socialPosts||[]).length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>📱 {(camp.socialPosts||[]).length} posts</span>}
                           </div>
                         </div>
-                        <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"flex-end"}}>
+                        <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${camp.name}"?`))dispatch("DELETE_CAMPAIGN",camp.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
                           <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>OPEN →</span>
                         </div>
                       </div>
@@ -6452,8 +6462,9 @@ function ModMarketing() {
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   <select value={selCamp.status||"draft"} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,status:e.target.value})}
                     style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,color:B.text,fontFamily:"'Lexend',sans-serif"}}>
-                    {["draft","active","paused","completed"].map(sv=><option key={sv} value={sv}>{sv.toUpperCase()}</option>)}
+                    {["draft","active","paused","completed","running"].map(sv=><option key={sv} value={sv}>{sv.toUpperCase()}</option>)}
                   </select>
+                  <button onClick={()=>{setCampDraft({...selCamp});setShowNewCampForm(true);setCampStep(1);setSelCampId(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}}>✏ EDIT</button>
                   <button onClick={()=>{if(window.confirm("Delete this campaign?")) {dispatch("DELETE_CAMPAIGN",selCamp.id);setSelCampId(null);}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
                 </div>
               </div>
