@@ -3647,87 +3647,127 @@ function ModProspecting() {
                 </OBtn>
               </div>
             </div>
-            {/* CSV upload card */}
-            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.orange}`}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>UPLOAD A LIST</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Upload a CSV or Excel export from Zoho, HubSpot, Salesforce, or any CRM. AI will normalize and categorize each contact automatically.
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
-                <OBtn sm onClick={()=>importFileRef.current?.click()} disabled={importPhase==="parsing"}>
-                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD CSV / EXCEL"}
-                </OBtn>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} in database</span>
-              </div>
-            </div>
-            {/* Apollo.io import card */}
-            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.teal}`}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:2,marginBottom:8}}>APOLLO.IO IMPORT</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Upload an Apollo.io CSV export. AI maps: First Name, Last Name, Title, Company, Email, LinkedIn URL, City, State into your contact database.
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
-                <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()} disabled={importPhase==="parsing"}>
-                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD APOLLO CSV"}
-                </OBtn>
-              </div>
-            </div>
           </div>
-
-          {/* Preview table */}
-          {importPhase==="preview"&&importRows.length>0&&(
-            <div style={{marginBottom:20}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{importRows.length} contacts ready · {importSel.size} selected</div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ IMPORT {importSel.size}</OBtn>
-                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ IMPORT + PUSH TO ZOHO</OBtn>
+          {/* ── IMPORT PANEL ──────────────────────────────────────────────────── */}
+          {importPhase==="idle"&&(
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:20}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 18px",cursor:"pointer",flex:1,minWidth:200}}>
+                <span style={{fontSize:20}}>📂</span>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5,marginBottom:2}}>IMPORT FROM FILE</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>CSV, Excel (.xlsx/.xls)</div>
+                </div>
+                <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:8,background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 18px",cursor:"pointer",flex:1,minWidth:200}}>
+                <span style={{fontSize:20}}>🚀</span>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:.5,marginBottom:2}}>IMPORT FROM APOLLO</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Apollo.io CSV export</div>
+                </div>
+                <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
+              </label>
+            </div>
+          )}
+          {importPhase==="parsing"&&(
+            <div style={{display:"flex",gap:7,alignItems:"center",padding:"20px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.orange}}><Spin/>Reading file…</div>
+          )}
+          {importPhase==="mapping"&&(
+            <div className="card" style={{padding:20,marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>MAP COLUMNS</div>
+                <button onClick={()=>{setImportPhase("idle");setImportHeaders([]);setImportRawRows([]);setImportMapping({});}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕ CANCEL</button>
+              </div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14}}>
+                Map each column from your file to the correct contact field. Auto-detected where possible.
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr",gap:6,marginBottom:6}}>
+                {["YOUR COLUMN","SAMPLE VALUE","MAPS TO"].map(h=>(
+                  <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,padding:"4px 0"}}>{h}</div>
+                ))}
+              </div>
+              {importHeaders.map((h,hi)=>{
+                const sample = (importRawRows.slice(0,3).map(r=>String(r[hi]||"").trim()).filter(Boolean)[0])||"—";
+                return(
+                  <div key={h} style={{display:"grid",gridTemplateColumns:"1fr 1fr 2fr",gap:6,alignItems:"center",padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{h}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontStyle:"italic"}}>{sample}</div>
+                    <select value={importMapping[h]||"__ignore__"} onChange={e=>setImportMapping(m=>({...m,[h]:e.target.value}))}
+                      style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif"}}>
+                      <option value="__ignore__">— ignore —</option>
+                      <option value="firstName">First Name</option>
+                      <option value="lastName">Last Name</option>
+                      <option value="fullName">Full Name</option>
+                      <option value="email">Email</option>
+                      <option value="phone">Phone</option>
+                      <option value="title">Job Title</option>
+                      <option value="school">School / Organization</option>
+                      <option value="city">City</option>
+                      <option value="state">State</option>
+                      <option value="sport">Sport</option>
+                      <option value="tags">Tags (comma separated)</option>
+                    </select>
+                  </div>
+                );
+              })}
+              <div style={{marginTop:14,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                <input value={importListName} onChange={e=>setImportListName(e.target.value)} placeholder="Save as list name (optional)…"
+                  style={{flex:1,minWidth:180,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                <OBtn onClick={()=>{
+                  const now=Date.now();
+                  const prev=importRawRows.slice(0,5).map(row=>{
+                    const obj={};
+                    importHeaders.forEach((h,hi)=>{
+                      const field=importMapping[h];
+                      if(!field||field==="__ignore__")return;
+                      const val=String(row[hi]||"").trim();
+                      if(!val)return;
+                      if(field==="tags")obj.tags=val.split(/[,;|]/).map(t=>t.trim()).filter(Boolean);
+                      else obj[field]=val;
+                    });
+                    if(!obj.fullName&&(obj.firstName||obj.lastName))obj.fullName=`${obj.firstName||""} ${obj.lastName||""}`.trim();
+                    return obj;
+                  }).filter(c=>c.fullName||c.email);
+                  setImportPreview(prev);
+                  setImportPhase("preview");
+                }}>PREVIEW →</OBtn>
+              </div>
+            </div>
+          )}
+          {importPhase==="preview"&&(
+            <div className="card" style={{padding:20,marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>PREVIEW IMPORT</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{importRawRows.length} contacts from file — showing first 5</div>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <GBtn onClick={()=>setImportPhase("mapping")}>← BACK</GBtn>
+                  <OBtn onClick={commitListImport}>IMPORT {importRawRows.length} CONTACTS{importListName?` → "${importListName}"`:""}</OBtn>
                 </div>
               </div>
               <div style={{overflowX:"auto"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
                   <thead>
-                    <tr style={{borderBottom:`2px solid ${B.border}`}}>
-                      {["","Name","Title / Org","Email","Sport","Outreach Window","Priority","Tags"].map(h=>(
-                        <th key={h} style={{padding:"7px 10px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                      ))}
-                    </tr>
+                    <tr>{["Name","Email","Title","School","City/State","Sport"].map(h=>(
+                      <th key={h} style={{textAlign:"left",padding:"5px 8px",borderBottom:`2px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{h}</th>
+                    ))}</tr>
                   </thead>
                   <tbody>
-                    {importRows.map((c,i)=>(
-                      <tr key={c.id} style={{borderBottom:`1px solid ${B.border}`,background:importSel.has(c.id)?`${B.orange}06`:B.white}}>
-                        <td style={{padding:"6px 10px"}}>
-                          <input type="checkbox" checked={importSel.has(c.id)} onChange={()=>setImportSel(s=>{const n=new Set(s);n.has(c.id)?n.delete(c.id):n.add(c.id);return n;})}/>
-                        </td>
-                        <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
-                          <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
-                          <div style={{color:B.muted,fontSize:10}}>{c.city&&c.state?`${c.city}, ${c.state}`:c.state||""}</div>
-                        </td>
-                        <td style={{padding:"6px 10px"}}>
-                          <div style={{color:B.text}}>{(typeof c.title==="string"?c.title:c.title?.name||"")||"—"}</div>
-                          <div style={{color:B.muted,fontSize:10}}>{typeof c.school==="string"?c.school:c.school?.name||""}</div>
-                        </td>
-                        <td style={{padding:"6px 10px",color:c.email?B.green:B.muted}}>{c.email||"—"}</td>
-                        <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
-                          {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
-                        </td>
-                        <td style={{padding:"6px 10px",color:B.orange,fontWeight:500,fontSize:10,whiteSpace:"nowrap"}}>{c.outreachWindow||SPORT_WINDOWS[c.sport]||"—"}</td>
-                        <td style={{padding:"6px 10px"}}>
-                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,background:{high:B.greenBg,medium:B.blueBg,low:B.surface}[c.priority]||B.surface,padding:"2px 6px",borderRadius:3}}>{(c.priority||"med").toUpperCase()}</span>
-                        </td>
-                        <td style={{padding:"6px 10px"}}>
-                          <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                            {(c.tags||[]).map((t,ti)=>{const ts=typeof t==="string"?t:t?.name||String(t);return<span key={ti} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>{ts}</span>;})}
-                          </div>
-                        </td>
+                    {importPreview.map((c,i)=>(
+                      <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                        <td style={{padding:"6px 8px",color:B.text}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</td>
+                        <td style={{padding:"6px 8px",color:B.muted}}>{c.email||"—"}</td>
+                        <td style={{padding:"6px 8px",color:B.muted}}>{c.title||"—"}</td>
+                        <td style={{padding:"6px 8px",color:B.muted}}>{c.school||"—"}</td>
+                        <td style={{padding:"6px 8px",color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")||"—"}</td>
+                        <td style={{padding:"6px 8px",color:B.muted}}>{c.sport||"—"}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {importListName&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue}}>📋 Will be saved as list: "{importListName}"</div>}
             </div>
           )}
 
@@ -3792,6 +3832,24 @@ function ModProspecting() {
                 ))}
               </div>
             </div>
+            {/* Contact Lists */}
+            {(s.contactLists||[]).length>0&&(
+              <div style={{marginTop:10,marginBottom:8}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>LISTS</div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
+                  {(s.contactLists||[]).map(list=>(
+                    <div key={list.id} style={{display:"flex",alignItems:"center",gap:0,background:dbFilter===`list_${list.id}`?B.orange:B.white,border:`1px solid ${dbFilter===`list_${list.id}`?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                      <button onClick={()=>setDbFilter(dbFilter===`list_${list.id}`?"all":`list_${list.id}`)}
+                        style={{background:"none",border:"none",padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:dbFilter===`list_${list.id}`?B.white:B.text,cursor:"pointer"}}>
+                        📋 {list.name} <span style={{fontSize:9,opacity:.7}}>({(list.contactIds||[]).length})</span>
+                      </button>
+                      <button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DELETE_CONTACT_LIST",list.id);}}
+                        style={{background:"none",border:"none",padding:"5px 7px",fontSize:10,color:dbFilter===`list_${list.id}`?`${B.white}80`:B.muted,cursor:"pointer"}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             {(s.contacts||[]).length===0&&importPhase==="idle"&&(
               <div className="card" style={{padding:30,textAlign:"center"}}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:8}}>No contacts yet</div>
@@ -3919,6 +3977,11 @@ function ModProspecting() {
                     if(isDead) return false;
                     const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);
                     if(dbFilter==="scraped") return isScraped;
+                    if(dbFilter?.startsWith("list_")){
+                      const listId=dbFilter.slice(5);
+                      const list=(s.contactLists||[]).find(l=>l.id===listId);
+                      return list?(list.contactIds||[]).includes(c.id):false;
+                    }
                     const inv=findCustomerInvoice(c,s.invoices||[]);
                     if(dbFilter==="customers") return !!inv;
                     if(dbFilter==="leads") return !inv;
