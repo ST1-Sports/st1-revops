@@ -7489,6 +7489,249 @@ function ModCalendar() {
 // ════════════════════════════════════════════════════════════════════════════
 const PLATFORM_COLORS = {instagram:"#E4405F",facebook:"#1877F2",linkedin:"#0A66C2",twitter:"#1DA1F2",tiktok:"#010101"};
 const SOCIAL_PLATFORMS = ["instagram","facebook","linkedin","twitter","tiktok"];
+const PLATFORM_LIMITS  = {twitter:280,instagram:2200,facebook:63206,linkedin:3000,tiktok:2200};
+
+// ── Social Image Editor ─────────────────────────────────────────────────────
+// Full-featured image generator + layer compositor for social posts.
+// Generates background via Ideogram, then lets user drag text/logo layers
+// and export a flattened 1080×1080 JPEG.
+function SocialImageEditor({value, onChange, brandAssets, toast}) {
+  const CW=560,CH=560;
+  const [bgImg,setBgImg]=useState(value||"");
+  const [layers,setLayers]=useState([]);
+  const [selId,setSelId]=useState(null);
+  const [drag,setDrag]=useState(null);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgStyle,setImgStyle]=useState("REALISTIC");
+  const [genRunning,setGenRunning]=useState(false);
+  const [showModal,setShowModal]=useState(false);
+
+  const addText=()=>{
+    const id=mkId();
+    setLayers(ls=>[...ls,{id,type:"text",x:Math.round(CW/2-80),y:CH-80,w:160,h:44,content:"ST1 Sports",fontSize:22,color:"#FFFFFF",bgColor:"rgba(0,0,0,0.55)",bgPad:6,fontWeight:"bold"}]);
+    setSelId(id);
+  };
+  const addLogo=(url,name)=>{
+    const id=mkId();
+    setLayers(ls=>[...ls,{id,type:"logo",x:20,y:20,w:100,h:100,content:url,opacity:1,name:name||"logo"}]);
+    setSelId(id);
+  };
+  const updLayer=(id,upd)=>setLayers(ls=>ls.map(l=>l.id===id?{...l,...upd}:l));
+  const delLayer=(id)=>{setLayers(ls=>ls.filter(l=>l.id!==id));if(selId===id)setSelId(null);};
+
+  useEffect(()=>{
+    if(!drag)return;
+    const onMove=e=>{
+      const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
+      if(drag.mode==="move"){updLayer(drag.id,{x:Math.max(0,Math.min(CW-drag.lw,drag.lx+dx)),y:Math.max(0,Math.min(CH-drag.lh,drag.ly+dy))});}
+      else{updLayer(drag.id,{w:Math.max(40,drag.lw+dx),h:Math.max(20,drag.lh+dy)});}
+    };
+    const onUp=()=>setDrag(null);
+    window.addEventListener("mousemove",onMove);window.addEventListener("mouseup",onUp);
+    return()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
+  },[drag]);
+
+  const startDrag=(e,id,mode)=>{
+    e.preventDefault();e.stopPropagation();
+    const l=layers.find(x=>x.id===id);
+    setSelId(id);
+    setDrag({id,mode,sx:e.clientX,sy:e.clientY,lx:l.x,ly:l.y,lw:l.w,lh:l.h});
+  };
+
+  const generateBg=async()=>{
+    if(!imgPrompt.trim()){toast("Enter a prompt","error");return;}
+    setGenRunning(true);
+    try{
+      const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:imgPrompt,style:imgStyle,sizeKey:"square"})});
+      const d=await r.json();
+      if(d.imageUrl){setBgImg(d.imageUrl);onChange(d.imageUrl);}
+      else toast(d.error||"Failed","error");
+    }catch{toast("Failed","error");}
+    setGenRunning(false);
+  };
+
+  const exportComposite=()=>{
+    if(!bgImg){toast("No background image","error");return;}
+    const scale=1080/CW;
+    const canvas=document.createElement("canvas");
+    canvas.width=1080;canvas.height=1080;
+    const ctx=canvas.getContext("2d");
+    const drawTexts=()=>{
+      layers.filter(l=>l.type==="text").forEach(layer=>{
+        ctx.save();
+        if(layer.bgColor&&layer.bgColor!=="transparent"){
+          ctx.fillStyle=layer.bgColor;
+          const p=(layer.bgPad||0)*scale;
+          ctx.fillRect(layer.x*scale-p,layer.y*scale-p,layer.w*scale+p*2,layer.h*scale+p*2);
+        }
+        const fs=layer.fontSize*scale;
+        ctx.font=`${layer.fontWeight||"bold"} ${fs}px Arial,sans-serif`;
+        ctx.fillStyle=layer.color;
+        ctx.textAlign="center";ctx.textBaseline="middle";
+        layer.content.split("\n").forEach((line,i,arr)=>{
+          ctx.fillText(line,(layer.x+layer.w/2)*scale,(layer.y+layer.h/2)*scale+(i-(arr.length-1)/2)*fs*1.25);
+        });
+        ctx.restore();
+      });
+      try{
+        const url=canvas.toDataURL("image/jpeg",0.92);
+        onChange(url);setBgImg(url);setLayers([]);setSelId(null);
+        toast("✓ Layers applied!","success");
+      }catch{toast("Export failed — download the background then re-upload it first","error");}
+    };
+    const logos=layers.filter(l=>l.type==="logo");
+    let rem=logos.length;
+    const bg=new Image();bg.crossOrigin="anonymous";
+    bg.onload=()=>{
+      ctx.drawImage(bg,0,0,1080,1080);
+      if(!rem){drawTexts();return;}
+      logos.forEach(layer=>{
+        const img=new Image();img.crossOrigin="anonymous";
+        img.onload=()=>{
+          ctx.save();ctx.globalAlpha=layer.opacity;
+          ctx.drawImage(img,layer.x*scale,layer.y*scale,layer.w*scale,layer.h*scale);
+          ctx.restore();rem--;if(!rem)drawTexts();
+        };
+        img.onerror=()=>{rem--;if(!rem)drawTexts();};
+        img.src=layer.content;
+      });
+    };
+    bg.onerror=()=>toast("Background failed to load","error");
+    bg.src=bgImg;
+  };
+
+  const selLayer=layers.find(l=>l.id===selId);
+
+  return(
+    <div>
+      <div style={{marginBottom:10}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>BACKGROUND IMAGE</div>
+        <textarea value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} rows={2}
+          placeholder="Describe the background image (or upload / paste URL below)"
+          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:6}}/>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+          <select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{flex:1,minWidth:100,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}>
+            {["REALISTIC","GENERAL","DESIGN","RENDER_3D","STYLIZED","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
+          </select>
+          <OBtn onClick={generateBg} disabled={genRunning} style={{flexShrink:0}}>{genRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+          <label style={{display:"flex",alignItems:"center",gap:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 9px",cursor:"pointer",flexShrink:0}}>
+            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>↑ UPLOAD</span>
+            <input type="file" accept="image/*" onChange={e=>{const f=e.target.files?.[0];if(!f)return;const rd=new FileReader();rd.onload=ev=>{setBgImg(ev.target.result);onChange(ev.target.result);};rd.readAsDataURL(f);}} style={{display:"none"}}/>
+          </label>
+          <input placeholder="paste URL…" onBlur={e=>{const v=e.target.value.trim();if(v.startsWith("http")){setBgImg(v);onChange(v);e.target.value="";}}}
+            style={{width:110,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:10}}/>
+        </div>
+      </div>
+      {bgImg&&(
+        <div>
+          <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+            <button onClick={addText} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>+ TEXT</button>
+            {(brandAssets||[]).filter(a=>a.url).length>0&&(
+              <>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,flexShrink:0}}>LOGOS →</span>
+                {(brandAssets||[]).filter(a=>a.url).map(a=>(
+                  <button key={a.id} onClick={()=>addLogo(a.url,a.name)} title={`Add ${a.name}`}
+                    style={{padding:2,border:`1px solid ${B.border}`,borderRadius:4,background:B.surface,cursor:"pointer",flexShrink:0}}>
+                    {(a.url.startsWith("data:image")||/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(a.url))?
+                      <img src={a.url} style={{width:28,height:28,objectFit:"contain",display:"block"}} alt={a.name}/>:
+                      <div style={{width:28,height:28,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14}}>📄</div>}
+                  </button>
+                ))}
+              </>
+            )}
+            <div style={{marginLeft:"auto",display:"flex",gap:5}}>
+              <button onClick={()=>setShowModal(true)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>⛶ EXPAND</button>
+              {layers.length>0&&<OBtn onClick={exportComposite} style={{flexShrink:0}}>✓ APPLY LAYERS</OBtn>}
+            </div>
+          </div>
+          <div style={{position:"relative",width:"100%",paddingBottom:"100%",borderRadius:6,overflow:"hidden",border:`1px solid ${B.border}`,cursor:"default",userSelect:"none"}}
+            onClick={()=>setSelId(null)}>
+            <div style={{position:"absolute",inset:0}}>
+              <img src={bgImg} alt="bg" style={{width:"100%",height:"100%",objectFit:"cover",display:"block",pointerEvents:"none"}}/>
+              {layers.map(layer=>{
+                const isSelected=selId===layer.id;
+                const pct=(v,dim)=>`${(v/dim*100).toFixed(2)}%`;
+                return(
+                  <div key={layer.id}
+                    style={{position:"absolute",left:pct(layer.x,CW),top:pct(layer.y,CH),width:pct(layer.w,CW),height:pct(layer.h,CH),
+                      cursor:"move",border:`2px solid ${isSelected?B.orange:"transparent"}`,boxSizing:"border-box",borderRadius:3}}
+                    onMouseDown={e=>startDrag(e,layer.id,"move")}
+                    onClick={e=>{e.stopPropagation();setSelId(layer.id);}}>
+                    {layer.type==="text"?(
+                      <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center",
+                        background:layer.bgColor||"transparent",padding:`${layer.bgPad||0}px`,boxSizing:"border-box",
+                        fontFamily:"Arial,sans-serif",fontWeight:layer.fontWeight||"bold",color:layer.color,
+                        textAlign:"center",whiteSpace:"pre-wrap",lineHeight:1.2,overflow:"hidden",pointerEvents:"none",
+                        fontSize:`clamp(8px,${(layer.fontSize/CW*100).toFixed(2)}vw,72px)`}}>
+                        {layer.content}
+                      </div>
+                    ):(
+                      <img src={layer.content} alt={layer.name} style={{width:"100%",height:"100%",objectFit:"contain",display:"block",opacity:layer.opacity,pointerEvents:"none"}}/>
+                    )}
+                    {isSelected&&(
+                      <>
+                        <div onMouseDown={e=>startDrag(e,layer.id,"resize")}
+                          style={{position:"absolute",bottom:-6,right:-6,width:14,height:14,background:B.orange,borderRadius:2,cursor:"se-resize",zIndex:10}}/>
+                        <button onClick={e=>{e.stopPropagation();delLayer(layer.id);}}
+                          style={{position:"absolute",top:-8,right:-8,width:18,height:18,background:B.red,color:"#fff",border:"none",borderRadius:"50%",cursor:"pointer",fontSize:11,lineHeight:"18px",textAlign:"center",padding:0,zIndex:10}}>✕</button>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {layers.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Drag to move · corner handle to resize · hit APPLY LAYERS to export</div>}
+          {selLayer&&(
+            <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 12px"}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>{selLayer.type==="text"?"TEXT LAYER":"LOGO LAYER"}</div>
+              {selLayer.type==="text"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                  <input value={selLayer.content} onChange={e=>updLayer(selId,{content:e.target.value})}
+                    style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                    placeholder="Text content"/>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      SIZE
+                      <input type="range" min={8} max={80} value={selLayer.fontSize} onChange={e=>updLayer(selId,{fontSize:+e.target.value})} style={{width:80,marginLeft:4}}/>
+                      <span style={{minWidth:26}}>{selLayer.fontSize}px</span>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      TEXT
+                      <input type="color" value={selLayer.color.startsWith("rgba")?"#ffffff":selLayer.color} onChange={e=>updLayer(selId,{color:e.target.value})} style={{width:26,height:22,padding:0,border:"none",cursor:"pointer",background:"none"}}/>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:5,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                      BG
+                      <input type="color" value={"#000000"} onChange={e=>{const h=e.target.value,r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),bv=parseInt(h.slice(5,7),16);updLayer(selId,{bgColor:`rgba(${r},${g},${bv},0.6)`});}} style={{width:26,height:22,padding:0,border:"none",cursor:"pointer",background:"none"}}/>
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer"}}>
+                      <input type="checkbox" checked={selLayer.bgColor==="transparent"} onChange={e=>updLayer(selId,{bgColor:e.target.checked?"transparent":"rgba(0,0,0,0.55)"})}/>
+                      No background
+                    </label>
+                  </div>
+                </div>
+              )}
+              {selLayer.type==="logo"&&(
+                <label style={{display:"flex",alignItems:"center",gap:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>
+                  OPACITY
+                  <input type="range" min={10} max={100} value={Math.round(selLayer.opacity*100)} onChange={e=>updLayer(selId,{opacity:e.target.value/100})} style={{width:100,marginLeft:4}}/>
+                  <span>{Math.round(selLayer.opacity*100)}%</span>
+                </label>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {showModal&&bgImg&&(
+        <div onClick={()=>setShowModal(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out"}}>
+          <img src={bgImg} alt="full" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
+          <button onClick={e=>{e.stopPropagation();setShowModal(false);}} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer"}}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
@@ -7506,9 +7749,12 @@ function ModSocial() {
   const [linkedCampId,setLinkedCampId]=useState("");
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
+  const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
+  const [editingPost,setEditingPost]=useState(null); // post being edited in modal
+  const [syncingStats,setSyncingStats]=useState(false);
 
   const campaigns=s.campaigns||[];
 
@@ -7532,10 +7778,18 @@ function ModSocial() {
 
   const generateCaption=async()=>{
     setGenRunning(true);
-    const r=await aiCall(
-      `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging. Include relevant hashtags. Under 150 words.`,
-      {tokens:300}
-    );
+    const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
+    const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
+    const target=lengthTargets[postLength];
+    const effectiveChars=Math.min(target.chars,hardLimit);
+    const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
+    const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
+    const direction=caption.trim();
+    const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
+    const prompt=direction
+      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
+    const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
   };
@@ -7725,18 +7979,22 @@ function ModSocial() {
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                  {genRunning?"✦ WRITING...":"✦ AI WRITE"}
-                </button>
+                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                  {["short","medium","long"].map(l=>(
+                    <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
+                  ))}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
+                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  </button>
+                </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
             </div>
             {/* Image */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:5}}>IMAGE URL (optional)</Lbl>
-              <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-              {imageUrl&&<img src={imageUrl} style={{marginTop:8,maxHeight:120,borderRadius:6,objectFit:"cover"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
+              <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
+              <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}/>
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
