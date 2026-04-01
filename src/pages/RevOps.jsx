@@ -5428,6 +5428,80 @@ function ModMarketing() {
               })}
             </div>
           )}
+          {/* Daily Email Summary */}
+          {(()=>{
+            // Build last 7 days
+            const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));return d.toISOString().slice(0,10);});
+            // All users (USERS + appUsers) who have campaigns
+            const allUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            // Build a map: repId -> Set of campaignIds
+            const repCampIds={};
+            (s.campaigns||[]).forEach(camp=>{
+              if(camp.repId){
+                if(!repCampIds[camp.repId]) repCampIds[camp.repId]=new Set();
+                repCampIds[camp.repId].add(camp.id);
+              }
+            });
+            const repsWithCamps=allUsers.filter(u=>repCampIds[u.id]);
+            if(!repsWithCamps.length) return null;
+            // Build sent count: repId -> date -> count
+            // Activities live on contacts
+            const counts={};
+            repsWithCamps.forEach(u=>{counts[u.id]={};});
+            (s.contacts||[]).forEach(c=>{
+              (c.activity||[]).forEach(a=>{
+                if(a.type!=="sent") return;
+                const camp=(s.campaigns||[]).find(x=>x.id===a.campaignId);
+                if(!camp||!camp.repId) return;
+                if(!counts[camp.repId]) return;
+                const dateStr=new Date(a.ts).toISOString().slice(0,10);
+                if(!counts[camp.repId][dateStr]) counts[camp.repId][dateStr]=0;
+                counts[camp.repId][dateStr]++;
+              });
+            });
+            return(
+              <div style={{marginTop:24}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>DAILY EMAIL SUMMARY — LAST 7 DAYS</div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{borderCollapse:"collapse",width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                    <thead>
+                      <tr>
+                        <th style={{textAlign:"left",padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,minWidth:80}}>DATE</th>
+                        {repsWithCamps.map(u=>(
+                          <th key={u.id} style={{padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,textAlign:"center",minWidth:80}}>
+                            <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
+                              <div style={{width:8,height:8,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
+                              <span style={{color:u.color||B.muted}}>{u.name.split(" ")[0].toUpperCase()}</span>
+                            </div>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {days.map(dateStr=>{
+                        const isToday=dateStr===today();
+                        return(
+                          <tr key={dateStr} style={{background:isToday?`${B.orange}06`:B.white}}>
+                            <td style={{padding:"6px 10px",border:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:10,color:isToday?B.orange:B.text,fontWeight:isToday?600:400}}>
+                              {new Date(dateStr+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}{isToday?" (today)":""}
+                            </td>
+                            {repsWithCamps.map(u=>{
+                              const cnt=counts[u.id]?.[dateStr]||0;
+                              return(
+                                <td key={u.id} style={{padding:"6px 10px",border:`1px solid ${B.border}`,textAlign:"center",color:cnt>0?u.color||B.text:B.muted,fontWeight:cnt>0?600:400,fontSize:12}}>
+                                  {cnt>0?cnt:"—"}
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -5752,6 +5826,13 @@ function ModMarketing() {
                                         </div>
                                       )}
                                     </div>
+                                    <button onClick={()=>{
+                                      startNewCampaign(selPlan);
+                                      setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal||"",channels:sug.channels||[],assetTypes:sug.assetTypes||[],planId:selPlan.id,status:"draft"}));
+                                      setTab("campaigns");
+                                      setPlanSuggestions(null);
+                                      toast("Campaign pre-filled — complete the wizard to launch","success");
+                                    }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap",letterSpacing:.3}}>USE THIS CAMPAIGN →</button>
                                   </div>
                                 </div>
                               );
@@ -6481,6 +6562,15 @@ function ModMarketing() {
 
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
+              {selCamp.status==="running"&&(
+                <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.green}10`,border:`1px solid ${B.green}30`,borderRadius:6,marginBottom:14}}>
+                  <span style={{fontSize:16}}>▶</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5,marginBottom:2}}>CAMPAIGN IS RUNNING</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>This campaign is already active. Use the controls below to send due emails, check replies, and track opens.</div>
+                  </div>
+                </div>
+              )}
               {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:12}}>
                   <div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
@@ -6898,6 +6988,23 @@ function ModMarketing() {
           <div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
             {campaigns.map(camp=>(<div key={camp.id} style={{display:"flex",gap:6,alignItems:"center"}}><div style={{width:10,height:10,borderRadius:2,background:camp.color||B.orange}}/><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{camp.name}</div></div>))}
           </div>
+          {/* Rep color key */}
+          {(()=>{
+            const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+            const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
+            if(!activeReps.length) return null;
+            return(
+              <div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap",alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
+                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>REPS:</span>
+                {activeReps.map(u=>(
+                  <div key={u.id} style={{display:"flex",gap:5,alignItems:"center"}}>
+                    <div style={{width:12,height:12,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -7200,6 +7307,24 @@ function ModCalendar() {
           </div>
         ))}
       </div>
+      {/* Rep color key */}
+      {(()=>{
+        const campaigns=s.campaigns||[];
+        const repUsers=[...USERS,...(s.appUsers||[])].filter((u,idx,arr)=>arr.findIndex(x=>x.id===u.id)===idx);
+        const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
+        if(!activeReps.length) return null;
+        return(
+          <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
+            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>REPS:</span>
+            {activeReps.map(u=>(
+              <div key={u.id} style={{display:"flex",gap:5,alignItems:"center"}}>
+                <div style={{width:12,height:12,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }
