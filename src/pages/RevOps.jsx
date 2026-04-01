@@ -7799,23 +7799,37 @@ function ModSocial() {
     if(!caption.trim()){toast("Caption is required","error");return;}
     setPosting(true);
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
+    // Always save locally first so the post is never lost
+    const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
+    dispatch("ADD_SOCIAL_POST",post);
+    if(linkedCampId){
+      const camp=campaigns.find(c=>c.id===linkedCampId);
+      if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
+    }
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
       const data=await r.json();
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
-        const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:scheduleAt?"scheduled":"published",postType,campaignId:linkedCampId||""};
-        dispatch("ADD_SOCIAL_POST",post);
+        const finalStatus=scheduleAt?"scheduled":"published";
+        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:finalStatus,publerPostIds:data.postIds||[]});
         if(linkedCampId){
           const camp=campaigns.find(c=>c.id===linkedCampId);
-          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
+          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:finalStatus}]});
         }
-        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted!","success");
-        setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
-        setTab("posts");
-      }else{toast(data.error||"Post failed","error");}
-    }catch{toast("Post failed","error");}
+        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted to Publer!","success");
+      }else{
+        const errMsg=data.error||"Publer rejected the post";
+        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
+        toast(`Saved locally — Publer failed: ${errMsg.slice(0,80)}`,"warn");
+      }
+    }catch(err){
+      dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
+      toast(`Saved locally — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
+    }
+    setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+    setTab("posts");
     setPosting(false);
   };
 
@@ -7923,20 +7937,33 @@ function ModSocial() {
           ):(
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filtered.map(p=>{
-                const sc={scheduled:B.blue,published:B.green,draft:B.muted}[p.status]||B.muted;
+                const isLocalOnly=p.status==="local_only";
+                const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
+                const retryPost=async()=>{
+                  try{
+                    const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+                      body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined})});
+                    const data=await r.json();
+                    const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
+                    if(ok){dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});toast("Posted!","success");}
+                    else toast(data.error||"Publer rejected post","error");
+                  }catch(e){toast("Publer unreachable: "+e.message,"error");}
+                };
                 return(
-                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
                     {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
                         {(p.platforms||[]).map(pl=>(
                           <span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
                         ))}
-                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{(p.status||"draft").toUpperCase()}</span>
+                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{isLocalOnly?"⚠ PUBLER FAILED":(p.status||"draft").toUpperCase()}</span>
                         {p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
                         {p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
                         {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
+                        {isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
                       </div>
+                      {isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>
                     </div>
                     {p._source==="standalone"&&(
@@ -9968,14 +9995,93 @@ function ModSettings() {
         <OBtn onClick={save}>SAVE SETTINGS</OBtn>
       </div>
 
-      {/* Integrations pointer */}
-      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.purple}`}}>
-        <Lbl c={B.purple} s={{marginBottom:8}}>Integrations</Lbl>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
-          Zoho CRM, Zoho Books, Gmail, Slack, and WooCommerce are configured on the Integrations page.
-        </div>
-        <a href="/integrations" style={{display:"inline-block",background:B.purple,color:B.white,borderRadius:5,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,textDecoration:"none"}}>GO TO INTEGRATIONS →</a>
-      </div>
+      {/* Email & Social connection status */}
+      {(()=>{
+        const [gmailInfo,setGmailInfo]=useState(null); // {email} or {error}
+        const [gmailChecking,setGmailChecking]=useState(false);
+        const [publerInfo,setPublerInfo]=useState(null);
+        const [publerChecking,setPublerChecking]=useState(false);
+
+        const checkGmail=async()=>{
+          setGmailChecking(true);setGmailInfo(null);
+          try{
+            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})}).then(r=>r.json());
+            setGmailInfo(d.error?{error:d.error}:{email:d.email});
+          }catch(e){setGmailInfo({error:e.message});}
+          setGmailChecking(false);
+        };
+        const checkPubler=async()=>{
+          setPublerChecking(true);setPublerInfo(null);
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
+            setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
+          }catch(e){setPublerInfo({error:e.message});}
+          setPublerChecking(false);
+        };
+
+        useEffect(()=>{checkGmail();checkPubler();},[]);
+
+        const failedPosts=(s.socialPosts||[]).filter(p=>p.status==="local_only");
+
+        return(
+          <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
+            <Lbl c={B.green} s={{marginBottom:12}}>Email & Social Status</Lbl>
+
+            {/* Gmail */}
+            <div style={{marginBottom:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
+                <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
+              </div>
+              {gmailInfo&&(
+                gmailInfo.error
+                  ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                    ✕ Not connected — {gmailInfo.error}
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                  </div>
+                  :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+                    ✓ Connected as <strong>{gmailInfo.email}</strong>
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>All campaign emails send FROM this account. Rep name &amp; email appear in the signature — replies go back to this inbox.</div>
+                  </div>
+              )}
+              {!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+            </div>
+
+            {/* Publer */}
+            <div style={{marginBottom:failedPosts.length>0?14:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>PUBLER (social media posting)</div>
+                <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+              </div>
+              {publerInfo&&(
+                publerInfo.error
+                  ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                    ✕ Not connected — {publerInfo.error}
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set PUBLER_API_KEY and PUBLER_WORKSPACE_ID in Vercel env vars. Get them from app.publer.com → Settings → API.</div>
+                  </div>
+                  :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+                    ✓ Connected — {publerInfo.name}
+                  </div>
+              )}
+              {!publerInfo&&!publerChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+            </div>
+
+            {/* Failed posts */}
+            {failedPosts.length>0&&(
+              <div style={{background:`${B.red}06`,border:`1px solid ${B.red}20`,borderRadius:5,padding:"10px 12px"}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:.5,marginBottom:6}}>{failedPosts.length} POST{failedPosts.length!==1?"S":""} FAILED TO REACH PUBLER</div>
+                {failedPosts.map(p=>(
+                  <div key={p.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:4,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.caption?.slice(0,60)}…</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{p.date}</span>
+                  </div>
+                ))}
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Go to Social → All Posts to retry each one.</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       {/* Sales Reps */}
       <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
