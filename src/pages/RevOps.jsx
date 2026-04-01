@@ -5169,7 +5169,7 @@ function ModMarketing() {
     const htmlBody=`<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}<img src="${trackUrl}" width="1" height="1" style="display:none" alt=""></body></html>`;
     try{
       const payload={action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body:plainBody,htmlBody};
-      if(rep?.email){payload.from_name=rep.name;payload.from_email=rep.email;payload.reply_to=rep.email;}
+      if(rep?.email){payload.sender_email=rep.email;payload.from_name=rep.name;payload.from_email=rep.email;payload.reply_to=rep.email;}
       const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
       const d=await r.json();
       return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
@@ -9379,7 +9379,7 @@ function ModSettings() {
           <button onClick={()=>setRepForm({name:"",email:"",title:"",phone:""})} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>+ ADD REP</button>
         </div>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>
-          Reps can be assigned to campaigns. Their name and contact info will appear in outbound emails as the sender, and replies/leads will count toward their pipeline.
+          Reps can be assigned to campaigns. Connect each rep's Gmail so emails send from their actual inbox and replies go to them directly.
         </div>
         {repForm&&(
           <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:14,marginBottom:12}}>
@@ -9408,7 +9408,11 @@ function ModSettings() {
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{rep.name}</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
               </div>
-              <div style={{display:"flex",gap:5}}>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <a href={rep.email?`/api/gmail-setup?rep=${rep.email.split("@")[0]}`:"#"} target="_blank" rel="noreferrer"
+                  style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.green,textDecoration:"none",cursor:"pointer"}}>
+                  CONNECT GMAIL
+                </a>
                 <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
                 <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
               </div>
