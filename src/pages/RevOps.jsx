@@ -3176,28 +3176,51 @@ function ModProspecting() {
   };
 
   // Fetch ALL records from a Zoho CRM module using COQL cursor pagination.
-  // Uses WHERE id > lastId to bypass Zoho's 2,000-record OFFSET cap entirely.
+  // Falls back to standard REST GET (capped at 2,000) if COQL fails.
   const zohoFetchAll = async (module, fields, onProgress) => {
     const fList = [...new Set(["id", ...fields])].join(",");
-    let all = [];
-    let lastId = null;
-    while(true) {
-      const where = lastId ? ` WHERE id > '${lastId}'` : '';
-      const query = `SELECT ${fList} FROM ${module}${where} ORDER BY id ASC LIMIT 200`;
-      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
-      }).then(r=>r.json());
-      // Surface COQL errors instead of silently returning empty
-      if(res.code && res.code !== "SUCCESS" && !Array.isArray(res.data)) {
-        throw new Error(`Zoho COQL error [${res.code}]: ${res.message||"unknown error"}`);
+
+    // ── COQL cursor attempt ────────────────────────────────────────────────────
+    // Requires ZohoCRM.coql.READ scope. If it fails we fall back to REST below.
+    try {
+      let all = []; let lastId = null;
+      while(true) {
+        const where = lastId ? ` WHERE id > '${lastId}'` : '';
+        const query = `SELECT ${fList} FROM ${module}${where} ORDER BY id ASC LIMIT 200`;
+        const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({service:"crm",endpoint:"/coql",method:"POST",body:{select_query:query}})
+        }).then(r=>r.json());
+        // Catch ANY response that is not a successful data array
+        if(!Array.isArray(res.data)) {
+          const detail = res.message||res.code||res.error||JSON.stringify(res).slice(0,120);
+          throw new Error(`COQL failed (${res._http_status||"?"}): ${detail}`);
+        }
+        const batch = res.data;
+        if(!batch.length) break;
+        all = [...all,...batch];
+        if(onProgress) onProgress(all.length);
+        lastId = batch[batch.length-1].id;
+        if(batch.length<200) break;
+        await new Promise(r=>setTimeout(r,250));
       }
-      const batch = res.data||[];
-      if(!batch.length) break;
-      all = [...all,...batch];
+      return all;
+    } catch(coqlErr) {
+      console.warn("[zohoFetchAll] COQL failed, falling back to REST GET:", coqlErr.message);
+      toast(`Zoho COQL unavailable (${coqlErr.message.slice(0,60)}) — falling back, results may be limited to 2,000`,"warn");
+    }
+
+    // ── Standard REST GET fallback (max 2,000 due to Zoho OFFSET limit) ────────
+    let all = []; let page = 1;
+    while(true) {
+      const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service:"crm",endpoint:`/${module}?fields=${fList}&per_page=200&page=${page}`,method:"GET"})
+      }).then(r=>r.json());
+      if(!Array.isArray(res.data)||!res.data.length) break;
+      all = [...all,...res.data];
       if(onProgress) onProgress(all.length);
-      lastId = batch[batch.length-1].id;
-      if(batch.length<200) break;
-      await new Promise(r=>setTimeout(r,250));
+      if(!res.info?.more_records||res.data.length<200) break;
+      page++;
+      await new Promise(r=>setTimeout(r,200));
     }
     return all;
   };
@@ -5755,31 +5778,39 @@ function ModMarketing() {
                 <div style={{display:"flex",gap:10,alignItems:"center"}}>
                   <button onClick={()=>setSelPlanId(null)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>← BACK</button>
                   <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2}}>{selPlan.name}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selPlan.sport&&`${selPlan.sport} · `}{(selPlan.states||[]).join(", ")||""}</div>
+                    <input value={selPlan.name||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,name:e.target.value})} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",width:"100%",maxWidth:420}}/>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{selPlan.sport&&`${selPlan.sport} · `}{(selPlan.states||[]).join(", ")||""}</div>
                   </div>
                 </div>
                 <div style={{display:"flex",gap:8}}>
                   <OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ CAMPAIGN FROM PLAN</OBtn>
-                  <button onClick={()=>{setPlanDraft({...selPlan,icp:selPlan.icp||{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""}});setEditingPlanId(selPlan.id);setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}}>✏ EDIT</button>
                   <button onClick={()=>{if(window.confirm("Delete this plan?")){{dispatch("DEL_STRATEGY",selPlan.id);setSelPlanId(null);}}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
                 </div>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
                 <div className="card" style={{padding:"14px 16px",borderLeft:`4px solid ${B.orange}`}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>PLAN GOALS</div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{selPlan.goals||<span style={{color:B.muted,fontStyle:"italic"}}>No goals defined</span>}</div>
+                  <textarea value={selPlan.goals||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,goals:e.target.value})} placeholder="Describe the goals of this plan…" rows={4} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",resize:"vertical"}}/>
                 </div>
                 <div className="card" style={{padding:"14px 16px"}}>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                    {[["SPORT",selPlan.sport||"—"],["SEGMENT",selPlan.segment||"—"],["SEASON START",selPlan.seasonStart||"—"],["SEASON END",selPlan.seasonEnd||"—"]].map(([k,v])=>(
-                      <div key={k}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{k}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{v}</div></div>
-                    ))}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEASON START</div>
+                      <input type="date" value={selPlan.seasonStart||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,seasonStart:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11}}/>
+                    </div>
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEASON END</div>
+                      <input type="date" value={selPlan.seasonEnd||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,seasonEnd:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11}}/>
+                    </div>
                   </div>
-                  {(selPlan.states||[]).length>0&&<div style={{marginTop:10}}>
+                  {(selPlan.states||[]).length>0&&<div>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>TARGET STATES</div>
                     <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selPlan.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}</div>
                   </div>}
+                  <div style={{marginTop:8}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEGMENT</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{selPlan.segment||"—"}</div>
+                  </div>
                 </div>
               </div>
               {/* Linked campaigns */}
@@ -6455,8 +6486,8 @@ function ModMarketing() {
                 <div style={{display:"flex",gap:10,alignItems:"center"}}>
                   <button onClick={()=>setSelCampId(null)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>← BACK</button>
                   <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2}}>{selCamp.name}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selCamp.product}{selCamp.audience?` · ${selCamp.audience}`:""}{selCamp.goal?` · Goal: ${selCamp.goal}`:""}</div>
+                    <input value={selCamp.name||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,name:e.target.value})} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",width:"100%",maxWidth:420}}/>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{selCamp.product}{selCamp.audience?` · ${selCamp.audience}`:""}</div>
                   </div>
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -6464,7 +6495,6 @@ function ModMarketing() {
                     style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,color:B.text,fontFamily:"'Lexend',sans-serif"}}>
                     {["draft","active","paused","completed","running"].map(sv=><option key={sv} value={sv}>{sv.toUpperCase()}</option>)}
                   </select>
-                  <button onClick={()=>{setCampDraft({...selCamp});setShowNewCampForm(true);setCampStep(1);setSelCampId(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}}>✏ EDIT</button>
                   <button onClick={()=>{if(window.confirm("Delete this campaign?")) {dispatch("DELETE_CAMPAIGN",selCamp.id);setSelCampId(null);}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
                 </div>
               </div>
@@ -6480,37 +6510,42 @@ function ModMarketing() {
                 <div>
                   {/* Plan link */}
                   {selCamp.planId&&(()=>{const plan=strategies.find(p=>p.id===selCamp.planId);return plan?(<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:12,cursor:"pointer"}} onClick={()=>{setSelPlanId(plan.id);setSelCampId(null);setTab("plans");}}>Part of plan: <strong>{plan.name}</strong> — view plan →</div>):null;})()}
-                  {/* Strategy header — goal prominent */}
+                  {/* Strategy header — inline editable */}
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-                    {/* Left: Goal + context */}
+                    {/* Left: Goal + context — editable */}
                     <div className="card" style={{padding:"14px 16px",borderLeft:`4px solid ${selCamp.color||B.orange}`}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>CAMPAIGN GOAL</div>
-                      {selCamp.goal
-                        ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,fontWeight:600,lineHeight:1.4,marginBottom:10}}>{selCamp.goal}</div>
-                        : <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:10,fontStyle:"italic"}}>No goal set</div>}
-                      {selCamp.ctx&&(
-                        <div>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>CONTEXT / ANGLE</div>
-                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>{selCamp.ctx}</div>
-                        </div>
-                      )}
+                      <textarea value={selCamp.goal||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,goal:e.target.value})} placeholder="Describe the goal of this campaign…" rows={3} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,lineHeight:1.4,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",resize:"vertical",marginBottom:10}}/>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>CONTEXT / ANGLE</div>
+                      <textarea value={selCamp.ctx||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,ctx:e.target.value})} placeholder="Additional context or angle for AI…" rows={2} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",resize:"vertical"}}/>
                     </div>
-                    {/* Right: Details */}
+                    {/* Right: Details — editable */}
                     <div className="card" style={{padding:"14px 16px"}}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                        {[["PRODUCT",selCamp.product],["AUDIENCE",selCamp.audience||"All"],["TONE",(selCamp.tone||"—")],["DATES",`${selCamp.startDate||""}${selCamp.endDate?` → ${selCamp.endDate}`:""}`||"—"]].map(([k,v])=>(
-                          <div key={k}>
-                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{k}</div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{v||"—"}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
-                        <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:7}}>
-                          <div style={{width:24,height:24,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
-                          <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{rep.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{rep.email}</div></div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>START DATE</div>
+                          <input type="date" value={selCamp.startDate||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,startDate:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}/>
                         </div>
-                      ):null;})()}
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>END DATE</div>
+                          <input type="date" value={selCamp.endDate||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,endDate:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}/>
+                        </div>
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>PRODUCT</div>
+                          <input value={selCamp.product||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,product:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}/>
+                        </div>
+                        <div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>AUDIENCE</div>
+                          <input value={selCamp.audience||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,audience:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}/>
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>REP / SENDER</div>
+                        <select value={selCamp.repId||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,repId:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11}}>
+                          <option value="">— No rep assigned —</option>
+                          {[...USERS,...(s.appUsers||[])].map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                        </select>
+                      </div>
                     </div>
                   </div>
                   {/* ICP */}
