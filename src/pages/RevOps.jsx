@@ -6052,7 +6052,7 @@ function ModMarketing() {
                               const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
                               setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true}:x)}));
                               try{
-                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"lifestyle",sizeKey:"square"})});
+                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"REALISTIC",sizeKey:"square"})});
                                 const d=await r.json();
                                 setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl||"",imageGenerating:false}:x)}));
                               }catch(err){setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false}:x)}));}
@@ -7170,6 +7170,7 @@ function ModSocial() {
   const [imgPrompt,setImgPrompt]=useState("");
   const [imgGenRunning,setImgGenRunning]=useState(false);
   const [imgMode,setImgMode]=useState("generate"); // "generate" | "upload" | "url"
+  const [imgStyle,setImgStyle]=useState("REALISTIC");
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
@@ -7181,7 +7182,7 @@ function ModSocial() {
     const fullPrompt=(imgPrompt.trim()||"Lifestyle sports action shot")+captionContext;
     try{
       const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({prompt:fullPrompt,style:"REALISTIC",sizeKey:"square"})});
+        body:JSON.stringify({prompt:fullPrompt,style:imgStyle,sizeKey:"square"})});
       const d=await r.json();
       if(d.imageUrl){setImageUrl(d.imageUrl);toast("Image generated!","success");}
       else toast(d.error||"Image gen failed","error");
@@ -7463,12 +7464,19 @@ function ModSocial() {
                 </div>
               </div>
               {imgMode==="generate"&&(
-                <div style={{display:"flex",gap:6}}>
-                  <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder={caption.trim()?`Visual for: "${caption.trim().slice(0,60)}${caption.length>60?"…":""}" — or describe something specific`:"Describe the image you want, or just hit Generate to match your caption"} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
-                    onKeyDown={e=>e.key==="Enter"&&generateSocialImage()}/>
-                  <button onClick={generateSocialImage} disabled={imgGenRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",opacity:imgGenRunning?.7:1}}>
-                    {imgGenRunning?"GENERATING...":"GENERATE"}
-                  </button>
+                <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                    {[["REALISTIC","📷 Realistic"],["GENERAL","🖼 General"],["DESIGN","✏ Design"],["RENDER_3D","📦 3D Render"],["STYLIZED","🎨 Stylized"],["AUTO","✦ Auto"]].map(([val,label])=>(
+                      <button key={val} onClick={()=>setImgStyle(val)} style={{background:imgStyle===val?B.purple:B.surface,color:imgStyle===val?B.white:B.muted,border:`1px solid ${imgStyle===val?B.purple:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{label}</button>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <input value={imgPrompt} onChange={e=>setImgPrompt(e.target.value)} placeholder={caption.trim()?`Visual for: "${caption.trim().slice(0,60)}${caption.length>60?"…":""}" — or describe something specific`:"Describe the image you want, or just hit Generate to match your caption"} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                      onKeyDown={e=>e.key==="Enter"&&generateSocialImage()}/>
+                    <button onClick={generateSocialImage} disabled={imgGenRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",opacity:imgGenRunning?.7:1}}>
+                      {imgGenRunning?"GENERATING...":"GENERATE"}
+                    </button>
+                  </div>
                 </div>
               )}
               {imgMode==="upload"&&(
