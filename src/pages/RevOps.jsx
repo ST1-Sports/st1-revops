@@ -7946,7 +7946,12 @@ function ModSocial() {
                     const data=await r.json();
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});toast("Posted!","success");}
-                    else toast(data.error||"Publer rejected post","error");
+                    else{
+                      const detail=data.detail?JSON.stringify(data.detail).slice(0,120):"";
+                      const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,publerError:msg});
+                      toast(msg,"error");
+                    }
                   }catch(e){toast("Publer unreachable: "+e.message,"error");}
                 };
                 return(
