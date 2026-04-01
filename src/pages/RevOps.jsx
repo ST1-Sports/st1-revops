@@ -7171,6 +7171,10 @@ function ModSocial() {
   const [imgGenRunning,setImgGenRunning]=useState(false);
   const [imgMode,setImgMode]=useState("generate"); // "generate" | "upload" | "url"
   const [imgStyle,setImgStyle]=useState("REALISTIC");
+  const [overlayText,setOverlayText]=useState("");
+  const [overlayPos,setOverlayPos]=useState("bottom"); // none | top | center | bottom
+  const [overlayTheme,setOverlayTheme]=useState("dark"); // dark | light | none
+  const [showImgModal,setShowImgModal]=useState(false);
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
@@ -7194,8 +7198,35 @@ function ModSocial() {
     const file=e.target.files?.[0];
     if(!file) return;
     const reader=new FileReader();
-    reader.onload=ev=>setImageUrl(ev.target.result);
+    reader.onload=ev=>{setImageUrl(ev.target.result);setImgMode("upload");};
     reader.readAsDataURL(file);
+  };
+
+  const burnOverlay=()=>{
+    if(!imageUrl||!overlayText.trim()||overlayPos==="none") return;
+    const img=new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>{
+      const canvas=document.createElement("canvas");
+      canvas.width=img.width||1080; canvas.height=img.height||1080;
+      const ctx=canvas.getContext("2d");
+      ctx.drawImage(img,0,0,canvas.width,canvas.height);
+      const barH=Math.round(canvas.height*0.16);
+      const y=overlayPos==="top"?0:overlayPos==="center"?Math.round((canvas.height-barH)/2):canvas.height-barH;
+      if(overlayTheme!=="none"){
+        ctx.fillStyle=overlayTheme==="dark"?"rgba(0,0,0,0.62)":"rgba(255,255,255,0.82)";
+        ctx.fillRect(0,y,canvas.width,barH);
+      }
+      const sz=Math.round(canvas.width*0.05);
+      ctx.font=`bold ${sz}px Arial,sans-serif`;
+      ctx.fillStyle=overlayTheme==="light"?"#0A0A0A":"#FFFFFF";
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(overlayText,canvas.width/2,y+barH/2);
+      try{setImageUrl(canvas.toDataURL("image/jpeg",0.92));toast("Text applied!","success");}
+      catch{toast("Can't burn text on external images — download it first then re-upload","error");}
+    };
+    img.onerror=()=>toast("Image failed to load for text burn","error");
+    img.src=imageUrl;
   };
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
@@ -7243,25 +7274,31 @@ function ModSocial() {
     setGenRunning(false);
   };
 
-  const submitPost=async()=>{
+  const submitPost=async(postNow=false)=>{
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
     setPosting(true);
-    const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
+    const useDate=postNow?"":scheduleAt;
+    const scheduleDateTime=useDate?`${useDate}T${scheduleTime}:00`:null;
+    // Auto-save image to brand assets
+    if(imageUrl){
+      const assetName=`Social Post ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;
+      dispatch("ADD_BRAND_ASSET",{id:mkId(),name:assetName,url:imageUrl,type:"social-post",createdAt:today()});
+    }
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
       const data=await r.json();
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
-        const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:scheduleAt?"scheduled":"published",postType,campaignId:linkedCampId||""};
+        const post={id:mkId(),createdAt:today(),date:useDate||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:useDate?"scheduled":"published",postType,campaignId:linkedCampId||""};
         dispatch("ADD_SOCIAL_POST",post);
         if(linkedCampId){
           const camp=campaigns.find(c=>c.id===linkedCampId);
           if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
         }
-        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted!","success");
-        setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+        toast(useDate?`Scheduled for ${useDate}!`:"Posted!","success");
+        setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");setOverlayText("");
         setTab("posts");
       }else{toast(data.error||"Post failed","error");}
     }catch{toast("Post failed","error");}
@@ -7485,15 +7522,47 @@ function ModSocial() {
                   {imgGenRunning?"GENERATING...":"✦ GENERATE"}
                 </OBtn>
               </div>
-              {/* Generated result */}
-              {imageUrl&&imageUrl.startsWith("http")&&imgMode==="generate"&&(
-                <div style={{display:"flex",gap:10,alignItems:"flex-start",marginBottom:10}}>
-                  <img src={imageUrl} alt="Generated" style={{width:90,height:90,objectFit:"cover",borderRadius:6,border:`1px solid ${B.border}`,flexShrink:0}}/>
-                  <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:3,display:"inline-block"}}>✓ READY TO POST</span>
-                    <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.png`;a.click();}} style={{background:B.blueBg,color:B.blue,border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
-                    <button onClick={()=>{setImageUrl("");setImgMode("generate");}} style={{background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textAlign:"left"}}>Clear</button>
+              {/* Image preview — full width, click to expand */}
+              {imageUrl&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{position:"relative",borderRadius:6,overflow:"hidden",cursor:"pointer",border:`1px solid ${B.border}`}} onClick={()=>setShowImgModal(true)}>
+                    <img src={imageUrl} alt="Post image" style={{width:"100%",maxHeight:320,objectFit:"cover",display:"block"}}
+                      onError={e=>{e.target.style.display="none";}}/>
+                    {/* CSS overlay preview */}
+                    {overlayText&&overlayPos!=="none"&&(
+                      <div style={{position:"absolute",left:0,right:0,...(overlayPos==="top"?{top:0}:overlayPos==="center"?{top:"42%"}:{bottom:0}),
+                        background:overlayTheme==="dark"?"rgba(0,0,0,0.62)":overlayTheme==="light"?"rgba(255,255,255,0.82)":"transparent",
+                        padding:"10px 14px",textAlign:"center",
+                        fontFamily:"Arial,sans-serif",fontSize:15,fontWeight:700,
+                        color:overlayTheme==="light"?"#0A0A0A":"#FFFFFF"}}>
+                        {overlayText}
+                      </div>
+                    )}
+                    <div style={{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.5)",borderRadius:3,padding:"2px 6px",fontFamily:"'Lexend',sans-serif",fontSize:9,color:"#fff",pointerEvents:"none"}}>click to expand</div>
                   </div>
+                  <div style={{display:"flex",gap:6,marginTop:6}}>
+                    <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.png`;a.click();}} style={{background:B.blueBg,color:B.blue,border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
+                    <button onClick={()=>{setImageUrl("");setOverlayText("");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕ CLEAR</button>
+                  </div>
+                </div>
+              )}
+              {/* Text overlay / templates */}
+              {imageUrl&&(
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 12px",marginBottom:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>TEXT OVERLAY</div>
+                  {/* Template presets */}
+                  <div style={{display:"flex",gap:5,marginBottom:8,flexWrap:"wrap"}}>
+                    {[["Clean","none","none"],["Dark Footer","bottom","dark"],["Light Footer","bottom","light"],["Dark Header","top","dark"],["Center Bold","center","dark"]].map(([label,pos,theme])=>(
+                      <button key={label} onClick={()=>{setOverlayPos(pos);setOverlayTheme(theme);}} style={{background:(overlayPos===pos&&overlayTheme===theme)||(pos==="none"&&overlayPos==="none")?B.orange:B.white,color:(overlayPos===pos&&overlayTheme===theme)||(pos==="none"&&overlayPos==="none")?B.white:B.muted,border:`1px solid ${(overlayPos===pos&&overlayTheme===theme)||(pos==="none"&&overlayPos==="none")?B.orange:B.border}`,borderRadius:3,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{label}</button>
+                    ))}
+                  </div>
+                  {overlayPos!=="none"&&(
+                    <div style={{display:"flex",gap:6}}>
+                      <input value={overlayText} onChange={e=>setOverlayText(e.target.value)} placeholder="Overlay text e.g. ST1 Sports · New Arrivals"
+                        style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                      <button onClick={burnOverlay} disabled={!overlayText.trim()} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:overlayText.trim()?1:.5}}>APPLY</button>
+                    </div>
+                  )}
                 </div>
               )}
               {/* Upload or paste URL */}
@@ -7501,14 +7570,19 @@ function ModSocial() {
                 <label style={{display:"flex",alignItems:"center",gap:6,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",cursor:"pointer",flexShrink:0}}>
                   <span style={{fontSize:13}}>↑</span>
                   <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3}}>UPLOAD</span>
-                  <input type="file" accept="image/*" onChange={e=>{handleImgUpload(e);setImgMode("upload");}} style={{display:"none"}}/>
+                  <input type="file" accept="image/*" onChange={handleImgUpload} style={{display:"none"}}/>
                 </label>
                 <input value={imgMode==="url"?imageUrl:""} onChange={e=>{setImageUrl(e.target.value);setImgMode("url");}} placeholder="or paste an image URL…"
                   style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
               </div>
-              {/* Preview for upload/url */}
-              {imageUrl&&imgMode!=="generate"&&<img src={imageUrl} style={{marginTop:8,maxHeight:140,borderRadius:6,objectFit:"cover",width:"100%"}} alt="preview" onError={e=>{e.target.style.display="none";}}/>}
             </div>
+            {/* Expand modal */}
+            {showImgModal&&imageUrl&&(
+              <div onClick={()=>setShowImgModal(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",cursor:"zoom-out"}}>
+                <img src={imageUrl} alt="Full size" style={{maxWidth:"90vw",maxHeight:"90vh",borderRadius:8,objectFit:"contain"}}/>
+                <button onClick={e=>{e.stopPropagation();setShowImgModal(false);}} style={{position:"absolute",top:16,right:20,background:"none",border:"none",color:"#fff",fontSize:28,cursor:"pointer",lineHeight:1}}>✕</button>
+              </div>
+            )}
             {/* Link */}
             <div style={{marginBottom:14}}>
               <Lbl s={{marginBottom:5}}>LINK URL (optional)</Lbl>
@@ -7539,9 +7613,14 @@ function ModSocial() {
               </div>
             </div>
             {!platforms.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:10}}>Select at least one platform</div>}
-            <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length} style={{width:"100%",justifyContent:"center"}}>
-              {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
-            </OBtn>
+            <div style={{display:"flex",gap:8}}>
+              <OBtn onClick={()=>submitPost(true)} disabled={posting||!caption.trim()||!platforms.length} style={{flex:1,justifyContent:"center",background:B.green}}>
+                {posting?"POSTING…":"📣 POST NOW"}
+              </OBtn>
+              <OBtn onClick={()=>submitPost(false)} disabled={posting||!caption.trim()||!platforms.length||!scheduleAt} style={{flex:1,justifyContent:"center"}} title={!scheduleAt?"Pick a date above first":""}>
+                {posting?"…":`🗓 SCHEDULE${scheduleAt?` ${scheduleAt}`:""}`}
+              </OBtn>
+            </div>
           </div>
         </div>
       )}
