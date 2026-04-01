@@ -7150,6 +7150,8 @@ function ModCalendar() {
 // ════════════════════════════════════════════════════════════════════════════
 const PLATFORM_COLORS = {instagram:"#E4405F",facebook:"#1877F2",linkedin:"#0A66C2",twitter:"#1DA1F2",tiktok:"#010101"};
 const SOCIAL_PLATFORMS = ["instagram","facebook","linkedin","twitter","tiktok"];
+// Official/practical character limits per platform
+const PLATFORM_LIMITS = {twitter:280,instagram:2200,facebook:63206,linkedin:3000,tiktok:2200};
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
@@ -7220,8 +7222,17 @@ function ModSocial() {
 
   const generateCaption=async()=>{
     setGenRunning(true);
+    // Find the tightest char limit across selected platforms
+    const hardLimit=platforms.length
+      ? Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000))
+      : 3000;
+    // Length word targets — capped by the platform's hard char limit
+    const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
+    const target=lengthTargets[postLength];
+    const effectiveChars=Math.min(target.chars,hardLimit);
+    const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
+    const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
     const direction=caption.trim();
-    const lengthGuide={short:"1-2 sentences, punchy and direct, max 40 words",medium:"3-5 sentences with context and hashtags, max 100 words",long:"full post with a hook, body, call to action, and hashtags, max 220 words"}[postLength];
     const prompt=direction
       ? `Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message and direction.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.\n\nDraft to improve:\n${direction}`
       : `Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.`;
@@ -7425,7 +7436,21 @@ function ModSocial() {
                 </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
+              {(()=>{
+                const lim=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):null;
+                const tightPlatform=lim&&platforms.find(p=>PLATFORM_LIMITS[p]===lim);
+                const over=lim&&caption.length>lim;
+                return(
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:over?B.red:B.muted}}>
+                      {over?`⚠ ${caption.length - lim} chars over ${tightPlatform} limit`:""}
+                    </span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:over?B.red:B.muted}}>
+                      {caption.length}{lim?` / ${lim}${tightPlatform?` (${tightPlatform})`:""}`:" chars"}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
             {/* Image */}
             <div style={{marginBottom:14}}>
