@@ -4912,6 +4912,7 @@ function ModMarketing() {
   const [schedSendTimer,setSchedSendTimer]=useState(null);
   // Manual batch queue: null = no pending batches, or {campId, queue:[...], batchNum, sentSoFar, failedSoFar, firstErr}
   const [pendingBatch,setPendingBatch]=useState(null);
+  const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -6702,118 +6703,194 @@ function ModMarketing() {
 
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
-              {selCamp.status==="running"&&(
-                <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.green}10`,border:`1px solid ${B.green}30`,borderRadius:6,marginBottom:14}}>
-                  <span style={{fontSize:16}}>▶</span>
-                  <div style={{flex:1}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5,marginBottom:2}}>CAMPAIGN IS RUNNING</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>This campaign is already active. Use the controls below to send due emails, check replies, and track opens.</div>
-                  </div>
-                </div>
-              )}
               {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
                 <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:12}}>
                   <div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                   <div style={{flex:1}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending as <strong>{rep.name}</strong> · {rep.email}</span>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:8}}>Replies feed {rep.name.split(" ")[0]}'s pipeline</span>
+                    {rep.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}10`,padding:"1px 5px",borderRadius:3,marginLeft:8}}>OWN GMAIL</span>}
                   </div>
                   <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
                 </div>
               ):null;})()}
               {(()=>{
                 const enrs=selCamp.enrollments||[];
-                const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
-                const repliedN=enrs.filter(e=>e.status==="replied").length;
-                const doneN=enrs.filter(e=>e.status==="done").length;
-                const activeN=enrs.filter(e=>e.status==="active").length;
-                const openedN=enrs.filter(e=>e.openedAt).length;
-                return(
-                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                const todayStr=today();
+                // Contacts not yet sent to (step===0, no lastSentAt) or due for next touch
+                const sendQueue=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                const alreadySent=enrs.filter(e=>e.lastSentAt||(e.step>0&&e.status!=="active")||e.status==="done"||e.status==="replied"||e.status==="interested");
+                const activeOnly=enrs.filter(e=>e.status==="active");
+                // Divide send queue into batches of 25
+                const batches=[];
+                for(let i=0;i<sendQueue.length;i+=BATCH_SIZE) batches.push(sendQueue.slice(i,i+BATCH_SIZE));
+
+                // Simple one-batch sender (no queue state needed)
+                const sendOneBatch=async(batchEnrollments)=>{
+                  const camp=campaigns.find(c=>c.id===selCamp.id);
+                  if(!camp||sending) return;
+                  setSending(true);
+                  let sent=0,failed=0,firstErr=null;
+                  const todStr=today();
+                  const updEnr=[...(camp.enrollments||[])];
+                  toast(`Sending ${batchEnrollments.length} emails…`,"info");
+                  for(const enroll of batchEnrollments){
+                    const res=await sendOneEmail(camp,enroll);
+                    if(res.ok){
+                      const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                      if(idx>=0){
+                        const ns=enroll.step+1;
+                        const done=ns>=(camp.touches||[]).length;
+                        const nt=(camp.touches||[])[ns];
+                        const nd=nt?new Date(Date.now()+nt.dayOffset*86400000).toISOString().slice(0,10):null;
+                        updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
+                      }
+                      dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
+                      const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
+                      sent++;
+                      if(sent<batchEnrollments.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
+                    } else {
+                      failed++;
+                      const fe=contactMap[enroll.contactId]?.email||"unknown";
+                      if(!firstErr) firstErr=`${fe}: ${res.reason}`;
+                    }
+                  }
+                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
+                  setSending(false);
+                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}`,sent>0?"success":"error");
+                };
+
+                return(<>
+                  {/* Stats row */}
+                  <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+                    {[
+                      ["ENROLLED",enrs.length,B.blue],
+                      ["QUEUE",sendQueue.length,B.orange],
+                      ["SENT",alreadySent.length,B.purple],
+                      ["REPLIED",enrs.filter(e=>e.status==="replied").length,B.green],
+                      ["INTERESTED",enrs.filter(e=>e.status==="interested").length,B.orange],
+                      ["DONE",enrs.filter(e=>e.status==="done").length,B.muted],
+                    ].map(([l,v,c])=>(
                       <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
                         <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
                       </div>
                     ))}
-                    {(()=>{
-                      const todayStr=today();
-                      const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
-                      const hasPending=pendingBatch&&pendingBatch.campId===selCamp.id;
-                      return(
-                        <>
-                          {/* Pending batch control */}
-                          {hasPending&&(
-                            <div style={{width:"100%",background:`${B.orange}10`,border:`2px solid ${B.orange}`,borderRadius:6,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:"auto"}}>
+                      <button onClick={async()=>{
+                        const firstEnroll=sendQueue[0];
+                        if(!firstEnroll){toast("No contacts in queue","warn");return;}
+                        const c=contactMap[firstEnroll.contactId];
+                        toast(`Sending 1 test email to ${c?.email||"?"}…`,"info");
+                        const res=await sendOneEmail(selCamp,firstEnroll);
+                        if(res.ok) toast(`✓ Test sent to ${c?.email}`,"success");
+                        else toast(`✗ ${res.reason}`,"error");
+                      }} disabled={sending||!sendQueue.length}
+                        style={{background:sendQueue.length?B.teal:B.surface,color:sendQueue.length?B.white:B.muted,border:`1px solid ${sendQueue.length?B.teal:B.border}`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                        ✉ TEST (1)
+                      </button>
+                      <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
+                        style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                        {checkingReplies?"CHECKING...":"↻ REPLIES"}
+                      </button>
+                      <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
+                        style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                        {checkingOpens?"CHECKING...":"👁 OPENS"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* BATCH QUEUE */}
+                  {batches.length>0&&(
+                    <div style={{marginBottom:20}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:8}}>
+                        SEND QUEUE — {sendQueue.length} CONTACTS · {batches.length} BATCH{batches.length!==1?"ES":""} OF {BATCH_SIZE}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {batches.map((batch,bi)=>{
+                          const [expanded,setExpanded]=[batchExpanded[bi],v=>setBatchExpanded(x=>({...x,[bi]:v}))];
+                          return(
+                          <div key={bi} style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",background:B.white}}>
+                            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:bi===0?`${B.orange}08`:B.white}}>
                               <div style={{flex:1}}>
-                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>BATCH {pendingBatch.batchNum} READY</div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:2}}>
-                                  {Math.min(BATCH_SIZE,pendingBatch.queue.length)} contacts · {pendingBatch.queue.length} remaining total
-                                  {pendingBatch.sentSoFar>0&&<span style={{color:B.green,marginLeft:8}}>✓ {pendingBatch.sentSoFar} sent so far</span>}
-                                  {pendingBatch.failedSoFar>0&&<span style={{color:B.red,marginLeft:8}}>✗ {pendingBatch.failedSoFar} failed</span>}
+                                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:bi===0?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
+                                  <button onClick={()=>setExpanded(!expanded)} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:"0 4px"}}>{expanded?"▲ hide":"▼ show"}</button>
                                 </div>
+                                {expanded&&(
+                                  <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:4}}>
+                                    {batch.map(e=>{
+                                      const c=contactMap[e.contactId];
+                                      if(!c) return null;
+                                      const touch=(selCamp.touches||[])[e.step];
+                                      return(
+                                        <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
+                                          <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                                            {c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}
+                                            <span style={{color:B.muted,marginLeft:8,fontSize:10}}>{c.email}</span>
+                                          </div>
+                                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange}}>TOUCH {(e.step||0)+1}</span>
+                                          {touch?.subject&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>"{touch.subject}"</span>}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
-                              <button onClick={()=>executeBatch(pendingBatch)} disabled={sending}
-                                style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer",whiteSpace:"nowrap"}}>
-                                {sending?"SENDING...":"▶ SEND BATCH "+pendingBatch.batchNum+" ("+Math.min(BATCH_SIZE,pendingBatch.queue.length)+")"}
-                              </button>
-                              <button onClick={()=>{setPendingBatch(null);toast("Remaining batches cancelled","info");}} disabled={sending}
-                                style={{background:"none",border:`1px solid ${B.red}50`,color:B.red,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap"}}>
-                                ✕ CANCEL REMAINING
+                              <button onClick={()=>sendOneBatch(batch)} disabled={sending}
+                                style={{background:sending?B.muted:bi===0?B.orange:B.surface,color:sending?B.white:bi===0?B.white:B.text,border:`1px solid ${bi===0?B.orange:B.border}`,borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.4,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                {sending?"SENDING...":"▶ SEND BATCH "+(bi+1)+" ("+batch.length+")"}
                               </button>
                             </div>
-                          )}
-                          {/* Scheduled send */}
-                          <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                            <input type="datetime-local" value={schedSendTime} onChange={e=>setSchedSendTime(e.target.value)}
-                              style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}/>
-                            <button disabled={!schedSendTime||sending||activeN===0} onClick={()=>{
-                              const ms=new Date(schedSendTime).getTime()-Date.now();
-                              if(ms<=0){toast("Pick a future time","warn");return;}
-                              const mins=Math.round(ms/60000);
-                              toast(`Scheduled — will send in ${mins} min. Keep this tab open.`,"success");
-                              if(schedSendTimer) clearTimeout(schedSendTimer);
-                              const t=setTimeout(()=>sendDueEmails(selCamp.id,true),ms);
-                              setSchedSendTimer(t);
-                              setSchedSendTime("");
-                            }} style={{background:schedSendTime&&activeN>0?B.purple:B.surface,color:schedSendTime&&activeN>0?B.white:B.muted,border:`1px solid ${schedSendTime?B.purple:B.border}`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",whiteSpace:"nowrap"}}>
-                              ⏰ SCHEDULE
-                            </button>
-                            {schedSendTimer&&<button onClick={()=>{clearTimeout(schedSendTimer);setSchedSendTimer(null);toast("Scheduled send cancelled","info");}} style={{background:"none",border:`1px solid ${B.red}40`,color:B.red,borderRadius:4,padding:"4px 8px",fontSize:9,cursor:"pointer"}}>✕ CANCEL</button>}
                           </div>
-                          <button onClick={async()=>{
-                            const firstEnroll=(selCamp.enrollments||[]).find(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut);
-                            if(!firstEnroll){toast("No active enrollments to test","warn");return;}
-                            const c=contactMap[firstEnroll.contactId];
-                            toast(`Sending 1 test email to ${c?.email||"?"}…`,"info");
-                            const res=await sendOneEmail(selCamp,firstEnroll);
-                            if(res.ok) toast(`✓ Test email sent to ${c?.email}. Check inbox!`,"success");
-                            else toast(`✗ Failed: ${res.reason}`,"error");
-                          }} disabled={sending||activeN===0}
-                            style={{background:activeN>0?B.teal:B.surface,color:activeN>0?B.white:B.muted,border:`1px solid ${activeN>0?B.teal:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:activeN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            ✉ TEST (1)
-                          </button>
-                          <button onClick={()=>sendDueEmails(selCamp.id,false)} disabled={sending||dueN===0}
-                            style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
-                          </button>
-                          <button onClick={()=>sendDueEmails(selCamp.id,true)} disabled={sending||activeN===0}
-                            style={{background:activeN>0?B.orange:B.surface,color:activeN>0?B.white:B.muted,border:`1px solid ${activeN>0?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:activeN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {sending?"SENDING...":"▶ SEND ALL"+(activeN>0?" ("+activeN+")":"")}
-                          </button>
-                          <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
-                            style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingReplies?"CHECKING...":"↻ REPLIES"}
-                          </button>
-                          <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
-                            style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingOpens?"CHECKING...":"👁 OPENS"}
-                          </button>
-                        </>
-                      );
-                    })()}
-                  </div>
-                );
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {batches.length===0&&sendQueue.length===0&&(
+                    <div style={{padding:"14px",background:B.surface,borderRadius:6,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>
+                      No contacts in send queue. Enroll contacts in the Audience tab, or check that enrollments are still active.
+                    </div>
+                  )}
+
+                  {/* ALREADY SENT */}
+                  {alreadySent.length>0&&(
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:8}}>
+                        ALREADY CONTACTED — {alreadySent.length}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                        {alreadySent.map(e=>{
+                          const c=contactMap[e.contactId];
+                          if(!c) return null;
+                          const sc={done:B.green,replied:B.green,interested:B.orange,unsubscribed:B.red}[e.status]||B.blue;
+                          const label={done:"DONE",replied:"REPLIED",interested:"INTERESTED",unsubscribed:"UNSUB",active:"ACTIVE"}[e.status]||e.status?.toUpperCase();
+                          return(
+                            <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5}}>
+                              <div style={{flex:1}}>
+                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{c.email}</span>
+                              </div>
+                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{e.lastSentAt?`Sent ${e.lastSentAt}`:""}</span>
+                              {e.status==="active"&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Next: Touch {(e.step||0)+1} · {e.nextDate||"—"}</span>}
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}15`,padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{label}</span>
+                              {e.status==="active"&&(
+                                <button onClick={()=>{
+                                  const camp=campaigns.find(c2=>c2.id===selCamp.id);
+                                  if(!camp) return;
+                                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"interested"}:en)});
+                                  dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"meeting",campaignId:selCamp.id,note:"Positive intent"});
+                                  toast(`${c.fullName||c.firstName} marked as interested`,"success");
+                                }} style={{background:`${B.orange}10`,color:B.orange,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>🎯</button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>);
               })()}
               {/* Sequence touchpoints — editable */}
               <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"flex-start"}}>
