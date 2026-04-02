@@ -211,10 +211,10 @@ export default async function handler(req, res) {
   const accountObjs = accountIds.map(id => ({
     id: String(id),
     // For immediate posts use now; for scheduled posts use the requested time
-    // For immediate posts schedule 2 min out so Publer has time to process before the time passes
+    // Schedule 5 min from now so Publer has time to process and publish
     scheduled_at: scheduleDate
       ? new Date(scheduleDate).toISOString()
-      : new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+      : new Date(Date.now() + 5 * 60 * 1000).toISOString(),
   }));
 
   const payload = {

@@ -7947,7 +7947,9 @@ function ModSocial() {
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){
                       dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});
-                      toast(data._warning?`Sent to Publer — ⚠ ${data._warning}`:"Sent to Publer!",data._warning?"warn":"success");
+                      const t=new Date(Date.now()+5*60*1000);
+                      const tStr=`${t.getHours()}:${String(t.getMinutes()).padStart(2,"0")}`;
+                      toast(data._warning?`Sent — ⚠ ${data._warning}`:`Queued in Publer — posts at ${tStr}`,"success");
                     }
                     else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,120):"";
