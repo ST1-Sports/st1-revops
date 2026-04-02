@@ -5276,7 +5276,16 @@ function ModMarketing() {
     const htmlBody=`<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}<img src="${trackUrl}" width="1" height="1" style="display:none" alt=""></body></html>`;
     try{
       const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:"send",to_email:c.email,to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),subject,body:plainBody,htmlBody})});
+        body:JSON.stringify({
+          action:"send",
+          to_email:c.email,
+          to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
+          subject,
+          body:plainBody,
+          htmlBody,
+          // Reply-To = rep's email so replies land in their inbox, not the company Gmail
+          ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+        })});
       const d=await r.json();
       return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
     }catch(err){return {ok:false,reason:err.message};}
