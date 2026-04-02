@@ -99,13 +99,17 @@ export default async function handler(req, res) {
     };
     if (workspaceId) headers["Publer-Workspace-Id"] = workspaceId;
 
-    // Correct Publer bulk format: networks + accounts as objects
-    const soon = new Date(Date.now() + 2 * 60 * 1000).toISOString();
+    // Simple test: list scheduled posts to see what Publer actually has
+    const listR = await fetch(`${PUBLER_API}/posts?state=scheduled&per_page=5`, { headers });
+    const listText = await listR.text();
+
+    // Also test creating a minimal post
+    const soon = new Date(Date.now() + 5 * 60 * 1000).toISOString();
     const testPayload = {
       bulk: {
         state: "scheduled",
         posts: [{
-          networks: { instagram: { type: "image", text: "ST1 RevOps debug test" } },
+          networks: { instagram: { type: "feed", text: "ST1 RevOps debug test — please ignore" } },
           accounts: firstAccountId ? [{ id: firstAccountId, scheduled_at: soon }] : [],
         }],
       },
@@ -113,23 +117,13 @@ export default async function handler(req, res) {
 
     const r = await fetch(`${PUBLER_API}/posts/schedule`, { method: "POST", headers, body: JSON.stringify(testPayload) });
     const rawText = await r.text();
-    let jobStatus = null;
-    try {
-      const parsed = JSON.parse(rawText);
-      const jobId = parsed.job_id;
-      if (jobId) {
-        await new Promise(res => setTimeout(res, 3000)); // wait 3s for job to process
-        const jr = await fetch(`${PUBLER_API}/job_status/${jobId}`, { headers });
-        jobStatus = await jr.text();
-      }
-    } catch {}
     return res.json({
       httpStatus: r.status,
       accountUsed: firstAccountId || "NONE",
       workspaceId: workspaceId || "NONE",
       scheduledFor: soon,
-      rawResponse: rawText.slice(0, 1000),
-      jobStatus: jobStatus ? jobStatus.slice(0, 500) : "not checked",
+      createResponse: rawText.slice(0, 500),
+      existingScheduled: listText.slice(0, 500),
     });
   }
 
@@ -197,10 +191,10 @@ export default async function handler(req, res) {
   // networks = per-platform content; accounts = [{id, scheduled_at}] objects
   // Instagram requires type:"image" when posting with media; "status" for text-only (may not work on IG)
   const netTypeMap = {
-    facebook:  hasMedia ? "image" : "status",
-    instagram: hasMedia ? "image" : "image",  // IG always needs image
-    linkedin:  hasMedia ? "image" : "status",
-    twitter:   hasMedia ? "image" : "status",
+    facebook:  "feed",
+    instagram: "feed",
+    linkedin:  "feed",
+    twitter:   "feed",
     tiktok:    "video",
   };
 
