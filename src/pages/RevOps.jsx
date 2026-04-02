@@ -5283,8 +5283,10 @@ function ModMarketing() {
           subject,
           body:plainBody,
           htmlBody,
-          // Reply-To = rep's email so replies land in their inbox, not the company Gmail
-          ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+          // Send from the rep's own Gmail if they have a key, otherwise shared account
+          ...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
+          // Reply-To = rep's email so replies land in their inbox (fallback if no own Gmail)
+          ...(!rep?.gmailEnvKey && rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
         })});
       const d=await r.json();
       return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
@@ -6899,7 +6901,7 @@ function ModMarketing() {
                     const c=contactMap[e.contactId];
                     if(!c)return null;
                     const touch=selCamp.touches[e.step];
-                    const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                    const sc={active:B.blue,replied:B.green,interested:B.orange,meeting:B.purple,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
                     return (
                       <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -6927,6 +6929,23 @@ function ModMarketing() {
                               <div style={{display:"flex",gap:4}}>
                                 <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT +15</GBtn>
                                 <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED +50</button>
+                              </div>
+                              <div style={{display:"flex",gap:4}}>
+                                <button onClick={()=>{
+                                  const camp=campaigns.find(c=>c.id===selCamp.id);
+                                  if(!camp) return;
+                                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"interested"}:en)});
+                                  dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"meeting",campaignId:selCamp.id,note:"Positive intent — removed from sequence"});
+                                  dispatch("UPDATE_CONTACT",{id:e.contactId,outreachStatus:"interested"});
+                                  toast(`${c.fullName||c.firstName} removed from sequence — marked as interested`,"success");
+                                }} style={{background:`${B.orange}15`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>🎯 POSITIVE INTENT</button>
+                                <button onClick={()=>{
+                                  const camp=campaigns.find(c=>c.id===selCamp.id);
+                                  if(!camp) return;
+                                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"unsubscribed"}:en)});
+                                  dispatch("UPDATE_CONTACT",{id:e.contactId,optedOut:true});
+                                  toast(`${c.fullName||c.firstName} unsubscribed`,"info");
+                                }} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>UNSUB</button>
                               </div>
                             </div>
                           )}
@@ -10056,14 +10075,16 @@ function ModSettings() {
   const [gmailStatus,setGmailStatus]=useState(null); // null=checking, true=ok, false=error
 
   const testRepEmail=async(rep)=>{
-    toast(`Sending test to ${rep.email}…`,"info");
+    const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
+    toast(`Sending test to ${rep.email} via ${fromLabel}…`,"info");
     try {
       const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         action:"send", to_email:rep.email, to_name:rep.name,
         subject:`ST1 RevOps — email test for ${rep.name}`,
-        body:`Hi ${rep.name.split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`
+        body:`Hi ${rep.name.split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
+        ...(rep.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
       })}).then(r=>r.json());
-      if(d.sent) toast(`Test sent to ${rep.email} ✓`,"success");
+      if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
       else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
     } catch(e){ toast("Error: "+e.message,"error"); }
   };
@@ -10227,6 +10248,17 @@ function ModSettings() {
                     style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
                 </div>
               ))}
+              <div style={{gridColumn:"1/-1"}}>
+                <Lbl s={{marginBottom:3}}>Gmail Key <span style={{fontWeight:400,textTransform:"none",letterSpacing:0,color:B.muted}}>(optional — e.g. JOSH)</span></Lbl>
+                <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                  <input type="text" value={repForm.gmailEnvKey||""} onChange={e=>setRepForm(f=>({...f,gmailEnvKey:e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g,"")}))}
+                    placeholder="e.g. JOSH" maxLength={20}
+                    style={{width:120,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",letterSpacing:1}}/>
+                  {repForm.gmailEnvKey&&<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
+                    style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline"}}>Set up Gmail for {repForm.gmailEnvKey} →</a>}
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>→ set <code>GMAIL_REFRESH_TOKEN_{repForm.gmailEnvKey||"KEY"}</code> in Vercel</span>
+                </div>
+              </div>
             </div>
             <div style={{display:"flex",gap:7}}>
               <OBtn sm onClick={saveRep}>SAVE</OBtn>
@@ -10238,6 +10270,7 @@ function ModSettings() {
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {(s.reps||[]).map(rep=>{
             const hasAccess = (s.appUsers||[]).some(u=>u.repId===rep.id);
+            const hasOwnGmail = !!rep.gmailEnvKey;
             return(
             <div key={rep.id} style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
               <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:B.white}}>
@@ -10245,14 +10278,18 @@ function ModSettings() {
                   <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
                 </div>
                 <div style={{flex:1}}>
-                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{rep.name}</span>
                     {hasAccess&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}15`,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>HAS ACCESS</span>}
+                    {hasOwnGmail
+                      ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>✉ OWN GMAIL ({rep.gmailEnvKey})</span>
+                      : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>✉ SHARED GMAIL</span>
+                    }
                   </div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
                 </div>
                 <div style={{display:"flex",gap:5}}>
-                  <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title="Send test email to this rep">✉ TEST</button>
+                  <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title={hasOwnGmail?`Send test from ${rep.gmailEnvKey}'s Gmail`:"Send test from shared Gmail"}>✉ TEST</button>
                   <button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
                   <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
                   <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
