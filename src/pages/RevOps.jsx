@@ -7945,7 +7945,10 @@ function ModSocial() {
                       body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined})});
                     const data=await r.json();
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
-                    if(ok){dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});toast("Sent to Publer!","success");}
+                    if(ok){
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});
+                      toast(data._warning?`Sent to Publer — ⚠ ${data._warning}`:"Sent to Publer!",data._warning?"warn":"success");
+                    }
                     else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,120):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");

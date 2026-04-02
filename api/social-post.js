@@ -177,12 +177,20 @@ export default async function handler(req, res) {
   const publicMediaUrls = (mediaUrls || []).filter(
     u => typeof u === "string" && u.startsWith("http") && !u.startsWith("data:")
   );
+  const hasMedia = publicMediaUrls.length > 0;
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
   // Publer bulk API: POST /posts/schedule
-  // networks = per-platform content; accounts = [{id, scheduled_at?}] objects
-  const netTypeMap = { facebook:"status", instagram:"status", linkedin:"status", twitter:"status", tiktok:"video" };
+  // networks = per-platform content; accounts = [{id, scheduled_at}] objects
+  // Instagram requires type:"image" when posting with media; "status" for text-only (may not work on IG)
+  const netTypeMap = {
+    facebook:  hasMedia ? "image" : "status",
+    instagram: hasMedia ? "image" : "image",  // IG always needs image
+    linkedin:  hasMedia ? "image" : "status",
+    twitter:   hasMedia ? "image" : "status",
+    tiktok:    "video",
+  };
 
   const activePlatforms = platforms?.length
     ? platforms.filter(p => platformMap[p])
@@ -191,7 +199,7 @@ export default async function handler(req, res) {
   const networks = {};
   for (const pl of (activePlatforms.length ? activePlatforms : Object.keys(platformMap).filter(p => platformMap[p]))) {
     networks[pl] = { type: netTypeMap[pl] || "status", text: postText };
-    if (publicMediaUrls.length) networks[pl].media_urls = publicMediaUrls;
+    if (hasMedia) networks[pl].media_urls = publicMediaUrls;
   }
 
   const accountObjs = accountIds.map(id => ({
@@ -217,15 +225,15 @@ export default async function handler(req, res) {
 
     // Publer returns 202 + job_id (async) on success
     if (ok || httpStatus === 202) {
+      const warnings = [];
+      if (mediaUrls?.length && !hasMedia) warnings.push("Image skipped — must be a public HTTPS URL. Upload to Cloudinary/Imgur and paste the link instead.");
       return res.json({
         status: scheduleDate ? "scheduled" : "success",
         backend: "publer",
         jobId: data.job_id || data.id || null,
         postIds: [],
+        _warning: warnings[0] || undefined,
         scheduled: !!scheduleDate,
-        ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0
-          ? { _warning: "Image skipped — must be a public HTTPS URL." }
-          : {}),
       });
     }
 
