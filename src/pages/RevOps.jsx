@@ -4910,6 +4910,8 @@ function ModMarketing() {
   const [previewModal,setPreviewModal]=useState(null);
   const [schedSendTime,setSchedSendTime]=useState("");
   const [schedSendTimer,setSchedSendTimer]=useState(null);
+  // Manual batch queue: null = no pending batches, or {campId, queue:[...], batchNum, sentSoFar, failedSoFar, firstErr}
+  const [pendingBatch,setPendingBatch]=useState(null);
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -5293,55 +5295,69 @@ function ModMarketing() {
     }catch(err){return {ok:false,reason:err.message};}
   };
 
+  const BATCH_SIZE = 25;
+  const BETWEEN_EMAILS = 3000;
+
+  // Execute exactly one batch of BATCH_SIZE contacts, then stop.
+  // If more remain, stores them in pendingBatch so the user can manually trigger next.
+  const executeBatch = async ({campId, queue, batchNum, sentSoFar, failedSoFar, firstErr: prevErr}) => {
+    const camp = campaigns.find(c=>c.id===campId);
+    if(!camp){setPendingBatch(null);return;}
+    const batch = queue.slice(0,BATCH_SIZE);
+    const remaining = queue.slice(BATCH_SIZE);
+    const totalBatches = Math.ceil((queue.length)/BATCH_SIZE) + (batchNum - 1); // approx
+    setSending(true);
+    let sent=0, failed=0, firstErr=prevErr||null;
+    const todayStr=today();
+    // snapshot enrollments so we can update them
+    const updatedEnrollments=[...(camp.enrollments||[])];
+    toast(`Sending batch ${batchNum} — ${batch.length} contacts…`,"info");
+    for(const enroll of batch){
+      const res=await sendOneEmail(camp,enroll);
+      if(res.ok){
+        const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
+        if(idx>=0){
+          const nextStep=enroll.step+1;
+          const done=nextStep>=(camp.touches||[]).length;
+          const nextTouch=(camp.touches||[])[nextStep];
+          const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+          updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
+        }
+        dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
+        const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
+        sent++;
+        if(sent<batch.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
+      } else {
+        failed++;
+        const failEmail=contactMap[enroll.contactId]?.email||"unknown";
+        if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
+        console.warn("[campaign send] failed for",failEmail,"→",res.reason);
+      }
+    }
+    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
+    setSending(false);
+    const totalSent=sentSoFar+sent, totalFailed=failedSoFar+failed;
+    if(remaining.length>0){
+      setPendingBatch({campId,queue:remaining,batchNum:batchNum+1,sentSoFar:totalSent,failedSoFar:totalFailed,firstErr});
+      toast(`Batch ${batchNum} done — ${sent} sent${failed?`, ${failed} failed`:""}. ${remaining.length} contacts remaining. Click SEND NEXT BATCH when ready.`,"success");
+    } else {
+      setPendingBatch(null);
+      toast(`All done! Total: ${totalSent} sent${totalFailed?`, ${totalFailed} failed — first error: ${firstErr}`:""}`,totalSent>0?"success":"error");
+    }
+  };
+
   const sendDueEmails = async (campId, sendAll=false) => {
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
+    // If there's already a pending batch for this campaign, just resume it
+    if(pendingBatch?.campId===campId){executeBatch(pendingBatch);return;}
     const todayStr=today();
     const queue=(camp.enrollments||[]).filter(e=>
       e.status==="active" && !contactMap[e.contactId]?.optedOut &&
       (sendAll || (e.nextDate||todayStr)<=todayStr)
     );
     if(!queue.length){toast(sendAll?"No active enrollments":"No emails due today — try SEND ALL","info");return;}
-    setSending(true);
-    let sent=0,failed=0,firstErr=null;
-    const updatedEnrollments=[...(camp.enrollments||[])];
-    const BATCH=25;
-    const BETWEEN_EMAILS=3000;
-    const BETWEEN_BATCHES=60000;
-    for(let b=0;b<queue.length;b+=BATCH){
-      const batch=queue.slice(b,b+BATCH);
-      toast(`Sending batch ${Math.floor(b/BATCH)+1} of ${Math.ceil(queue.length/BATCH)} (${b+1}–${Math.min(b+BATCH,queue.length)} of ${queue.length})…`,"info");
-      for(const enroll of batch){
-        const res=await sendOneEmail(camp,enroll);
-        if(res.ok){
-          const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
-          if(idx>=0){
-            const nextStep=enroll.step+1;
-            const done=nextStep>=(camp.touches||[]).length;
-            const nextTouch=(camp.touches||[])[nextStep];
-            const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
-            updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
-          }
-          dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
-          const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
-          sent++;
-          if(b+sent<queue.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
-        } else {
-          failed++;
-          const failEmail=contactMap[enroll.contactId]?.email||"unknown";
-          if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
-          console.warn("[campaign send] failed for",failEmail,"→",res.reason);
-        }
-      }
-      // Pause between batches (except after last batch)
-      if(b+BATCH<queue.length){
-        toast(`Batch sent — pausing 60s before next batch (anti-spam)…`,"info");
-        await new Promise(r=>setTimeout(r,BETWEEN_BATCHES));
-      }
-    }
-    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
-    setSending(false);
-    toast(`Sent ${sent}${failed?`, ${failed} failed — first error: ${firstErr}`:""}`,sent>0?"success":"error");
+    executeBatch({campId,queue,batchNum:1,sentSoFar:0,failedSoFar:0,firstErr:null});
   };
 
   const checkReplies = async (campId) => {
@@ -6723,8 +6739,30 @@ function ModMarketing() {
                     {(()=>{
                       const todayStr=today();
                       const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
+                      const hasPending=pendingBatch&&pendingBatch.campId===selCamp.id;
                       return(
                         <>
+                          {/* Pending batch control */}
+                          {hasPending&&(
+                            <div style={{width:"100%",background:`${B.orange}10`,border:`2px solid ${B.orange}`,borderRadius:6,padding:"10px 14px",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                              <div style={{flex:1}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>BATCH {pendingBatch.batchNum} READY</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:2}}>
+                                  {Math.min(BATCH_SIZE,pendingBatch.queue.length)} contacts · {pendingBatch.queue.length} remaining total
+                                  {pendingBatch.sentSoFar>0&&<span style={{color:B.green,marginLeft:8}}>✓ {pendingBatch.sentSoFar} sent so far</span>}
+                                  {pendingBatch.failedSoFar>0&&<span style={{color:B.red,marginLeft:8}}>✗ {pendingBatch.failedSoFar} failed</span>}
+                                </div>
+                              </div>
+                              <button onClick={()=>executeBatch(pendingBatch)} disabled={sending}
+                                style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                {sending?"SENDING...":"▶ SEND BATCH "+pendingBatch.batchNum+" ("+Math.min(BATCH_SIZE,pendingBatch.queue.length)+")"}
+                              </button>
+                              <button onClick={()=>{setPendingBatch(null);toast("Remaining batches cancelled","info");}} disabled={sending}
+                                style={{background:"none",border:`1px solid ${B.red}50`,color:B.red,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                ✕ CANCEL REMAINING
+                              </button>
+                            </div>
+                          )}
                           {/* Scheduled send */}
                           <div style={{display:"flex",gap:5,alignItems:"center"}}>
                             <input type="datetime-local" value={schedSendTime} onChange={e=>setSchedSendTime(e.target.value)}
