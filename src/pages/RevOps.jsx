@@ -5273,16 +5273,20 @@ function ModMarketing() {
     );
     if(!queue.length){toast(sendAll?"No active enrollments":"No emails due today — try SEND ALL","info");return;}
     setSending(true);
-    let sent=0,failed=0;
+    let sent=0,failed=0,firstErr=null;
     const updatedEnrollments=[...(camp.enrollments||[])];
-    const BATCH=25; // emails per batch
-    const BETWEEN_EMAILS=3000; // 3s between individual sends
-    const BETWEEN_BATCHES=60000; // 60s between batches (anti-spam)
+    const BATCH=25;
+    const BETWEEN_EMAILS=3000;
+    const BETWEEN_BATCHES=60000;
     for(let b=0;b<queue.length;b+=BATCH){
       const batch=queue.slice(b,b+BATCH);
       toast(`Sending batch ${Math.floor(b/BATCH)+1} of ${Math.ceil(queue.length/BATCH)} (${b+1}–${Math.min(b+BATCH,queue.length)} of ${queue.length})…`,"info");
       for(const enroll of batch){
         const res=await sendOneEmail(camp,enroll);
+        if(!res.ok){
+          failed++;
+          if(!firstErr) firstErr=`${contactMap[enroll.contactId]?.email||"unknown"}: ${res.reason}`;
+        }
         if(res.ok){
           const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
           if(idx>=0){
@@ -5306,15 +5310,7 @@ function ModMarketing() {
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
     setSending(false);
-    toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
-  };
-        if(sent<due.length) await new Promise(r=>setTimeout(r,15000));
-      }else failed++;
-    }
-    // Single batch dispatch — no stale overwrites
-    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
-    setSending(false);
-    toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
+    toast(`Sent ${sent}${failed?`, ${failed} failed — first error: ${firstErr}`:""}`,sent>0?"success":"error");
   };
 
   const checkReplies = async (campId) => {
@@ -10086,7 +10082,14 @@ function ModSettings() {
             <div style={{marginBottom:14}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
-                <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
+                <div style={{display:"flex",gap:5}}>
+                  <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
+                  <button onClick={async()=>{
+                    const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:s.company?.email||"test@example.com",to_name:"ST1 Test",subject:"ST1 RevOps — Gmail test",body:"If you receive this, Gmail sending is working correctly."})}).then(r=>r.json());
+                    if(d.sent) toast("Test email sent — check your inbox","success");
+                    else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
+                  }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>
+                </div>
               </div>
               {gmailInfo&&(
                 gmailInfo.error

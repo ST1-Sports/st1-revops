@@ -1811,7 +1811,9 @@ function AyrsharePanel({addLog}) {
           {debugResult&&(
             <div style={{background:"#0a0a0a",border:"1px solid #00ff8840",borderRadius:5,padding:"10px 12px",marginBottom:10,fontFamily:"monospace",fontSize:10,color:"#00ff88",overflowX:"auto"}}>
               <div style={{color:"#888",marginBottom:4}}>HTTP {debugResult.httpStatus} · account: {debugResult.accountUsed} · workspace: {debugResult.workspaceId}</div>
-              <div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{debugResult.rawResponse}</div>
+              <div style={{color:"#aaa",marginBottom:2,fontSize:9}}>CREATE:</div>
+              <div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap",marginBottom:6}}>{debugResult.createResponse||debugResult.rawResponse||"(empty)"}</div>
+              {debugResult.existingScheduled&&<><div style={{color:"#aaa",marginBottom:2,fontSize:9}}>EXISTING SCHEDULED:</div><div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{debugResult.existingScheduled}</div></>}
             </div>
           )}
           {profiles.length>0&&(
