@@ -274,6 +274,8 @@ function reducer(prev, action, payload) {
     case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
     case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
+    case "SET_APP_USER":        return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),payload]};
+    case "DEL_APP_USER":        return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.repId!==payload)};
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
@@ -435,7 +437,7 @@ export default function App() {
     return()=>window.removeEventListener("keydown",handler);
   },[]);
 
-  if (!s.currentUserId) return <Login dispatch={dispatch}/>;
+  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
@@ -672,24 +674,34 @@ export default function App() {
 }
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
-function Login({dispatch}) {
+function Login({dispatch, reps=[], appUsers=[]}) {
   const [sel,setSel]=useState(null);
   const [pin,setPin]=useState("");
   const [shake,setShake]=useState(false);
   const [loading,setLoading]=useState(false);
+
+  // Build login user list from appUsers + reps cross-reference
+  const loginUsers = appUsers.map(au=>{
+    const rep = reps.find(r=>r.id===au.repId);
+    if(!rep) return null;
+    const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+    return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue, pin: au.pin };
+  }).filter(Boolean);
+
   const doLogin=async()=>{
     if(!sel||pin.length<4) return;
     setLoading(true);
-    try {
-      const r=await fetch("/api/auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({userId:sel.id,pin})});
-      if(r.ok){dispatch("LOGIN",sel.id);}
-      else{setPin("");setShake(true);setTimeout(()=>setShake(false),500);}
-    } catch {
+    // Authenticate locally against stored PIN
+    const user = loginUsers.find(u=>u.id===sel.id);
+    await new Promise(r=>setTimeout(r,200)); // brief delay for UX
+    if(user && pin===user.pin){
+      dispatch("LOGIN",sel.id);
+    } else {
       setPin("");setShake(true);setTimeout(()=>setShake(false),500);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   };
+
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
@@ -703,8 +715,14 @@ function Login({dispatch}) {
         </div>
         <div style={{marginBottom:14}}>
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>SELECT USER</div>
+          {loginUsers.length===0?(
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px",background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,textAlign:"center",lineHeight:1.6}}>
+              No users set up yet.<br/>
+              <span style={{fontSize:10}}>Go to Settings → Sales Reps and set a PIN for each rep to grant access.</span>
+            </div>
+          ):(
           <div style={{display:"flex",flexDirection:"column",gap:5}}>
-            {USERS.map(u=>(
+            {loginUsers.map(u=>(
               <button key={u.id} onClick={()=>{setSel(u);setPin("");}}
                 style={{background:sel?.id===u.id?`${u.color}10`:B.surface,border:`1px solid ${sel?.id===u.id?u.color:B.border}`,borderRadius:6,padding:"9px 13px",display:"flex",alignItems:"center",gap:9,textAlign:"left"}}>
                 <div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -717,6 +735,7 @@ function Login({dispatch}) {
               </button>
             ))}
           </div>
+          )}
         </div>
         {sel&&(
           <div className={shake?"shk fu":"fu"} style={{marginBottom:14}}>
@@ -10010,7 +10029,35 @@ function ModSettings() {
   const [ints,setInts]=useState({...s.integrations});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
   const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
+  const [pinForm,setPinForm]=useState(null); // repId being set, or null
+  const [pinVal,setPinVal]=useState("");
   const [gmailStatus,setGmailStatus]=useState(null); // null=checking, true=ok, false=error
+
+  const testRepEmail=async(rep)=>{
+    toast(`Sending test to ${rep.email}…`,"info");
+    try {
+      const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"send", to_email:rep.email, to_name:rep.name,
+        subject:`ST1 RevOps — email test for ${rep.name}`,
+        body:`Hi ${rep.name.split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`
+      })}).then(r=>r.json());
+      if(d.sent) toast(`Test sent to ${rep.email} ✓`,"success");
+      else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
+    } catch(e){ toast("Error: "+e.message,"error"); }
+  };
+
+  const savePin=()=>{
+    if(pinVal.length!==4||!/^\d{4}$/.test(pinVal)){toast("PIN must be exactly 4 digits","error");return;}
+    dispatch("SET_APP_USER",{repId:pinForm,pin:pinVal});
+    toast("PIN saved — rep can now log in","success");
+    setPinForm(null);setPinVal("");
+  };
+
+  const revokeAccess=(rep)=>{
+    if(!window.confirm(`Remove login access for ${rep.name}?`)) return;
+    dispatch("DEL_APP_USER",rep.id);
+    toast(`Access revoked for ${rep.name}`,"success");
+  };
   const save=()=>{dispatch("SAVE_INTEGRATIONS",ints);dispatch("SAVE_COMPANY",co);toast("Settings saved","success");};
   const saveRep=()=>{
     if(!repForm?.name||!repForm?.email){toast("Name and email required","error");return;}
@@ -10167,21 +10214,41 @@ function ModSettings() {
         )}
         {(s.reps||[]).length===0&&!repForm&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 0"}}>No reps added yet — add your sales team to assign campaigns.</div>}
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
-          {(s.reps||[]).map(rep=>(
-            <div key={rep.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
-              <div style={{width:32,height:32,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
+          {(s.reps||[]).map(rep=>{
+            const hasAccess = (s.appUsers||[]).some(u=>u.repId===rep.id);
+            return(
+            <div key={rep.id} style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:B.white}}>
+                <div style={{width:32,height:32,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{rep.name}</span>
+                    {hasAccess&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}15`,padding:"1px 5px",borderRadius:3,letterSpacing:.5}}>HAS ACCESS</span>}
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
+                </div>
+                <div style={{display:"flex",gap:5}}>
+                  <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title="Send test email to this rep">✉ TEST</button>
+                  <button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
+                  <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
+                  <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
+                </div>
               </div>
-              <div style={{flex:1}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{rep.name}</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.email}{rep.title?` · ${rep.title}`:""}{rep.phone?` · ${rep.phone}`:""}</div>
-              </div>
-              <div style={{display:"flex",gap:5}}>
-                <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
-                <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
-              </div>
+              {pinForm===rep.id&&(
+                <div style={{background:B.surface,borderTop:`1px solid ${B.border}`,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,whiteSpace:"nowrap"}}>SET 4-DIGIT PIN</div>
+                  <input type="password" value={pinVal} onChange={e=>setPinVal(e.target.value.replace(/\D/g,"").slice(0,4))} onKeyDown={e=>e.key==="Enter"&&savePin()} placeholder="••••" maxLength={4}
+                    style={{width:80,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:14,letterSpacing:6,textAlign:"center",fontFamily:"'Lexend',sans-serif"}}/>
+                  <button onClick={savePin} disabled={pinVal.length!==4} style={{background:pinVal.length===4?B.orange:B.border,color:pinVal.length===4?B.white:B.muted,border:"none",borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:pinVal.length===4?"pointer":"not-allowed"}}>SAVE</button>
+                  {hasAccess&&<button onClick={()=>revokeAccess(rep)} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>REVOKE ACCESS</button>}
+                  <button onClick={()=>{setPinForm(null);setPinVal("");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CANCEL</button>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
