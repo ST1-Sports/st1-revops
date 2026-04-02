@@ -100,24 +100,36 @@ export default async function handler(req, res) {
     if (workspaceId) headers["Publer-Workspace-Id"] = workspaceId;
 
     // Correct Publer bulk format: networks + accounts as objects
+    const soon = new Date(Date.now() + 2 * 60 * 1000).toISOString();
     const testPayload = {
       bulk: {
         state: "scheduled",
         posts: [{
-          networks: { instagram: { type: "status", text: "ST1 RevOps debug test" } },
-          accounts: firstAccountId ? [{ id: firstAccountId, scheduled_at: new Date().toISOString() }] : [],
+          networks: { instagram: { type: "image", text: "ST1 RevOps debug test" } },
+          accounts: firstAccountId ? [{ id: firstAccountId, scheduled_at: soon }] : [],
         }],
       },
     };
 
     const r = await fetch(`${PUBLER_API}/posts/schedule`, { method: "POST", headers, body: JSON.stringify(testPayload) });
     const rawText = await r.text();
+    let jobStatus = null;
+    try {
+      const parsed = JSON.parse(rawText);
+      const jobId = parsed.job_id;
+      if (jobId) {
+        await new Promise(res => setTimeout(res, 3000)); // wait 3s for job to process
+        const jr = await fetch(`${PUBLER_API}/job_status/${jobId}`, { headers });
+        jobStatus = await jr.text();
+      }
+    } catch {}
     return res.json({
       httpStatus: r.status,
       accountUsed: firstAccountId || "NONE",
       workspaceId: workspaceId || "NONE",
-      payload: testPayload,
+      scheduledFor: soon,
       rawResponse: rawText.slice(0, 1000),
+      jobStatus: jobStatus ? jobStatus.slice(0, 500) : "not checked",
     });
   }
 
@@ -205,9 +217,10 @@ export default async function handler(req, res) {
   const accountObjs = accountIds.map(id => ({
     id: String(id),
     // For immediate posts use now; for scheduled posts use the requested time
+    // For immediate posts schedule 2 min out so Publer has time to process before the time passes
     scheduled_at: scheduleDate
       ? new Date(scheduleDate).toISOString()
-      : new Date().toISOString(),
+      : new Date(Date.now() + 2 * 60 * 1000).toISOString(),
   }));
 
   const payload = {
