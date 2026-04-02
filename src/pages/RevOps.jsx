@@ -5302,10 +5302,6 @@ function ModMarketing() {
       toast(`Sending batch ${Math.floor(b/BATCH)+1} of ${Math.ceil(queue.length/BATCH)} (${b+1}–${Math.min(b+BATCH,queue.length)} of ${queue.length})…`,"info");
       for(const enroll of batch){
         const res=await sendOneEmail(camp,enroll);
-        if(!res.ok){
-          failed++;
-          if(!firstErr) firstErr=`${contactMap[enroll.contactId]?.email||"unknown"}: ${res.reason}`;
-        }
         if(res.ok){
           const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
           if(idx>=0){
@@ -5318,8 +5314,13 @@ function ModMarketing() {
           dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
           const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
           sent++;
-          if(sent<queue.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
-        }else failed++;
+          if(b+sent<queue.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
+        } else {
+          failed++;
+          const failEmail=contactMap[enroll.contactId]?.email||"unknown";
+          if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
+          console.warn("[campaign send] failed for",failEmail,"→",res.reason);
+        }
       }
       // Pause between batches (except after last batch)
       if(b+BATCH<queue.length){
@@ -6731,6 +6732,18 @@ function ModMarketing() {
                             </button>
                             {schedSendTimer&&<button onClick={()=>{clearTimeout(schedSendTimer);setSchedSendTimer(null);toast("Scheduled send cancelled","info");}} style={{background:"none",border:`1px solid ${B.red}40`,color:B.red,borderRadius:4,padding:"4px 8px",fontSize:9,cursor:"pointer"}}>✕ CANCEL</button>}
                           </div>
+                          <button onClick={async()=>{
+                            const firstEnroll=(selCamp.enrollments||[]).find(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                            if(!firstEnroll){toast("No active enrollments to test","warn");return;}
+                            const c=contactMap[firstEnroll.contactId];
+                            toast(`Sending 1 test email to ${c?.email||"?"}…`,"info");
+                            const res=await sendOneEmail(selCamp,firstEnroll);
+                            if(res.ok) toast(`✓ Test email sent to ${c?.email}. Check inbox!`,"success");
+                            else toast(`✗ Failed: ${res.reason}`,"error");
+                          }} disabled={sending||activeN===0}
+                            style={{background:activeN>0?B.teal:B.surface,color:activeN>0?B.white:B.muted,border:`1px solid ${activeN>0?B.teal:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:activeN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
+                            ✉ TEST (1)
+                          </button>
                           <button onClick={()=>sendDueEmails(selCamp.id,false)} disabled={sending||dueN===0}
                             style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
                             {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
