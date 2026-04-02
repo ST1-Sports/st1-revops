@@ -4889,6 +4889,8 @@ function ModMarketing() {
   const [checkingReplies,setCheckingReplies]=useState(false);
   const [checkingOpens,setCheckingOpens]=useState(false);
   const [previewModal,setPreviewModal]=useState(null);
+  const [schedSendTime,setSchedSendTime]=useState("");
+  const [schedSendTimer,setSchedSendTimer]=useState(null);
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -5261,31 +5263,51 @@ function ModMarketing() {
     }catch(err){return {ok:false,reason:err.message};}
   };
 
-  const sendDueEmails = async (campId) => {
+  const sendDueEmails = async (campId, sendAll=false) => {
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
     const todayStr=today();
-    const due=(camp.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr&&!contactMap[e.contactId]?.optedOut);
-    if(!due.length){toast("No emails due today","info");return;}
+    const queue=(camp.enrollments||[]).filter(e=>
+      e.status==="active" && !contactMap[e.contactId]?.optedOut &&
+      (sendAll || (e.nextDate||todayStr)<=todayStr)
+    );
+    if(!queue.length){toast(sendAll?"No active enrollments":"No emails due today — try SEND ALL","info");return;}
     setSending(true);
     let sent=0,failed=0;
-    // Build updated enrollments array in memory to avoid stale-closure overwrite
     const updatedEnrollments=[...(camp.enrollments||[])];
-    for(const enroll of due){
-      const res=await sendOneEmail(camp,enroll);
-      if(res.ok){
-        const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
-        if(idx>=0){
-          const nextStep=enroll.step+1;
-          const done=nextStep>=(camp.touches||[]).length;
-          const nextTouch=(camp.touches||[])[nextStep];
-          const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
-          updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
-        }
-        dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
-        const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
-        sent++;
-        // 15-second gap between sends to avoid spam filters
+    const BATCH=25; // emails per batch
+    const BETWEEN_EMAILS=3000; // 3s between individual sends
+    const BETWEEN_BATCHES=60000; // 60s between batches (anti-spam)
+    for(let b=0;b<queue.length;b+=BATCH){
+      const batch=queue.slice(b,b+BATCH);
+      toast(`Sending batch ${Math.floor(b/BATCH)+1} of ${Math.ceil(queue.length/BATCH)} (${b+1}–${Math.min(b+BATCH,queue.length)} of ${queue.length})…`,"info");
+      for(const enroll of batch){
+        const res=await sendOneEmail(camp,enroll);
+        if(res.ok){
+          const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
+          if(idx>=0){
+            const nextStep=enroll.step+1;
+            const done=nextStep>=(camp.touches||[]).length;
+            const nextTouch=(camp.touches||[])[nextStep];
+            const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+            updatedEnrollments[idx]={...updatedEnrollments[idx],step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr,lastSentAt:todayStr};
+          }
+          dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
+          const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
+          sent++;
+          if(sent<queue.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
+        }else failed++;
+      }
+      // Pause between batches (except after last batch)
+      if(b+BATCH<queue.length){
+        toast(`Batch sent — pausing 60s before next batch (anti-spam)…`,"info");
+        await new Promise(r=>setTimeout(r,BETWEEN_BATCHES));
+      }
+    }
+    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
+    setSending(false);
+    toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
+  };
         if(sent<due.length) await new Promise(r=>setTimeout(r,15000));
       }else failed++;
     }
@@ -6676,9 +6698,31 @@ function ModMarketing() {
                       const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
                       return(
                         <>
-                          <button onClick={()=>sendDueEmails(selCamp.id)} disabled={sending||dueN===0}
+                          {/* Scheduled send */}
+                          <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                            <input type="datetime-local" value={schedSendTime} onChange={e=>setSchedSendTime(e.target.value)}
+                              style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}/>
+                            <button disabled={!schedSendTime||sending||activeN===0} onClick={()=>{
+                              const ms=new Date(schedSendTime).getTime()-Date.now();
+                              if(ms<=0){toast("Pick a future time","warn");return;}
+                              const mins=Math.round(ms/60000);
+                              toast(`Scheduled — will send in ${mins} min. Keep this tab open.`,"success");
+                              if(schedSendTimer) clearTimeout(schedSendTimer);
+                              const t=setTimeout(()=>sendDueEmails(selCamp.id,true),ms);
+                              setSchedSendTimer(t);
+                              setSchedSendTime("");
+                            }} style={{background:schedSendTime&&activeN>0?B.purple:B.surface,color:schedSendTime&&activeN>0?B.white:B.muted,border:`1px solid ${schedSendTime?B.purple:B.border}`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",whiteSpace:"nowrap"}}>
+                              ⏰ SCHEDULE
+                            </button>
+                            {schedSendTimer&&<button onClick={()=>{clearTimeout(schedSendTimer);setSchedSendTimer(null);toast("Scheduled send cancelled","info");}} style={{background:"none",border:`1px solid ${B.red}40`,color:B.red,borderRadius:4,padding:"4px 8px",fontSize:9,cursor:"pointer"}}>✕ CANCEL</button>}
+                          </div>
+                          <button onClick={()=>sendDueEmails(selCamp.id,false)} disabled={sending||dueN===0}
                             style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
                             {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
+                          </button>
+                          <button onClick={()=>sendDueEmails(selCamp.id,true)} disabled={sending||activeN===0}
+                            style={{background:activeN>0?B.orange:B.surface,color:activeN>0?B.white:B.muted,border:`1px solid ${activeN>0?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:activeN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
+                            {sending?"SENDING...":"▶ SEND ALL"+(activeN>0?" ("+activeN+")":"")}
                           </button>
                           <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
                             style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
