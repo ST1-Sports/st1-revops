@@ -6703,28 +6703,12 @@ function ModMarketing() {
 
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
-              {selCamp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===selCamp.repId);return rep?(
-                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:12}}>
-                  <div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
-                  <div style={{flex:1}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending as <strong>{rep.name}</strong> · {rep.email}</span>
-                    {rep.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}10`,padding:"1px 5px",borderRadius:3,marginLeft:8}}>OWN GMAIL</span>}
-                  </div>
-                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
-                </div>
-              ):null;})()}
               {(()=>{
                 const enrs=selCamp.enrollments||[];
-                const todayStr=today();
-                // Contacts not yet sent to (step===0, no lastSentAt) or due for next touch
-                const sendQueue=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut);
-                const alreadySent=enrs.filter(e=>e.lastSentAt||(e.step>0&&e.status!=="active")||e.status==="done"||e.status==="replied"||e.status==="interested");
-                const activeOnly=enrs.filter(e=>e.status==="active");
-                // Divide send queue into batches of 25
-                const batches=[];
-                for(let i=0;i<sendQueue.length;i+=BATCH_SIZE) batches.push(sendQueue.slice(i,i+BATCH_SIZE));
+                const touches=selCamp.touches||[];
+                const rep=selCamp.repId?(s.reps||[]).find(r=>r.id===selCamp.repId):null;
 
-                // Simple one-batch sender (no queue state needed)
+                // One-batch sender — sends exactly this list of enrollments for their current step
                 const sendOneBatch=async(batchEnrollments)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
@@ -6759,137 +6743,117 @@ function ModMarketing() {
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}`,sent>0?"success":"error");
                 };
 
+                // Totals for stats row
+                const allSent=enrs.filter(e=>e.lastSentAt||e.step>0).length;
+                const replied=enrs.filter(e=>e.status==="replied").length;
+                const interested=enrs.filter(e=>e.status==="interested").length;
+                const done=enrs.filter(e=>e.status==="done").length;
+                const totalPending=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut).length;
+
                 return(<>
-                  {/* Stats row */}
+                  {/* Rep + Gmail status */}
+                  {rep&&(
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:12}}>
+                      <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                      <div style={{flex:1}}>
+                        {rep.gmailEnvKey
+                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail account ({rep.gmailEnvKey})</span>
+                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from your account with their signature. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Sales Reps → Edit → set Gmail Key</a>.</span>
+                        }
+                      </div>
+                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                    </div>
+                  )}
+
+                  {/* Stats */}
                   <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-                    {[
-                      ["ENROLLED",enrs.length,B.blue],
-                      ["QUEUE",sendQueue.length,B.orange],
-                      ["SENT",alreadySent.length,B.purple],
-                      ["REPLIED",enrs.filter(e=>e.status==="replied").length,B.green],
-                      ["INTERESTED",enrs.filter(e=>e.status==="interested").length,B.orange],
-                      ["DONE",enrs.filter(e=>e.status==="done").length,B.muted],
-                    ].map(([l,v,c])=>(
+                    {[["ENROLLED",enrs.length,B.blue],["PENDING",totalPending,B.orange],["SENT",allSent,B.purple],["REPLIED",replied,B.green],["INTERESTED",interested,B.teal],["DONE",done,B.muted]].map(([l,v,c])=>(
                       <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
                         <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                        <Lbl s={{marginTop:2}}>{l}</Lbl>
                       </div>
                     ))}
-                    <div style={{display:"flex",gap:6,alignItems:"center",marginLeft:"auto"}}>
-                      <button onClick={async()=>{
-                        const firstEnroll=sendQueue[0];
-                        if(!firstEnroll){toast("No contacts in queue","warn");return;}
-                        const c=contactMap[firstEnroll.contactId];
-                        toast(`Sending 1 test email to ${c?.email||"?"}…`,"info");
-                        const res=await sendOneEmail(selCamp,firstEnroll);
-                        if(res.ok) toast(`✓ Test sent to ${c?.email}`,"success");
-                        else toast(`✗ ${res.reason}`,"error");
-                      }} disabled={sending||!sendQueue.length}
-                        style={{background:sendQueue.length?B.teal:B.surface,color:sendQueue.length?B.white:B.muted,border:`1px solid ${sendQueue.length?B.teal:B.border}`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                        ✉ TEST (1)
-                      </button>
-                      <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
-                        style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                        {checkingReplies?"CHECKING...":"↻ REPLIES"}
-                      </button>
-                      <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
-                        style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                        {checkingOpens?"CHECKING...":"👁 OPENS"}
-                      </button>
+                    <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+                      <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens} style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingReplies?"CHECKING...":"↻ REPLIES"}</button>
+                      <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies} style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingOpens?"CHECKING...":"👁 OPENS"}</button>
                     </div>
                   </div>
 
-                  {/* BATCH QUEUE */}
-                  {batches.length>0&&(
-                    <div style={{marginBottom:20}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:8}}>
-                        SEND QUEUE — {sendQueue.length} CONTACTS · {batches.length} BATCH{batches.length!==1?"ES":""} OF {BATCH_SIZE}
-                      </div>
-                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                        {batches.map((batch,bi)=>{
-                          const [expanded,setExpanded]=[batchExpanded[bi],v=>setBatchExpanded(x=>({...x,[bi]:v}))];
-                          return(
-                          <div key={bi} style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden",background:B.white}}>
-                            <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:bi===0?`${B.orange}08`:B.white}}>
-                              <div style={{flex:1}}>
-                                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:bi===0?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
-                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
-                                  <button onClick={()=>setExpanded(!expanded)} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:"0 4px"}}>{expanded?"▲ hide":"▼ show"}</button>
-                                </div>
-                                {expanded&&(
-                                  <div style={{marginTop:8,display:"flex",flexDirection:"column",gap:4}}>
-                                    {batch.map(e=>{
-                                      const c=contactMap[e.contactId];
-                                      if(!c) return null;
-                                      const touch=(selCamp.touches||[])[e.step];
-                                      return(
-                                        <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-                                          <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-                                            {c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}
-                                            <span style={{color:B.muted,marginLeft:8,fontSize:10}}>{c.email}</span>
-                                          </div>
-                                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange}}>TOUCH {(e.step||0)+1}</span>
-                                          {touch?.subject&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>"{touch.subject}"</span>}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                              <button onClick={()=>sendOneBatch(batch)} disabled={sending}
-                                style={{background:sending?B.muted:bi===0?B.orange:B.surface,color:sending?B.white:bi===0?B.white:B.text,border:`1px solid ${bi===0?B.orange:B.border}`,borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.4,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-                                {sending?"SENDING...":"▶ SEND BATCH "+(bi+1)+" ("+batch.length+")"}
-                              </button>
+                  {/* Per-touch sections */}
+                  {touches.map((touch,ti)=>{
+                    // Only contacts at exactly this step are eligible to receive this touch
+                    const pending=enrs.filter(e=>e.step===ti&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                    // Contacts who already received this touch (step has moved past ti)
+                    const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","unsubscribed"].includes(e.status))).length;
+                    const touchBatches=[];
+                    for(let i=0;i<pending.length;i+=BATCH_SIZE) touchBatches.push(pending.slice(i,i+BATCH_SIZE));
+                    const allDone=pending.length===0;
+
+                    return(
+                      <div key={ti} style={{marginBottom:14,border:`1px solid ${allDone?B.green+"60":B.border}`,borderRadius:7,overflow:"hidden"}}>
+                        {/* Touch header */}
+                        <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:allDone?`${B.green}08`:ti===0?`${B.orange}08`:B.surface}}>
+                          <div style={{width:28,height:28,borderRadius:"50%",background:allDone?B.green:B.orange,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                            <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white}}>{allDone?"✓":ti+1}</span>
+                          </div>
+                          <div style={{flex:1}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:allDone?B.green:B.orange,letterSpacing:.5}}>EMAIL {ti+1} · DAY {touch.dayOffset}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:1,fontWeight:500}}>{touch.subject||"(no subject)"}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>
+                              {allDone
+                                ?`✓ All ${receivedCount} contacts received this email`
+                                :`${pending.length} pending · ${receivedCount} already sent · ${touchBatches.length} batch${touchBatches.length!==1?"es":""}`
+                              }
                             </div>
                           </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                  {batches.length===0&&sendQueue.length===0&&(
-                    <div style={{padding:"14px",background:B.surface,borderRadius:6,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>
-                      No contacts in send queue. Enroll contacts in the Audience tab, or check that enrollments are still active.
-                    </div>
-                  )}
+                          {allDone&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4,letterSpacing:.5}}>COMPLETE</span>}
+                        </div>
 
-                  {/* ALREADY SENT */}
-                  {alreadySent.length>0&&(
-                    <div>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:8}}>
-                        ALREADY CONTACTED — {alreadySent.length}
+                        {/* Batches for this touch */}
+                        {!allDone&&(
+                          <div style={{padding:"10px 14px",display:"flex",flexDirection:"column",gap:6,borderTop:`1px solid ${B.border}`}}>
+                            {touchBatches.map((batch,bi)=>{
+                              const isFirst=bi===0;
+                              const expKey=`${ti}-${bi}`;
+                              const isExp=batchExpanded[expKey]??(bi===0);
+                              return(
+                                <div key={bi} style={{border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:isFirst?`${B.orange}06`:B.white}}>
+                                    <div style={{flex:1,display:"flex",alignItems:"center",gap:8}}>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
+                                      <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
+                                    </div>
+                                    <button onClick={()=>sendOneBatch(batch)} disabled={sending}
+                                      style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                      {sending?"SENDING...":"▶ SEND ("+ batch.length+")"}
+                                    </button>
+                                  </div>
+                                  {isExp&&(
+                                    <div style={{borderTop:`1px solid ${B.border}`,padding:"6px 12px",display:"flex",flexDirection:"column",gap:3}}>
+                                      {batch.map(e=>{
+                                        const c=contactMap[e.contactId];
+                                        if(!c) return null;
+                                        return(
+                                          <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0",borderBottom:`1px solid ${B.border}`}}>
+                                            <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</div>
+                                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</span>
+                                            {c.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{typeof c.school==="string"?c.school:c.school?.name||""}</span>}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
-                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                        {alreadySent.map(e=>{
-                          const c=contactMap[e.contactId];
-                          if(!c) return null;
-                          const sc={done:B.green,replied:B.green,interested:B.orange,unsubscribed:B.red}[e.status]||B.blue;
-                          const label={done:"DONE",replied:"REPLIED",interested:"INTERESTED",unsubscribed:"UNSUB",active:"ACTIVE"}[e.status]||e.status?.toUpperCase();
-                          return(
-                            <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5}}>
-                              <div style={{flex:1}}>
-                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
-                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{c.email}</span>
-                              </div>
-                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{e.lastSentAt?`Sent ${e.lastSentAt}`:""}</span>
-                              {e.status==="active"&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Next: Touch {(e.step||0)+1} · {e.nextDate||"—"}</span>}
-                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}15`,padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{label}</span>
-                              {e.status==="active"&&(
-                                <button onClick={()=>{
-                                  const camp=campaigns.find(c2=>c2.id===selCamp.id);
-                                  if(!camp) return;
-                                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"interested"}:en)});
-                                  dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"meeting",campaignId:selCamp.id,note:"Positive intent"});
-                                  toast(`${c.fullName||c.firstName} marked as interested`,"success");
-                                }} style={{background:`${B.orange}10`,color:B.orange,border:`1px solid ${B.orange}30`,borderRadius:4,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>🎯</button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                    );
+                  })}
+
+                  {touches.length===0&&<div style={{padding:14,background:B.surface,borderRadius:6,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No email touches configured. Go to the Assets tab to generate emails for this campaign.</div>}
                 </>);
               })()}
               {/* Sequence touchpoints — editable */}
