@@ -1,27 +1,42 @@
 /**
- * /api/gmail  — Gmail API proxy (read-only inbox access)
+ * /api/gmail  — Gmail API proxy (read-only inbox access + send)
  *
  * Required env vars:
  *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
  *   (get them from /api/gmail-setup)
  *
- * POST body: { action: "list" | "get", messageId?: string, maxResults?: number, query?: string }
+ * For per-rep sending, add GMAIL_REFRESH_TOKEN_{REPKEY} e.g. GMAIL_REFRESH_TOKEN_JOSH
+ * and pass repEnvKey:"JOSH" in the request body.
  *
- * action "list"  → returns [{id, subject, from, date, snippet}]
- * action "get"   → returns {id, subject, from, date, body (plain text)}
+ * POST body: { action: "list" | "get" | "send" | "profile", repEnvKey?: string, ... }
  */
 
 export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
 };
 
-let _token = null;
-let _tokenExpiry = 0;
+// Per-key token cache: { [envKey]: { token, expiry } }
+const _tokenCache = {};
 
-async function getToken() {
-  if (_token && Date.now() < _tokenExpiry - 60_000) return _token;
+async function getToken(repEnvKey = "") {
+  const cacheKey = repEnvKey || "default";
+  const cached = _tokenCache[cacheKey];
+  if (cached && Date.now() < cached.expiry - 60_000) return cached.token;
 
-  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET || !process.env.GMAIL_REFRESH_TOKEN) {
+  if (!process.env.GMAIL_CLIENT_ID || !process.env.GMAIL_CLIENT_SECRET) {
+    throw new Error("Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars");
+  }
+
+  // Look up per-rep refresh token, fall back to default
+  const refreshTokenVar = repEnvKey
+    ? `GMAIL_REFRESH_TOKEN_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`
+    : "GMAIL_REFRESH_TOKEN";
+  const refreshToken = process.env[refreshTokenVar];
+
+  if (!refreshToken) {
+    if (repEnvKey) {
+      throw new Error(`Gmail not configured for rep key "${repEnvKey}" — add ${refreshTokenVar} to Vercel env vars (visit /api/gmail-setup?repKey=${repEnvKey})`);
+    }
     throw new Error("Gmail not configured — visit /api/gmail-setup");
   }
 
@@ -31,16 +46,15 @@ async function getToken() {
     body: new URLSearchParams({
       client_id:     process.env.GMAIL_CLIENT_ID,
       client_secret: process.env.GMAIL_CLIENT_SECRET,
-      refresh_token: process.env.GMAIL_REFRESH_TOKEN,
+      refresh_token: refreshToken,
       grant_type:    "refresh_token",
     }).toString(),
   });
 
   const data = await res.json();
   if (!data.access_token) throw new Error(`Gmail token refresh failed: ${JSON.stringify(data)}`);
-  _token = data.access_token;
-  _tokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
-  return _token;
+  _tokenCache[cacheKey] = { token: data.access_token, expiry: Date.now() + (data.expires_in || 3600) * 1000 };
+  return data.access_token;
 }
 
 function extractHeader(headers, name) {
@@ -79,15 +93,30 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId, reply_to, from_name, repEnvKey } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
   try {
-    const token = await getToken();
+    const token = await getToken(repEnvKey || "");
     const auth  = { Authorization: `Bearer ${token}` };
 
-    // ── LIST: fetch recent messages ───────────────────────────────────────────
+    // ── PROFILE: return connected account email ───────────────────────────────
+    if (action === "profile") {
+      const profileRes = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+        { headers: auth }
+      );
+      const profile = await profileRes.json();
+      if (!profileRes.ok) return res.status(profileRes.status).json({ error: profile.error?.message || "Profile fetch failed" });
+      return res.json({
+        email: profile.emailAddress,
+        messagesTotal: profile.messagesTotal,
+        threadsTotal: profile.threadsTotal,
+      });
+    }
+
+
     if (action === "list") {
       const q = query || "newer_than:14d category:primary -from:me";
       const listRes = await fetch(
@@ -153,9 +182,14 @@ export default async function handler(req, res) {
 
       const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
+      // Reply-To points to the rep so replies land in their inbox, not the sending Gmail account
+      const replyToHeader = reply_to
+        ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
+        : null;
       const lines = [
         `To: ${toHeader}`,
         ...(cc ? [`Cc: ${cc}`] : []),
+        ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
         `Content-Type: ${contentType}`,

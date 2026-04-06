@@ -99,8 +99,15 @@ export default async function handler(req, res) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
 
-    const data = await zohoRes.json();
-    return res.status(zohoRes.ok ? 200 : zohoRes.status).json(data);
+    let data;
+    try {
+      data = await zohoRes.json();
+    } catch {
+      data = { _raw_status: zohoRes.status, error: "Zoho returned non-JSON response" };
+    }
+    // Always return 200 so the client receives the body — the client checks for error fields
+    console.log("[zoho]", method, url.replace("https://www.zohoapis.com",""), "→", zohoRes.status, data?.status||data?.code||"ok");
+    return res.status(200).json({ ...data, _http_status: zohoRes.status });
 
   } catch (err) {
     return res.status(500).json({ error: err.message });

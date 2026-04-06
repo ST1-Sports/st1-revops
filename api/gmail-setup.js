@@ -26,7 +26,9 @@ export default async function handler(req, res) {
   const proto        = host.includes("localhost") ? "http" : "https";
   const redirectUri  = process.env.GMAIL_REDIRECT_URI || `${proto}://${host}/api/gmail-setup`;
 
-  const { code, error: oauthError } = req.query || {};
+  const { code, error: oauthError, repKey } = req.query || {};
+  const repKeyClean = repKey ? repKey.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "";
+  const refreshTokenVar = repKeyClean ? `GMAIL_REFRESH_TOKEN_${repKeyClean}` : "GMAIL_REFRESH_TOKEN";
 
   // ── Step 2: exchange code ───────────────────────────────────────────────────
   if (code) {
@@ -57,14 +59,14 @@ export default async function handler(req, res) {
       }
       return res.status(200).send(page("✓ Gmail Connected!", `
         <p style="color:#1e8f4e;font-size:16px;margin-bottom:20px">
-          Authorization successful. Add these to Vercel → Settings → Environment Variables.
+          Authorization successful. Add ${repKeyClean ? `<strong>${refreshTokenVar}</strong> (for rep ${repKeyClean})` : "these"} to Vercel → Settings → Environment Variables.
         </p>
-        ${tokenRow("GMAIL_REFRESH_TOKEN", data.refresh_token)}
-        ${tokenRow("GMAIL_CLIENT_ID", clientId)}
-        ${tokenRow("GMAIL_CLIENT_SECRET", clientSecret)}
+        ${tokenRow(refreshTokenVar, data.refresh_token)}
+        ${!repKeyClean ? tokenRow("GMAIL_CLIENT_ID", clientId) : ""}
+        ${!repKeyClean ? tokenRow("GMAIL_CLIENT_SECRET", clientSecret) : ""}
         <div style="margin-top:20px;padding:14px;background:#e8f0fa;border:1px solid #1a5fa840;border-radius:6px">
-          <strong>Next:</strong> Redeploy your Vercel project after adding the env vars, then click
-          "Test Gmail" in the Integrations → Email tab.
+          <strong>Next:</strong> Add <code>${refreshTokenVar}</code> to Vercel env vars, then redeploy.
+          ${repKeyClean ? `In Settings → Sales Reps, make sure the Gmail Key for this rep is set to <strong>${repKeyClean}</strong>.` : 'Click "Test Gmail" in the Integrations → Email tab to confirm.'}
         </div>
       `));
     } catch(err) {
@@ -98,24 +100,27 @@ export default async function handler(req, res) {
     `));
   }
 
+  // Carry repKey through state so we know which env var to display after redirect
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id:     clientId,
     response_type: "code",
     access_type:   "offline",
     scope:         SCOPE,
-    redirect_uri:  redirectUri,
+    redirect_uri:  redirectUri + (repKeyClean ? `?repKey=${repKeyClean}` : ""),
     prompt:        "consent",
   }).toString();
 
-  return res.status(200).send(page("Connect Gmail to ST1 RevOps", `
+  const pageTitle = repKeyClean ? `Connect Gmail for ${repKeyClean}` : "Connect Gmail to ST1 RevOps";
+  return res.status(200).send(page(pageTitle, `
     <p style="color:#424242;margin-bottom:24px">
       Click below to authorize read-only access to your Gmail inbox.
       ST1 RevOps will scan for customer order emails and turn them into deals automatically.
     </p>
+    ${repKeyClean ? `<p style="background:#fff8e6;padding:10px 14px;border-radius:6px;border:1px solid #f0c040;font-size:13px">Setting up Gmail for rep key: <strong>${repKeyClean}</strong>. This will generate <code>GMAIL_REFRESH_TOKEN_${repKeyClean}</code>.</p>` : ""}
     <a href="${authUrl}" style="
       display:inline-block;background:#F37321;color:white;text-decoration:none;
       padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px;
-    ">Connect Gmail →</a>
+    ">${repKeyClean ? `Connect ${repKeyClean}'s Gmail →` : "Connect Gmail →"}</a>
     <div style="margin-top:20px;padding:14px;background:#f8f8f8;border:1px solid #e0e0e0;border-radius:6px;font-size:13px">
       <strong>Permissions requested:</strong> Read Gmail inbox (gmail.readonly) + Send emails on your behalf (gmail.send)<br>
       ST1 RevOps will never delete messages or modify your inbox. Send permission is used only when you click "Send Now" on an agent-drafted email.

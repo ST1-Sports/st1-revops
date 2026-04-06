@@ -1728,6 +1728,19 @@ function AyrsharePanel({addLog}) {
     setLoadingProfiles(false);
   };
 
+  const [debugResult, setDebugResult] = useState(null);
+  const [debugging, setDebugging] = useState(false);
+  const debugPost = async () => {
+    setDebugging(true); setDebugResult(null);
+    try {
+      const r = await fetch("/api/social-post", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug_post"})});
+      const d = await r.json();
+      setDebugResult(d);
+      addLog(`Debug post: HTTP ${d.httpStatus} — ${d.rawResponse?.slice(0,120)}`,"info");
+    } catch(e) { addLog(e.message,"error"); }
+    setDebugging(false);
+  };
+
   const NET_COLORS = {twitter:"#000",facebook:"#1877F2",instagram:"#E1306C",linkedin:"#0A66C2",tiktok:"#000"};
   const NET_ICONS  = {twitter:"𝕏",facebook:"f",instagram:"📷",linkedin:"in",tiktok:"T"};
 
@@ -1782,13 +1795,27 @@ function AyrsharePanel({addLog}) {
         ))}
 
         <div style={{borderTop:`1px solid ${B.border}`,paddingTop:12,marginTop:4}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8,flexWrap:"wrap"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>YOUR PUBLER ACCOUNTS</div>
-            <button onClick={loadProfiles} disabled={loadingProfiles}
-              style={{background:loadingProfiles?B.surface:B.orangeBg,color:loadingProfiles?B.muted:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
-              {loadingProfiles?"LOADING…":"⟳ LOAD ACCOUNTS"}
-            </button>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={loadProfiles} disabled={loadingProfiles}
+                style={{background:loadingProfiles?B.surface:B.orangeBg,color:loadingProfiles?B.muted:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
+                {loadingProfiles?"LOADING…":"⟳ LOAD ACCOUNTS"}
+              </button>
+              <button onClick={debugPost} disabled={debugging}
+                style={{background:debugging?B.surface:"#1a1a1a",color:debugging?B.muted:"#00ff88",border:"1px solid #00ff8840",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer",fontWeight:700,letterSpacing:.5}}>
+                {debugging?"TESTING…":"🔬 DEBUG POST"}
+              </button>
+            </div>
           </div>
+          {debugResult&&(
+            <div style={{background:"#0a0a0a",border:"1px solid #00ff8840",borderRadius:5,padding:"10px 12px",marginBottom:10,fontFamily:"monospace",fontSize:10,color:"#00ff88",overflowX:"auto"}}>
+              <div style={{color:"#888",marginBottom:4}}>HTTP {debugResult.httpStatus} · account: {debugResult.accountUsed} · workspace: {debugResult.workspaceId}</div>
+              <div style={{color:"#aaa",marginBottom:2,fontSize:9}}>CREATE:</div>
+              <div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap",marginBottom:6}}>{debugResult.createResponse||debugResult.rawResponse||"(empty)"}</div>
+              {debugResult.existingScheduled&&<><div style={{color:"#aaa",marginBottom:2,fontSize:9}}>EXISTING SCHEDULED:</div><div style={{color:"#fff",wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{debugResult.existingScheduled}</div></>}
+            </div>
+          )}
           {profiles.length>0&&(
             <div style={{display:"flex",flexDirection:"column",gap:6}}>
               {profiles.map(p=>(
