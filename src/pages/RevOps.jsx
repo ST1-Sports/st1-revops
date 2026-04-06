@@ -4135,11 +4135,25 @@ function ModMarketing() {
     if(!due.length){toast("No emails due today","info");return;}
     setSending(true);
     let sent=0,failed=0;
+    // Build updated enrollments array once — avoids stale-closure overwrite when dispatching per-contact
+    const updatedEnrollments=[...(camp.enrollments||[])];
     for(const enroll of due){
       const res=await sendOneEmail(camp,enroll);
-      if(res.ok){markContacted(campId,enroll.contactId);sent++;}
-      else failed++;
+      if(res.ok){
+        const idx=updatedEnrollments.findIndex(e=>e.contactId===enroll.contactId);
+        if(idx>=0){
+          const nextStep=enroll.step+1;
+          const done=nextStep>=(camp.touches||[]).length;
+          const nextTouch=(camp.touches||[])[nextStep];
+          const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+          updatedEnrollments[idx]={...enroll,step:nextStep,status:done?"done":"active",nextDate:nextDate||enroll.nextDate,lastContacted:todayStr};
+        }
+        dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:"Touch sent"});
+        sent++;
+      } else failed++;
     }
+    // Single dispatch after all sends — prevents stale closure from overwriting earlier updates
+    dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
     setSending(false);
     toast(`Sent ${sent}${failed?`, ${failed} failed`:""}`,sent>0?"success":"error");
   };
@@ -4550,234 +4564,322 @@ function ModMarketing() {
                   <button key={id} onClick={()=>setCampSubTab(id)} style={{background:campSubTab===id?B.orange:"transparent",color:campSubTab===id?B.white:B.muted,border:"none",padding:"8px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
                 ))}
               </div>
-              {campSubTab==="email"&&(<>
-              {(()=>{
-                const enrs=selCamp.enrollments||[];
-                const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
-                const repliedN=enrs.filter(e=>e.status==="replied").length;
-                const doneN=enrs.filter(e=>e.status==="done").length;
-                const activeN=enrs.filter(e=>e.status==="active").length;
-                const openedN=enrs.filter(e=>e.openedAt).length;
-                return(
-                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-                    {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
-                      <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+              {/* ── STRATEGY TAB ── */}
+              {campSubTab==="strategy"&&(
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+                  <div className="card" style={{padding:16}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:10}}>CAMPAIGN GOAL</div>
+                    <textarea value={selCamp.goal||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,goal:e.target.value})}
+                      rows={3} placeholder="What is the goal of this campaign?"
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginTop:12,marginBottom:8}}>DATES</div>
+                    <div style={{display:"flex",gap:8}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:3}}>Start</div>
+                        <input type="date" value={selCamp.startDate||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,startDate:e.target.value})}
+                          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
                       </div>
-                    ))}
-                    {(()=>{
-                      const todayStr=today();
-                      const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
-                      return(
-                        <>
-                          <button onClick={()=>sendDueEmails(selCamp.id)} disabled={sending||dueN===0}
-                            style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?" ("+dueN+")":"")}
-                          </button>
-                          <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
-                            style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingReplies?"CHECKING...":"↻ REPLIES"}
-                          </button>
-                          <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
-                            style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
-                            {checkingOpens?"CHECKING...":"👁 OPENS"}
-                          </button>
-                        </>
-                      );
-                    })()}
-                  </div>
-                );
-              })()}
-              {/* Sequence touchpoints — editable */}
-              <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"flex-start"}}>
-                {selCamp.touches.map((t,i)=>(
-                  <div key={t.id||i} className="card" style={{flex:1,padding:10,borderTop:`2px solid ${B.orange}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
-                      <button onClick={()=>editingTouchIdx===i?setEditingTouchIdx(null):openTouchEdit(i)}
-                        style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>
-                        {editingTouchIdx===i?"✕ CANCEL":"✎ EDIT"}
-                      </button>
+                      <div style={{flex:1}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:3}}>End</div>
+                        <input type="date" value={selCamp.endDate||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,endDate:e.target.value})}
+                          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                      </div>
                     </div>
-                    {editingTouchIdx===i?(
-                      <div>
-                        <div style={{marginBottom:6}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
-                          <input value={touchDraft.subject} onChange={e=>setTouchDraft(d=>({...d,subject:e.target.value}))}
-                            style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-                        </div>
-                        <div style={{marginBottom:8}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
-                          <textarea value={touchDraft.body} onChange={e=>setTouchDraft(d=>({...d,body:e.target.value}))}
-                            rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-                        </div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
-                        <OBtn sm onClick={saveTouchEdit}>✓ SAVE EMAIL</OBtn>
-                      </div>
-                    ):(
-                      <>
-                        {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{t.body}</div>
-                      </>
-                    )}
                   </div>
-                ))}
-              </div>
-              {/* Enrolled contacts */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({selCamp.enrollments.length})</div>
-                <div style={{display:"flex",gap:6}}>
-                  {["all",...allSports].map(sp=>(
-                    <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
-                  ))}
+                  <div className="card" style={{padding:16}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:10}}>CHANNELS</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                      {(selCamp.channels||[]).length===0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No channels selected</span>}
+                      {(selCamp.channels||[]).map(ch=>{
+                        const def=CHANNELS.find(c=>c.id===ch)||{icon:"•",label:ch};
+                        return<span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}12`,border:`1px solid ${B.orange}30`,borderRadius:10,padding:"3px 8px"}}>{def.icon} {def.label}</span>;
+                      })}
+                    </div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>METRICS TO TRACK</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+                      {(selCamp.metrics||[]).length===0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No metrics selected</span>}
+                      {(selCamp.metrics||[]).map(m=>(
+                        <span key={m} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:10,padding:"3px 8px"}}>{m}</span>
+                      ))}
+                    </div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>AUDIENCE & PRODUCT</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:4}}>{selCamp.product||"—"}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selCamp.audience||"—"}</div>
+                  </div>
+                  <div className="card" style={{padding:16,gridColumn:"1/-1"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>CONTEXT / NOTES</div>
+                    <textarea value={selCamp.ctx||""} onChange={e=>dispatch("UPDATE_CAMPAIGN",{...selCamp,ctx:e.target.value})}
+                      rows={3} placeholder="Background context, talking points, offer details..."
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                  </div>
                 </div>
-              </div>
-              <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                {selCamp.enrollments
-                  .filter(e=>{
-                    const c=contactMap[e.contactId];
-                    return !c||(filterSport==="all"||c.sport===filterSport);
-                  })
-                  .sort((a,b)=>a.step-b.step)
-                  .map(e=>{
-                    const c=contactMap[e.contactId];
-                    if(!c)return null;
-                    const touch=selCamp.touches[e.step];
-                    const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
-                    return (
-                      <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                          <div>
-                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
-                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
-                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
-                              {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
-                              {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
+              )}
+              {/* ── ASSETS TAB ── */}
+              {campSubTab==="assets"&&(
+                <div style={{display:"flex",flexDirection:"column",gap:20}}>
+                  {(selCamp.channels||[]).includes("email")&&(
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE</div>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-start"}}>
+                        {(selCamp.touches||[]).map((t,i)=>(
+                          <div key={t.id||i} className="card" style={{flex:"1 1 220px",padding:10,borderTop:`2px solid ${B.orange}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
+                              <button onClick={()=>editingTouchIdx===i?setEditingTouchIdx(null):openTouchEdit(i)}
+                                style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>
+                                {editingTouchIdx===i?"✕ CANCEL":"✎ EDIT"}
+                              </button>
                             </div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
-                            {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
-                            {touch&&e.status==="active"&&(
-                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>
-                                Next: Touch {touch.step} · {e.nextDate||"today"}{touch.subject?` — "${touch.subject}"`:""}</div>
+                            {editingTouchIdx===i?(
+                              <div>
+                                <div style={{marginBottom:6}}>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
+                                  <input value={touchDraft.subject} onChange={e=>setTouchDraft(d=>({...d,subject:e.target.value}))}
+                                    style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                                </div>
+                                <div style={{marginBottom:8}}>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
+                                  <textarea value={touchDraft.body} onChange={e=>setTouchDraft(d=>({...d,body:e.target.value}))}
+                                    rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
+                                </div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
+                                <OBtn sm onClick={saveTouchEdit}>✓ SAVE EMAIL</OBtn>
+                              </div>
+                            ):(
+                              <>
+                                {t.subject&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:4}}>{t.subject}</div>}
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,whiteSpace:"pre-wrap"}}>{t.body}</div>
+                              </>
                             )}
                           </div>
-                          {e.status==="active"&&(
-                            <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
-                              {touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
-                              <div style={{display:"flex",gap:4}}>
-                                <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
-                                <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
-                              </div>
-                              <div style={{display:"flex",gap:4}}>
-                                <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT +15</GBtn>
-                                <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED +50</button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
+                        ))}
+                        {(selCamp.touches||[]).length===0&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"20px 0"}}>No email touches yet — go back to Strategy to regenerate or add touches manually.</div>
+                        )}
                       </div>
-                    );
-                  })}
-              </div>
-              </>)}
-              {campSubTab==="social"&&(
-                <div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{(selCamp.socialPosts||[]).length} SOCIAL POSTS</div>
-                    <OBtn sm onClick={()=>setShowAddPost(!showAddPost)}>+ ADD POST</OBtn>
-                  </div>
-                  {showAddPost&&(
-                    <div className="card" style={{padding:14,marginBottom:14}}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                        <div><Lbl s={{marginBottom:4}}>Date</Lbl><input type="date" value={postDraft.date} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-                        <div><Lbl s={{marginBottom:4}}>Type</Lbl><select value={postDraft.type} onChange={e=>setPostDraft(d=>({...d,type:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["post","story","reel"].map(o=><option key={o}>{o}</option>)}</select></div>
-                      </div>
-                      <div style={{marginBottom:10}}>
-                        <Lbl s={{marginBottom:4}}>Platforms</Lbl>
-                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                          {["facebook","instagram","linkedin","twitter","tiktok"].map(p=>{const sel=(postDraft.platforms||[]).includes(p);return<button key={p} onClick={()=>setPostDraft(d=>({...d,platforms:sel?d.platforms.filter(x=>x!==p):[...d.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p}</button>;})}
-                        </div>
-                      </div>
-                      <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-                      <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                      <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
                     </div>
                   )}
-                  {(selCamp.socialPosts||[]).length===0&&!showAddPost&&(<div className="card" style={{padding:30,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No social posts yet — add posts to schedule them with this campaign</div>)}
-                  <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                    {(selCamp.socialPosts||[]).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(post=>(
-                      <div key={post.id} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${post.posted?B.green:B.orange}`}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                          <div style={{flex:1}}>
-                            <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
-                              {post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{post.date}</span>}
-                              {(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
-                              {post.posted&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>✓ POSTED</span>}
-                            </div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5,marginBottom:post.imageUrl?8:0}}>{post.caption}</div>
-                            {post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:200,borderRadius:4,marginTop:4}}/>}
-                          </div>
-                          {!post.posted&&(
-                            <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
-                              <OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>
-                              <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
-                            </div>
-                          )}
-                        </div>
+                  {(selCamp.channels||[]).includes("social")&&(
+                    <div>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>📱 SOCIAL POSTS ({(selCamp.socialPosts||[]).length})</div>
+                        <OBtn sm onClick={()=>setShowAddPost(!showAddPost)}>+ ADD POST</OBtn>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {campSubTab==="ads"&&(
-                <div>
-                  <div style={{marginBottom:16,padding:"12px 14px",background:`${B.orange}08`,border:`1px solid ${B.orange}20`,borderRadius:6}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Link ads from the Ad Engine to this campaign</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Create ads in the Ad Engine tab, then link them here for unified reporting.</div>
-                  </div>
-                  {(()=>{
-                    const linkedAds=(s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id));
-                    const unlinkable=(s.ads||[]).filter(a=>!(selCamp.adIds||[]).includes(a.id));
-                    return(<div>
-                      {linkedAds.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"20px 0",textAlign:"center"}}>No ads linked yet</div>}
-                      {linkedAds.map(ad=>(
-                        <div key={ad.id} className="card" style={{padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                          <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{ad.objective}</div></div>
-                          <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:(selCamp.adIds||[]).filter(id=>id!==ad.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>UNLINK</button>
+                      {showAddPost&&(
+                        <div className="card" style={{padding:14,marginBottom:14}}>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                            <div><Lbl s={{marginBottom:4}}>Date</Lbl><input type="date" value={postDraft.date} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                            <div><Lbl s={{marginBottom:4}}>Type</Lbl><select value={postDraft.type} onChange={e=>setPostDraft(d=>({...d,type:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{["post","story","reel"].map(o=><option key={o}>{o}</option>)}</select></div>
+                          </div>
+                          <div style={{marginBottom:10}}>
+                            <Lbl s={{marginBottom:4}}>Platforms</Lbl>
+                            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                              {["facebook","instagram","linkedin","twitter","tiktok"].map(p=>{const sel=(postDraft.platforms||[]).includes(p);return<button key={p} onClick={()=>setPostDraft(d=>({...d,platforms:sel?d.platforms.filter(x=>x!==p):[...d.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{p}</button>;})}
+                            </div>
+                          </div>
+                          <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
+                          <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                          <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
                         </div>
-                      ))}
-                      {unlinkable.length>0&&(<div style={{marginTop:12}}>
-                        <Lbl s={{marginBottom:8}}>LINK AN AD</Lbl>
-                        {unlinkable.slice(0,10).map(ad=>(
-                          <div key={ad.id} className="card fu" style={{padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:[...(selCamp.adIds||[]),ad.id]})}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{ad.objective}</div></div>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>+ LINK</span>
+                      )}
+                      {(selCamp.socialPosts||[]).length===0&&!showAddPost&&(
+                        <div className="card" style={{padding:24,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No social posts yet</div>
+                      )}
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        {(selCamp.socialPosts||[]).sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(post=>(
+                          <div key={post.id} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${post.posted?B.green:B.orange}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                              <div style={{flex:1}}>
+                                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
+                                  {post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{post.date}</span>}
+                                  {(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
+                                  {post.posted&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>✓ POSTED</span>}
+                                </div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{post.caption}</div>
+                                {post.imageUrl&&<img src={post.imageUrl} alt="" style={{maxWidth:200,borderRadius:4,marginTop:6}}/>}
+                              </div>
+                              {!post.posted&&(
+                                <div style={{display:"flex",flexDirection:"column",gap:4,marginLeft:12,flexShrink:0}}>
+                                  <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,socialPosts:(selCamp.socialPosts||[]).filter(p=>p.id!==post.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>REMOVE</button>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         ))}
-                      </div>)}
-                    </div>);
-                  })()}
-                </div>
-              )}
-              {campSubTab==="graphics"&&(
-                <div>
-                  <div style={{marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Images from social posts and linked ads in this campaign</div>
+                      </div>
+                    </div>
+                  )}
+                  {(selCamp.channels||[]).includes("paid_ads")&&(
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>⬛ LINKED ADS</div>
+                      {(()=>{
+                        const linkedAds=(s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id));
+                        const unlinkable=(s.ads||[]).filter(a=>!(selCamp.adIds||[]).includes(a.id));
+                        return(
+                          <div>
+                            {linkedAds.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:8}}>No ads linked yet</div>}
+                            {linkedAds.map(ad=>(
+                              <div key={ad.id} className="card" style={{padding:"10px 12px",marginBottom:8,borderLeft:`3px solid ${B.orange}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                                <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{ad.objective}</div></div>
+                                <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:(selCamp.adIds||[]).filter(id=>id!==ad.id)})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>UNLINK</button>
+                              </div>
+                            ))}
+                            {unlinkable.length>0&&(
+                              <div style={{marginTop:8}}>
+                                <Lbl s={{marginBottom:6}}>LINK AN AD</Lbl>
+                                {unlinkable.slice(0,8).map(ad=>(
+                                  <div key={ad.id} className="card fu" style={{padding:"8px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,adIds:[...(selCamp.adIds||[]),ad.id]})}>
+                                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{ad.name||ad.headline||"Ad"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{ad.objective}</div></div>
+                                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>+ LINK</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
                   {(()=>{
                     const imgs=[
                       ...(selCamp.socialPosts||[]).filter(p=>p.imageUrl).map(p=>({url:p.imageUrl,label:p.caption?.slice(0,40)||"Social post",type:"social"})),
                       ...((s.ads||[]).filter(a=>(selCamp.adIds||[]).includes(a.id)&&a.imageUrl)).map(a=>({url:a.imageUrl,label:a.name||a.headline||"Ad",type:"ad"})),
                     ];
-                    if(!imgs.length) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"30px 0",textAlign:"center"}}>No graphics yet — add social posts with images or link ads</div>;
-                    return(<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
-                      {imgs.map((img,i)=>(
-                        <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
-                          <img src={img.url} alt={img.label} style={{width:"100%",aspectRatio:"1",objectFit:"cover",display:"block"}}/>
-                          <div style={{padding:"6px 8px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{img.label}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:img.type==="social"?B.orange:B.purple}}>{img.type.toUpperCase()}</div></div>
+                    if(!imgs.length) return null;
+                    return(
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>🖼 GRAPHICS</div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:10}}>
+                          {imgs.map((img,i)=>(
+                            <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
+                              <img src={img.url} alt={img.label} style={{width:"100%",aspectRatio:"1",objectFit:"cover",display:"block"}}/>
+                              <div style={{padding:"6px 8px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{img.label}</div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:img.type==="social"?B.orange:B.purple}}>{img.type.toUpperCase()}</div></div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>);
+                      </div>
+                    );
                   })()}
+                  {(selCamp.channels||[]).filter(ch=>["email","social","paid_ads"].includes(ch)).length===0&&(
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"30px 0",textAlign:"center"}}>No channels selected — go to Strategy tab to set up channels for this campaign.</div>
+                  )}
+                </div>
+              )}
+              {/* ── EXECUTE TAB ── */}
+              {campSubTab==="execute"&&(
+                <div>
+                  {(()=>{
+                    const enrs=selCamp.enrollments||[];
+                    const sentCount=enrs.reduce((n,e)=>n+(e.step||0),0);
+                    const repliedN=enrs.filter(e=>e.status==="replied").length;
+                    const doneN=enrs.filter(e=>e.status==="done").length;
+                    const activeN=enrs.filter(e=>e.status==="active").length;
+                    const openedN=enrs.filter(e=>e.openedAt).length;
+                    const todayStr=today();
+                    const dueN=enrs.filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;
+                    return(
+                      <>
+                        <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                          {[["ENROLLED",enrs.length,B.blue],["ACTIVE",activeN,B.orange],["SENT",sentCount,B.purple],["OPENED",openedN,B.teal],["REPLIED",repliedN,B.green],["DONE",doneN,B.muted]].map(([l,v,c])=>(
+                            <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+                            </div>
+                          ))}
+                          {(selCamp.channels||[]).includes("email")&&(
+                            <>
+                              <button onClick={()=>sendDueEmails(selCamp.id)} disabled={sending||dueN===0}
+                                style={{background:dueN>0?B.green:B.surface,color:dueN>0?B.white:B.muted,border:`1px solid ${dueN>0?B.green:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:dueN>0?"pointer":"default",alignSelf:"center",whiteSpace:"nowrap"}}>
+                                {sending?"SENDING...":"▶ SEND DUE"+(dueN>0?` (${dueN})`:"")}
+                              </button>
+                              <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens}
+                                style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                                {checkingReplies?"CHECKING...":"↻ REPLIES"}
+                              </button>
+                              <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies}
+                                style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",alignSelf:"center",whiteSpace:"nowrap"}}>
+                                {checkingOpens?"CHECKING...":"👁 OPENS"}
+                              </button>
+                            </>
+                          )}
+                        </div>
+                        {(selCamp.channels||[]).includes("social")&&(selCamp.socialPosts||[]).filter(p=>!p.posted).length>0&&(
+                          <div style={{marginBottom:16}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:8}}>READY TO POST</div>
+                            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                              {(selCamp.socialPosts||[]).filter(p=>!p.posted).map(post=>(
+                                <div key={post.id} className="card" style={{padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",borderLeft:`3px solid ${B.orange}`}}>
+                                  <div>
+                                    <div style={{display:"flex",gap:5,marginBottom:3,flexWrap:"wrap"}}>
+                                      {(post.platforms||[]).map(p=><span key={p} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{p}</span>)}
+                                      {post.date&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{post.date}</span>}
+                                    </div>
+                                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{post.caption?.slice(0,80)}{(post.caption||"").length>80?"…":""}</div>
+                                  </div>
+                                  <OBtn sm onClick={()=>postCampPostNow(selCamp.id,post)}>POST NOW</OBtn>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()}
+                  {/* Enrolled contacts */}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({(selCamp.enrollments||[]).length})</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {["all",...allSports].map(sp=>(
+                        <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
+                      ))}
+                    </div>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                    {(selCamp.enrollments||[])
+                      .filter(e=>{
+                        const c=contactMap[e.contactId];
+                        return !c||(filterSport==="all"||c.sport===filterSport);
+                      })
+                      .sort((a,b)=>a.step-b.step)
+                      .map(e=>{
+                        const c=contactMap[e.contactId];
+                        if(!c)return null;
+                        const touch=(selCamp.touches||[])[e.step];
+                        const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                        return(
+                          <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                              <div>
+                                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
+                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
+                                  {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                                  {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
+                                </div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
+                                {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
+                                {touch&&e.status==="active"&&(
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>Next: Touch {touch.step} · {e.nextDate||"today"}{touch.subject?` — "${touch.subject}"`:""}</div>
+                                )}
+                              </div>
+                              {e.status==="active"&&(
+                                <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
+                                  {touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
+                                  <div style={{display:"flex",gap:4}}>
+                                    <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
+                                    <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
+                                  </div>
+                                  <div style={{display:"flex",gap:4}}>
+                                    <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT +15</GBtn>
+                                    <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED +50</button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
               )}
             </div>
