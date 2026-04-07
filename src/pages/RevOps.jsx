@@ -6789,7 +6789,7 @@ function ModMarketing() {
                     // Only contacts at exactly this step are eligible to receive this touch
                     const pending=enrs.filter(e=>e.step===ti&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
                     // Contacts who already received this touch (step has moved past ti)
-                    const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","unsubscribed"].includes(e.status))).length;
+                    const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","not_interested","unsubscribed"].includes(e.status))).length;
                     const touchBatches=[];
                     for(let i=0;i<pending.length;i+=BATCH_SIZE) touchBatches.push(pending.slice(i,i+BATCH_SIZE));
                     const allDone=pending.length===0;
@@ -6991,7 +6991,7 @@ function ModMarketing() {
                     const c=contactMap[e.contactId];
                     if(!c)return null;
                     const touch=selCamp.touches[e.step];
-                    const sc={active:B.blue,replied:B.green,interested:B.orange,meeting:B.purple,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                    const sc={active:B.blue,replied:B.green,interested:B.orange,meeting:B.purple,done:B.muted,unsubscribed:B.red,not_interested:B.muted}[e.status]||B.muted;
                     return (
                       <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
@@ -7029,6 +7029,12 @@ function ModMarketing() {
                                   dispatch("UPDATE_CONTACT",{id:e.contactId,outreachStatus:"interested"});
                                   toast(`${c.fullName||c.firstName} removed from sequence — marked as interested`,"success");
                                 }} style={{background:`${B.orange}15`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>🎯 POSITIVE INTENT</button>
+                                <button onClick={()=>{
+                                  const camp=campaigns.find(c=>c.id===selCamp.id);
+                                  if(!camp) return;
+                                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"not_interested"}:en)});
+                                  toast(`${c.fullName||c.firstName||"Contact"} paused — won't receive more emails in this campaign`,"info");
+                                }} style={{background:B.surface,color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>⏸ NOT INTERESTED</button>
                                 <button onClick={()=>{
                                   const camp=campaigns.find(c=>c.id===selCamp.id);
                                   if(!camp) return;
@@ -7335,7 +7341,7 @@ function ModMarketing() {
                           const c=contactMap[e.contactId];
                           if(!c)return null;
                           const touch=(selCamp.touches||[])[e.step];
-                          const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                          const sc={active:B.blue,replied:B.green,interested:B.orange,done:B.muted,unsubscribed:B.red,not_interested:B.muted}[e.status]||B.muted;
                           const totalTouches=(selCamp.touches||[]).length;
                           return(
                             <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
@@ -7381,6 +7387,10 @@ function ModMarketing() {
                                     <div style={{display:"flex",gap:4}}>
                                       <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT</GBtn>
                                       <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED</button>
+                                    </div>
+                                    <div style={{display:"flex",gap:4}}>
+                                      <button onClick={()=>{const camp=campaigns.find(cc=>cc.id===selCamp.id);if(!camp)return;dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"not_interested"}:en)});toast(`${c.fullName||c.firstName||"Contact"} paused from this campaign`,"info");}} style={{background:B.surface,color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>⏸ NOT INTERESTED</button>
+                                      <button onClick={()=>{const camp=campaigns.find(cc=>cc.id===selCamp.id);if(!camp)return;dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:(camp.enrollments||[]).map(en=>en.contactId===e.contactId?{...en,status:"unsubscribed"}:en)});dispatch("UPDATE_CONTACT",{id:e.contactId,optedOut:true});toast(`${c.fullName||c.firstName} unsubscribed`,"info");}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>UNSUB</button>
                                     </div>
                                   </div>
                                 )}
