@@ -3946,6 +3946,7 @@ function ModMarketing() {
   const [editingTouchIdx,setEditingTouchIdx]=useState(null);
   const [touchDraft,setTouchDraft]=useState({subject:"",body:""});
   const [filterSport,setFilterSport]=useState("all");
+  const [campContactSearch,setCampContactSearch]=useState("");
   const [enrollSel,setEnrollSel]=useState(new Set());
   const [sending,setSending]=useState(false);
   const [checkingReplies,setCheckingReplies]=useState(false);
@@ -4826,59 +4827,95 @@ function ModMarketing() {
                     );
                   })()}
                   {/* Enrolled contacts */}
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({(selCamp.enrollments||[]).length})</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      {["all",...allSports].map(sp=>(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,gap:10,flexWrap:"wrap"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,whiteSpace:"nowrap"}}>ENROLLED CONTACTS ({(selCamp.enrollments||[]).length})</div>
+                    <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",flex:1,justifyContent:"flex-end"}}>
+                      <input
+                        value={campContactSearch}
+                        onChange={e=>{setCampContactSearch(e.target.value);setFilterSport("all");}}
+                        placeholder="Search name, email, school…"
+                        style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,minWidth:180,outline:"none"}}
+                      />
+                      {campContactSearch&&<button onClick={()=>setCampContactSearch("")} style={{background:"none",border:"none",fontSize:11,color:B.muted,cursor:"pointer",padding:"0 2px"}}>✕</button>}
+                      {!campContactSearch&&["all",...allSports].map(sp=>(
                         <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
                       ))}
                     </div>
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                    {(selCamp.enrollments||[])
-                      .filter(e=>{
-                        const c=contactMap[e.contactId];
-                        return !c||(filterSport==="all"||c.sport===filterSport);
-                      })
-                      .sort((a,b)=>a.step-b.step)
-                      .map(e=>{
-                        const c=contactMap[e.contactId];
-                        if(!c)return null;
-                        const touch=(selCamp.touches||[])[e.step];
-                        const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
-                        return(
-                          <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
-                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                              <div>
-                                <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
-                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
-                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
-                                  {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
-                                  {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
+                    {(()=>{
+                      const q=(campContactSearch||"").toLowerCase().trim();
+                      return(selCamp.enrollments||[])
+                        .filter(e=>{
+                          const c=contactMap[e.contactId];
+                          if(!c) return true;
+                          if(q){
+                            const name=(c.fullName||`${c.firstName||""} ${c.lastName||""}`).toLowerCase();
+                            const school=(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase();
+                            const email=(c.email||"").toLowerCase();
+                            return name.includes(q)||school.includes(q)||email.includes(q);
+                          }
+                          return filterSport==="all"||c.sport===filterSport;
+                        })
+                        .sort((a,b)=>a.step-b.step)
+                        .map(e=>{
+                          const c=contactMap[e.contactId];
+                          if(!c)return null;
+                          const touch=(selCamp.touches||[])[e.step];
+                          const sc={active:B.blue,replied:B.green,done:B.muted,unsubscribed:B.red}[e.status]||B.muted;
+                          const totalTouches=(selCamp.touches||[]).length;
+                          return(
+                            <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
+                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
+                                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
+                                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:sc,background:`${sc}20`,padding:"2px 6px",borderRadius:3}}>{e.status?.toUpperCase()}</span>
+                                    {c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}
+                                    {(()=>{const t=scoreTier(c.score);return<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:t.color,background:t.bg,padding:"2px 5px",borderRadius:3}}>{t.label} {c.score||0}</span>})()}
+                                  </div>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""}{(typeof c.school==="string"?c.school:c.school?.name||"")?" · ":""}{typeof c.school==="string"?c.school:c.school?.name||""}</div>
+                                  {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
+                                  {/* Touch progress dots */}
+                                  {totalTouches>0&&(
+                                    <div style={{display:"flex",gap:4,alignItems:"center",marginTop:5,flexWrap:"wrap"}}>
+                                      {(selCamp.touches||[]).map((t,i)=>{
+                                        const sent=i<e.step;
+                                        const next=i===e.step&&e.status==="active";
+                                        const color=sent?B.green:next?B.orange:B.border;
+                                        return(
+                                          <div key={i} title={`Touch ${i+1}${t.subject?`: ${t.subject}`:""}`}
+                                            style={{display:"flex",alignItems:"center",gap:3}}>
+                                            <div style={{width:18,height:18,borderRadius:"50%",background:sent?B.green:next?`${B.orange}20`:"transparent",border:`2px solid ${color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:sent?B.white:next?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>
+                                              {sent?"✓":i+1}
+                                            </div>
+                                            {i<totalTouches-1&&<div style={{width:12,height:1,background:sent?B.green:B.border}}/>}
+                                          </div>
+                                        );
+                                      })}
+                                      {e.status==="active"&&touch&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,marginLeft:4}}>{e.nextDate||"today"}</span>}
+                                      {e.lastContacted&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:4}}>last sent {e.lastContacted}</span>}
+                                    </div>
+                                  )}
                                 </div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
-                                {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
-                                {touch&&e.status==="active"&&(
-                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>Next: Touch {touch.step} · {e.nextDate||"today"}{touch.subject?` — "${touch.subject}"`:""}</div>
+                                {e.status==="active"&&(
+                                  <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end",marginLeft:10}}>
+                                    {touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW</button>}
+                                    <div style={{display:"flex",gap:4}}>
+                                      <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED</button>
+                                      <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED</button>
+                                    </div>
+                                    <div style={{display:"flex",gap:4}}>
+                                      <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT</GBtn>
+                                      <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED</button>
+                                    </div>
+                                  </div>
                                 )}
                               </div>
-                              {e.status==="active"&&(
-                                <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
-                                  {touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
-                                  <div style={{display:"flex",gap:4}}>
-                                    <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
-                                    <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
-                                  </div>
-                                  <div style={{display:"flex",gap:4}}>
-                                    <GBtn onClick={()=>markContacted(selCamp.id,e.contactId)} style={{fontSize:9,padding:"3px 8px"}}>✓ SENT +15</GBtn>
-                                    <button onClick={()=>markReplied(selCamp.id,e.contactId)} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>REPLIED +50</button>
-                                  </div>
-                                </div>
-                              )}
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        });
+                    })()}
                   </div>
                 </div>
               )}
