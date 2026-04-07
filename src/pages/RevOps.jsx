@@ -4915,6 +4915,7 @@ function ModMarketing() {
   // Manual batch queue: null = no pending batches, or {campId, queue:[...], batchNum, sentSoFar, failedSoFar, firstErr}
   const [pendingBatch,setPendingBatch]=useState(null);
   const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
+  const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -6711,7 +6712,7 @@ function ModMarketing() {
                 const rep=selCamp.repId?(s.reps||[]).find(r=>r.id===selCamp.repId):null;
 
                 // One-batch sender — sends exactly this list of enrollments for their current step
-                const sendOneBatch=async(batchEnrollments)=>{
+                const sendOneBatch=async(batchEnrollments,batchKey)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
@@ -6741,6 +6742,8 @@ function ModMarketing() {
                     }
                   }
                   dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
+                  // Mark this batch as sent so the row shows ✓ even before re-render removes it
+                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
                   setSending(false);
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}`,sent>0?"success":"error");
                 };
@@ -6818,18 +6821,24 @@ function ModMarketing() {
                               const isFirst=bi===0;
                               const expKey=`${ti}-${bi}`;
                               const isExp=batchExpanded[expKey]??(bi===0);
+                              // Stable key based on first contact ID so it survives re-indexing
+                              const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
+                              const wasSent=!!batchSentMap[batchKey];
                               return(
-                                <div key={bi} style={{border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:isFirst?`${B.orange}06`:B.white}}>
-                                    <div style={{flex:1,display:"flex",alignItems:"center",gap:8}}>
-                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                <div key={batchKey} style={{border:`1px solid ${wasSent?B.green:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:wasSent?`${B.green}08`:isFirst?`${B.orange}06`:B.white}}>
+                                    <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:wasSent?B.green:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
                                       <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
+                                      {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {batchSentMap[batchKey].sent}{batchSentMap[batchKey].failed>0?` · ${batchSentMap[batchKey].failed} failed`:""}</span>}
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
                                     </div>
-                                    <button onClick={()=>sendOneBatch(batch)} disabled={sending}
-                                      style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-                                      {sending?"SENDING...":"▶ SEND ("+ batch.length+")"}
-                                    </button>
+                                    {!wasSent&&(
+                                      <button onClick={()=>sendOneBatch(batch,batchKey)} disabled={sending}
+                                        style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                        {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
+                                      </button>
+                                    )}
                                   </div>
                                   {isExp&&(
                                     <div style={{borderTop:`1px solid ${B.border}`,padding:"6px 12px",display:"flex",flexDirection:"column",gap:3}}>
