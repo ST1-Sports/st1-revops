@@ -344,6 +344,26 @@ model IntegrationConnection {
   updatedAt   DateTime  @updatedAt
 }
 
+// ── INBOUND QUOTE EMAIL TRACKING ─────────────────────────────────────────────
+// Receives BCC'd pricing emails from any email client.
+// The React app polls /api/inbound-email to consume and create deals from these.
+
+model InboundQuote {
+  id          String    @id @default(cuid())
+  messageId   String?   @unique  // dedup by Message-ID header
+  fromEmail   String
+  fromName    String?
+  toEmail     String
+  toName      String?
+  subject     String
+  bodyText    String?   @db.Text
+  receivedAt  DateTime  @default(now())
+  processed   Boolean   @default(false)
+  processedAt DateTime?
+
+  @@index([processed])
+}
+
 // ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
 
 model EmailOpen {

@@ -11,7 +11,8 @@
     "api/zoho-campaigns.js":                      { "maxDuration": 30 },
     "api/zoho-social.js":                         { "maxDuration": 30 },
     "api/gmail.js":                               { "maxDuration": 30 },
-    "api/zoho.js":                                { "maxDuration": 30 }
+    "api/zoho.js":                                { "maxDuration": 30 },
+    "api/inbound-email.js":                       { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
