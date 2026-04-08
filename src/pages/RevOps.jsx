@@ -5293,6 +5293,8 @@ function ModMarketing() {
           ...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
           // Reply-To = rep's email so replies land in their inbox (fallback if no own Gmail)
           ...(!rep?.gmailEnvKey && rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+          // BCC quote tracker if this touch is marked as a pricing email
+          ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
         })});
       const d=await r.json();
       return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
@@ -5315,6 +5317,7 @@ function ModMarketing() {
     const todayStr=today();
     // snapshot enrollments so we can update them
     const updatedEnrollments=[...(camp.enrollments||[])];
+    const dealsToCreate=[];
     toast(`Sending batch ${batchNum} — ${batch.length} contacts…`,"info");
     for(const enroll of batch){
       const res=await sendOneEmail(camp,enroll);
@@ -5329,6 +5332,14 @@ function ModMarketing() {
         }
         dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:campId,note:`Touch ${enroll.step+1} sent`});
         const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
+        // Auto-create deal if this touch is flagged as a pricing/quote email
+        const _touch=(camp.touches||[])[enroll.step];
+        if(_touch?.isQuote){
+          const _c=contactMap[enroll.contactId];
+          const _school=typeof _c?.school==="string"?_c.school:_c?.school?.name||"";
+          const _name=_c?.fullName||`${_c?.firstName||""} ${_c?.lastName||""}`.trim();
+          dealsToCreate.push({id:mkId(),name:`${_name} — ${camp.product||camp.name}`,school:_school,contact:_name,value:0,stage:"Quoted",product:camp.product||camp.name,priority:"medium",createdAt:todayStr,followUpDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),notes:`Auto-created: campaign "${camp.name}" touch ${enroll.step+1}`});
+        }
         sent++;
         if(sent<batch.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
       } else {
@@ -5339,6 +5350,8 @@ function ModMarketing() {
       }
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
+    dealsToCreate.forEach(deal=>dispatch("ADD_DEAL",deal));
+    if(dealsToCreate.length>0) toast(`${dealsToCreate.length} deal${dealsToCreate.length!==1?"s":""} auto-created from quote emails — check Deals tab`,"success");
     setSending(false);
     const totalSent=sentSoFar+sent, totalFailed=failedSoFar+failed;
     if(remaining.length>0){
@@ -6272,6 +6285,10 @@ function ModMarketing() {
                         <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
                           <textarea value={t.body||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,body:e.target.value}:x)}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/></div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,paddingTop:8,borderTop:`1px solid ${B.border}`}}>
+                          <input type="checkbox" id={`iq-${i}`} checked={!!t.isQuote} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,isQuote:e.target.checked}:x)}))} style={{accentColor:B.orange,cursor:"pointer"}}/>
+                          <label htmlFor={`iq-${i}`} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:t.isQuote?B.orange:B.muted,cursor:"pointer"}}>💰 Pricing / Quote email — auto-creates deal &amp; BCCs quote tracker on send</label>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -10316,7 +10333,7 @@ function ModSettings() {
           This info is used in campaign emails, bid documents, and agent-drafted correspondence.
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
-          {[["Company Name","name","text"],["Owner / Rep Name","ownerName","text"],["Email Address","email","email"],["Phone Number","phone","text"],["Address","address","text"],["Website","website","text"]].map(([l,k,t])=>(
+          {[["Company Name","name","text"],["Owner / Rep Name","ownerName","text"],["Email Address","email","email"],["Phone Number","phone","text"],["Address","address","text"],["Website","website","text"],["Quote BCC Email","quoteTrackEmail","email"]].map(([l,k,t])=>(
             <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
               <input type={t} value={co[k]||""} onChange={e=>setCo(c=>({...c,[k]:e.target.value}))}
                 placeholder={k==="email"?"you@company.com":k==="website"?"yoursite.com":""}
