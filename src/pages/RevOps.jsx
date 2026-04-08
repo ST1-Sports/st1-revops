@@ -1693,6 +1693,49 @@ function ModDeals() {
   const [drafting,setDrafting]=useState(false);
   const [draft,setDraft]=useState("");
   const [dealNoteText,setDealNoteText]=useState("");
+  const [syncing,setSyncing]=useState(false);
+  const [pendingQuoteCount,setPendingQuoteCount]=useState(0);
+
+  // Poll for pending inbound quote emails on mount
+  useEffect(()=>{
+    const secret=s.company?.inboundEmailSecret||"";
+    const url="/api/inbound-email"+(secret?`?secret=${encodeURIComponent(secret)}`:"");
+    fetch(url).then(r=>r.ok?r.json():null).then(d=>{if(d?.quotes) setPendingQuoteCount(d.quotes.length);}).catch(()=>{});
+  },[]);
+
+  const syncQuoteEmails=async()=>{
+    setSyncing(true);
+    try{
+      const secret=s.company?.inboundEmailSecret||"";
+      const url="/api/inbound-email"+(secret?`?secret=${encodeURIComponent(secret)}`:"");
+      const res=await fetch(url);
+      if(!res.ok){toast("Could not reach inbound email endpoint","error");setSyncing(false);return;}
+      const {quotes=[]}=await res.json();
+      if(!quotes.length){toast("No new quote emails to sync","info");setSyncing(false);setPendingQuoteCount(0);return;}
+      // Match contacts by email, create deals
+      const contactsByEmail={};
+      (s.contacts||[]).forEach(c=>{if(c.email) contactsByEmail[c.email.toLowerCase()]=c;});
+      const todayStr=today();
+      let created=0;
+      const ids=[];
+      for(const q of quotes){
+        const c=contactsByEmail[q.toEmail?.toLowerCase()];
+        const school=c?(typeof c.school==="string"?c.school:c.school?.name||""):q.toEmail;
+        const cname=c?(c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()):q.toEmail;
+        const dealName=(q.subject||"").replace(/^(re:|fwd?:)\s*/gi,"").trim()||`${cname} — Quote`;
+        dispatch("ADD_DEAL",{id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`});
+        ids.push(q.id);
+        created++;
+      }
+      // Mark as processed
+      if(ids.length){
+        await fetch("/api/inbound-email"+(secret?`?secret=${encodeURIComponent(secret)}`:""),{method:"POST",headers:{"Content-Type":"application/json","x-inbound-secret":secret||"","x-action":"mark-processed"},body:JSON.stringify({ids})});
+      }
+      setPendingQuoteCount(0);
+      toast(`${created} deal${created!==1?"s":""} created from BCC'd quote emails`,"success");
+    }catch(err){toast("Sync error: "+err.message,"error");}
+    setSyncing(false);
+  };
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
   const pool=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
@@ -1733,7 +1776,14 @@ Under 80 words. Include subject line. Warm tone.`);
 
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="DEAL MANAGER" sub="Track every opportunity · log touches · manage follow-ups" action={<OBtn onClick={()=>setAdding(true)}>+ NEW DEAL</OBtn>}/>
+      <PH title="DEAL MANAGER" sub="Track every opportunity · log touches · manage follow-ups" action={
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <button onClick={syncQuoteEmails} disabled={syncing} style={{position:"relative",background:pendingQuoteCount>0?B.orange:B.surface,color:pendingQuoteCount>0?B.white:B.muted,border:`1px solid ${pendingQuoteCount>0?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:syncing?.7:1}}>
+            {syncing?"SYNCING...":"⬇ SYNC QUOTES"}{pendingQuoteCount>0&&<span style={{position:"absolute",top:-5,right:-5,background:B.red,color:B.white,borderRadius:"50%",width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{pendingQuoteCount}</span>}
+          </button>
+          <OBtn onClick={()=>setAdding(true)}>+ NEW DEAL</OBtn>
+        </div>
+      }/>
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:16}}>
         <KCard l="Open Pipeline" v={fmt$(pipe)} c={B.orange}/>
         <KCard l="Closed Won"    v={fmt$(won)}  c={B.green}/>
@@ -10340,6 +10390,37 @@ function ModSettings() {
                 style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
             </div>
           ))}
+        </div>
+        <OBtn onClick={save}>SAVE SETTINGS</OBtn>
+      </div>
+
+      {/* BCC-to-Deal Email Tracking */}
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
+        <Lbl c={B.blue} s={{marginBottom:6}}>BCC-to-Deal Tracking</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.6}}>
+          Like HubSpot's BCC key — when you send a pricing email from any email client, BCC your tracking address and a deal will be auto-created in RevOps when you click <strong style={{color:B.text}}>Sync Quotes</strong> in the Deals tab.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:11}}>
+          <div>
+            <Lbl s={{marginBottom:3}}>Inbound Email Webhook Secret</Lbl>
+            <input value={co.inboundEmailSecret||""} onChange={e=>setCo(c=>({...c,inboundEmailSecret:e.target.value}))}
+              placeholder="Generate a random string here"
+              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontFamily:"monospace"}}/>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Add this to your email provider's webhook URL as <code style={{color:B.orange}}>?secret=...</code></div>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Your Webhook URL</Lbl>
+            <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"monospace",color:B.orange,wordBreak:"break-all",lineHeight:1.5}}>
+              {window.location.origin}/api/inbound-email{co.inboundEmailSecret?`?secret=${co.inboundEmailSecret}`:""}
+            </div>
+          </div>
+        </div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.7,marginBottom:11}}>
+          <strong style={{color:B.text}}>Setup (SendGrid Inbound Parse):</strong>{" "}
+          1. Set MX record for a subdomain (e.g. <code>mail.st1sports.com</code>) → <code>mx.sendgrid.net</code> priority 10{"  "}
+          2. In SendGrid → Settings → Inbound Parse → add your subdomain + this webhook URL{"  "}
+          3. BCC <code>quotes@mail.st1sports.com</code> on any pricing email{"  "}
+          4. Click <strong>Sync Quotes</strong> in the Deals tab to pull them in
         </div>
         <OBtn onClick={save}>SAVE SETTINGS</OBtn>
       </div>
