@@ -8161,12 +8161,37 @@ function ModSocial() {
     setGenRunning(false);
   };
 
+  // Poll Publer job status until done, then update post state with result
+  const checkPublerJob=async(postId,jobId,isScheduled)=>{
+    for(let i=0;i<8;i++){
+      await new Promise(r=>setTimeout(r,i===0?3000:4000));
+      try{
+        const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"job-status",jobId})});
+        const d=await r.json();
+        if(d.done){
+          if(d.failures?.length){
+            const msg=d.failures.join(" | ");
+            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"local_only",publerError:msg});
+            toast(`Publer failed: ${msg}`,"error");
+          }else{
+            const finalStatus=isScheduled?"scheduled":"published";
+            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:finalStatus,publerError:null});
+            toast(isScheduled?"Scheduled in Publer!":"Published to Publer!","success");
+          }
+          return;
+        }
+      }catch{}
+    }
+    // Timed out — assume success if we got a job_id (Publer queued it)
+    dispatch("UPDATE_SOCIAL_POST",{id:postId,status:isScheduled?"scheduled":"published",publerError:null});
+    toast("Sent to Publer (confirm in your Publer calendar)","success");
+  };
+
   const submitPost=async()=>{
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
     setPosting(true);
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
-    // Always save locally first so the post is never lost
     const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
     dispatch("ADD_SOCIAL_POST",post);
     if(linkedCampId){
@@ -8179,17 +8204,17 @@ function ModSocial() {
       const data=await r.json();
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
-        const finalStatus=scheduleAt?"scheduled":"published";
-        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:finalStatus,publerPostIds:data.postIds||[]});
-        if(linkedCampId){
-          const camp=campaigns.find(c=>c.id===linkedCampId);
-          if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:finalStatus}]});
-        }
-        toast(scheduleAt?`Scheduled for ${scheduleAt}!`:"Posted to Publer!","success");
+        const jobId=data.postIds?.[0];
+        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
+        if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
+        toast("Sent to Publer — checking result…","info");
+        // Poll job status in background to confirm success or surface failure
+        if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);
+        else{dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
       }else{
         const errMsg=data.error||"Publer rejected the post";
         dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
-        toast(`Saved locally — Publer failed: ${errMsg.slice(0,80)}`,"warn");
+        toast(`Saved locally — Publer failed: ${errMsg.slice(0,120)}`,"warn");
       }
     }catch(err){
       dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
@@ -8313,10 +8338,12 @@ function ModSocial() {
                     const data=await r.json();
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published",publerError:null,publerPostIds:data.postIds||[]});
-                      toast(data._warning?`Sent — ⚠ ${data._warning}`:"Queued in Publer!","success");
-                    }
-                    else{
+                      const jobId=data.postIds?.[0];
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:null,publerPostIds:data.postIds||[]});
+                      toast("Sent to Publer — checking result…","info");
+                      if(jobId) checkPublerJob(p.id,jobId,false);
+                      else{dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published"});toast("Published!","success");}
+                    }else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
                       dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:msg});

@@ -81,7 +81,31 @@ export default async function handler(req, res) {
     });
   }
 
-  const { post, platforms, mediaUrls, scheduleDate, isStory, link, action } = req.body || {};
+  const { post, platforms, mediaUrls, scheduleDate, isStory, link, action, jobId } = req.body || {};
+
+  // ── Check job status ───────────────────────────────────────────────────────
+  // Called after posting to find out if the async Publer job succeeded or failed
+  if (action === "job-status") {
+    if (!jobId) return res.status(400).json({ error: "jobId required" });
+    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    try {
+      const { ok, data } = await publerRequest(`/job_status/${jobId}`, "GET", null, apiKey, workspaceId);
+      // data.payload.failures = [{account_id, account_name, provider, message}]
+      const failures = data.payload?.failures;
+      const failureList = Array.isArray(failures)
+        ? failures.map(f => `${f.account_name || f.provider}: ${f.message}`)
+        : failures?.error ? [failures.error] : [];
+      return res.json({
+        ok,
+        status: data.status,        // "working" | "complete" | "failed"
+        done: data.status === "complete" || data.status === "failed",
+        failures: failureList,
+        raw: data,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
 
   // ── Test connection ────────────────────────────────────────────────────────
   if (action === "test") {
