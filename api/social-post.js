@@ -13,8 +13,6 @@
  *   action="test"     → verify API key + list workspaces
  *   action="profiles" → list connected social accounts
  *   (default)         → post or schedule
- *
- * NOTE: Publer API requires Business plan or higher.
  */
 
 const PUBLER_API = "https://app.publer.com/api/v1";
@@ -30,7 +28,9 @@ async function publerRequest(path, method = "GET", body = null, apiKey, workspac
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const r = await fetch(`${PUBLER_API}${path}`, opts);
+  const url = `${PUBLER_API}${path}`;
+  const r = await fetch(url, opts);
+
   let data;
   try {
     data = await r.json();
@@ -38,7 +38,29 @@ async function publerRequest(path, method = "GET", body = null, apiKey, workspac
     const text = await r.text().catch(() => "");
     data = { error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
   }
+
+  // Log for debugging (Vercel function logs)
+  console.log(`[publer] ${method} ${path} → ${r.status}`, JSON.stringify(data).slice(0, 500));
   return { ok: r.ok, status: r.status, data };
+}
+
+// Parse Publer's response into a normalised success/postIds shape
+function parsePostResponse(data, scheduled) {
+  // Publer v1 returns: { success: true, data: { job_id: "...", status: "working" } }
+  // Or sometimes: { id: 123, status: "success" }
+  // Or for bulk: { posts: [...] }
+  if (data.success === true) {
+    const jobId = data.data?.job_id || data.data?.id;
+    return { ok: true, postIds: jobId ? [String(jobId)] : [], scheduled };
+  }
+  if (data.status === "success" || data.status === "scheduled") {
+    const posts = data.posts || (data.id ? [data] : []);
+    return { ok: true, postIds: posts.map(p => String(p.id)).filter(Boolean), scheduled };
+  }
+  if (data.id) {
+    return { ok: true, postIds: [String(data.id)], scheduled };
+  }
+  return null; // not a success
 }
 
 export default async function handler(req, res) {
@@ -55,7 +77,7 @@ export default async function handler(req, res) {
 
   const { post, platforms, mediaUrls, scheduleDate, isStory, link, action } = req.body || {};
 
-  // ── Test connection — fetch workspaces (no workspace header needed) ───────────
+  // ── Test connection ────────────────────────────────────────────────────────
   if (action === "test") {
     try {
       const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
@@ -67,13 +89,13 @@ export default async function handler(req, res) {
           ok: true,
           user: {
             name: `Connected — ${workspaces.length} workspace(s): ${names}`,
-            plan: "Publer",
           },
           workspaces: workspaces.map(w => ({ id: w.id, name: w.name || w.title })),
           firstWorkspaceId: firstId,
         });
       }
-      return res.status(400).json({ ok: false, error: data.errors?.[0] || data.message || data.error || JSON.stringify(data) });
+      const errMsg = data.errors?.[0] || data.message || data.error || JSON.stringify(data).slice(0, 200);
+      return res.status(400).json({ ok: false, error: errMsg });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
     }
@@ -87,17 +109,20 @@ export default async function handler(req, res) {
     });
   }
 
-  // ── List accounts ────────────────────────────────────────────────────────────
+  // ── List accounts ─────────────────────────────────────────────────────────
   if (action === "profiles") {
     try {
       const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
-      if (!ok) return res.status(400).json({ error: data.errors?.[0] || data.message || data.error || JSON.stringify(data) });
+      if (!ok) {
+        const errMsg = data.errors?.[0] || data.message || data.error || JSON.stringify(data).slice(0, 200);
+        return res.status(400).json({ error: errMsg });
+      }
       const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
       return res.json({
         ok: true,
         profiles: accounts.map(a => ({
           id: String(a.id),
-          service: (a.provider || a.platform || a.type || "").toLowerCase(),
+          service: (a.provider || a.platform || a.type || a.service || "").toLowerCase(),
           name: a.name || a.username || a.display_name,
           avatar: a.picture || a.avatar,
           connected: !a.needs_reconnect,
@@ -108,7 +133,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Post / Schedule ──────────────────────────────────────────────────────────
+  // ── Post / Schedule ────────────────────────────────────────────────────────
   if (!post?.trim()) return res.status(400).json({ error: "post text is required" });
 
   const platformMap = {
@@ -119,16 +144,16 @@ export default async function handler(req, res) {
     tiktok:    process.env.PUBLER_ACCOUNT_TIKTOK,
   };
 
-  let accountIds = [];
+  let rawIds = [];
   if (platforms?.length) {
-    accountIds = platforms.map(p => platformMap[p]).filter(Boolean);
+    rawIds = platforms.map(p => platformMap[p]).filter(Boolean);
   }
-  if (!accountIds.length && process.env.PUBLER_ACCOUNT_IDS) {
-    accountIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
+  if (!rawIds.length && process.env.PUBLER_ACCOUNT_IDS) {
+    rawIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
   }
-  if (!accountIds.length) {
+  if (!rawIds.length) {
     return res.status(400).json({
-      error: "No Publer account IDs configured. Go to Integrations → Load Accounts to find your IDs, then add them to Vercel.",
+      error: "No Publer account IDs configured. Go to Settings → Load Accounts to find your IDs, then add them to Vercel.",
     });
   }
 
@@ -138,30 +163,47 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  const payload = { accounts: accountIds, text: postText };
-  if (scheduleDate) payload.scheduled_at = new Date(scheduleDate).toISOString();
-  else payload.publish_at = "now";
-  if (isStory) payload.content_type = "story";
-  if (publicMediaUrls.length) payload.media = publicMediaUrls.map(url => ({ url }));
+  // Publer expects accounts as an array of objects: [{id: "123", scheduled_at: "..."}]
+  // scheduled_at must be at least 1–2 minutes in the future
+  const scheduledAt = scheduleDate ? new Date(scheduleDate).toISOString() : null;
+
+  const accountObjs = rawIds.map(id => ({
+    id: String(id),
+    ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
+  }));
+
+  const payload = {
+    accounts: accountObjs,
+    text: postText,
+    ...(isStory ? { content_type: "story" } : {}),
+    ...(publicMediaUrls.length ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+  };
+
+  // Immediate = /posts/schedule/publish, Scheduled = /posts/schedule
+  const endpoint = scheduledAt ? "/posts/schedule" : "/posts/schedule/publish";
 
   try {
-    const { ok, data } = await publerRequest("/posts/schedule", "POST", payload, apiKey, workspaceId);
+    const { ok, status: httpStatus, data } = await publerRequest(endpoint, "POST", payload, apiKey, workspaceId);
 
-    if (ok && (data.status === "success" || data.id || Array.isArray(data.posts))) {
-      const posts = data.posts || (data.id ? [data] : []);
-      return res.json({
-        status: scheduleDate ? "scheduled" : "success",
-        backend: "publer",
-        postIds: posts.map(p => p.id).filter(Boolean),
-        scheduled: !!scheduleDate,
-        ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0
-          ? { _warning: "Image skipped — must be a public HTTPS URL." }
-          : {}),
-      });
+    if (ok) {
+      const parsed = parsePostResponse(data, !!scheduledAt);
+      if (parsed) {
+        return res.json({
+          status: scheduledAt ? "scheduled" : "success",
+          backend: "publer",
+          postIds: parsed.postIds,
+          scheduled: !!scheduledAt,
+          ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0
+            ? { _warning: "Image skipped — must be a public HTTPS URL." }
+            : {}),
+        });
+      }
     }
 
+    // Return a useful error including the full Publer response for debugging
+    const errMsg = data.errors?.[0] || data.message || data.error || `HTTP ${httpStatus}`;
     return res.status(400).json({
-      error: data.errors?.[0] || data.message || data.error || "Post failed",
+      error: errMsg,
       backend: "publer",
       detail: data,
     });
