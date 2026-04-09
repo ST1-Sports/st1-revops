@@ -8211,6 +8211,7 @@ function ModSocial() {
         const jobId=data.postIds?.[0];
         dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
         if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
+        if(data._missing) toast(`⚠ ${data._missing}`,"warn");
         toast("Sent to Publer — checking result…","info");
         // Poll job status in background to confirm success or surface failure
         if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);

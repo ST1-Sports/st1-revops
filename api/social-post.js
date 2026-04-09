@@ -166,22 +166,9 @@ export default async function handler(req, res) {
     tiktok:    process.env.PUBLER_ACCOUNT_TIKTOK,
   };
 
-  // Collect account IDs for the requested platforms
-  let accountIds = [];
   const activePlatforms = (platforms || []).filter(Boolean);
-  if (activePlatforms.length) {
-    accountIds = activePlatforms.map(p => platformMap[p]).filter(Boolean);
-  }
-  if (!accountIds.length && process.env.PUBLER_ACCOUNT_IDS) {
-    accountIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
-  }
-  if (!accountIds.length) {
-    return res.status(400).json({
-      error: "No account IDs configured. In Settings → Load Accounts, copy the IDs, then add PUBLER_ACCOUNT_FACEBOOK (etc.) to Vercel env vars.",
-    });
-  }
 
-  // Only include public HTTP image URLs — base64 / blob URLs won't work with Publer
+  // Only include public HTTPS image URLs — base64 / blob URLs won't work with Publer
   const publicMediaUrls = (mediaUrls || []).filter(
     u => typeof u === "string" && u.startsWith("https://") && !u.startsWith("data:")
   );
@@ -198,38 +185,51 @@ export default async function handler(req, res) {
     scheduledAt = (t > minAllowed ? t : minAllowed).toISOString();
   }
 
-  // Build the network-specific content block
-  // Use the same text for all platforms; type="photo" when media present, "status" otherwise
-  const contentType = isStory ? "story" : hasMedia ? "photo" : "status";
-  const networkContent = {
-    type: contentType,
-    text: postText,
-    ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
-  };
-
-  // Build networks object — one entry per platform we're posting to
-  // If we can't identify the platforms from env vars, fall back to platform list
-  const networkKeys = activePlatforms.length > 0 ? activePlatforms : ["facebook"];
-  const networks = Object.fromEntries(networkKeys.map(p => [p, networkContent]));
-
-  // Build accounts array — objects with id and optional scheduled_at
-  const accountObjs = accountIds.map(id => ({
-    id: String(id),
-    ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
-  }));
-
-  // Publer v1 bulk payload
-  const payload = {
-    bulk: {
-      state: "scheduled",
-      posts: [
-        {
-          networks,
-          accounts: accountObjs,
+  // Build one post object per platform so each succeeds/fails independently.
+  // Instagram requires media; use type="photo" when media present, "status" otherwise.
+  const missingAccounts = [];
+  const posts = [];
+  for (const platform of activePlatforms) {
+    const accountId = platformMap[platform];
+    if (!accountId) { missingAccounts.push(platform); continue; }
+    const contentType = isStory ? "story" : (hasMedia || platform === "instagram") ? "photo" : "status";
+    posts.push({
+      networks: {
+        [platform]: {
+          type: contentType,
+          text: postText,
+          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
         },
-      ],
-    },
-  };
+      },
+      accounts: [{ id: String(accountId), ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) }],
+    });
+  }
+
+  // Fallback: if no platform-specific IDs found, try PUBLER_ACCOUNT_IDS with first platform
+  if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
+    const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
+    const platform = activePlatforms[0] || "facebook";
+    posts.push({
+      networks: {
+        [platform]: {
+          type: isStory ? "story" : hasMedia ? "photo" : "status",
+          text: postText,
+          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+        },
+      },
+      accounts: fallbackIds.map(id => ({ id, ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) })),
+    });
+  }
+
+  if (!posts.length) {
+    const missing = missingAccounts.join(", ");
+    return res.status(400).json({
+      error: `No account IDs configured for: ${missing}. In Settings → Load Accounts, copy the IDs, then add PUBLER_ACCOUNT_FACEBOOK / PUBLER_ACCOUNT_INSTAGRAM (etc.) to Vercel env vars.`,
+    });
+  }
+
+  // Publer v1 bulk payload — one post object per platform for independent handling
+  const payload = { bulk: { state: "scheduled", posts } };
 
   // Immediate = /posts/schedule/publish, Scheduled = /posts/schedule
   const endpoint = scheduledAt ? "/posts/schedule" : "/posts/schedule/publish";
@@ -246,6 +246,7 @@ export default async function handler(req, res) {
           postIds: parsed.postIds,
           scheduled: !!scheduledAt,
           ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
+          ...(missingAccounts.length ? { _missing: `No account ID configured for: ${missingAccounts.join(", ")} — add to Vercel env vars.` } : {}),
         });
       }
     }
