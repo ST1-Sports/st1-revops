@@ -1723,7 +1723,12 @@ function ModDeals() {
         const school=c?(typeof c.school==="string"?c.school:c.school?.name||""):q.toEmail;
         const cname=c?(c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()):q.toEmail;
         const dealName=(q.subject||"").replace(/^(re:|fwd?:)\s*/gi,"").trim()||`${cname} — Quote`;
-        dispatch("ADD_DEAL",{id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`});
+        const followUp=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
+        const deal={id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:followUp,notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`};
+        dispatch("ADD_DEAL",deal);
+        // Push to Zoho CRM
+        fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:deal.name,Amount:0,Stage:"Quoted",Closing_Date:followUp,Description:deal.notes}]}})})
+          .then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:_zid});}).catch(()=>{});
         ids.push(q.id);
         created++;
       }
@@ -1732,7 +1737,7 @@ function ModDeals() {
         await fetch("/api/inbound-email"+(secret?`?secret=${encodeURIComponent(secret)}`:""),{method:"POST",headers:{"Content-Type":"application/json","x-inbound-secret":secret||"","x-action":"mark-processed"},body:JSON.stringify({ids})});
       }
       setPendingQuoteCount(0);
-      toast(`${created} deal${created!==1?"s":""} created from BCC'd quote emails`,"success");
+      toast(`${created} deal${created!==1?"s":""} created in RevOps + pushed to Zoho`,"success");
     }catch(err){toast("Sync error: "+err.message,"error");}
     setSyncing(false);
   };
@@ -5400,8 +5405,12 @@ function ModMarketing() {
       }
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
-    dealsToCreate.forEach(deal=>dispatch("ADD_DEAL",deal));
-    if(dealsToCreate.length>0) toast(`${dealsToCreate.length} deal${dealsToCreate.length!==1?"s":""} auto-created from quote emails — check Deals tab`,"success");
+    dealsToCreate.forEach(deal=>{
+      dispatch("ADD_DEAL",deal);
+      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:deal.name,Amount:0,Stage:"Quoted",Closing_Date:deal.followUpDate,Description:deal.notes||""}]}})})
+        .then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:_zid});}).catch(()=>{});
+    });
+    if(dealsToCreate.length>0) toast(`${dealsToCreate.length} deal${dealsToCreate.length!==1?"s":""} created in RevOps + pushed to Zoho`,"success");
     setSending(false);
     const totalSent=sentSoFar+sent, totalFailed=failedSoFar+failed;
     if(remaining.length>0){
