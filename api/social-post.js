@@ -3,16 +3,19 @@
  *
  * Required env vars:
  *   PUBLER_API_KEY         — from app.publer.com → Settings → API
- *   PUBLER_WORKSPACE_ID    — from Load Accounts step (or Publer dashboard URL)
+ *   PUBLER_WORKSPACE_ID    — from Publer dashboard URL or Test Connection
  *
  * Optional (per-platform account IDs — get from Load Accounts):
  *   PUBLER_ACCOUNT_FACEBOOK / INSTAGRAM / LINKEDIN / TWITTER / TIKTOK
- *   PUBLER_ACCOUNT_IDS  — comma-separated fallback
+ *   PUBLER_ACCOUNT_IDS  — comma-separated fallback (used when platform-specific IDs missing)
  *
  * POST body actions:
  *   action="test"     → verify API key + list workspaces
  *   action="profiles" → list connected social accounts
  *   (default)         → post or schedule
+ *
+ * Publer API v1 docs: https://publer.com/docs/api-reference/posts
+ * Correct payload wraps everything in { bulk: { state, posts: [{ networks, accounts }] } }
  */
 
 const PUBLER_API = "https://app.publer.com/api/v1";
@@ -28,50 +31,49 @@ async function publerRequest(path, method = "GET", body = null, apiKey, workspac
   const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
 
-  const url = `${PUBLER_API}${path}`;
-  const r = await fetch(url, opts);
-
+  const r = await fetch(`${PUBLER_API}${path}`, opts);
   let data;
   try {
     data = await r.json();
   } catch {
     const text = await r.text().catch(() => "");
-    data = { error: `HTTP ${r.status}: ${text.slice(0, 300)}` };
+    data = { _rawError: `HTTP ${r.status}: ${text.slice(0, 400)}` };
   }
 
-  // Log for debugging (Vercel function logs)
-  console.log(`[publer] ${method} ${path} → ${r.status}`, JSON.stringify(data).slice(0, 500));
+  console.log(`[publer] ${method} ${path} → ${r.status}`, JSON.stringify(data).slice(0, 600));
   return { ok: r.ok, status: r.status, data };
 }
 
-// Parse Publer's response into a normalised success/postIds shape
-function parsePostResponse(data, scheduled) {
-  // Publer v1 returns: { success: true, data: { job_id: "...", status: "working" } }
-  // Or sometimes: { id: 123, status: "success" }
-  // Or for bulk: { posts: [...] }
+function extractError(data) {
+  if (!data) return "Unknown error";
+  if (data._rawError) return data._rawError;
+  if (data.errors && Array.isArray(data.errors)) return data.errors.join("; ");
+  if (data.message) return data.message;
+  if (data.error) return data.error;
+  return JSON.stringify(data).slice(0, 300);
+}
+
+function parseSuccess(data, scheduled) {
+  // Publer bulk API returns: { success: true, data: { job_id, status } }
   if (data.success === true) {
     const jobId = data.data?.job_id || data.data?.id;
-    return { ok: true, postIds: jobId ? [String(jobId)] : [], scheduled };
+    return { ok: true, postIds: jobId ? [String(jobId)] : [] };
   }
-  if (data.status === "success" || data.status === "scheduled") {
+  // Fallback shapes from older Publer versions
+  if (data.status === "success" || data.status === "scheduled" || data.id) {
     const posts = data.posts || (data.id ? [data] : []);
-    return { ok: true, postIds: posts.map(p => String(p.id)).filter(Boolean), scheduled };
+    return { ok: true, postIds: posts.map(p => String(p.id)).filter(Boolean) };
   }
-  if (data.id) {
-    return { ok: true, postIds: [String(data.id)], scheduled };
-  }
-  return null; // not a success
+  return null;
 }
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const apiKey = process.env.PUBLER_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: "PUBLER_API_KEY not set — add it to Vercel Environment Variables, then redeploy.",
+      error: "PUBLER_API_KEY not configured — add it to Vercel Environment Variables.",
     });
   }
 
@@ -83,29 +85,24 @@ export default async function handler(req, res) {
       const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
       if (ok) {
         const workspaces = Array.isArray(data) ? data : (data.data || data.workspaces || []);
-        const names = workspaces.map(w => w.name || w.title || w.id).join(", ");
-        const firstId = workspaces[0]?.id;
         return res.json({
           ok: true,
-          user: {
-            name: `Connected — ${workspaces.length} workspace(s): ${names}`,
-          },
+          user: { name: `Connected — ${workspaces.length} workspace(s): ${workspaces.map(w => w.name || w.title || w.id).join(", ")}` },
           workspaces: workspaces.map(w => ({ id: w.id, name: w.name || w.title })),
-          firstWorkspaceId: firstId,
+          firstWorkspaceId: workspaces[0]?.id,
         });
       }
-      const errMsg = data.errors?.[0] || data.message || data.error || JSON.stringify(data).slice(0, 200);
-      return res.status(400).json({ ok: false, error: errMsg });
+      return res.status(400).json({ ok: false, error: extractError(data) });
     } catch (e) {
       return res.status(500).json({ ok: false, error: e.message });
     }
   }
 
-  // All other actions require a workspace ID
+  // Workspace required for all posting actions
   const workspaceId = process.env.PUBLER_WORKSPACE_ID;
   if (!workspaceId) {
     return res.status(400).json({
-      error: "PUBLER_WORKSPACE_ID not set — click Test Connection to find your workspace ID, then add it to Vercel env vars.",
+      error: "PUBLER_WORKSPACE_ID not configured — click Test Connection, copy the workspace ID shown, then add it to Vercel env vars.",
     });
   }
 
@@ -113,10 +110,7 @@ export default async function handler(req, res) {
   if (action === "profiles") {
     try {
       const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
-      if (!ok) {
-        const errMsg = data.errors?.[0] || data.message || data.error || JSON.stringify(data).slice(0, 200);
-        return res.status(400).json({ error: errMsg });
-      }
+      if (!ok) return res.status(400).json({ error: extractError(data) });
       const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
       return res.json({
         ok: true,
@@ -134,7 +128,7 @@ export default async function handler(req, res) {
   }
 
   // ── Post / Schedule ────────────────────────────────────────────────────────
-  if (!post?.trim()) return res.status(400).json({ error: "post text is required" });
+  if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
 
   const platformMap = {
     facebook:  process.env.PUBLER_ACCOUNT_FACEBOOK,
@@ -144,39 +138,69 @@ export default async function handler(req, res) {
     tiktok:    process.env.PUBLER_ACCOUNT_TIKTOK,
   };
 
-  let rawIds = [];
-  if (platforms?.length) {
-    rawIds = platforms.map(p => platformMap[p]).filter(Boolean);
+  // Collect account IDs for the requested platforms
+  let accountIds = [];
+  const activePlatforms = (platforms || []).filter(Boolean);
+  if (activePlatforms.length) {
+    accountIds = activePlatforms.map(p => platformMap[p]).filter(Boolean);
   }
-  if (!rawIds.length && process.env.PUBLER_ACCOUNT_IDS) {
-    rawIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
+  if (!accountIds.length && process.env.PUBLER_ACCOUNT_IDS) {
+    accountIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
   }
-  if (!rawIds.length) {
+  if (!accountIds.length) {
     return res.status(400).json({
-      error: "No Publer account IDs configured. Go to Settings → Load Accounts to find your IDs, then add them to Vercel.",
+      error: "No account IDs configured. In Settings → Load Accounts, copy the IDs, then add PUBLER_ACCOUNT_FACEBOOK (etc.) to Vercel env vars.",
     });
   }
 
+  // Only include public HTTP image URLs — base64 / blob URLs won't work with Publer
   const publicMediaUrls = (mediaUrls || []).filter(
-    u => typeof u === "string" && u.startsWith("http") && !u.startsWith("data:")
+    u => typeof u === "string" && u.startsWith("https://") && !u.startsWith("data:")
   );
+  const hasMedia = publicMediaUrls.length > 0;
+  const skippedMedia = !hasMedia && (mediaUrls || []).length > 0;
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Publer expects accounts as an array of objects: [{id: "123", scheduled_at: "..."}]
-  // scheduled_at must be at least 1–2 minutes in the future
-  const scheduledAt = scheduleDate ? new Date(scheduleDate).toISOString() : null;
+  // Resolve scheduling time — must be at least 2 min in the future
+  let scheduledAt = null;
+  if (scheduleDate) {
+    const t = new Date(scheduleDate);
+    const minAllowed = new Date(Date.now() + 2 * 60 * 1000);
+    scheduledAt = (t > minAllowed ? t : minAllowed).toISOString();
+  }
 
-  const accountObjs = rawIds.map(id => ({
+  // Build the network-specific content block
+  // Use the same text for all platforms; type="photo" when media present, "status" otherwise
+  const contentType = isStory ? "story" : hasMedia ? "photo" : "status";
+  const networkContent = {
+    type: contentType,
+    text: postText,
+    ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+  };
+
+  // Build networks object — one entry per platform we're posting to
+  // If we can't identify the platforms from env vars, fall back to platform list
+  const networkKeys = activePlatforms.length > 0 ? activePlatforms : ["facebook"];
+  const networks = Object.fromEntries(networkKeys.map(p => [p, networkContent]));
+
+  // Build accounts array — objects with id and optional scheduled_at
+  const accountObjs = accountIds.map(id => ({
     id: String(id),
     ...(scheduledAt ? { scheduled_at: scheduledAt } : {}),
   }));
 
+  // Publer v1 bulk payload
   const payload = {
-    accounts: accountObjs,
-    text: postText,
-    ...(isStory ? { content_type: "story" } : {}),
-    ...(publicMediaUrls.length ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+    bulk: {
+      state: "scheduled",
+      posts: [
+        {
+          networks,
+          accounts: accountObjs,
+        },
+      ],
+    },
   };
 
   // Immediate = /posts/schedule/publish, Scheduled = /posts/schedule
@@ -186,24 +210,20 @@ export default async function handler(req, res) {
     const { ok, status: httpStatus, data } = await publerRequest(endpoint, "POST", payload, apiKey, workspaceId);
 
     if (ok) {
-      const parsed = parsePostResponse(data, !!scheduledAt);
+      const parsed = parseSuccess(data, !!scheduledAt);
       if (parsed) {
         return res.json({
           status: scheduledAt ? "scheduled" : "success",
           backend: "publer",
           postIds: parsed.postIds,
           scheduled: !!scheduledAt,
-          ...(publicMediaUrls.length === 0 && mediaUrls?.length > 0
-            ? { _warning: "Image skipped — must be a public HTTPS URL." }
-            : {}),
+          ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
         });
       }
     }
 
-    // Return a useful error including the full Publer response for debugging
-    const errMsg = data.errors?.[0] || data.message || data.error || `HTTP ${httpStatus}`;
     return res.status(400).json({
-      error: errMsg,
+      error: extractError(data),
       backend: "publer",
       detail: data,
     });
