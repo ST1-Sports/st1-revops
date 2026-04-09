@@ -54,12 +54,16 @@ function extractError(data) {
 }
 
 function parseSuccess(data, scheduled) {
-  // Publer bulk API returns: { success: true, data: { job_id, status } }
+  // Publer bulk API: { success: true, data: { job_id, status } }
   if (data.success === true) {
     const jobId = data.data?.job_id || data.data?.id;
     return { ok: true, postIds: jobId ? [String(jobId)] : [] };
   }
-  // Fallback shapes from older Publer versions
+  // Publer sometimes returns { job_id: "..." } directly at the top level
+  if (data.job_id) {
+    return { ok: true, postIds: [String(data.job_id)] };
+  }
+  // Older Publer response shapes
   if (data.status === "success" || data.status === "scheduled" || data.id) {
     const posts = data.posts || (data.id ? [data] : []);
     return { ok: true, postIds: posts.map(p => String(p.id)).filter(Boolean) };
