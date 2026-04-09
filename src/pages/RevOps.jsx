@@ -8191,7 +8191,11 @@ function ModSocial() {
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
     setPosting(true);
-    const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00`:null;
+    const tzOff=new Date().getTimezoneOffset(); // e.g. 300 for CDT (UTC-5)
+    const tzSign=tzOff<=0?"+":"-";
+    const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
+    const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
+    const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`:null;
     const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
     dispatch("ADD_SOCIAL_POST",post);
     if(linkedCampId){
