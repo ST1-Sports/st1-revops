@@ -10592,6 +10592,12 @@ function ModSettings() {
                               ))}
                             </div>
                           )}
+                          {publerPosts._rawSample&&(
+                            <div style={{marginTop:8,padding:"6px 8px",background:B.bg,borderRadius:3,fontFamily:"monospace",fontSize:9,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,marginBottom:4}}>RAW PUBLER POST SAMPLE (first result):</div>
+                              {JSON.stringify(publerPosts._rawSample,null,2).slice(0,800)}
+                            </div>
+                          )}
                         </>
                       }
                     </>
