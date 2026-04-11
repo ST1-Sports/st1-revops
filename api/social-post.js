@@ -105,26 +105,47 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── List scheduled posts (debug) ───────────────────────────────────────────
-  // Returns posts Publer has queued so we can confirm they're landing correctly
+  // ── List posts (debug) ────────────────────────────────────────────────────
+  // Queries scheduled + failed so we can see what's landing and why calendar is empty
   if (action === "list-posts") {
     const workspaceId = process.env.PUBLER_WORKSPACE_ID;
     try {
-      const { ok, data } = await publerRequest("/posts?status=scheduled&per_page=10", "GET", null, apiKey, workspaceId);
-      if (!ok) return res.status(400).json({ error: extractError(data), raw: data });
-      const posts = Array.isArray(data) ? data : (data.data || data.posts || []);
-      return res.json({
-        ok: true,
-        count: posts.length,
-        workspaceId,
-        posts: posts.map(p => ({
+      // Query scheduled and failed separately to see full picture
+      const [sched, failed] = await Promise.all([
+        publerRequest("/posts?status=scheduled&per_page=25", "GET", null, apiKey, workspaceId),
+        publerRequest("/posts?status=failed&per_page=10", "GET", null, apiKey, workspaceId),
+      ]);
+
+      const normPosts = (r) => {
+        if (!r.ok) return [];
+        const arr = Array.isArray(r.data) ? r.data : (r.data?.data || r.data?.posts || []);
+        return arr.map(p => ({
           id: p.id,
           text: (p.text || p.content || "").slice(0, 80),
           scheduled_at: p.scheduled_at || p.scheduledAt,
           status: p.status,
-          accounts: (p.accounts || []).map(a => a.name || a.id),
-        })),
-        raw: posts.slice(0, 3),
+          // Full account details so we can spot missing/wrong IDs
+          accounts: (p.accounts || []).map(a => ({
+            id: String(a.id || ""),
+            name: a.name || a.username || a.display_name || "",
+            provider: (a.provider || a.platform || a.type || "").toLowerCase(),
+          })),
+          networks: p.networks ? Object.keys(p.networks) : [],
+          error: p.error || p.error_message || null,
+        }));
+      };
+
+      const schedPosts = normPosts(sched);
+      const failedPosts = normPosts(failed);
+
+      return res.json({
+        ok: true,
+        workspaceId,
+        scheduled: { count: schedPosts.length, posts: schedPosts },
+        failed: { count: failedPosts.length, posts: failedPosts },
+        // Keep top-level count/posts for backwards compat with UI
+        count: schedPosts.length,
+        posts: schedPosts,
       });
     } catch (e) {
       return res.status(500).json({ error: e.message });
