@@ -10469,6 +10469,8 @@ function ModSettings() {
         const [gmailChecking,setGmailChecking]=useState(false);
         const [publerInfo,setPublerInfo]=useState(null);
         const [publerChecking,setPublerChecking]=useState(false);
+        const [publerPosts,setPublerPosts]=useState(null);
+        const [publerPostsLoading,setPublerPostsLoading]=useState(false);
 
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
@@ -10485,6 +10487,14 @@ function ModSettings() {
             setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
           }catch(e){setPublerInfo({error:e.message});}
           setPublerChecking(false);
+        };
+        const loadPublerPosts=async()=>{
+          setPublerPostsLoading(true);setPublerPosts(null);
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list-posts"})}).then(r=>r.json());
+            setPublerPosts(d);
+          }catch(e){setPublerPosts({error:e.message});}
+          setPublerPostsLoading(false);
         };
 
         useEffect(()=>{checkGmail();checkPubler();},[]);
@@ -10526,7 +10536,10 @@ function ModSettings() {
             <div style={{marginBottom:failedPosts.length>0?14:0}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>PUBLER (social media posting)</div>
-                <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Check Queue"}</button>
+                  <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+                </div>
               </div>
               {publerInfo&&(
                 publerInfo.error
@@ -10539,6 +10552,25 @@ function ModSettings() {
                   </div>
               )}
               {!publerInfo&&!publerChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+              {publerPosts&&(
+                <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
+                  {publerPosts.error
+                    ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Error: {publerPosts.error}</div>
+                    :<>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>PUBLER SCHEDULED QUEUE — {publerPosts.count} POST{publerPosts.count!==1?"S":""} (workspace: {publerPosts.workspaceId})</div>
+                      {publerPosts.count===0
+                        ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No scheduled posts found in this workspace. If you just posted, the posts may be in a different workspace — check PUBLER_WORKSPACE_ID in Vercel.</div>
+                        :(publerPosts.posts||[]).map((p,i)=>(
+                          <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
+                            <span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
+                            {(p.accounts||[]).join(", ")} — {p.text}
+                          </div>
+                        ))
+                      }
+                    </>
+                  }
+                </div>
+              )}
             </div>
 
             {/* Failed posts */}
