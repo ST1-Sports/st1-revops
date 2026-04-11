@@ -177,12 +177,16 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Resolve scheduling time — must be at least 2 min in the future
-  let scheduledAt = null;
+  // Always schedule via /posts/schedule so posts appear in Publer's calendar.
+  // For "immediate" posts (no scheduleDate), queue 2 min from now so the user
+  // can see and cancel in Publer before it fires.
+  const TWO_MIN = new Date(Date.now() + 2 * 60 * 1000);
+  let scheduledAt;
   if (scheduleDate) {
     const t = new Date(scheduleDate);
-    const minAllowed = new Date(Date.now() + 2 * 60 * 1000);
-    scheduledAt = (t > minAllowed ? t : minAllowed).toISOString();
+    scheduledAt = (t > TWO_MIN ? t : TWO_MIN).toISOString();
+  } else {
+    scheduledAt = TWO_MIN.toISOString();
   }
 
   // Build one post object per platform so each succeeds/fails independently.
@@ -231,20 +235,24 @@ export default async function handler(req, res) {
   // Publer v1 bulk payload — one post object per platform for independent handling
   const payload = { bulk: { state: "scheduled", posts } };
 
-  // Immediate = /posts/schedule/publish, Scheduled = /posts/schedule
-  const endpoint = scheduledAt ? "/posts/schedule" : "/posts/schedule/publish";
+  // Always use /posts/schedule so posts appear in Publer's calendar.
+  // "Immediate" posts are queued 2 min from now instead of firing blindly.
+  const endpoint = "/posts/schedule";
 
   try {
     const { ok, status: httpStatus, data } = await publerRequest(endpoint, "POST", payload, apiKey, workspaceId);
 
     if (ok) {
-      const parsed = parseSuccess(data, !!scheduledAt);
+      const parsed = parseSuccess(data, true);
       if (parsed) {
+        const userScheduled = !!scheduleDate;
         return res.json({
-          status: scheduledAt ? "scheduled" : "success",
+          status: "scheduled",
           backend: "publer",
           postIds: parsed.postIds,
-          scheduled: !!scheduledAt,
+          scheduled: true,
+          scheduledAt,
+          _userScheduled: userScheduled,
           ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
           ...(missingAccounts.length ? { _missing: `No account ID configured for: ${missingAccounts.join(", ")} — add to Vercel env vars.` } : {}),
         });
