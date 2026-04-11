@@ -84,23 +84,47 @@ export default async function handler(req, res) {
   const { post, platforms, mediaUrls, scheduleDate, isStory, link, action, jobId } = req.body || {};
 
   // ── Check job status ───────────────────────────────────────────────────────
-  // Called after posting to find out if the async Publer job succeeded or failed
   if (action === "job-status") {
     if (!jobId) return res.status(400).json({ error: "jobId required" });
     const workspaceId = process.env.PUBLER_WORKSPACE_ID;
     try {
       const { ok, data } = await publerRequest(`/job_status/${jobId}`, "GET", null, apiKey, workspaceId);
-      // data.payload.failures = [{account_id, account_name, provider, message}]
       const failures = data.payload?.failures;
       const failureList = Array.isArray(failures)
         ? failures.map(f => `${f.account_name || f.provider}: ${f.message}`)
         : failures?.error ? [failures.error] : [];
       return res.json({
         ok,
-        status: data.status,        // "working" | "complete" | "failed"
+        status: data.status,
         done: data.status === "complete" || data.status === "failed",
         failures: failureList,
         raw: data,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // ── List scheduled posts (debug) ───────────────────────────────────────────
+  // Returns posts Publer has queued so we can confirm they're landing correctly
+  if (action === "list-posts") {
+    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    try {
+      const { ok, data } = await publerRequest("/posts?status=scheduled&per_page=10", "GET", null, apiKey, workspaceId);
+      if (!ok) return res.status(400).json({ error: extractError(data), raw: data });
+      const posts = Array.isArray(data) ? data : (data.data || data.posts || []);
+      return res.json({
+        ok: true,
+        count: posts.length,
+        workspaceId,
+        posts: posts.map(p => ({
+          id: p.id,
+          text: (p.text || p.content || "").slice(0, 80),
+          scheduled_at: p.scheduled_at || p.scheduledAt,
+          status: p.status,
+          accounts: (p.accounts || []).map(a => a.name || a.id),
+        })),
+        raw: posts.slice(0, 3),
       });
     } catch (e) {
       return res.status(500).json({ error: e.message });
