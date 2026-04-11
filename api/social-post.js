@@ -117,9 +117,12 @@ export default async function handler(req, res) {
       ]);
 
       const normAccts = (raw) => {
-        // Publer may return accounts under different field names
-        const arr = raw.accounts || raw.social_accounts || raw.profiles || raw.account_ids || [];
-        if (!Array.isArray(arr)) return [];
+        // Publer returns account_id (singular string) per post, not an accounts array
+        const singularId = raw.account_id;
+        if (singularId) return [{ id: String(singularId), name: "", provider: "" }];
+        // Fallback: check array variants just in case
+        const arr = raw.accounts || raw.social_accounts || raw.profiles || [];
+        if (!Array.isArray(arr) || !arr.length) return [];
         return arr.map(a => {
           if (typeof a === "string" || typeof a === "number") return { id: String(a), name: "", provider: "" };
           return {
@@ -251,8 +254,12 @@ export default async function handler(req, res) {
   }
 
   // Build one post object per platform so each succeeds/fails independently.
-  // Instagram requires media; use type="photo" when media present, "status" otherwise.
-  // Publer bulk API: accounts = plain array of ID strings, scheduled_at at post level (not in accounts).
+  // Publer per-post fields (from API introspection):
+  //   account_id    — singular string ID (NOT accounts:[])
+  //   state         — "scheduled" per-post (bulk.state wrapper is ignored)
+  //   scheduled_at  — ISO datetime at post level
+  //   type          — "photo" / "status" / "story" at post level
+  //   networks      — platform-specific options (media etc.) keyed by platform name
   const missingAccounts = [];
   const posts = [];
   for (const platform of activePlatforms) {
@@ -260,15 +267,16 @@ export default async function handler(req, res) {
     if (!accountId) { missingAccounts.push(platform); continue; }
     const contentType = isStory ? "story" : (hasMedia || platform === "instagram") ? "photo" : "status";
     posts.push({
+      account_id: String(accountId),
       text: postText,
       scheduled_at: scheduledAt,
-      accounts: [String(accountId)],
-      networks: {
-        [platform]: {
-          type: contentType,
-          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+      state: "scheduled",
+      type: contentType,
+      ...(hasMedia ? {
+        networks: {
+          [platform]: { media: publicMediaUrls.map(url => ({ url })) },
         },
-      },
+      } : {}),
     });
   }
 
@@ -276,17 +284,21 @@ export default async function handler(req, res) {
   if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
     const platform = activePlatforms[0] || "facebook";
-    posts.push({
-      text: postText,
-      scheduled_at: scheduledAt,
-      accounts: fallbackIds,
-      networks: {
-        [platform]: {
-          type: isStory ? "story" : hasMedia ? "photo" : "status",
-          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
-        },
-      },
-    });
+    const contentType = isStory ? "story" : hasMedia ? "photo" : "status";
+    for (const id of fallbackIds) {
+      posts.push({
+        account_id: id,
+        text: postText,
+        scheduled_at: scheduledAt,
+        state: "scheduled",
+        type: contentType,
+        ...(hasMedia ? {
+          networks: {
+            [platform]: { media: publicMediaUrls.map(url => ({ url })) },
+          },
+        } : {}),
+      });
+    }
   }
 
   if (!posts.length) {
@@ -296,8 +308,8 @@ export default async function handler(req, res) {
     });
   }
 
-  // Publer v1 bulk payload — one post object per platform for independent handling
-  const payload = { bulk: { state: "scheduled", posts } };
+  // Publer v1 bulk payload — state/account_id/scheduled_at are per-post (not at bulk level)
+  const payload = { bulk: { posts } };
 
   // Always use /posts/schedule so posts appear in Publer's calendar.
   // "Immediate" posts are queued 2 min from now instead of firing blindly.
