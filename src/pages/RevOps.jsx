@@ -10557,15 +10557,42 @@ function ModSettings() {
                   {publerPosts.error
                     ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Error: {publerPosts.error}</div>
                     :<>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>PUBLER SCHEDULED QUEUE — {publerPosts.count} POST{publerPosts.count!==1?"S":""} (workspace: {publerPosts.workspaceId})</div>
-                      {publerPosts.count===0
-                        ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No scheduled posts found in this workspace. If you just posted, the posts may be in a different workspace — check PUBLER_WORKSPACE_ID in Vercel.</div>
-                        :(publerPosts.posts||[]).map((p,i)=>(
-                          <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
-                            {(p.accounts||[]).join(", ")} — {p.text}
-                          </div>
-                        ))
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>
+                        PUBLER QUEUE — {publerPosts.scheduled?.count||publerPosts.count||0} SCHEDULED
+                        {(publerPosts.failed?.count||0)>0&&<span style={{color:B.red,marginLeft:8}}>{publerPosts.failed.count} FAILED</span>}
+                        <span style={{marginLeft:8,opacity:.6}}>(workspace: {publerPosts.workspaceId})</span>
+                      </div>
+                      {(publerPosts.count===0&&(publerPosts.failed?.count||0)===0)
+                        ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No posts found. Check PUBLER_WORKSPACE_ID in Vercel matches what you see in Publer's dashboard URL.</div>
+                        :<>
+                          {(publerPosts.posts||[]).map((p,i)=>{
+                            const accts=(p.accounts||[]);
+                            const noAcct=accts.length===0;
+                            return(
+                              <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
+                                <span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
+                                {noAcct
+                                  ?<span style={{color:B.red,marginRight:6,fontWeight:600}}>⚠ NO ACCOUNT</span>
+                                  :<span style={{color:"#4ade80",marginRight:6}}>{accts.map(a=>a.name||a.id).join(", ")}</span>
+                                }
+                                <span style={{color:B.muted}}>({(p.networks||[]).join("/")})</span>
+                                {" — "}{p.text}
+                              </div>
+                            );
+                          })}
+                          {(publerPosts.failed?.posts||[]).length>0&&(
+                            <div style={{marginTop:8}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:.5,marginBottom:4}}>FAILED POSTS</div>
+                              {publerPosts.failed.posts.map((p,i)=>(
+                                <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
+                                  <span style={{color:B.muted,marginRight:8}}>{p.scheduled_at?.slice(0,16)?.replace("T"," ")}</span>
+                                  <span style={{color:B.red,marginRight:6}}>{p.error||"failed"}</span>
+                                  {" — "}{p.text}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </>
                       }
                     </>
                   }
