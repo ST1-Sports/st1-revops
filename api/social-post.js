@@ -116,6 +116,20 @@ export default async function handler(req, res) {
         publerRequest("/posts?status=failed&per_page=10", "GET", null, apiKey, workspaceId),
       ]);
 
+      const normAccts = (raw) => {
+        // Publer may return accounts under different field names
+        const arr = raw.accounts || raw.social_accounts || raw.profiles || raw.account_ids || [];
+        if (!Array.isArray(arr)) return [];
+        return arr.map(a => {
+          if (typeof a === "string" || typeof a === "number") return { id: String(a), name: "", provider: "" };
+          return {
+            id: String(a.id || a.account_id || ""),
+            name: a.name || a.username || a.display_name || "",
+            provider: (a.provider || a.platform || a.service || a.type || "").toLowerCase(),
+          };
+        });
+      };
+
       const normPosts = (r) => {
         if (!r.ok) return [];
         const arr = Array.isArray(r.data) ? r.data : (r.data?.data || r.data?.posts || []);
@@ -124,12 +138,7 @@ export default async function handler(req, res) {
           text: (p.text || p.content || "").slice(0, 80),
           scheduled_at: p.scheduled_at || p.scheduledAt,
           status: p.status,
-          // Full account details so we can spot missing/wrong IDs
-          accounts: (p.accounts || []).map(a => ({
-            id: String(a.id || ""),
-            name: a.name || a.username || a.display_name || "",
-            provider: (a.provider || a.platform || a.type || "").toLowerCase(),
-          })),
+          accounts: normAccts(p),
           networks: p.networks ? Object.keys(p.networks) : [],
           error: p.error || p.error_message || null,
         }));
@@ -137,6 +146,11 @@ export default async function handler(req, res) {
 
       const schedPosts = normPosts(sched);
       const failedPosts = normPosts(failed);
+      // Include raw first post so we can see the actual Publer response structure
+      const rawFirstPost = (() => {
+        const arr = Array.isArray(sched.data) ? sched.data : (sched.data?.data || sched.data?.posts || []);
+        return arr[0] || null;
+      })();
 
       return res.json({
         ok: true,
@@ -146,6 +160,8 @@ export default async function handler(req, res) {
         // Keep top-level count/posts for backwards compat with UI
         count: schedPosts.length,
         posts: schedPosts,
+        // Raw first post from Publer so we can see the actual field names
+        _rawSample: rawFirstPost,
       });
     } catch (e) {
       return res.status(500).json({ error: e.message });
@@ -236,6 +252,7 @@ export default async function handler(req, res) {
 
   // Build one post object per platform so each succeeds/fails independently.
   // Instagram requires media; use type="photo" when media present, "status" otherwise.
+  // Publer bulk API: accounts = plain array of ID strings, scheduled_at at post level (not in accounts).
   const missingAccounts = [];
   const posts = [];
   for (const platform of activePlatforms) {
@@ -243,14 +260,15 @@ export default async function handler(req, res) {
     if (!accountId) { missingAccounts.push(platform); continue; }
     const contentType = isStory ? "story" : (hasMedia || platform === "instagram") ? "photo" : "status";
     posts.push({
+      text: postText,
+      scheduled_at: scheduledAt,
+      accounts: [String(accountId)],
       networks: {
         [platform]: {
           type: contentType,
-          text: postText,
           ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
         },
       },
-      accounts: [{ id: String(accountId), ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) }],
     });
   }
 
@@ -259,14 +277,15 @@ export default async function handler(req, res) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
     const platform = activePlatforms[0] || "facebook";
     posts.push({
+      text: postText,
+      scheduled_at: scheduledAt,
+      accounts: fallbackIds,
       networks: {
         [platform]: {
           type: isStory ? "story" : hasMedia ? "photo" : "status",
-          text: postText,
           ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
         },
       },
-      accounts: fallbackIds.map(id => ({ id, ...(scheduledAt ? { scheduled_at: scheduledAt } : {}) })),
     });
   }
 
