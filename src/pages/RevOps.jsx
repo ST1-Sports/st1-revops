@@ -8174,9 +8174,8 @@ function ModSocial() {
             dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"local_only",publerError:msg});
             toast(`Publer failed: ${msg}`,"error");
           }else{
-            const finalStatus=isScheduled?"scheduled":"published";
-            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:finalStatus,publerError:null});
-            toast(isScheduled?"Scheduled in Publer!":"Published to Publer!","success");
+            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"scheduled",publerError:null});
+            toast(isScheduled?"Scheduled in Publer — check your calendar!":"Queued in Publer — posts in ~2 min, check your calendar!","success");
           }
           return;
         }
