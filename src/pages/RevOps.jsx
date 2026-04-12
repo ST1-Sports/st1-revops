@@ -8116,6 +8116,8 @@ function ModSocial() {
   const [linkedCampId,setLinkedCampId]=useState("");
   const [posting,setPosting]=useState(false);
   const [genRunning,setGenRunning]=useState(false);
+  const [editingPostId,setEditingPostId]=useState(null);
+  const [editDraft,setEditDraft]=useState({});
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
@@ -8189,6 +8191,14 @@ function ModSocial() {
   const submitPost=async()=>{
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
+    if(scheduleAt){
+      const tzOff=new Date().getTimezoneOffset();
+      const tzSign=tzOff<=0?"+":"-";
+      const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
+      const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
+      const chosen=new Date(`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`);
+      if(chosen<=new Date()){toast("Scheduled time must be in the future","error");return;}
+    }
     setPosting(true);
     const tzOff=new Date().getTimezoneOffset(); // e.g. 300 for CDT (UTC-5)
     const tzSign=tzOff<=0?"+":"-";
@@ -8355,26 +8365,62 @@ function ModSocial() {
                     }
                   }catch(e){toast("Publer unreachable: "+e.message,"error");}
                 };
+                const isEditing=editingPostId===p.id;
+                const saveEdit=async()=>{
+                  if(!editDraft.caption?.trim()){toast("Caption required","error");return;}
+                  if(editDraft.scheduleAt){
+                    const tzOff=new Date().getTimezoneOffset();
+                    const tzSign=tzOff<=0?"+":"-";
+                    const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
+                    const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
+                    const chosen=new Date(`${editDraft.scheduleAt}T${editDraft.scheduleTime||"09:00"}:00${tzSign}${tzH}:${tzM}`);
+                    if(chosen<=new Date()){toast("Scheduled time must be in the future","error");return;}
+                  }
+                  dispatch("UPDATE_SOCIAL_POST",{id:p.id,caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
+                  setEditingPostId(null);
+                  toast("Post updated — click Retry to re-send to Publer","info");
+                };
                 return(
-                  <div key={p.id} className="card" style={{padding:"12px 16px",display:"flex",gap:12,alignItems:"flex-start",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
-                    {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
-                        {(p.platforms||[]).map(pl=>(
-                          <span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
-                        ))}
-                        <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{isLocalOnly?"⚠ PUBLER FAILED":(p.status||"draft").toUpperCase()}</span>
-                        {p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
-                        {p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
-                        {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
-                        {isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
-                        {!isLocalOnly&&p.status!=="draft"&&<button onClick={retryPost} style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RESEND</button>}
+                  <div key={p.id} className="card" style={{padding:"12px 16px",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
+                    <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+                      {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
+                          {(p.platforms||[]).map(pl=>(
+                            <span key={pl} style={{background:PLATFORM_COLORS[pl]||B.purple,color:"#fff",borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>{pl.toUpperCase()}</span>
+                          ))}
+                          <span style={{background:`${sc}14`,color:sc,border:`1px solid ${sc}30`,borderRadius:3,padding:"1px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5}}>{isLocalOnly?"⚠ PUBLER FAILED":(p.status||"draft").toUpperCase()}</span>
+                          {p.date&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.date}{p.time?` @ ${p.time}`:""}</span>}
+                          {p._campaignName&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"1px 6px",borderRadius:3}}>📣 {p._campaignName}</span>}
+                          {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
+                          {isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
+                          {!isLocalOnly&&p.status!=="draft"&&<button onClick={retryPost} style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RESEND</button>}
+                        </div>
+                        {isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
+                        {!isEditing&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>}
                       </div>
-                      {isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>
+                      <div style={{display:"flex",gap:4,flexShrink:0}}>
+                        <button onClick={()=>{if(isEditing){setEditingPostId(null);}else{setEditingPostId(p.id);setEditDraft({caption:p.caption||"",platforms:p.platforms||[],scheduleAt:p.date||"",scheduleTime:p.time||"09:00"});}}} style={{background:isEditing?"none":B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{isEditing?"✕":"EDIT"}</button>
+                        {p._source==="standalone"&&(
+                          <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
+                        )}
+                      </div>
                     </div>
-                    {p._source==="standalone"&&(
-                      <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer",flexShrink:0}}>✕</button>
+                    {isEditing&&(
+                      <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${B.border}`}}>
+                        <textarea value={editDraft.caption} onChange={e=>setEditDraft(d=>({...d,caption:e.target.value}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6,marginBottom:8}}/>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE</div>
+                            <input type="date" value={editDraft.scheduleAt} min={today()} onChange={e=>setEditDraft(d=>({...d,scheduleAt:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>
+                            <input type="time" value={editDraft.scheduleTime} onChange={e=>setEditDraft(d=>({...d,scheduleTime:e.target.value}))} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                          </div>
+                        </div>
+                        <button onClick={saveEdit} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"7px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",fontWeight:700}}>SAVE CHANGES</button>
+                      </div>
                     )}
                   </div>
                 );
@@ -8451,7 +8497,7 @@ function ModSocial() {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE (blank = post now)</div>
-                  <input type="date" value={scheduleAt} onChange={e=>setScheduleAt(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+                  <input type="date" value={scheduleAt} min={today()} onChange={e=>setScheduleAt(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
                 </div>
                 <div>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>

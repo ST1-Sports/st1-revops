@@ -270,7 +270,6 @@ export default async function handler(req, res) {
       account_id: String(accountId),
       text: postText,
       scheduled_at: scheduledAt,
-      state: "scheduled",
       type: contentType,
       ...(hasMedia ? {
         networks: {
@@ -290,7 +289,6 @@ export default async function handler(req, res) {
         account_id: id,
         text: postText,
         scheduled_at: scheduledAt,
-        state: "scheduled",
         type: contentType,
         ...(hasMedia ? {
           networks: {
