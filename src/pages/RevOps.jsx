@@ -134,18 +134,30 @@ function useStore() {
     return SEED;
   });
 
-  // On mount: pull latest state from server (cross-device sync)
+  // On mount: sync with server (bidirectional)
+  // - If server has data: merge it in (server wins on conflicts)
+  // - If server is empty: push local data up so other devices can see it
+  // - Always push merged result back so server stays current
   useEffect(() => {
     fetch("/api/state")
       .then(r => r.json())
       .then(d => {
-        if (d.state && typeof d.state === "object") {
-          setRaw(prev => {
-            const merged = mergeServerState(prev, d.state);
-            try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
-            return merged;
-          });
-        }
+        setRaw(prev => {
+          const {currentUserId: _cid, ...localData} = prev;
+          let merged;
+          if (d.state && typeof d.state === "object") {
+            merged = mergeServerState(prev, d.state);
+          } else {
+            // Server empty — use local state as-is, then push it up
+            merged = prev;
+          }
+          try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
+          // Always push merged state to server so all devices stay in sync
+          const {currentUserId: _cid2, ...toSync} = merged;
+          fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({state: toSync})}).catch(()=>{});
+          return merged;
+        });
       })
       .catch(() => {}); // graceful fallback to localStorage
   }, []);
@@ -395,7 +407,16 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const dispatch = useCallback((action, payload) => {
-    set(prev => reducer(prev, action, payload));
+    set(prev => {
+      const next = reducer(prev, action, payload);
+      // On logout: immediately flush data to server so other devices see it
+      if (action === "LOGOUT") {
+        const {currentUserId: _cid, ...toSync} = next;
+        fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({state: toSync})}).catch(()=>{});
+      }
+      return next;
+    });
   }, [set]);
 
   const toast = useCallback((msg, type="info") => {
@@ -586,7 +607,7 @@ export default function App() {
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cu.name}</div>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:6,color:B.muted,letterSpacing:1}}>{cu.role.toUpperCase()}</div>
             </div>
-            <button onClick={()=>dispatch("LOGOUT")} style={{background:"none",border:"none",color:B.muted,fontSize:11,lineHeight:1}}>⏻</button>
+            <button onClick={()=>dispatch("LOGOUT")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>LOG OUT</button>
           </div>}
           {cu&&slim&&<div style={{padding:"8px 0",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"center"}}>
             <div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}} onClick={()=>dispatch("LOGOUT")}>
