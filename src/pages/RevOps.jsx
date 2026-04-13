@@ -425,7 +425,12 @@ export default function App() {
     setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 4000);
   }, []);
 
-  const cu = USERS.find(u=>u.id===s.currentUserId);
+  const cu = (() => {
+    const rep = (s.reps||[]).find(r=>r.id===s.currentUserId);
+    if (!rep) return null;
+    const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+    return { ...rep, initials, color: B.blue, role: rep.title || "rep" };
+  })();
   const crmSyncRef = useRef(null);
   const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef};
   useEffect(()=>{
