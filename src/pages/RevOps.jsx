@@ -319,6 +319,8 @@ function reducer(prev, action, payload) {
     case "ADD_TEMPLATE":        return {...prev, templates:[payload,...(prev.templates||[])]};
     case "UPDATE_TEMPLATE":     return {...prev, templates:(prev.templates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
     case "DEL_TEMPLATE":        return {...prev, templates:(prev.templates||[]).filter(t=>t.id!==payload)};
+    case "ADD_CONTACT_LIST":    return {...prev, contactLists:[payload,...(prev.contactLists||[])]};
+    case "DEL_CONTACT_LIST":    return {...prev, contactLists:(prev.contactLists||[]).filter(l=>l.id!==payload)};
     case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
     case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
@@ -3168,9 +3170,11 @@ function ModProspecting() {
   const [zohoPullResult, setZohoPullResult] = useState(null);
 
   // Import-list state
-  const [importPhase,setImportPhase] = useState("idle"); // idle|parsing|preview
-  const [importRows,setImportRows]   = useState([]);
-  const [importSel,setImportSel]     = useState(new Set());
+  const [importPhase,setImportPhase]     = useState("idle"); // idle|parsing|preview
+  const [importRows,setImportRows]       = useState([]);
+  const [importSel,setImportSel]         = useState(new Set());
+  const [importListName,setImportListName] = useState("");
+  const [expandedListId,setExpandedListId] = useState(null);
   const [enrollingContact,setEnrollingContact] = useState(null);
   const [flaggingContact,setFlaggingContact] = useState(null);
   const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
@@ -3507,6 +3511,8 @@ function ModProspecting() {
   const handleListUpload=async(e)=>{
     const file=e.target.files[0];
     if(!file)return;
+    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+    setImportListName(autoName);
     e.target.value="";
     setImportPhase("parsing");setImportRows([]);
     try {
@@ -3552,6 +3558,8 @@ function ModProspecting() {
   const handleApolloUpload=async(e)=>{
     const file=e.target.files[0];
     if(!file)return;
+    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+    setImportListName(autoName);
     e.target.value="";
     setImportPhase("parsing");setImportRows([]);
     try {
@@ -3603,8 +3611,13 @@ function ModProspecting() {
     const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
     const dupes=selected.length-toAdd.length;
     dispatch("ADD_CONTACTS",toAdd);
-    toast(`Imported ${toAdd.length} contacts${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
-    setImportPhase("idle");setImportRows([]);setImportSel(new Set());
+    // Save as a named contact list for easy campaign use
+    const listName=(importListName||"Imported List").trim();
+    const newList={id:mkId(),name:listName,contactIds:toAdd.map(c=>c.id),createdAt:Date.now(),source:"import"};
+    dispatch("ADD_CONTACT_LIST",newList);
+    toast(`Imported ${toAdd.length} contacts → saved as list "${listName}"${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
+    setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");
+    setView("lists"); // jump straight to the lists view
     if(pushZoho&&toAdd.length>0){
       await pushToZohoLeads(toAdd);
     }
@@ -3613,7 +3626,7 @@ function ModProspecting() {
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
   const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 
-  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`]];
+  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -3774,12 +3787,16 @@ function ModProspecting() {
           {/* Preview table */}
           {importPhase==="preview"&&importRows.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{importRows.length} contacts ready · {importSel.size} selected</div>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:10,gap:12,flexWrap:"wrap"}}>
+                <div style={{flex:1,minWidth:200}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME</div>
+                  <input value={importListName} onChange={e=>setImportListName(e.target.value)} placeholder="e.g. Track Coaches Spring 2025" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts · {importSel.size} selected</div>
                   <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ IMPORT {importSel.size}</OBtn>
-                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ IMPORT + PUSH TO ZOHO</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0||!importListName.trim()}>⊕ SAVE LIST ({importSel.size})</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||!importListName.trim()||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ SAVE + PUSH ZOHO</OBtn>
                 </div>
               </div>
               <div style={{overflowX:"auto"}}>
@@ -4201,6 +4218,76 @@ function ModProspecting() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {view==="lists"&&(
+        <div>
+          {(s.contactLists||[]).length===0?(
+            <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+              No lists yet — upload a CSV and give it a name to save it as a list
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {(s.contactLists||[]).map(list=>{
+                const listContacts=(list.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean);
+                const isOpen=expandedListId===list.id;
+                return (
+                  <div key={list.id} className="card" style={{padding:0,overflow:"hidden"}}>
+                    {/* List header row */}
+                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
+                      <div style={{flex:1}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                          {listContacts.length} contacts · imported {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}
+                        </div>
+                      </div>
+                      <OBtn sm onClick={e=>{e.stopPropagation();setMod("campaigns");}} style={{background:B.orange,borderColor:B.orange,flexShrink:0}}>USE IN CAMPAIGN →</OBtn>
+                      <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete list "${list.name}"? Contacts stay in the database.`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 6px",flexShrink:0}} title="Delete list">×</button>
+                      <span style={{color:B.muted,fontSize:12,flexShrink:0}}>{isOpen?"▲":"▼"}</span>
+                    </div>
+                    {/* Expanded contact preview */}
+                    {isOpen&&(
+                      <div style={{borderTop:`1px solid ${B.border}`}}>
+                        <div style={{overflowX:"auto",maxHeight:340,overflowY:"auto"}}>
+                          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                            <thead style={{position:"sticky",top:0,background:B.white,zIndex:1}}>
+                              <tr style={{borderBottom:`1px solid ${B.border}`}}>
+                                {["Name","Title / Org","Email","Sport","State","Priority"].map(h=>(
+                                  <th key={h} style={{padding:"7px 12px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {listContacts.map(c=>(
+                                <tr key={c.id} style={{borderBottom:`1px solid ${B.border}`}}>
+                                  <td style={{padding:"6px 12px",whiteSpace:"nowrap"}}>
+                                    <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
+                                  </td>
+                                  <td style={{padding:"6px 12px"}}>
+                                    <div style={{color:B.text}}>{c.title||"—"}</div>
+                                    <div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
+                                  </td>
+                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.email||"—"}</td>
+                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.sport||"—"}</td>
+                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.state||"—"}</td>
+                                  <td style={{padding:"6px 12px"}}>
+                                    <span style={{background:c.priority==="high"?`${B.green}20`:c.priority==="medium"?`${B.orange}20`:`${B.border}`,color:c.priority==="high"?B.green:c.priority==="medium"?B.orange:B.muted,borderRadius:3,padding:"2px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>
+                                      {(c.priority||"low").toUpperCase()}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
