@@ -320,6 +320,7 @@ function reducer(prev, action, payload) {
     case "UPDATE_TEMPLATE":     return {...prev, templates:(prev.templates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
     case "DEL_TEMPLATE":        return {...prev, templates:(prev.templates||[]).filter(t=>t.id!==payload)};
     case "ADD_CONTACT_LIST":    return {...prev, contactLists:[payload,...(prev.contactLists||[])]};
+    case "UPDATE_CONTACT_LIST": return {...prev, contactLists:(prev.contactLists||[]).map(l=>l.id===payload.id?{...l,...payload}:l)};
     case "DEL_CONTACT_LIST":    return {...prev, contactLists:(prev.contactLists||[]).filter(l=>l.id!==payload)};
     case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
     case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
@@ -606,20 +607,21 @@ export default function App() {
             })}
           </nav>
 
-          {cu&&!slim&&<div style={{padding:"9px 11px",borderTop:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:7}}>
-            <div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          {s.currentUserId&&!slim&&<div style={{padding:"9px 11px",borderTop:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:7}}>
+            {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
-            </div>
+            </div>}
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cu.name}</div>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:6,color:B.muted,letterSpacing:1}}>{cu.role.toUpperCase()}</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cu?.name||s.currentUserId}</div>
+              {cu&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:6,color:B.muted,letterSpacing:1}}>{(cu.role||"").toUpperCase()}</div>}
             </div>
             <button onClick={()=>dispatch("LOGOUT")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>LOG OUT</button>
           </div>}
-          {cu&&slim&&<div style={{padding:"8px 0",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"center"}}>
-            <div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}} onClick={()=>dispatch("LOGOUT")}>
+          {s.currentUserId&&slim&&<div style={{padding:"8px 0",borderTop:`1px solid ${B.border}`,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+            {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
               <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
-            </div>
+            </div>}
+            <button onClick={()=>dispatch("LOGOUT")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
           </div>}
         </aside>
 
@@ -3173,8 +3175,12 @@ function ModProspecting() {
   const [importPhase,setImportPhase]     = useState("idle"); // idle|parsing|preview
   const [importRows,setImportRows]       = useState([]);
   const [importSel,setImportSel]         = useState(new Set());
-  const [importListName,setImportListName] = useState("");
-  const [expandedListId,setExpandedListId] = useState(null);
+  const [importListName,setImportListName]   = useState("");
+  const [expandedListId,setExpandedListId]   = useState(null);
+  const [renamingListId,setRenamingListId]   = useState(null);
+  const [renameValue,setRenameValue]         = useState("");
+  const [addingToListId,setAddingToListId]   = useState(null);
+  const [listContactSearch,setListContactSearch] = useState("");
   const [enrollingContact,setEnrollingContact] = useState(null);
   const [flaggingContact,setFlaggingContact] = useState(null);
   const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
@@ -3795,8 +3801,8 @@ function ModProspecting() {
                 <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts · {importSel.size} selected</div>
                   <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0||!importListName.trim()}>⊕ SAVE LIST ({importSel.size})</OBtn>
-                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||!importListName.trim()||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ SAVE + PUSH ZOHO</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ SAVE LIST ({importSel.size})</OBtn>
+                  <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ SAVE + PUSH ZOHO</OBtn>
                 </div>
               </div>
               <div style={{overflowX:"auto"}}>
@@ -4225,62 +4231,122 @@ function ModProspecting() {
         <div>
           {(s.contactLists||[]).length===0?(
             <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-              No lists yet — upload a CSV and give it a name to save it as a list
+              No lists yet — upload a CSV in the CONTACT DB tab to create your first list
             </div>
           ):(
-            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
               {(s.contactLists||[]).map(list=>{
                 const listContacts=(list.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean);
                 const isOpen=expandedListId===list.id;
+                const isRenaming=renamingListId===list.id;
+                const isAdding=addingToListId===list.id;
+                // contacts not yet in this list, filtered by search
+                const listIds=new Set(list.contactIds||[]);
+                const addableSq=(listContactSearch||"").toLowerCase();
+                const addable=(s.contacts||[]).filter(c=>!listIds.has(c.id)&&(
+                  !addableSq||[c.fullName,c.firstName,c.lastName,c.email,c.school,c.title,c.sport,c.state].some(v=>v&&v.toLowerCase().includes(addableSq))
+                )).slice(0,50);
                 return (
-                  <div key={list.id} className="card" style={{padding:0,overflow:"hidden"}}>
-                    {/* List header row */}
-                    <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
-                      <div style={{flex:1}}>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
-                          {listContacts.length} contacts · imported {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}
+                  <div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
+                    {/* Header */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px"}}>
+                      {isRenaming?(
+                        <input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
+                          onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
+                          style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
+                      ):(
+                        <div style={{flex:1,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>
+                            {listContacts.length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}
+                            {isOpen?" · click to collapse":""}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                        {isRenaming?(
+                          <>
+                            <OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn>
+                            <button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button>
+                          </>
+                        ):(
+                          <>
+                            <button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
+                            <button onClick={()=>{setAddingToListId(isAdding?null:list.id);setListContactSearch("");setExpandedListId(list.id);}} style={{background:isAdding?B.orange:"none",border:`1px solid ${isAdding?B.orange:B.border}`,color:isAdding?B.white:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>+ ADD CONTACTS</button>
+                            <OBtn sm onClick={()=>setMod("campaigns")} style={{background:B.orange,borderColor:B.orange}}>USE IN CAMPAIGN →</OBtn>
+                            <button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?\nContacts stay in the database.`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}} title="Delete list">×</button>
+                            <span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Add contacts panel */}
+                    {isAdding&&(
+                      <div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",background:`${B.orange}08`}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>ADD FROM CONTACT DATABASE</div>
+                        <input value={listContactSearch} onChange={e=>setListContactSearch(e.target.value)}
+                          placeholder="Search by name, email, school, sport, state…"
+                          style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:8}}/>
+                        {addable.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No matching contacts found outside this list.</div>}
+                        <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
+                          {addable.map(c=>(
+                            <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",background:B.white,borderRadius:4,border:`1px solid ${B.border}`}}>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.school,c.email].filter(Boolean).join(" · ")}</div>
+                              </div>
+                              <button onClick={()=>dispatch("UPDATE_CONTACT_LIST",{id:list.id,contactIds:[...(list.contactIds||[]),c.id]})}
+                                style={{background:B.orange,border:"none",color:B.white,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:4,cursor:"pointer",flexShrink:0}}>+ ADD</button>
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      <OBtn sm onClick={e=>{e.stopPropagation();setMod("campaigns");}} style={{background:B.orange,borderColor:B.orange,flexShrink:0}}>USE IN CAMPAIGN →</OBtn>
-                      <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete list "${list.name}"? Contacts stay in the database.`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 6px",flexShrink:0}} title="Delete list">×</button>
-                      <span style={{color:B.muted,fontSize:12,flexShrink:0}}>{isOpen?"▲":"▼"}</span>
-                    </div>
-                    {/* Expanded contact preview */}
+                    )}
+
+                    {/* Contact table */}
                     {isOpen&&(
                       <div style={{borderTop:`1px solid ${B.border}`}}>
-                        <div style={{overflowX:"auto",maxHeight:340,overflowY:"auto"}}>
-                          <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-                            <thead style={{position:"sticky",top:0,background:B.white,zIndex:1}}>
-                              <tr style={{borderBottom:`1px solid ${B.border}`}}>
-                                {["Name","Title / Org","Email","Sport","State","Priority"].map(h=>(
-                                  <th key={h} style={{padding:"7px 12px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-                                ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {listContacts.map(c=>(
-                                <tr key={c.id} style={{borderBottom:`1px solid ${B.border}`}}>
-                                  <td style={{padding:"6px 12px",whiteSpace:"nowrap"}}>
-                                    <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
-                                  </td>
-                                  <td style={{padding:"6px 12px"}}>
-                                    <div style={{color:B.text}}>{c.title||"—"}</div>
-                                    <div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
-                                  </td>
-                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.email||"—"}</td>
-                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.sport||"—"}</td>
-                                  <td style={{padding:"6px 12px",color:B.muted}}>{c.state||"—"}</td>
-                                  <td style={{padding:"6px 12px"}}>
-                                    <span style={{background:c.priority==="high"?`${B.green}20`:c.priority==="medium"?`${B.orange}20`:`${B.border}`,color:c.priority==="high"?B.green:c.priority==="medium"?B.orange:B.muted,borderRadius:3,padding:"2px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>
-                                      {(c.priority||"low").toUpperCase()}
-                                    </span>
-                                  </td>
+                        {listContacts.length===0?(
+                          <div style={{padding:"20px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts in this list yet. Use + ADD CONTACTS above.</div>
+                        ):(
+                          <div style={{overflowX:"auto",maxHeight:360,overflowY:"auto"}}>
+                            <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+                              <thead style={{position:"sticky",top:0,background:B.white,zIndex:1}}>
+                                <tr style={{borderBottom:`1px solid ${B.border}`}}>
+                                  {["Name","Title / Org","Email","Sport","State","Priority",""].map(h=>(
+                                    <th key={h} style={{padding:"7px 12px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
+                                  ))}
                                 </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                              </thead>
+                              <tbody>
+                                {listContacts.map(c=>(
+                                  <tr key={c.id} style={{borderBottom:`1px solid ${B.border}`}}>
+                                    <td style={{padding:"6px 12px",whiteSpace:"nowrap"}}>
+                                      <div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
+                                    </td>
+                                    <td style={{padding:"6px 12px"}}>
+                                      <div style={{color:B.text}}>{c.title||"—"}</div>
+                                      <div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
+                                    </td>
+                                    <td style={{padding:"6px 12px",color:B.muted}}>{c.email||"—"}</td>
+                                    <td style={{padding:"6px 12px",color:B.muted}}>{c.sport||"—"}</td>
+                                    <td style={{padding:"6px 12px",color:B.muted}}>{c.state||"—"}</td>
+                                    <td style={{padding:"6px 12px"}}>
+                                      <span style={{background:c.priority==="high"?`${B.green}20`:c.priority==="medium"?`${B.orange}20`:`${B.border}`,color:c.priority==="high"?B.green:c.priority==="medium"?B.orange:B.muted,borderRadius:3,padding:"2px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>
+                                        {(c.priority||"low").toUpperCase()}
+                                      </span>
+                                    </td>
+                                    <td style={{padding:"6px 8px"}}>
+                                      <button onClick={()=>dispatch("UPDATE_CONTACT_LIST",{id:list.id,contactIds:(list.contactIds||[]).filter(id=>id!==c.id)})}
+                                        title="Remove from list" style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13,padding:"0 4px"}}>×</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
