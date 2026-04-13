@@ -5547,6 +5547,51 @@ function ModMarketing() {
     toast(isEditing ? `Campaign updated` : `Campaign created · ${seg.length} contacts enrolled`,"success");
   };
 
+  const saveDraft = () => {
+    if(!campDraft) return;
+    const isEditing = !!campDraft.id;
+    const campId = campDraft.id || mkId();
+    const existingCamp = isEditing ? campaigns.find(c=>c.id===campId) : null;
+    const camp = {
+      ...(existingCamp||{}),
+      id: campId,
+      name: campDraft.name||"Untitled Campaign",
+      product: campDraft.product||"",
+      audience: campDraft.audience||"",
+      tone: campDraft.tone||"",
+      goal: campDraft.goal||"",
+      repId: campDraft.repId||"",
+      startDate: campDraft.startDate||"",
+      endDate: campDraft.endDate||"",
+      touches: campDraft.touches||[],
+      enrollments: existingCamp?.enrollments||[],
+      socialPosts: existingCamp?.socialPosts||[],
+      socialDrafts: campDraft.socialDrafts||[],
+      adCopy: campDraft.adCopy||"",
+      callScript: campDraft.callScript||"",
+      directMail: campDraft.directMail||"",
+      adIds: existingCamp?.adIds||[],
+      channels: campDraft.channels||[],
+      assetTypes: campDraft.assetTypes||[],
+      icp: campDraft.icp||{sports:[],titles:[],schoolLevel:"Both",states:[],buyingSeasonNotes:"",notes:""},
+      planId: campDraft.planId||"",
+      ctx: campDraft.ctx||"",
+      audienceMode: campDraft.audienceMode||"ai",
+      audienceListId: campDraft.audienceListId||"",
+      batchSize: campDraft.batchSize||25,
+      metrics: campDraft.metrics||[],
+      status: "draft",
+      _draftStep: campStep, // remember which step they were on
+      createdAt: existingCamp?.createdAt||today(),
+      color: existingCamp?.color||CAMP_COLORS[campaigns.length % CAMP_COLORS.length],
+    };
+    if(isEditing) dispatch("UPDATE_CAMPAIGN", camp);
+    else dispatch("ADD_CAMPAIGN", camp);
+    // Update draft id so subsequent saves use UPDATE not ADD
+    setCampDraft(d=>({...d, id: campId}));
+    toast(`Draft saved — come back any time to continue`,"success");
+  };
+
   const markContacted = (campId, contactId) => {
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
@@ -6364,7 +6409,16 @@ function ModMarketing() {
                     const replied=enrs.filter(e=>e.status==="replied").length;
                     const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
                     return(
-                      <div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("strategy");}} className="card fu"
+                      <div key={camp.id} onClick={()=>{
+                        if(camp.status==="draft"&&camp._draftStep){
+                          setCampDraft({...camp});
+                          setCampStep(camp._draftStep||1);
+                          setShowNewCampForm(true);
+                          setShowTemplateSelect(false);
+                        } else {
+                          setSelCampId(camp.id);setCampSubTab("strategy");
+                        }
+                      }} className="card fu"
                         style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${camp.color||B.orange}`}}>
                         <div style={{padding:"14px 16px"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
@@ -6383,7 +6437,7 @@ function ModMarketing() {
                         </div>
                         <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                           <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${camp.name}"?`))dispatch("DELETE_CAMPAIGN",camp.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
-                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>OPEN →</span>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:camp.status==="draft"&&camp._draftStep?B.blue:B.orange,letterSpacing:.5}}>{camp.status==="draft"&&camp._draftStep?"CONTINUE →":"OPEN →"}</span>
                         </div>
                       </div>
                     );
@@ -6432,7 +6486,10 @@ function ModMarketing() {
                     {i<4&&<div style={{flex:2,height:2,background:campStep>Number(n)?B.green:B.border,marginBottom:22}}/>}
                   </React.Fragment>);
                 })}
-                <div style={{marginLeft:"auto",paddingLeft:16}}><GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());setCampStep(1);}}>CANCEL</GBtn></div>
+                <div style={{marginLeft:"auto",paddingLeft:16,display:"flex",gap:8,alignItems:"center"}}>
+                  <GBtn onClick={saveDraft} style={{fontSize:9,padding:"5px 12px",background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`}}>💾 SAVE DRAFT</GBtn>
+                  <GBtn onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setSegResult(null);setSelectedContacts(new Set());setCampStep(1);}}>CANCEL</GBtn>
+                </div>
               </div>
 
               {/* STEP 1: DEFINE */}
