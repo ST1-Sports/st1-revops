@@ -302,8 +302,10 @@ export default async function handler(req, res) {
     });
   }
 
-  // Publer v1 bulk payload — state/account_id/scheduled_at are per-post (not at bulk level)
-  const payload = { bulk: { posts } };
+  // Publer v1 bulk payload.
+  // bulk.state:"scheduled" is required at wrapper level — omitting it causes "Unknown state" error.
+  // account_id and scheduled_at are per-post (confirmed from raw response).
+  const payload = { bulk: { state: "scheduled", posts } };
 
   // Always use /posts/schedule so posts appear in Publer's calendar.
   // "Immediate" posts are queued 2 min from now instead of firing blindly.

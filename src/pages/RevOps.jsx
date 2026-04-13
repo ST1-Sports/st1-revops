@@ -8347,8 +8347,16 @@ function ModSocial() {
                 const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
                 const retryPost=async()=>{
                   try{
+                    // Build a future schedule time (5 min from now) so Publer can schedule correctly
+                    const tzOff=new Date().getTimezoneOffset();
+                    const tzSign=tzOff<=0?"+":"-";
+                    const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
+                    const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
+                    const retryTime=new Date(Date.now()+5*60*1000);
+                    const pad=n=>String(n).padStart(2,"0");
+                    const retryIso=`${retryTime.getFullYear()}-${pad(retryTime.getMonth()+1)}-${pad(retryTime.getDate())}T${pad(retryTime.getHours())}:${pad(retryTime.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
                     const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-                      body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined})});
+                      body:JSON.stringify({post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined,scheduleDate:retryIso})});
                     const data=await r.json();
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){
