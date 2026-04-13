@@ -80,8 +80,20 @@ const SEED = {
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
 
+function mergeServerState(base, server) {
+  if (!server || typeof server !== "object") return base;
+  // Server is source of truth for data, but keep local session fields
+  return {
+    ...base,
+    ...server,
+    currentUserId: base.currentUserId, // always local
+    agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
+  };
+}
+
 function useStore() {
   const saveTimer = useRef(null);
+  const serverTimer = useRef(null);
   const [s, setRaw] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE);
@@ -122,13 +134,37 @@ function useStore() {
     return SEED;
   });
 
+  // On mount: pull latest state from server (cross-device sync)
+  useEffect(() => {
+    fetch("/api/state")
+      .then(r => r.json())
+      .then(d => {
+        if (d.state && typeof d.state === "object") {
+          setRaw(prev => {
+            const merged = mergeServerState(prev, d.state);
+            try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      })
+      .catch(() => {}); // graceful fallback to localStorage
+  }, []);
+
   const set = useCallback((fn) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
+      // Save to localStorage immediately (debounced)
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
         try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
       }, 300);
+      // Sync to server (debounced 2.5s to batch rapid changes)
+      if (serverTimer.current) clearTimeout(serverTimer.current);
+      serverTimer.current = setTimeout(() => {
+        const {currentUserId: _cid, ...toSync} = next;
+        fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({state: toSync})}).catch(()=>{});
+      }, 2500);
       return next;
     });
   }, []);
@@ -5074,20 +5110,29 @@ function ModMarketing() {
     else if(selCamp) dispatch("UPDATE_CAMPAIGN",{...selCamp,...patch});
   };
 
-  const generateTouches = async () => {
+  const [emailGenDirection,setEmailGenDirection]=useState("");
+  const generateTouches = async (directionOverride) => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenRunning(true);
     const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
     const repLine = (() => { const rep = (s.reps||[]).find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
+    const is5Touch = (ctx.assetTypes||[]).includes("email5");
+    const touchCount = is5Touch ? 5 : 3;
+    const dayOffsets = is5Touch ? [0,3,7,14,21] : [0,4,10];
+    const touchJson = dayOffsets.map((d,i)=>`{"step":${i+1},"dayOffset":${d},"subject":"","body":""}`).join(",");
+    const direction = directionOverride || emailGenDirection || ctx.ctx || "";
     const result = await aiCall(
-      `Create a 3-touch outreach sequence for ST1 Sports. ${ST1}.\n`+
-      `Product: ${ctx.product}. Audience: ${ctx.audience}. Channels: ${(ctx.channels||[]).join(", ")||"email"}. Tone: ${ctx.tone||"friendly"}.\n`+
-      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+      `Create a ${touchCount}-touch outreach email sequence for ST1 Sports. ${ST1}.\n`+
+      `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
+      `${direction?`Direction / angle: ${direction}.\n`:""}`+
       `${repLine?`${repLine}\n`:""}`+
       `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
-      `Return JSON: {"touches":[{"step":1,"dayOffset":0,"subject":"","body":""},{"step":2,"dayOffset":4,"subject":"","body":""},{"step":3,"dayOffset":10,"subject":"","body":""}]}\n`+
-      `Each touch under 100 words. Use {{firstName}} {{orgName}} merge tags. Step 2 references no reply to step 1. Step 3 is a final check-in.`,
-      {json:true,tokens:1200}
+      `Return JSON: {"touches":[${touchJson}]}\n`+
+      `Each email under 120 words. Use {{firstName}} {{orgName}} merge tags. `+
+      (is5Touch
+        ? `Touch 1: cold intro. Touch 2: follow-up referencing no reply. Touch 3: value add (stat, case study, or tip). Touch 4: urgency/offer. Touch 5: final breakup email.`
+        : `Touch 2 references no reply to touch 1. Touch 3 is a brief final check-in.`),
+      {json:true,tokens:is5Touch?2200:1400}
     );
     const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
     saveCampAsset({touches});
@@ -6331,9 +6376,13 @@ function ModMarketing() {
                 {/* Email sequence */}
                 {(campDraft.assetTypes||[]).some(t=>t==="email3"||t==="email5")&&(
                   <div style={{marginBottom:20}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1}}>✉ EMAIL SEQUENCE</div>
-                      <OBtn sm onClick={generateTouches} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                      <OBtn sm onClick={()=>generateTouches(emailGenDirection||undefined)} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE"}</OBtn>
+                    </div>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>CONTENT DIRECTION (optional)</div>
+                      <textarea value={emailGenDirection} onChange={e=>setEmailGenDirection(e.target.value)} placeholder="e.g. Focus on spring season urgency, mention early-bird discount, emphasize team bonding angle…" rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
                     </div>
                     {genRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10}}><Spin/>Writing emails…</div>}
                     {(campDraft.touches||[]).length>0&&campDraft.touches.map((t,i)=>(
@@ -7133,8 +7182,12 @@ function ModMarketing() {
                   {/* AI Generation panel — always visible in detail assets tab */}
                   <div className="card" style={{padding:"14px 16px",marginBottom:18,borderLeft:`4px solid ${B.purple}`}}>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,letterSpacing:1,marginBottom:10}}>✦ AI CONTENT GENERATION</div>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>EMAIL CONTENT DIRECTION (optional)</div>
+                      <textarea value={emailGenDirection} onChange={e=>setEmailGenDirection(e.target.value)} placeholder="e.g. Focus on spring season urgency, mention early-bird discount, emphasize team bonding angle…" rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
+                    </div>
                     <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
-                      <OBtn sm onClick={generateTouches} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE / REGEN EMAILS"}</OBtn>
+                      <OBtn sm onClick={()=>generateTouches(emailGenDirection||undefined)} disabled={genRunning}>{genRunning?"GENERATING...":"✦ GENERATE / REGEN EMAILS"}</OBtn>
                       <button onClick={generateSocialDrafts} disabled={genSocialRunning} style={{background:genSocialRunning?B.muted:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genSocialRunning?.7:1}}>{genSocialRunning?"GENERATING...":"✦ SOCIAL POSTS"}</button>
                       <button onClick={generateAdCopy} disabled={genAdRunning} style={{background:genAdRunning?B.muted:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genAdRunning?.7:1}}>{genAdRunning?"GENERATING...":"✦ AD COPY"}</button>
                       <button onClick={generateCallScript} disabled={genCallRunning} style={{background:genCallRunning?B.muted:B.blue,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genCallRunning?.7:1}}>{genCallRunning?"GENERATING...":"✦ CALL SCRIPT"}</button>
