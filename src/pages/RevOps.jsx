@@ -3544,54 +3544,71 @@ function ModProspecting() {
     const fileObj=importFile._fileObj||importFile;
     setImportPhase("parsing"); setImportRows([]);
     try {
-      setImportProgress(10); setImportStatus("Reading file…");
+      setImportProgress(20); setImportStatus("Reading file…");
       const buf=await toBuffer(fileObj);
       const wb=XLSX.read(buf,{type:"array"});
       const ws=wb.Sheets[wb.SheetNames[0]];
-      const csvText=XLSX.utils.sheet_to_csv(ws);
-      const lines=csvText.split("\n").filter(l=>l.trim());
-      if(lines.length<2){toast("File appears empty — check the file and try again","error");setImportPhase("setup");setImportProgress(0);return;}
-      const rowCount=lines.length-1;
-      setImportProgress(30); setImportStatus(`Sending ${rowCount} rows to AI…`);
-      const sportHint=importSport?`The list is primarily for sport: ${importSport}. Use this to set sport field if not obvious from title.\n`:"";
-      const notesHint=importNotes?`Additional context: ${importNotes}\n`:"";
-      const prompt=isApollo
-        ?`Apollo.io export CSV. Map Apollo columns to contact records.\n\nCSV:\n${lines.slice(0,201).join("\n")}\n\n`+
-          `Apollo column mapping: "First Name"→firstName, "Last Name"→lastName, "Title"→title, "Company"→school, `+
-          `"Email"→email, "LinkedIn URL"→linkedIn, "City"→city, "State"→state.\n`+
-          sportHint+notesHint+
-          `For each row infer: fullName (First+Last), orgType (school|club|district|company), `+
-          `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General), `+
-          `priority (high=AD/Director/Administrator, medium=coach/coordinator, low=other), tags (array), outreachWindow (best 2-month purchase window).\n`+
-          `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","linkedIn":"","source":"apollo"}]. Skip blank rows.`
-        :`CRM/list export. Map and normalize contacts.\n\nCSV:\n${lines.slice(0,201).join("\n")}\n\n`+
-          sportHint+notesHint+
-          `For each data row extract: firstName, lastName, fullName, email, phone, title, school (org/company), city, state (2-letter), `+
-          `orgType (school|club|district|company), `+
-          `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
-          `priority (high=AD/Director/Administrator, medium=coach/coordinator, low=other), tags (array), `+
-          `outreachWindow (best 2-month purchase window based on sport — e.g. "Nov–Jan" for T&F).\n`+
-          `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. Skip blank/header rows.`;
-      setImportProgress(50); setImportStatus("AI normalizing contacts…");
-      const result=await aiCall(prompt,{json:true,tokens:4000});
-      setImportProgress(85); setImportStatus("Finalizing…");
-      if(Array.isArray(result)&&result.length>0){
-        const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
-          ...c,
-          id:mkId(),
-          sport: importSport&&(!c.sport||c.sport==="General")?importSport:c.sport,
-          confidence: isApollo?"high":"medium",
-          outreachStatus:"new",
-          importedAt:Date.now(),
-        }));
-        setImportRows(mapped);
-        setImportSel(new Set(mapped.map(c=>c.id)));
-        setImportProgress(100); setImportStatus(`${mapped.length} contacts ready`);
-        setTimeout(()=>{setImportPhase("preview");setImportProgress(0);setImportStatus("");},500);
-      } else {
-        toast("AI couldn't extract contacts from this file. Check the format and try again.","error");
-        setImportPhase("setup"); setImportProgress(0); setImportStatus("");
-      }
+      // Parse to row objects (header row becomes keys)
+      const rows=XLSX.utils.sheet_to_json(ws,{defval:""});
+      if(rows.length===0){toast("File appears empty — check the file and try again","error");setImportPhase("setup");setImportProgress(0);return;}
+      setImportProgress(50); setImportStatus(`Mapping ${rows.length} contacts…`);
+
+      // Fuzzy header lookup — match ignoring spaces/underscores/case
+      const norm=s=>String(s||"").toLowerCase().replace(/[\s_\-\.]/g,"");
+      const get=(row,...keys)=>{
+        const entry=Object.entries(row).find(([k])=>keys.some(kk=>norm(k)===norm(kk)));
+        return entry?String(entry[1]||"").trim():"";
+      };
+
+      const inferSport=t=>{
+        const tl=(t||"").toLowerCase();
+        if(/track|cross.?country|xc|t&f|tf\b/.test(tl)) return "Track & Field";
+        if(/baseball|softball/.test(tl)) return "Baseball/Softball";
+        if(/volleyball/.test(tl)) return "Volleyball";
+        if(/football/.test(tl)) return "Football";
+        if(/basketball/.test(tl)) return "Basketball";
+        if(/wrestling/.test(tl)) return "Wrestling";
+        return importSport||"General";
+      };
+      const inferPriority=t=>{
+        const tl=(t||"").toLowerCase();
+        if(/athletic.?director|\bad\b|administrator|principal|superintendent|director/.test(tl)) return "high";
+        if(/coach|coordinator|manager|head/.test(tl)) return "medium";
+        return "medium";
+      };
+      const outreachByS={"Track & Field":"Nov–Jan","Baseball/Softball":"Sep–Nov","Volleyball":"Mar–May","Football":"Mar–May","Basketball":"Jun–Aug","Cross Country":"Mar–May","Wrestling":"Jul–Sep","General":"Oct–Dec"};
+
+      const mapped=rows.map(row=>{
+        const firstName=get(row,"First Name","FirstName","first","fname","first_name");
+        const lastName=get(row,"Last Name","LastName","last","lname","last_name");
+        const fullName=get(row,"Full Name","FullName","Name","full_name")||[firstName,lastName].filter(Boolean).join(" ");
+        const email=get(row,"Email","Email Address","EmailAddress","E-mail","email_address");
+        const phone=get(row,"Phone","Phone Number","PhoneNumber","Mobile","Cell","Telephone","phone_number");
+        const title=get(row,"Title","Job Title","JobTitle","Position","Role","job_title");
+        const school=get(row,"Company","School","Organization","Org","Institution","District","Club","Employer","Account Name");
+        const city=get(row,"City","Town");
+        const state=get(row,"State","St","Province");
+        const linkedIn=get(row,"LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url");
+        if(!fullName&&!email) return null; // skip blank rows
+        const sport=inferSport(title);
+        return {
+          id:mkId(), firstName, lastName,
+          fullName:fullName||email||"Unknown",
+          email, phone, title, school, city, state, linkedIn,
+          orgType:"school", sport,
+          priority:inferPriority(title),
+          tags:[], outreachWindow:outreachByS[sport]||"Oct–Dec",
+          source:isApollo?"apollo":"list-import",
+          confidence:isApollo?"high":"medium",
+          outreachStatus:"new", importedAt:Date.now(),
+        };
+      }).filter(Boolean);
+
+      if(mapped.length===0){toast("No contacts found — make sure the file has data rows below the header.","error");setImportPhase("setup");setImportProgress(0);return;}
+      setImportProgress(100); setImportStatus(`${mapped.length} contacts ready`);
+      setImportRows(mapped);
+      setImportSel(new Set(mapped.map(c=>c.id)));
+      setTimeout(()=>{setImportPhase("preview");setImportProgress(0);setImportStatus("");},400);
     } catch(err) {
       toast(`Import error: ${err.message}`,"error");
       setImportPhase("setup"); setImportProgress(0); setImportStatus("");
