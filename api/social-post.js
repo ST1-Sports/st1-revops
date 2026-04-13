@@ -106,21 +106,20 @@ export default async function handler(req, res) {
   }
 
   // ── List posts (debug) ────────────────────────────────────────────────────
-  // Queries scheduled + failed so we can see what's landing and why calendar is empty
+  // Queries scheduled + failed + draft so we can see what's landing
   if (action === "list-posts") {
     const workspaceId = process.env.PUBLER_WORKSPACE_ID;
     try {
-      // Query scheduled and failed separately to see full picture
-      const [sched, failed] = await Promise.all([
-        publerRequest("/posts?status=scheduled&per_page=25", "GET", null, apiKey, workspaceId),
+      // Query all three states to get full picture
+      const [sched, failed, drafts] = await Promise.all([
+        publerRequest("/posts?status=scheduled&per_page=15", "GET", null, apiKey, workspaceId),
         publerRequest("/posts?status=failed&per_page=10", "GET", null, apiKey, workspaceId),
+        publerRequest("/posts?status=draft&per_page=10", "GET", null, apiKey, workspaceId),
       ]);
 
       const normAccts = (raw) => {
-        // Publer returns account_id (singular string) per post, not an accounts array
         const singularId = raw.account_id;
         if (singularId) return [{ id: String(singularId), name: "", provider: "" }];
-        // Fallback: check array variants just in case
         const arr = raw.accounts || raw.social_accounts || raw.profiles || [];
         if (!Array.isArray(arr) || !arr.length) return [];
         return arr.map(a => {
@@ -133,26 +132,27 @@ export default async function handler(req, res) {
         });
       };
 
-      const normPosts = (r) => {
+      const normPosts = (r, label) => {
         if (!r.ok) return [];
         const arr = Array.isArray(r.data) ? r.data : (r.data?.data || r.data?.posts || []);
         return arr.map(p => ({
           id: p.id,
           text: (p.text || p.content || "").slice(0, 80),
           scheduled_at: p.scheduled_at || p.scheduledAt,
-          status: p.status,
+          state: p.state || p.status || label,
           accounts: normAccts(p),
           networks: p.networks ? Object.keys(p.networks) : [],
           error: p.error || p.error_message || null,
         }));
       };
 
-      const schedPosts = normPosts(sched);
-      const failedPosts = normPosts(failed);
-      // Include raw first post so we can see the actual Publer response structure
+      const schedPosts = normPosts(sched, "scheduled");
+      const failedPosts = normPosts(failed, "failed");
+      const draftPosts = normPosts(drafts, "draft");
       const rawFirstPost = (() => {
         const arr = Array.isArray(sched.data) ? sched.data : (sched.data?.data || sched.data?.posts || []);
-        return arr[0] || null;
+        const darr = Array.isArray(drafts.data) ? drafts.data : (drafts.data?.data || drafts.data?.posts || []);
+        return arr[0] || darr[0] || null;
       })();
 
       return res.json({
@@ -160,6 +160,7 @@ export default async function handler(req, res) {
         workspaceId,
         scheduled: { count: schedPosts.length, posts: schedPosts },
         failed: { count: failedPosts.length, posts: failedPosts },
+        draft: { count: draftPosts.length, posts: draftPosts },
         // Keep top-level count/posts for backwards compat with UI
         count: schedPosts.length,
         posts: schedPosts,
@@ -302,39 +303,46 @@ export default async function handler(req, res) {
     });
   }
 
-  // Publer v1 bulk payload.
-  // bulk.state:"scheduled" is required at wrapper level — omitting it causes "Unknown state" error.
-  // account_id and scheduled_at are per-post (confirmed from raw response).
-  const payload = { bulk: { state: "scheduled", posts } };
-
-  // Always use /posts/schedule so posts appear in Publer's calendar.
-  // "Immediate" posts are queued 2 min from now instead of firing blindly.
-  const endpoint = "/posts/schedule";
-
+  // Use POST /posts (direct post creation) not the /posts/schedule bulk endpoint.
+  // The bulk endpoint always creates "draft_public" (Draft Ideas) regardless of state.
+  // POST /posts with scheduled_at creates properly scheduled calendar posts.
+  // Send one POST /posts request per platform (each has its own account_id).
+  // Collect job IDs or post IDs from each response.
   try {
-    const { ok, status: httpStatus, data } = await publerRequest(endpoint, "POST", payload, apiKey, workspaceId);
+    const allPostIds = [];
+    const errors = [];
 
-    if (ok) {
-      const parsed = parseSuccess(data, true);
-      if (parsed) {
-        const userScheduled = !!scheduleDate;
-        return res.json({
-          status: "scheduled",
-          backend: "publer",
-          postIds: parsed.postIds,
-          scheduled: true,
-          scheduledAt,
-          _userScheduled: userScheduled,
-          ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
-          ...(missingAccounts.length ? { _missing: `No account ID configured for: ${missingAccounts.join(", ")} — add to Vercel env vars.` } : {}),
-        });
+    for (const post of posts) {
+      const { ok, data } = await publerRequest("/posts", "POST", post, apiKey, workspaceId);
+      if (ok) {
+        const parsed = parseSuccess(data, true);
+        if (parsed) allPostIds.push(...parsed.postIds);
+        else if (data.id) allPostIds.push(String(data.id));
+        else if (data.job_id) allPostIds.push(String(data.job_id));
+      } else {
+        errors.push(extractError(data));
+        console.error("[publer] post failed:", JSON.stringify(data).slice(0, 400));
       }
     }
 
+    if (allPostIds.length > 0) {
+      const userScheduled = !!scheduleDate;
+      return res.json({
+        status: "scheduled",
+        backend: "publer",
+        postIds: allPostIds,
+        scheduled: true,
+        scheduledAt,
+        _userScheduled: userScheduled,
+        ...(errors.length ? { _partialErrors: errors } : {}),
+        ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
+        ...(missingAccounts.length ? { _missing: `No account ID configured for: ${missingAccounts.join(", ")} — add to Vercel env vars.` } : {}),
+      });
+    }
+
     return res.status(400).json({
-      error: extractError(data),
+      error: errors.join(" | ") || "All platform posts failed",
       backend: "publer",
-      detail: data,
     });
   } catch (e) {
     return res.status(500).json({ error: e.message, backend: "publer" });

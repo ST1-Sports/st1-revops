@@ -10614,6 +10614,7 @@ function ModSettings() {
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,marginBottom:6}}>
                         PUBLER QUEUE — {publerPosts.scheduled?.count||publerPosts.count||0} SCHEDULED
                         {(publerPosts.failed?.count||0)>0&&<span style={{color:B.red,marginLeft:8}}>{publerPosts.failed.count} FAILED</span>}
+                        {(publerPosts.draft?.count||0)>0&&<span style={{color:B.orange,marginLeft:8}}>{publerPosts.draft.count} DRAFT</span>}
                         <span style={{marginLeft:8,opacity:.6}}>(workspace: {publerPosts.workspaceId})</span>
                       </div>
                       {(publerPosts.count===0&&(publerPosts.failed?.count||0)===0)
