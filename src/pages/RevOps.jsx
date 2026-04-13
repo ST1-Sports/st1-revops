@@ -3174,8 +3174,13 @@ function ModProspecting() {
   // Import-list state
   const [importPhase,setImportPhase]     = useState("idle"); // idle|parsing|preview
   const [importRows,setImportRows]       = useState([]);
-  const [importSel,setImportSel]         = useState(new Set());
+  const [importSel,setImportSel]             = useState(new Set());
   const [importListName,setImportListName]   = useState("");
+  const [importSport,setImportSport]         = useState("");
+  const [importNotes,setImportNotes]         = useState("");
+  const [importFile,setImportFile]           = useState(null); // File object
+  const [importProgress,setImportProgress]   = useState(0);   // 0-100
+  const [importStatus,setImportStatus]       = useState("");  // status text
   const [expandedListId,setExpandedListId]   = useState(null);
   const [renamingListId,setRenamingListId]   = useState(null);
   const [renameValue,setRenameValue]         = useState("");
@@ -3514,100 +3519,82 @@ function ModProspecting() {
     const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
   };
 
+  // Step 1: user picks a file — just capture it, show the setup form
   const handleListUpload=async(e)=>{
-    const file=e.target.files[0];
-    if(!file)return;
-    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
-    setImportListName(autoName);
+    const file=e.target.files[0]; if(!file)return;
     e.target.value="";
-    setImportPhase("parsing");setImportRows([]);
+    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+    setImportFile(file);
+    if(!importListName) setImportListName(autoName);
+    setImportPhase("setup");
+  };
+  const handleApolloUpload=async(e)=>{
+    const file=e.target.files[0]; if(!file)return;
+    e.target.value="";
+    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
+    setImportFile({...file, _isApollo:true, name:file.name, _fileObj:file});
+    if(!importListName) setImportListName(autoName);
+    setImportPhase("setup");
+  };
+
+  // Step 2: user clicks ANALYZE — read file + call AI with progress
+  const analyzeImportFile=async()=>{
+    if(!importFile) return;
+    const isApollo=!!(importFile._isApollo);
+    const fileObj=importFile._fileObj||importFile;
+    setImportPhase("parsing"); setImportRows([]);
     try {
-      const buf=await toBuffer(file);
+      setImportProgress(10); setImportStatus("Reading file…");
+      const buf=await toBuffer(fileObj);
       const wb=XLSX.read(buf,{type:"array"});
       const ws=wb.Sheets[wb.SheetNames[0]];
       const csvText=XLSX.utils.sheet_to_csv(ws);
-      const lines=csvText.split("\n").filter(l=>l.trim()).slice(0,201);
-      if(lines.length<2){toast("File appears empty","error");setImportPhase("idle");return;}
-      const result=await aiCall(
-        `CRM export (Zoho or similar). Map and normalize contacts.\n\nCSV:\n${lines.join("\n")}\n\n`+
-        `For each data row extract: firstName, lastName, fullName, email, phone, title (job role/position), school (org/company name), city, state (2-letter), `+
-        `orgType (school|club|district|company), sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
-        `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
-        `tags (array: include "multi-sport" if multiple sports implied, "club-director" if club org director, etc.), `+
-        `outreachWindow (best 2-month window to reach out for purchasing decisions based on their sport — e.g. "Nov–Jan" for T&F). `+
-        `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. `+
-        `Skip blank rows and header rows. Use empty string for unknown fields.`,
-        {json:true,tokens:4000}
-      );
+      const lines=csvText.split("\n").filter(l=>l.trim());
+      if(lines.length<2){toast("File appears empty — check the file and try again","error");setImportPhase("setup");setImportProgress(0);return;}
+      const rowCount=lines.length-1;
+      setImportProgress(30); setImportStatus(`Sending ${rowCount} rows to AI…`);
+      const sportHint=importSport?`The list is primarily for sport: ${importSport}. Use this to set sport field if not obvious from title.\n`:"";
+      const notesHint=importNotes?`Additional context: ${importNotes}\n`:"";
+      const prompt=isApollo
+        ?`Apollo.io export CSV. Map Apollo columns to contact records.\n\nCSV:\n${lines.slice(0,201).join("\n")}\n\n`+
+          `Apollo column mapping: "First Name"→firstName, "Last Name"→lastName, "Title"→title, "Company"→school, `+
+          `"Email"→email, "LinkedIn URL"→linkedIn, "City"→city, "State"→state.\n`+
+          sportHint+notesHint+
+          `For each row infer: fullName (First+Last), orgType (school|club|district|company), `+
+          `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General), `+
+          `priority (high=AD/Director/Administrator, medium=coach/coordinator, low=other), tags (array), outreachWindow (best 2-month purchase window).\n`+
+          `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","linkedIn":"","source":"apollo"}]. Skip blank rows.`
+        :`CRM/list export. Map and normalize contacts.\n\nCSV:\n${lines.slice(0,201).join("\n")}\n\n`+
+          sportHint+notesHint+
+          `For each data row extract: firstName, lastName, fullName, email, phone, title, school (org/company), city, state (2-letter), `+
+          `orgType (school|club|district|company), `+
+          `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title if possible), `+
+          `priority (high=AD/Director/Administrator, medium=coach/coordinator, low=other), tags (array), `+
+          `outreachWindow (best 2-month purchase window based on sport — e.g. "Nov–Jan" for T&F).\n`+
+          `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"school","sport":"","priority":"medium","tags":[],"outreachWindow":"","source":"list-import"}]. Skip blank/header rows.`;
+      setImportProgress(50); setImportStatus("AI normalizing contacts…");
+      const result=await aiCall(prompt,{json:true,tokens:4000});
+      setImportProgress(85); setImportStatus("Finalizing…");
       if(Array.isArray(result)&&result.length>0){
         const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
           ...c,
           id:mkId(),
-          confidence:"medium",
+          sport: importSport&&(!c.sport||c.sport==="General")?importSport:c.sport,
+          confidence: isApollo?"high":"medium",
           outreachStatus:"new",
           importedAt:Date.now(),
         }));
         setImportRows(mapped);
         setImportSel(new Set(mapped.map(c=>c.id)));
-        setImportPhase("preview");
-        toast(`${mapped.length} contacts mapped — review below`,"success");
+        setImportProgress(100); setImportStatus(`${mapped.length} contacts ready`);
+        setTimeout(()=>{setImportPhase("preview");setImportProgress(0);setImportStatus("");},500);
       } else {
-        toast("Could not extract contacts from this file","error");
-        setImportPhase("idle");
+        toast("AI couldn't extract contacts from this file. Check the format and try again.","error");
+        setImportPhase("setup"); setImportProgress(0); setImportStatus("");
       }
     } catch(err) {
       toast(`Import error: ${err.message}`,"error");
-      setImportPhase("idle");
-    }
-  };
-
-  const handleApolloUpload=async(e)=>{
-    const file=e.target.files[0];
-    if(!file)return;
-    const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
-    setImportListName(autoName);
-    e.target.value="";
-    setImportPhase("parsing");setImportRows([]);
-    try {
-      const buf=await toBuffer(file);
-      const wb=XLSX.read(buf,{type:"array"});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      const csvText=XLSX.utils.sheet_to_csv(ws);
-      const lines=csvText.split("\n").filter(l=>l.trim()).slice(0,201);
-      if(lines.length<2){toast("File appears empty","error");setImportPhase("idle");return;}
-      const result=await aiCall(
-        `Apollo.io export CSV. Map Apollo columns to contact records.\n\nCSV:\n${lines.join("\n")}\n\n`+
-        `Apollo column mapping: "First Name"→firstName, "Last Name"→lastName, "Title"→title, "Company"→school, `+
-        `"Email"→email, "LinkedIn URL"→linkedIn, "City"→city, "State"→state, "# Employees"→(ignore for now). `+
-        `For each row also infer: fullName (First+Last), `+
-        `orgType (school|club|district|company — use "company" if not clearly educational), `+
-        `sport (Track & Field|Baseball/Softball|Volleyball|Football|Basketball|Cross Country|Wrestling|General — infer from title/company), `+
-        `priority (high=AD or Director or Administrator, medium=coach or coordinator, low=other), `+
-        `tags (array of relevant tags), outreachWindow (best 2-month window for purchasing decisions based on sport). `+
-        `Return JSON array only: [{"firstName":"","lastName":"","fullName":"","email":"","phone":"","title":"","school":"","city":"","state":"","orgType":"company","sport":"","priority":"medium","tags":[],"outreachWindow":"","linkedIn":"","source":"apollo"}]. `+
-        `Skip blank rows and header rows. Use empty string for unknown fields.`,
-        {json:true,tokens:4000}
-      );
-      if(Array.isArray(result)&&result.length>0){
-        const mapped=result.filter(c=>c.fullName||c.firstName||c.email).map(c=>({
-          ...c,
-          id:mkId(),
-          source:"apollo",
-          confidence:"high",
-          outreachStatus:"new",
-          importedAt:Date.now(),
-        }));
-        setImportRows(mapped);
-        setImportSel(new Set(mapped.map(c=>c.id)));
-        setImportPhase("preview");
-        toast(`${mapped.length} Apollo contacts mapped — review below`,"success");
-      } else {
-        toast("Could not extract contacts from Apollo file","error");
-        setImportPhase("idle");
-      }
-    } catch(err) {
-      toast(`Apollo import error: ${err.message}`,"error");
-      setImportPhase("idle");
+      setImportPhase("setup"); setImportProgress(0); setImportStatus("");
     }
   };
 
@@ -3622,7 +3609,7 @@ function ModProspecting() {
     const newList={id:mkId(),name:listName,contactIds:toAdd.map(c=>c.id),createdAt:Date.now(),source:"import"};
     dispatch("ADD_CONTACT_LIST",newList);
     toast(`Imported ${toAdd.length} contacts → saved as list "${listName}"${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
-    setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");
+    setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
     setView("lists"); // jump straight to the lists view
     if(pushZoho&&toAdd.length>0){
       await pushToZohoLeads(toAdd);
@@ -3729,77 +3716,119 @@ function ModProspecting() {
       {view==="import"&&(
         <div>
           {/* Source row: Zoho pull + CSV upload + Apollo */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12,marginBottom:16}}>
-            {/* Zoho pull card */}
-            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.purple}`}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:2,marginBottom:8}}>PULL FROM ZOHO CRM</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Pulls Contacts and Leads from Zoho CRM. Leads are auto-scored from their Zoho activity: call count, chat count, lead status, last activity date, and lead source.
-              </div>
-              {s.contactsLastSync&&(
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>
-                  Last sync: {new Date(s.contactsLastSync).toLocaleString()}
-                </div>
-              )}
-              {zohoPullResult&&(
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:zohoPullResult.loading?B.orange:B.green,marginBottom:8}}>
-                  {zohoPullResult.loading
-                    ? `⟳ Fetching… ${zohoPullResult.contacts||0} contacts · ${zohoPullResult.leads||0} leads so far`
-                    : `✓ ${zohoPullResult.contacts} contacts · ${zohoPullResult.leads} leads · ${zohoPullResult.added} new · ${zohoPullResult.updated||0} updated`
-                  }
-                </div>
-              )}
-              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||fullPulling||rescoring}>
-                  {zohoPulling?"SYNCING...":"↓ SYNC NEW RECORDS"}
-                </OBtn>
-                <OBtn sm color={B.teal} onClick={pullFromZohoFull} disabled={zohoPulling||fullPulling||rescoring}>
-                  {fullPulling?"PULLING ALL...":"↓ FULL INITIAL PULL"}
-                </OBtn>
-                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling||fullPulling}>
-                  {rescoring?"RESCORING...":"↺ RESCORE FROM ZOHO ACTIVITY"}
-                </OBtn>
-              </div>
-            </div>
-            {/* CSV upload card */}
-            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.orange}`}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>UPLOAD A LIST</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Upload a CSV or Excel export from Zoho, HubSpot, Salesforce, or any CRM. AI will normalize and categorize each contact automatically.
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
-                <OBtn sm onClick={()=>importFileRef.current?.click()} disabled={importPhase==="parsing"}>
-                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD CSV / EXCEL"}
-                </OBtn>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} in database</span>
-              </div>
-            </div>
-            {/* Apollo.io import card */}
-            <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:14,borderLeft:`3px solid ${B.teal}`}}>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:2,marginBottom:8}}>APOLLO.IO IMPORT</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>
-                Upload an Apollo.io CSV export. AI maps: First Name, Last Name, Title, Company, Email, LinkedIn URL, City, State into your contact database.
-              </div>
-              <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
-                <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()} disabled={importPhase==="parsing"}>
-                  {importPhase==="parsing"?"⟳ ANALYZING...":"↑ UPLOAD APOLLO CSV"}
-                </OBtn>
+          {/* Zoho pull card — compact strip */}
+          <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",marginBottom:14,borderLeft:`3px solid ${B.purple}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:2,flexShrink:0}}>ZOHO CRM SYNC</div>
+              {s.contactsLastSync&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Last sync: {new Date(s.contactsLastSync).toLocaleString()}</div>}
+              {zohoPullResult&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:zohoPullResult.loading?B.orange:B.green}}>
+                {zohoPullResult.loading?`⟳ ${zohoPullResult.contacts||0} contacts · ${zohoPullResult.leads||0} leads…`:`✓ ${zohoPullResult.contacts} contacts · ${zohoPullResult.leads} leads · ${zohoPullResult.added} new`}
+              </div>}
+              <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                <OBtn sm color={B.purple} onClick={pullFromZoho} disabled={zohoPulling||fullPulling||rescoring}>{zohoPulling?"SYNCING...":"↓ SYNC NEW"}</OBtn>
+                <OBtn sm color={B.teal} onClick={pullFromZohoFull} disabled={zohoPulling||fullPulling||rescoring}>{fullPulling?"PULLING...":"↓ FULL PULL"}</OBtn>
+                <OBtn sm color={B.blue} onClick={rescoreFromZoho} disabled={rescoring||zohoPulling||fullPulling}>{rescoring?"RESCORING...":"↺ RESCORE"}</OBtn>
               </div>
             </div>
           </div>
 
-          {/* Preview table */}
-          {importPhase==="preview"&&importRows.length>0&&(
-            <div style={{marginBottom:20}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:10,gap:12,flexWrap:"wrap"}}>
-                <div style={{flex:1,minWidth:200}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME</div>
-                  <input value={importListName} onChange={e=>setImportListName(e.target.value)} placeholder="e.g. Track Coaches Spring 2025" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+          {/* Upload a list — step-by-step */}
+          <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:16,marginBottom:16,borderLeft:`3px solid ${B.orange}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:importPhase==="idle"?0:14}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2}}>UPLOAD A LIST</div>
+              {importPhase!=="idle"&&<button onClick={()=>{setImportPhase("idle");setImportFile(null);setImportRows([]);setImportSel(new Set());setImportProgress(0);setImportStatus("");}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:11}}>✕ cancel</button>}
+            </div>
+
+            {/* Idle: just the buttons */}
+            {importPhase==="idle"&&(
+              <div style={{display:"flex",gap:10,alignItems:"center",paddingTop:10}}>
+                <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
+                <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
+                <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CSV / EXCEL</OBtn>
+                <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()}>↑ APOLLO.IO CSV</OBtn>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} contacts in database</span>
+              </div>
+            )}
+
+            {/* Setup: name, sport, notes, file attached */}
+            {(importPhase==="setup"||importPhase==="parsing")&&(
+              <div>
+                {/* File attached banner */}
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:`${B.orange}10`,borderRadius:5,marginBottom:14,border:`1px solid ${B.orange}30`}}>
+                  <span style={{fontSize:16}}>📎</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{importFile?.name||importFile?._fileObj?.name||"File attached"}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                      {importFile?._isApollo?"Apollo.io export":"CSV / Excel list"}
+                      {(importFile?.size||importFile?._fileObj?.size)?` · ${((importFile?.size||importFile?._fileObj?.size)/1024).toFixed(0)} KB`:""}
+                    </div>
+                  </div>
+                  {importPhase==="setup"&&(
+                    <div style={{display:"flex",gap:6}}>
+                      <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
+                      <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
+                      <button onClick={()=>importFileRef.current?.click()} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"2px 7px",borderRadius:3,cursor:"pointer"}}>CHANGE FILE</button>
+                    </div>
+                  )}
                 </div>
-                <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts · {importSel.size} selected</div>
+
+                {/* Form fields */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME <span style={{color:B.orange}}>*</span></div>
+                    <input value={importListName} onChange={e=>setImportListName(e.target.value)}
+                      placeholder="e.g. Track Coaches Spring 2025"
+                      style={{width:"100%",background:B.surface,border:`1px solid ${importListName.trim()?B.green:B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                      disabled={importPhase==="parsing"}/>
+                  </div>
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>PRIMARY SPORT (optional)</div>
+                    <select value={importSport} onChange={e=>setImportSport(e.target.value)}
+                      style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:importSport?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                      disabled={importPhase==="parsing"}>
+                      <option value="">— any / mixed sports —</option>
+                      {SPORTS_LIST.map(sp=><option key={sp} value={sp}>{sp}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>NOTES / CONTEXT (optional — helps AI categorize better)</div>
+                  <input value={importNotes} onChange={e=>setImportNotes(e.target.value)}
+                    placeholder="e.g. Athletic directors from Ohio — pulled from state association website"
+                    style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+                    disabled={importPhase==="parsing"}/>
+                </div>
+
+                {/* Progress bar during parsing */}
+                {importPhase==="parsing"&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>{importStatus}</div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>{importProgress}%</div>
+                    </div>
+                    <div style={{height:6,background:B.border,borderRadius:3,overflow:"hidden"}}>
+                      <div style={{height:"100%",width:`${importProgress}%`,background:importProgress===100?B.green:B.orange,borderRadius:3,transition:"width .4s ease"}}/>
+                    </div>
+                  </div>
+                )}
+
+                {importPhase==="setup"&&(
+                  <OBtn onClick={analyzeImportFile} disabled={!importListName.trim()}>
+                    ✦ ANALYZE & IMPORT
+                  </OBtn>
+                )}
+              </div>
+            )}
+
+            {/* Preview header + table */}
+            {importPhase==="preview"&&importRows.length>0&&(
+              <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:10}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{importListName||"Imported List"}</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts found · {importSel.size} selected to save</div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                   <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
                   <OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ SAVE LIST ({importSel.size})</OBtn>
                   <OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ SAVE + PUSH ZOHO</OBtn>
@@ -3848,6 +3877,8 @@ function ModProspecting() {
               </div>
             </div>
           )}
+
+          </div>{/* end upload card */}
 
           {/* Contact database */}
           <div>
