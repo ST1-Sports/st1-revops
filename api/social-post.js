@@ -254,12 +254,8 @@ export default async function handler(req, res) {
   }
 
   // Build one post object per platform so each succeeds/fails independently.
-  // Publer per-post fields (from API introspection):
-  //   account_id    — singular string ID (NOT accounts:[])
-  //   state         — "scheduled" per-post (bulk.state wrapper is ignored)
-  //   scheduled_at  — ISO datetime at post level
-  //   type          — "photo" / "status" / "story" at post level
-  //   networks      — platform-specific options (media etc.) keyed by platform name
+  // Confirmed from raw Publer response: account_id (singular) and scheduled_at at post level.
+  // type + text must live inside networks[platform] — top-level type causes "Unknown state" error.
   const missingAccounts = [];
   const posts = [];
   for (const platform of activePlatforms) {
@@ -268,14 +264,14 @@ export default async function handler(req, res) {
     const contentType = isStory ? "story" : (hasMedia || platform === "instagram") ? "photo" : "status";
     posts.push({
       account_id: String(accountId),
-      text: postText,
       scheduled_at: scheduledAt,
-      type: contentType,
-      ...(hasMedia ? {
-        networks: {
-          [platform]: { media: publicMediaUrls.map(url => ({ url })) },
+      networks: {
+        [platform]: {
+          type: contentType,
+          text: postText,
+          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
         },
-      } : {}),
+      },
     });
   }
 
@@ -287,14 +283,14 @@ export default async function handler(req, res) {
     for (const id of fallbackIds) {
       posts.push({
         account_id: id,
-        text: postText,
         scheduled_at: scheduledAt,
-        type: contentType,
-        ...(hasMedia ? {
-          networks: {
-            [platform]: { media: publicMediaUrls.map(url => ({ url })) },
+        networks: {
+          [platform]: {
+            type: contentType,
+            text: postText,
+            ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
           },
-        } : {}),
+        },
       });
     }
   }
