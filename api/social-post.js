@@ -229,40 +229,83 @@ export default async function handler(req, res) {
       linkedin:  process.env.PUBLER_ACCOUNT_LINKEDIN,
       twitter:   process.env.PUBLER_ACCOUNT_TWITTER,
     };
-    const accountId = platformMap2[targetPlatform] || process.env.PUBLER_ACCOUNT_IDS?.split(",")[0]?.trim();
+    const envAccountId = platformMap2[targetPlatform] || process.env.PUBLER_ACCOUNT_IDS?.split(",")[0]?.trim();
     const envConfigured = Object.fromEntries(
       Object.entries(platformMap2).map(([k,v]) => [k, v ? `...${String(v).slice(-4)}` : "NOT SET"])
     );
-    if (!accountId) {
-      return res.json({ ok: false, envConfigured, error: `No account ID for ${targetPlatform}` });
-    }
-    const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-    // Try different endpoint patterns
+    // Always fetch live account list so we can compare env IDs vs what Publer actually has
+    const { ok: accOk, data: accData } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
+    const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
+    const liveAccount = liveAccounts.find(a => {
+      const svc = (a.provider || a.platform || a.type || a.service || "").toLowerCase();
+      return svc === targetPlatform;
+    }) || liveAccounts[0];
+    const liveAccountId = liveAccount ? String(liveAccount.id) : envAccountId;
+    const liveAccountProvider = liveAccount ? (liveAccount.provider || liveAccount.platform || liveAccount.type || "").toLowerCase() : targetPlatform;
+
+    if (!liveAccountId) {
+      return res.json({ ok: false, envConfigured, liveAccounts, error: `No account ID found (env or live) for ${targetPlatform}` });
+    }
+
+    const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const attempts = [];
 
-    const body1 = { post: { content: "ST1 debug test", profiles: [String(accountId)], schedule_time: testSchedule } };
+    // Helper: try a pattern, record result
+    const tryPost = async (label, path, body, wsHeader = false) => {
+      const r = await publerRequest(path, "POST", body, apiKey, wsHeader ? workspaceId : null);
+      attempts.push({ path: label, httpStatus: r.status, ok: r.ok, publerResponse: r.data });
+      return r;
+    };
 
-    // Pattern 1: workspace-scoped path (most common modern REST pattern)
-    const r1 = await publerRequest(`/workspaces/${workspaceId}/posts`, "POST", body1, apiKey);
-    attempts.push({ path: `/workspaces/${workspaceId}/posts`, httpStatus: r1.status, ok: r1.ok, publerResponse: r1.data });
-    if (r1.ok) return res.json({ ok: true, successPath: `/workspaces/${workspaceId}/posts`, accountId, envConfigured, attempts });
+    // ── Pattern A: profiles array + schedule_time (current format, live account ID)
+    const bodyA = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule } };
+    const rA = await tryPost(`POST /posts  [profiles+schedule_time, live ID ${liveAccountId.slice(-6)}]`, "/posts", bodyA, true);
+    if (rA.ok) return res.json({ ok: true, successPattern: "A", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // Pattern 2: /posts with workspace header
-    const r2 = await publerRequest("/posts", "POST", body1, apiKey, workspaceId);
-    attempts.push({ path: "/posts + workspace header", httpStatus: r2.status, ok: r2.ok, publerResponse: r2.data });
-    if (r2.ok) return res.json({ ok: true, successPath: "/posts", accountId, envConfigured, attempts });
+    // ── Pattern B: account_id singular (matches what GET /posts returns in existing posts)
+    const bodyB = { post: { content: "ST1 debug test ✓", account_id: liveAccountId, schedule_time: testSchedule } };
+    const rB = await tryPost(`POST /posts  [account_id singular, live ID]`, "/posts", bodyB, true);
+    if (rB.ok) return res.json({ ok: true, successPattern: "B", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // Pattern 3: /posts without workspace header
-    const r3 = await publerRequest("/posts", "POST", body1, apiKey);
-    attempts.push({ path: "/posts (no workspace header)", httpStatus: r3.status, ok: r3.ok, publerResponse: r3.data });
-    if (r3.ok) return res.json({ ok: true, successPath: "/posts (no workspace)", accountId, envConfigured, attempts });
+    // ── Pattern C: networks object format (mirrors Publer's own GET response structure)
+    const bodyC = { post: { content: "ST1 debug test ✓", networks: { [liveAccountProvider]: { account_id: liveAccountId } }, schedule_time: testSchedule } };
+    const rC = await tryPost(`POST /posts  [networks object, provider=${liveAccountProvider}]`, "/posts", bodyC, true);
+    if (rC.ok) return res.json({ ok: true, successPattern: "C", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // Pattern 4: GET /posts — does this collection route even exist?
-    const r4 = await publerRequest("/posts?per_page=1", "GET", null, apiKey, workspaceId);
-    attempts.push({ path: "GET /posts (read check)", httpStatus: r4.status, ok: r4.ok, publerResponse: r4.data });
+    // ── Pattern D: scheduled_at instead of schedule_time (some Publer versions use this)
+    const bodyD = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId], scheduled_at: testSchedule } };
+    const rD = await tryPost(`POST /posts  [profiles+scheduled_at]`, "/posts", bodyD, true);
+    if (rD.ok) return res.json({ ok: true, successPattern: "D", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    return res.json({ ok: false, accountId, envConfigured, scheduleTime: testSchedule, attempts });
+    // ── Pattern E: no schedule (immediate post) — strips schedule_time entirely
+    const bodyE = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId] } };
+    const rE = await tryPost(`POST /posts  [profiles only, no schedule]`, "/posts", bodyE, true);
+    if (rE.ok) return res.json({ ok: true, successPattern: "E", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // ── Pattern F: try /social_accounts/{id}/posts (some platforms use account-scoped URLs)
+    const rF = await tryPost(`POST /social_accounts/${liveAccountId}/posts`, `/social_accounts/${liveAccountId}/posts`, bodyE, false);
+    if (rF.ok) return res.json({ ok: true, successPattern: "F", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // ── Pattern G: bulk format (documented in older Publer API)
+    const bodyG = { bulk: { state: "scheduled", posts: [{ content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule }] } };
+    const rG = await tryPost(`POST /posts  [bulk: wrapper]`, "/posts", bodyG, true);
+    if (rG.ok) return res.json({ ok: true, successPattern: "G", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // ── Pattern H: verify GET /accounts matches env var IDs
+    const getCheck = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
+    attempts.push({ path: "GET /accounts (verify IDs)", httpStatus: getCheck.status, ok: getCheck.ok, publerResponse: getCheck.data });
+
+    return res.json({
+      ok: false,
+      liveAccountId,
+      envAccountId,
+      idsMatch: liveAccountId === envAccountId,
+      envConfigured,
+      liveAccounts: liveAccounts.map(a => ({ id: a.id, provider: a.provider || a.platform || a.type, name: a.name || a.username })),
+      scheduleTime: testSchedule,
+      attempts,
+    });
   }
 
   // ── Post / Schedule ────────────────────────────────────────────────────────

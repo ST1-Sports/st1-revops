@@ -415,8 +415,17 @@ export default function App() {
   const dispatch = useCallback((action, payload) => {
     set(prev => {
       const next = reducer(prev, action, payload);
-      // On logout: immediately flush data to server so other devices see it
-      if (action === "LOGOUT") {
+      // Sync to server immediately for any action that mutates persistent data
+      const syncActions = [
+        "LOGOUT",
+        "ADD_CAMPAIGN","UPDATE_CAMPAIGN","DELETE_CAMPAIGN",
+        "ADD_CONTACT_LIST","DEL_CONTACT_LIST","ADD_CONTACTS",
+        "ADD_BRAND_ASSET","DEL_BRAND_ASSET",
+        "ADD_DEAL","UPDATE_DEAL","DEL_DEAL",
+        "ADD_ACCOUNT","UPDATE_ACCOUNT","DEL_ACCOUNT",
+        "SAVE_SETTINGS",
+      ];
+      if (syncActions.includes(action)) {
         const {currentUserId: _cid, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({state: toSync})}).catch(()=>{});
