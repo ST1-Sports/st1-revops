@@ -220,7 +220,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Debug: try a test post and return full raw response ───────────────────
+  // ── Debug: try multiple endpoint patterns and return full raw responses ───────
   if (action === "debug-post") {
     const targetPlatform = req.body.platform || "instagram";
     const platformMap2 = {
@@ -236,10 +236,29 @@ export default async function handler(req, res) {
     if (!accountId) {
       return res.json({ ok: false, envConfigured, error: `No account ID for ${targetPlatform}` });
     }
-    const testSchedule = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    const testBody = { post: { content: "ST1 RevOps debug test — ignore", profiles: [String(accountId)], schedule_time: testSchedule } };
-    const { ok, status: s, data } = await publerRequest("/posts", "POST", testBody, apiKey, workspaceId);
-    return res.json({ ok, httpStatus: s, envConfigured, accountId, testBody, rawPublerResponse: data });
+    const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    // Try 3 different body formats against /posts — return all results
+    const attempts = [];
+
+    // Format 1: { post: { content, profiles, schedule_time } }
+    const body1 = { post: { content: "ST1 debug test", profiles: [String(accountId)], schedule_time: testSchedule } };
+    const r1 = await publerRequest("/posts", "POST", body1, apiKey, workspaceId);
+    attempts.push({ path: "/posts", bodyFormat: "post wrapper + profiles array", httpStatus: r1.status, ok: r1.ok, publerResponse: r1.data });
+    if (r1.ok) return res.json({ ok: true, successFormat: "post wrapper + profiles array", accountId, envConfigured, attempts });
+
+    // Format 2: flat body { content, profiles, schedule_time }  (no post wrapper)
+    const body2 = { content: "ST1 debug test", profiles: [String(accountId)], schedule_time: testSchedule };
+    const r2 = await publerRequest("/posts", "POST", body2, apiKey, workspaceId);
+    attempts.push({ path: "/posts", bodyFormat: "flat (no wrapper)", httpStatus: r2.status, ok: r2.ok, publerResponse: r2.data });
+    if (r2.ok) return res.json({ ok: true, successFormat: "flat no wrapper", accountId, envConfigured, attempts });
+
+    // Format 3: bulk endpoint  { bulk: { state: "scheduled", posts: [{ account_id, networks, scheduled_at }] } }
+    const body3 = { bulk: { state: "scheduled", posts: [{ account_id: String(accountId), scheduled_at: testSchedule, networks: { instagram: { type: "photo", text: "ST1 debug test" } } }] } };
+    const r3 = await publerRequest("/posts/bulk", "POST", body3, apiKey, workspaceId);
+    attempts.push({ path: "/posts/bulk", bodyFormat: "bulk legacy", httpStatus: r3.status, ok: r3.ok, publerResponse: r3.data });
+
+    return res.json({ ok: false, accountId, envConfigured, scheduleTime: testSchedule, attempts });
   }
 
   // ── Post / Schedule ────────────────────────────────────────────────────────
