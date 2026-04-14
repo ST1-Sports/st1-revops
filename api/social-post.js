@@ -251,53 +251,113 @@ export default async function handler(req, res) {
     const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const attempts = [];
 
-    // Helper: try a pattern, record result
+    // Helper: try a JSON POST pattern
     const tryPost = async (label, path, body, wsHeader = false) => {
       const r = await publerRequest(path, "POST", body, apiKey, wsHeader ? workspaceId : null);
       attempts.push({ path: label, httpStatus: r.status, ok: r.ok, publerResponse: r.data });
       return r;
     };
 
-    // ── Pattern A: profiles array + schedule_time (current format, live account ID)
+    // Helper: try form-encoded POST
+    const tryFormPost = async (label, path, params) => {
+      const headers = {
+        Authorization: `Bearer-API ${apiKey}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+        "Publer-Workspace-Id": workspaceId,
+      };
+      const body = new URLSearchParams(params).toString();
+      const r = await fetch(`${PUBLER_API}${path}`, { method: "POST", headers, body });
+      let data;
+      try { data = await r.json(); } catch { data = { _raw: await r.text().catch(()=>"") }; }
+      attempts.push({ path: label, httpStatus: r.status, ok: r.ok, publerResponse: data });
+      return { ok: r.ok, status: r.status, data };
+    };
+
+    // ── ROUND 1: API v1 /posts with various body shapes ───────────────────────
+
+    // Pattern A: profiles array + schedule_time (current format, live account ID)
     const bodyA = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule } };
     const rA = await tryPost(`POST /posts  [profiles+schedule_time, live ID ${liveAccountId.slice(-6)}]`, "/posts", bodyA, true);
     if (rA.ok) return res.json({ ok: true, successPattern: "A", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern B: account_id singular (matches what GET /posts returns in existing posts)
+    // Pattern B: account_id singular
     const bodyB = { post: { content: "ST1 debug test ✓", account_id: liveAccountId, schedule_time: testSchedule } };
-    const rB = await tryPost(`POST /posts  [account_id singular, live ID]`, "/posts", bodyB, true);
+    const rB = await tryPost(`POST /posts  [account_id singular]`, "/posts", bodyB, true);
     if (rB.ok) return res.json({ ok: true, successPattern: "B", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern C: networks object format (mirrors Publer's own GET response structure)
+    // Pattern C: networks object format
     const bodyC = { post: { content: "ST1 debug test ✓", networks: { [liveAccountProvider]: { account_id: liveAccountId } }, schedule_time: testSchedule } };
     const rC = await tryPost(`POST /posts  [networks object, provider=${liveAccountProvider}]`, "/posts", bodyC, true);
     if (rC.ok) return res.json({ ok: true, successPattern: "C", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern D: scheduled_at instead of schedule_time (some Publer versions use this)
+    // Pattern D: scheduled_at instead of schedule_time
     const bodyD = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId], scheduled_at: testSchedule } };
     const rD = await tryPost(`POST /posts  [profiles+scheduled_at]`, "/posts", bodyD, true);
     if (rD.ok) return res.json({ ok: true, successPattern: "D", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern E: no schedule (immediate post) — strips schedule_time entirely
+    // Pattern E: no schedule
     const bodyE = { post: { content: "ST1 debug test ✓", profiles: [liveAccountId] } };
     const rE = await tryPost(`POST /posts  [profiles only, no schedule]`, "/posts", bodyE, true);
     if (rE.ok) return res.json({ ok: true, successPattern: "E", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern F: try /social_accounts/{id}/posts (some platforms use account-scoped URLs)
+    // Pattern F: /social_accounts/{id}/posts
     const rF = await tryPost(`POST /social_accounts/${liveAccountId}/posts`, `/social_accounts/${liveAccountId}/posts`, bodyE, false);
     if (rF.ok) return res.json({ ok: true, successPattern: "F", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern G: bulk format (documented in older Publer API)
+    // Pattern G: bulk wrapper
     const bodyG = { bulk: { state: "scheduled", posts: [{ content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule }] } };
     const rG = await tryPost(`POST /posts  [bulk: wrapper]`, "/posts", bodyG, true);
     if (rG.ok) return res.json({ ok: true, successPattern: "G", liveAccountId, envConfigured, liveAccounts, attempts });
 
-    // ── Pattern H: verify GET /accounts matches env var IDs
-    const getCheck = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
-    attempts.push({ path: "GET /accounts (verify IDs)", httpStatus: getCheck.status, ok: getCheck.ok, publerResponse: getCheck.data });
+    // ── ROUND 2: New approaches not yet tried ──────────────────────────────────
+
+    // Pattern H: Use "text" instead of "content" (some Publer docs show "text" as the field name)
+    const bodyH = { post: { text: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule } };
+    const rH = await tryPost(`POST /posts  [text field instead of content]`, "/posts", bodyH, true);
+    if (rH.ok) return res.json({ ok: true, successPattern: "H", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // Pattern I: API v2 endpoint — try /api/v2/posts directly
+    try {
+      const headers2 = { Authorization: `Bearer-API ${apiKey}`, "Content-Type": "application/json", Accept: "application/json" };
+      const r2 = await fetch("https://app.publer.com/api/v2/posts", { method: "POST", headers: headers2, body: JSON.stringify(bodyA) });
+      let d2; try { d2 = await r2.json(); } catch { d2 = { _raw: await r2.text().catch(()=>"") }; }
+      attempts.push({ path: "POST /api/v2/posts  [API v2]", httpStatus: r2.status, ok: r2.ok, publerResponse: d2 });
+      if (r2.ok) return res.json({ ok: true, successPattern: "I-v2", liveAccountId, envConfigured, liveAccounts, attempts });
+    } catch(e2) {
+      attempts.push({ path: "POST /api/v2/posts  [API v2]", httpStatus: 0, ok: false, publerResponse: { error: e2.message } });
+    }
+
+    // Pattern J: form-encoded body (some APIs require this even when docs say JSON)
+    const rJ = await tryFormPost(`POST /posts  [form-encoded, profiles[]+schedule_time]`, "/posts", {
+      "post[content]": "ST1 debug test ✓",
+      "post[profiles][]": liveAccountId,
+      "post[schedule_time]": testSchedule,
+    });
+    if (rJ.ok) return res.json({ ok: true, successPattern: "J", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // Pattern K: POST /posts/schedule (alternative schedule endpoint)
+    const rK = await tryPost(`POST /posts/schedule  [alternate schedule path]`, "/posts/schedule", bodyA, true);
+    if (rK.ok) return res.json({ ok: true, successPattern: "K", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // Pattern L: flat body (no "post" wrapper) — some API proxies strip one level
+    const bodyL = { content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule };
+    const rL = await tryPost(`POST /posts  [flat body, no post: wrapper]`, "/posts", bodyL, true);
+    if (rL.ok) return res.json({ ok: true, successPattern: "L", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // Pattern M: Workspace ID in URL path instead of header
+    const rM = await tryPost(`POST /workspaces/${workspaceId}/posts  [workspace in URL]`, `/workspaces/${workspaceId}/posts`, { post: { content: "ST1 debug test ✓", profiles: [liveAccountId], schedule_time: testSchedule } }, false);
+    if (rM.ok) return res.json({ ok: true, successPattern: "M", liveAccountId, envConfigured, liveAccounts, attempts });
+
+    // ── Plan diagnostic: GET /me or /profile to check plan tier ───────────────
+    const meCheck = await publerRequest("/me", "GET", null, apiKey, workspaceId);
+    attempts.push({ path: "GET /me  [plan check]", httpStatus: meCheck.status, ok: meCheck.ok, publerResponse: meCheck.data });
+    const profileCheck = await publerRequest("/profile", "GET", null, apiKey, workspaceId);
+    attempts.push({ path: "GET /profile  [plan check]", httpStatus: profileCheck.status, ok: profileCheck.ok, publerResponse: profileCheck.data });
 
     return res.json({
       ok: false,
+      diagnosis: "All 13 POST patterns returned non-2xx. GET endpoints work. This strongly suggests the Publer plan does not allow API posting (read-only API access on free/basic tier) — or the workspace ID is wrong.",
       liveAccountId,
       envAccountId,
       idsMatch: liveAccountId === envAccountId,
