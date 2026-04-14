@@ -220,114 +220,101 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Debug: confirm workspace ID is the problem + try live workspace ID ────────
+  // ── Debug ─────────────────────────────────────────────────────────────────────
   if (action === "debug-post") {
-    // Show stored workspace ID details
-    const storedWsId = workspaceId;
-    const wsIdTail = storedWsId ? `...${String(storedWsId).slice(-6)}` : "NOT SET";
-    const wsIdLen  = storedWsId ? String(storedWsId).length : 0;
+    const BASE = "https://app.publer.com/api/v1";
 
-    // Fetch live workspace IDs directly from Publer (no workspace header needed for this)
-    const { ok: wsOk, data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
+    // Fetch workspace details — includes plan/subscription info
+    const { data: wsData }  = await publerRequest("/workspaces", "GET", null, apiKey);
     const liveWorkspaces = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
-    const liveWsId = liveWorkspaces[0] ? String(liveWorkspaces[0].id) : null;
+    const liveWsId = liveWorkspaces[0] ? String(liveWorkspaces[0].id) : workspaceId;
+    const wsDetails = liveWorkspaces[0] || {};
 
-    // Fetch live accounts
-    const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, storedWsId);
+    // Fetch workspace by ID for deeper plan info
+    const { data: wsDetailData } = await publerRequest(`/workspaces/${liveWsId}`, "GET", null, apiKey);
+
+    // Fetch ALL account details (full objects, not just ids)
+    const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, liveWsId);
     const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
-    const liveAccountId = liveAccounts[0] ? String(liveAccounts[0].id) : null;
 
-    if (!liveAccountId) {
-      return res.json({ ok: false, wsIdTail, wsIdLen, storedWsId, liveWsId, liveWorkspaces, liveAccounts, error: "No account ID found in GET /accounts" });
+    if (!liveAccounts.length) {
+      return res.json({ ok: false, error: "No accounts found", wsDetails, wsDetailData });
     }
 
     const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const attempts = [];
-    const BASE = "https://app.publer.com/api/v1";
-    const postBody = { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } };
 
     const rawPost = async (label, url, body, extraHeaders = {}) => {
-      const headers = {
-        Authorization: `Bearer-API ${apiKey}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...extraHeaders,
-      };
+      const headers = { Authorization: `Bearer-API ${apiKey}`, "Content-Type": "application/json", Accept: "application/json", ...extraHeaders };
       try {
         const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
         const text = await r.text();
-        let data;
-        try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 800) }; }
+        let data; try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 800) }; }
         attempts.push({ label, httpStatus: r.status, ok: r.ok, response: data });
         return { ok: r.ok, status: r.status, data };
       } catch(e) {
         attempts.push({ label, httpStatus: 0, ok: false, response: { error: e.message } });
-        return { ok: false, status: 0, data: { error: e.message } };
+        return { ok: false, status: 0, data: {} };
       }
     };
 
-    // S1: stored workspace ID — we know this 500s
-    const r1 = await rawPost("S1: /posts/schedule [STORED workspace ID]",
-      `${BASE}/posts/schedule`, postBody,
-      storedWsId ? { "Publer-Workspace-Id": storedWsId } : {});
-    if (r1.ok) return res.json({ ok: true, successPattern: "S1", usedWsId: storedWsId, attempts });
+    const wsHdr = { "Publer-Workspace-Id": liveWsId };
 
-    // S2: live workspace ID fetched fresh from GET /workspaces — the real fix
-    if (liveWsId && liveWsId !== storedWsId) {
-      const r2 = await rawPost(`S2: /posts/schedule [LIVE workspace ID ${liveWsId}]`,
-        `${BASE}/posts/schedule`, postBody,
-        { "Publer-Workspace-Id": liveWsId });
-      if (r2.ok) return res.json({ ok: true, successPattern: "S2", usedWsId: liveWsId, note: "SUCCESS with live workspace ID — update PUBLER_WORKSPACE_ID env var to: " + liveWsId, attempts });
-    } else if (liveWsId) {
-      attempts.push({ label: "S2: skipped (live ID == stored ID)", httpStatus: 0, ok: false, response: { note: "same as S1" } });
+    // Try with each account separately
+    for (const acct of liveAccounts) {
+      const acctId = String(acct.id);
+      const acctType = acct.provider || acct.platform || acct.type || "unknown";
+
+      // T1: standard format
+      const r1 = await rawPost(`T1 [${acctType}/${acctId.slice(-6)}] profiles+schedule_time`,
+        `${BASE}/posts/schedule`,
+        { post: { content: "ST1 test", profiles: [acctId], schedule_time: testSchedule } }, wsHdr);
+      if (r1.ok) return res.json({ ok: true, successPattern: "T1", acctId, acctType, attempts });
+
+      // T2: account_ids array
+      const r2 = await rawPost(`T2 [${acctType}/${acctId.slice(-6)}] account_ids array`,
+        `${BASE}/posts/schedule`,
+        { post: { content: "ST1 test", account_ids: [acctId], schedule_time: testSchedule } }, wsHdr);
+      if (r2.ok) return res.json({ ok: true, successPattern: "T2", acctId, acctType, attempts });
     }
 
-    // S3: try each live workspace ID if there are multiple
-    for (let i = 0; i < liveWorkspaces.length; i++) {
-      const wsId = String(liveWorkspaces[i].id);
-      if (wsId === storedWsId) continue; // already tried in S1
-      const r = await rawPost(`S3.${i}: /posts/schedule [workspace ${wsId}]`,
-        `${BASE}/posts/schedule`, postBody,
-        { "Publer-Workspace-Id": wsId });
-      if (r.ok) return res.json({ ok: true, successPattern: `S3.${i}`, usedWsId: wsId, note: "SUCCESS — update PUBLER_WORKSPACE_ID to: " + wsId, attempts });
-    }
+    // T3: workspace ID in URL path (not header)
+    const firstAcctId = String(liveAccounts[0].id);
+    const r3 = await rawPost(`T3 workspace-in-URL /workspaces/${liveWsId}/posts/schedule`,
+      `${BASE}/workspaces/${liveWsId}/posts/schedule`,
+      { post: { content: "ST1 test", profiles: [firstAcctId], schedule_time: testSchedule } }, {});
+    if (r3.ok) return res.json({ ok: true, successPattern: "T3", attempts });
 
-    // S4: try without any workspace header (got 401 last time — expected but confirms endpoint exists)
-    const r4 = await rawPost("S4: /posts/schedule [no workspace header]",
-      `${BASE}/posts/schedule`, postBody, {});
-    if (r4.ok) return res.json({ ok: true, successPattern: "S4", attempts });
+    // T4: try /posts (not /posts/schedule) with workspace in URL
+    const r4 = await rawPost(`T4 workspace-in-URL /workspaces/${liveWsId}/posts`,
+      `${BASE}/workspaces/${liveWsId}/posts`,
+      { post: { content: "ST1 test", profiles: [firstAcctId], schedule_time: testSchedule } }, {});
+    if (r4.ok) return res.json({ ok: true, successPattern: "T4", attempts });
 
-    // S5: if still failing with live workspace ID, try the workspace ID as integer
-    if (liveWsId) {
-      const wsInt = parseInt(liveWsId, 10);
-      if (!isNaN(wsInt) && String(wsInt) !== liveWsId) {
-        const r5 = await rawPost(`S5: /posts/schedule [live workspace as integer ${wsInt}]`,
-          `${BASE}/posts/schedule`, postBody,
-          { "Publer-Workspace-Id": String(wsInt) });
-        if (r5.ok) return res.json({ ok: true, successPattern: "S5", usedWsId: wsInt, attempts });
-      }
-    }
+    // T5: completely empty body — if still 500, plan restriction is confirmed
+    const r5 = await rawPost("T5 empty body {} [plan restriction check]",
+      `${BASE}/posts/schedule`, {}, wsHdr);
 
-    const byStatus = {};
-    for (const a of attempts) {
-      const k = String(a.httpStatus);
-      if (!byStatus[k]) byStatus[k] = [];
-      byStatus[k].push(a.label);
-    }
+    // Plan restriction diagnosis: if empty {} gives same 500 as full body, it's a plan gate
+    const planRestricted = r5.status === 500;
 
     return res.json({
       ok: false,
-      storedWsId,
-      liveWsId,
-      wsIdMatch: storedWsId === liveWsId,
-      workspaceIdInfo: { tail: wsIdTail, length: wsIdLen },
-      liveWorkspaces: liveWorkspaces.map(w => ({ id: w.id, name: w.name || w.title })),
-      liveAccountId,
-      liveAccounts: liveAccounts.map(a => ({ id: a.id, type: a.provider||a.platform||a.type, name: a.name||a.username })),
-      statusSummary: byStatus,
-      diagnosis: liveWsId && liveWsId !== storedWsId
-        ? `Stored PUBLER_WORKSPACE_ID (${wsIdTail}) != live workspace ID (${liveWsId}). Update the env var and redeploy.`
-        : "Workspace IDs match but still 500 — Publer server error on this workspace or plan restriction.",
+      diagnosis: planRestricted
+        ? "LIKELY PLAN RESTRICTION: POST /posts/schedule returns HTTP 500 even for an empty {} body. This means Publer's server is failing before reading the request — almost always a plan/subscription gate. Check your Publer plan at app.publer.com/settings/subscription — API posting usually requires a paid plan."
+        : "Empty body returned different status — body format may be the issue.",
+      workspaceId: liveWsId,
+      workspaceDetails: wsDetails,
+      workspaceDetailsFull: wsDetailData,
+      liveAccounts: liveAccounts.map(a => ({
+        id: a.id,
+        type: a.provider||a.platform||a.type,
+        name: a.name||a.username,
+        needs_reconnect: a.needs_reconnect,
+        plan: a.plan || a.subscription || a.tier || null,
+        // Full raw object for inspection
+        _raw: a,
+      })),
       attempts,
     });
   }
