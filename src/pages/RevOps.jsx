@@ -8534,7 +8534,11 @@ function ModSocial() {
       const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
       const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
       const chosen=new Date(`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`);
-      if(chosen<=new Date()){toast("Scheduled time must be in the future","error");return;}
+      if(chosen<=new Date()){
+        const n=new Date(Date.now()+5*60*1000);
+        toast(`${scheduleTime} is in the past — pick a time after ${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}  (your local time)`,"error");
+        return;
+      }
     }
     setPosting(true);
     const tzOff=new Date().getTimezoneOffset(); // e.g. 300 for CDT (UTC-5)
@@ -8719,7 +8723,11 @@ function ModSocial() {
                     const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
                     const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
                     const chosen=new Date(`${editDraft.scheduleAt}T${editDraft.scheduleTime||"09:00"}:00${tzSign}${tzH}:${tzM}`);
-                    if(chosen<=new Date()){toast("Scheduled time must be in the future","error");return;}
+                    if(chosen<=new Date()){
+                      const n=new Date(Date.now()+5*60*1000);
+                      toast(`${editDraft.scheduleTime||"09:00"} is in the past — pick a time after ${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")} (your local time)`,"error");
+                      return;
+                    }
                   }
                   dispatch("UPDATE_SOCIAL_POST",{id:p.id,caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
                   setEditingPostId(null);
@@ -8842,7 +8850,11 @@ function ModSocial() {
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>DATE (blank = post now)</div>
-                  <input type="date" value={scheduleAt} min={today()} onChange={e=>setScheduleAt(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+                  <input type="date" value={scheduleAt} min={today()} onChange={e=>{
+                    const d=e.target.value; setScheduleAt(d);
+                    // If today selected, advance time to now+15min so it's always valid
+                    if(d===today()){const n=new Date(Date.now()+15*60*1000);setScheduleTime(`${String(n.getHours()).padStart(2,"0")}:${String(n.getMinutes()).padStart(2,"0")}`);}
+                  }} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
                 </div>
                 <div>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>
