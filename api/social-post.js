@@ -220,25 +220,32 @@ export default async function handler(req, res) {
     }
   }
 
-  // ── Debug: try multiple endpoint patterns and return full raw responses ───────
+  // ── Debug: confirm workspace ID is the problem + try live workspace ID ────────
   if (action === "debug-post") {
-    // Expose workspace ID (last 6 chars) so we can verify it looks right
-    const wsIdTail = workspaceId ? `...${String(workspaceId).slice(-6)}` : "NOT SET";
-    const wsIdLen  = workspaceId ? String(workspaceId).length : 0;
+    // Show stored workspace ID details
+    const storedWsId = workspaceId;
+    const wsIdTail = storedWsId ? `...${String(storedWsId).slice(-6)}` : "NOT SET";
+    const wsIdLen  = storedWsId ? String(storedWsId).length : 0;
+
+    // Fetch live workspace IDs directly from Publer (no workspace header needed for this)
+    const { ok: wsOk, data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const liveWorkspaces = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
+    const liveWsId = liveWorkspaces[0] ? String(liveWorkspaces[0].id) : null;
 
     // Fetch live accounts
-    const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
+    const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, storedWsId);
     const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
     const liveAccountId = liveAccounts[0] ? String(liveAccounts[0].id) : null;
 
     if (!liveAccountId) {
-      return res.json({ ok: false, wsIdTail, wsIdLen, liveAccounts, error: "No account ID found in GET /accounts" });
+      return res.json({ ok: false, wsIdTail, wsIdLen, storedWsId, liveWsId, liveWorkspaces, liveAccounts, error: "No account ID found in GET /accounts" });
     }
 
     const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const attempts = [];
+    const BASE = "https://app.publer.com/api/v1";
+    const postBody = { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } };
 
-    // Low-level raw fetch — captures full body + selected response headers
     const rawPost = async (label, url, body, extraHeaders = {}) => {
       const headers = {
         Authorization: `Bearer-API ${apiKey}`,
@@ -251,9 +258,7 @@ export default async function handler(req, res) {
         const text = await r.text();
         let data;
         try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 800) }; }
-        // Capture any extra error info from headers
-        const xError = r.headers.get("x-error") || r.headers.get("x-message") || r.headers.get("x-exception") || null;
-        attempts.push({ label, httpStatus: r.status, ok: r.ok, response: data, xError });
+        attempts.push({ label, httpStatus: r.status, ok: r.ok, response: data });
         return { ok: r.ok, status: r.status, data };
       } catch(e) {
         attempts.push({ label, httpStatus: 0, ok: false, response: { error: e.message } });
@@ -261,83 +266,68 @@ export default async function handler(req, res) {
       }
     };
 
-    const BASE = "https://app.publer.com/api/v1";
-    const wsHdr = { "Publer-Workspace-Id": workspaceId };
-    const body = { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } };
+    // S1: stored workspace ID — we know this 500s
+    const r1 = await rawPost("S1: /posts/schedule [STORED workspace ID]",
+      `${BASE}/posts/schedule`, postBody,
+      storedWsId ? { "Publer-Workspace-Id": storedWsId } : {});
+    if (r1.ok) return res.json({ ok: true, successPattern: "S1", usedWsId: storedWsId, attempts });
 
-    // ── Confirm: /posts/schedule with workspace header (from last run → 500) ──
-    const rBase = await rawPost("S1: /posts/schedule [WITH workspace header]",
-      `${BASE}/posts/schedule`, body, wsHdr);
-    if (rBase.ok) return res.json({ ok: true, successPattern: "S1", attempts });
-
-    // ── Key test: /posts/schedule WITHOUT workspace header ─────────────────────
-    // If this changes the response (e.g. goes 422/400 instead of 500), the
-    // workspace ID is the problem.
-    const rNoWs = await rawPost("S2: /posts/schedule [NO workspace header]",
-      `${BASE}/posts/schedule`, body, {});
-    if (rNoWs.ok) return res.json({ ok: true, successPattern: "S2", attempts });
-
-    // ── Key test: workspace_id in body instead of header ──────────────────────
-    const rWsBody = await rawPost("S3: /posts/schedule [workspace_id in body]",
-      `${BASE}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule, workspace_id: workspaceId } },
-      {});
-    if (rWsBody.ok) return res.json({ ok: true, successPattern: "S3", attempts });
-
-    // ── Key test: workspace ID in URL path ─────────────────────────────────────
-    const rWsPath = await rawPost(`S4: /workspaces/${workspaceId}/posts/schedule [ws in URL]`,
-      `${BASE}/workspaces/${workspaceId}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } },
-      {});
-    if (rWsPath.ok) return res.json({ ok: true, successPattern: "S4", attempts });
-
-    // ── Minimal body: just text, no profiles, no schedule ──────────────────────
-    // If this returns a different error (like "profiles required"), we'll learn
-    // what fields Publer actually validates.
-    const rMin = await rawPost("S5: /posts/schedule [minimal: just text]",
-      `${BASE}/posts/schedule`, { post: { content: "ST1 test" } }, wsHdr);
-    if (rMin.ok) return res.json({ ok: true, successPattern: "S5", attempts });
-
-    const rEmpty = await rawPost("S6: /posts/schedule [empty body {}]",
-      `${BASE}/posts/schedule`, {}, wsHdr);
-    if (rEmpty.ok) return res.json({ ok: true, successPattern: "S6", attempts });
-
-    // ── Try Bearer (not Bearer-API) on /posts/schedule ────────────────────────
-    // Checks if POST endpoints require different auth header than GET
-    try {
-      const r7 = await fetch(`${BASE}/posts/schedule`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          "Publer-Workspace-Id": workspaceId,
-        },
-        body: JSON.stringify(body),
-      });
-      const t7 = await r7.text();
-      let d7; try { d7 = JSON.parse(t7); } catch { d7 = { _raw: t7.slice(0, 500) }; }
-      attempts.push({ label: "S7: /posts/schedule [Bearer (not Bearer-API)]", httpStatus: r7.status, ok: r7.ok, response: d7 });
-      if (r7.ok) return res.json({ ok: true, successPattern: "S7", attempts });
-    } catch(e) {
-      attempts.push({ label: "S7: Bearer", error: e.message });
+    // S2: live workspace ID fetched fresh from GET /workspaces — the real fix
+    if (liveWsId && liveWsId !== storedWsId) {
+      const r2 = await rawPost(`S2: /posts/schedule [LIVE workspace ID ${liveWsId}]`,
+        `${BASE}/posts/schedule`, postBody,
+        { "Publer-Workspace-Id": liveWsId });
+      if (r2.ok) return res.json({ ok: true, successPattern: "S2", usedWsId: liveWsId, note: "SUCCESS with live workspace ID — update PUBLER_WORKSPACE_ID env var to: " + liveWsId, attempts });
+    } else if (liveWsId) {
+      attempts.push({ label: "S2: skipped (live ID == stored ID)", httpStatus: 0, ok: false, response: { note: "same as S1" } });
     }
 
-    // ── Summarize ──────────────────────────────────────────────────────────────
+    // S3: try each live workspace ID if there are multiple
+    for (let i = 0; i < liveWorkspaces.length; i++) {
+      const wsId = String(liveWorkspaces[i].id);
+      if (wsId === storedWsId) continue; // already tried in S1
+      const r = await rawPost(`S3.${i}: /posts/schedule [workspace ${wsId}]`,
+        `${BASE}/posts/schedule`, postBody,
+        { "Publer-Workspace-Id": wsId });
+      if (r.ok) return res.json({ ok: true, successPattern: `S3.${i}`, usedWsId: wsId, note: "SUCCESS — update PUBLER_WORKSPACE_ID to: " + wsId, attempts });
+    }
+
+    // S4: try without any workspace header (got 401 last time — expected but confirms endpoint exists)
+    const r4 = await rawPost("S4: /posts/schedule [no workspace header]",
+      `${BASE}/posts/schedule`, postBody, {});
+    if (r4.ok) return res.json({ ok: true, successPattern: "S4", attempts });
+
+    // S5: if still failing with live workspace ID, try the workspace ID as integer
+    if (liveWsId) {
+      const wsInt = parseInt(liveWsId, 10);
+      if (!isNaN(wsInt) && String(wsInt) !== liveWsId) {
+        const r5 = await rawPost(`S5: /posts/schedule [live workspace as integer ${wsInt}]`,
+          `${BASE}/posts/schedule`, postBody,
+          { "Publer-Workspace-Id": String(wsInt) });
+        if (r5.ok) return res.json({ ok: true, successPattern: "S5", usedWsId: wsInt, attempts });
+      }
+    }
+
     const byStatus = {};
     for (const a of attempts) {
       const k = String(a.httpStatus);
-      byStatus[k] = (byStatus[k] || []);
+      if (!byStatus[k]) byStatus[k] = [];
       byStatus[k].push(a.label);
     }
 
     return res.json({
       ok: false,
+      storedWsId,
+      liveWsId,
+      wsIdMatch: storedWsId === liveWsId,
       workspaceIdInfo: { tail: wsIdTail, length: wsIdLen },
+      liveWorkspaces: liveWorkspaces.map(w => ({ id: w.id, name: w.name || w.title })),
       liveAccountId,
       liveAccounts: liveAccounts.map(a => ({ id: a.id, type: a.provider||a.platform||a.type, name: a.name||a.username })),
       statusSummary: byStatus,
-      diagnosis: "See statusSummary — if S1 (with ws header) = 500 but S2 (without) = 422/400, the workspace ID is wrong. If both 500, something else.",
+      diagnosis: liveWsId && liveWsId !== storedWsId
+        ? `Stored PUBLER_WORKSPACE_ID (${wsIdTail}) != live workspace ID (${liveWsId}). Update the env var and redeploy.`
+        : "Workspace IDs match but still 500 — Publer server error on this workspace or plan restriction.",
       attempts,
     });
   }
@@ -412,17 +402,22 @@ export default async function handler(req, res) {
     });
   }
 
-  // Try workspace-scoped endpoint first (/workspaces/{id}/posts), fall back to /posts with header.
-  const postPath = workspaceId ? `/workspaces/${workspaceId}/posts` : "/posts";
-  const postApiKey = apiKey;
-  const postWsId = workspaceId ? null : null; // workspace already in path
+  // Use /posts/schedule (confirmed live endpoint). Always fetch the workspace ID
+  // fresh from GET /workspaces so a stale env var doesn't break posting.
+  let effectiveWsId = workspaceId;
+  try {
+    const { ok: wsOk, data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const ws = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
+    if (ws[0]?.id) effectiveWsId = String(ws[0].id);
+  } catch {}
 
   try {
     const allPostIds = [];
     const errors = [];
 
     for (const post of posts) {
-      const { ok, status: httpStatus, data } = await publerRequest(postPath, "POST", { post }, postApiKey, null);
+      const { ok, status: httpStatus, data } = await publerRequest(
+        "/posts/schedule", "POST", { post }, apiKey, effectiveWsId);
       if (ok) {
         const parsed = parseSuccess(data, true);
         if (parsed) allPostIds.push(...parsed.postIds);
