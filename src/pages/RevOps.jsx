@@ -39,7 +39,10 @@ const STORE = "st1_revops_v2";
 const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
 
 const mkId   = () => Math.random().toString(36).slice(2,9);
-const today  = () => new Date().toISOString().slice(0,10);
+// Use local date (not UTC) so "today" matches the user's calendar
+const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+// Local "now + N minutes" as HH:MM string
+const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
 const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -8199,7 +8202,7 @@ const PLATFORM_LIMITS  = {twitter:280,instagram:2200,facebook:63206,linkedin:300
 // Full-featured image generator + layer compositor for social posts.
 // Generates background via Ideogram, then lets user drag text/logo layers
 // and export a flattened 1080×1080 JPEG.
-function SocialImageEditor({value, onChange, brandAssets, toast}) {
+function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
   const CW=560,CH=560;
   const [bgImg,setBgImg]=useState(value||"");
   const [layers,setLayers]=useState([]);
@@ -8249,7 +8252,12 @@ function SocialImageEditor({value, onChange, brandAssets, toast}) {
       const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({prompt:imgPrompt,style:imgStyle,sizeKey:"square"})});
       const d=await r.json();
-      if(d.imageUrl){setBgImg(d.imageUrl);onChange(d.imageUrl);}
+      if(d.imageUrl){
+        setBgImg(d.imageUrl);onChange(d.imageUrl);
+        // Auto-save to brand assets so the image persists after navigation
+        if(onSaveAsset) onSaveAsset(d.imageUrl, imgPrompt);
+        toast("Image generated and saved to Brand Assets","success");
+      }
       else toast(d.error||"Failed","error");
     }catch{toast("Failed","error");}
     setGenRunning(false);
@@ -8827,7 +8835,8 @@ function ModSocial() {
             {/* Image */}
             <div style={{marginBottom:14}}>
               <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
-              <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}/>
+              <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
+                onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
@@ -8857,8 +8866,11 @@ function ModSocial() {
                   }} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
                 </div>
                 <div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME</div>
-                  <input type="time" value={scheduleTime} onChange={e=>setScheduleTime(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TIME{scheduleAt===today()&&<span style={{color:B.orange}}> — must be after {nowPlusMin(5)}</span>}</div>
+                  <input type="time" value={scheduleTime}
+                    min={scheduleAt===today()?nowPlusMin(5):undefined}
+                    onChange={e=>setScheduleTime(e.target.value)}
+                    style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
                 </div>
               </div>
             </div>
