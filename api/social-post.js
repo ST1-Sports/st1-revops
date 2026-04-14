@@ -254,46 +254,33 @@ export default async function handler(req, res) {
     scheduledAt = TWO_MIN.toISOString();
   }
 
-  // Build one post object per platform so each succeeds/fails independently.
-  // Confirmed from raw Publer response: account_id (singular) and scheduled_at at post level.
-  // type + text must live inside networks[platform] — top-level type causes "Unknown state" error.
+  // Publer POST /posts API v1 format:
+  //   { post: { content, profiles: [id], schedule_time, media: [{url}], is_story } }
+  // One request per platform so each succeeds/fails independently.
   const missingAccounts = [];
   const posts = [];
   for (const platform of activePlatforms) {
     const accountId = platformMap[platform];
     if (!accountId) { missingAccounts.push(platform); continue; }
-    const contentType = isStory ? "story" : (hasMedia || platform === "instagram") ? "photo" : "status";
     posts.push({
-      account_id: String(accountId),
-      scheduled_at: scheduledAt,
-      networks: {
-        [platform]: {
-          type: contentType,
-          text: postText,
-          ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
-        },
-      },
+      content: postText,
+      profiles: [String(accountId)],
+      schedule_time: scheduledAt,
+      ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+      ...(isStory ? { is_story: true } : {}),
     });
   }
 
-  // Fallback: if no platform-specific IDs found, try PUBLER_ACCOUNT_IDS with first platform
+  // Fallback: if no platform-specific IDs found, try PUBLER_ACCOUNT_IDS
   if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
-    const platform = activePlatforms[0] || "facebook";
-    const contentType = isStory ? "story" : hasMedia ? "photo" : "status";
-    for (const id of fallbackIds) {
-      posts.push({
-        account_id: id,
-        scheduled_at: scheduledAt,
-        networks: {
-          [platform]: {
-            type: contentType,
-            text: postText,
-            ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
-          },
-        },
-      });
-    }
+    posts.push({
+      content: postText,
+      profiles: fallbackIds,
+      schedule_time: scheduledAt,
+      ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
+      ...(isStory ? { is_story: true } : {}),
+    });
   }
 
   if (!posts.length) {
@@ -303,25 +290,22 @@ export default async function handler(req, res) {
     });
   }
 
-  // Use POST /posts (direct post creation) not the /posts/schedule bulk endpoint.
-  // The bulk endpoint always creates "draft_public" (Draft Ideas) regardless of state.
-  // POST /posts with scheduled_at creates properly scheduled calendar posts.
-  // Send one POST /posts request per platform (each has its own account_id).
-  // Collect job IDs or post IDs from each response.
+  // Send each post as { post: {...} } — Publer v1 POST /posts wraps in "post" key.
   try {
     const allPostIds = [];
     const errors = [];
 
     for (const post of posts) {
-      const { ok, data } = await publerRequest("/posts", "POST", post, apiKey, workspaceId);
+      const { ok, status: httpStatus, data } = await publerRequest("/posts", "POST", { post }, apiKey, workspaceId);
       if (ok) {
         const parsed = parseSuccess(data, true);
         if (parsed) allPostIds.push(...parsed.postIds);
         else if (data.id) allPostIds.push(String(data.id));
         else if (data.job_id) allPostIds.push(String(data.job_id));
       } else {
-        errors.push(extractError(data));
-        console.error("[publer] post failed:", JSON.stringify(data).slice(0, 400));
+        const errMsg = extractError(data);
+        errors.push(`${errMsg} (HTTP ${httpStatus})`);
+        console.error("[publer] post failed:", JSON.stringify(data).slice(0, 600));
       }
     }
 
