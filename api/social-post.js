@@ -220,6 +220,28 @@ export default async function handler(req, res) {
     }
   }
 
+  // ── Debug: try a test post and return full raw response ───────────────────
+  if (action === "debug-post") {
+    const targetPlatform = req.body.platform || "instagram";
+    const platformMap2 = {
+      facebook:  process.env.PUBLER_ACCOUNT_FACEBOOK,
+      instagram: process.env.PUBLER_ACCOUNT_INSTAGRAM,
+      linkedin:  process.env.PUBLER_ACCOUNT_LINKEDIN,
+      twitter:   process.env.PUBLER_ACCOUNT_TWITTER,
+    };
+    const accountId = platformMap2[targetPlatform] || process.env.PUBLER_ACCOUNT_IDS?.split(",")[0]?.trim();
+    const envConfigured = Object.fromEntries(
+      Object.entries(platformMap2).map(([k,v]) => [k, v ? `...${String(v).slice(-4)}` : "NOT SET"])
+    );
+    if (!accountId) {
+      return res.json({ ok: false, envConfigured, error: `No account ID for ${targetPlatform}` });
+    }
+    const testSchedule = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+    const testBody = { post: { content: "ST1 RevOps debug test — ignore", profiles: [String(accountId)], schedule_time: testSchedule } };
+    const { ok, status: s, data } = await publerRequest("/posts", "POST", testBody, apiKey, workspaceId);
+    return res.json({ ok, httpStatus: s, envConfigured, accountId, testBody, rawPublerResponse: data });
+  }
+
   // ── Post / Schedule ────────────────────────────────────────────────────────
   if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
 
