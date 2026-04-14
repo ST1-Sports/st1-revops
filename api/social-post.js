@@ -224,98 +224,122 @@ export default async function handler(req, res) {
   if (action === "debug-post") {
     const BASE = "https://app.publer.com/api/v1";
 
-    // Fetch workspace details — includes plan/subscription info
     const { data: wsData }  = await publerRequest("/workspaces", "GET", null, apiKey);
     const liveWorkspaces = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
     const liveWsId = liveWorkspaces[0] ? String(liveWorkspaces[0].id) : workspaceId;
-    const wsDetails = liveWorkspaces[0] || {};
 
-    // Fetch workspace by ID for deeper plan info
-    const { data: wsDetailData } = await publerRequest(`/workspaces/${liveWsId}`, "GET", null, apiKey);
-
-    // Fetch ALL account details (full objects, not just ids)
     const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, liveWsId);
     const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
+    const fbAcct  = liveAccounts.find(a=>(a.provider||a.platform||a.type||"").toLowerCase()==="facebook") || liveAccounts[0];
+    const igAcct  = liveAccounts.find(a=>(a.provider||a.platform||a.type||"").toLowerCase()==="instagram");
+    const acctId  = fbAcct ? String(fbAcct.id) : null;
+    if (!acctId) return res.json({ ok:false, error:"No accounts", liveAccounts });
 
-    if (!liveAccounts.length) {
-      return res.json({ ok: false, error: "No accounts found", wsDetails, wsDetailData });
-    }
-
-    const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const sched = new Date(Date.now() + 20 * 60 * 1000).toISOString();
     const attempts = [];
 
-    const rawPost = async (label, url, body, extraHeaders = {}) => {
-      const headers = { Authorization: `Bearer-API ${apiKey}`, "Content-Type": "application/json", Accept: "application/json", ...extraHeaders };
+    // Full raw fetch with header inspection
+    const rawFetch = async (label, url, method, reqBody, extraHeaders = {}) => {
+      const headers = {
+        Authorization: `Bearer-API ${apiKey}`,
+        Accept: "application/json",
+        "Publer-Workspace-Id": liveWsId,
+        ...extraHeaders,
+      };
+      if (reqBody !== null && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+      const opts = { method, headers };
+      if (reqBody !== null) opts.body = typeof reqBody === "string" ? reqBody : JSON.stringify(reqBody);
       try {
-        const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+        const r = await fetch(url, opts);
         const text = await r.text();
-        let data; try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 800) }; }
-        attempts.push({ label, httpStatus: r.status, ok: r.ok, response: data });
+        let data; try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0,1000) }; }
+        // Capture any informative response headers
+        const hdrs = {};
+        for (const [k,v] of r.headers.entries()) {
+          if (["content-type","x-error","x-message","x-exception","x-request-id","www-authenticate","cf-ray","x-runtime"].includes(k.toLowerCase())) {
+            hdrs[k] = v;
+          }
+        }
+        attempts.push({ label, httpStatus: r.status, ok: r.ok, responseBody: data, responseHeaders: hdrs });
         return { ok: r.ok, status: r.status, data };
       } catch(e) {
-        attempts.push({ label, httpStatus: 0, ok: false, response: { error: e.message } });
+        attempts.push({ label, httpStatus: 0, ok: false, responseBody: { error: e.message } });
         return { ok: false, status: 0, data: {} };
       }
     };
 
-    const wsHdr = { "Publer-Workspace-Id": liveWsId };
+    const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
-    // Try with each account separately
-    for (const acct of liveAccounts) {
-      const acctId = String(acct.id);
-      const acctType = acct.provider || acct.platform || acct.type || "unknown";
+    // T1: baseline — our current approach (500)
+    const r1 = await rawFetch("T1: POST /posts/schedule [standard JSON]",
+      `${BASE}/posts/schedule`, "POST", body);
+    if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
 
-      // T1: standard format
-      const r1 = await rawPost(`T1 [${acctType}/${acctId.slice(-6)}] profiles+schedule_time`,
-        `${BASE}/posts/schedule`,
-        { post: { content: "ST1 test", profiles: [acctId], schedule_time: testSchedule } }, wsHdr);
-      if (r1.ok) return res.json({ ok: true, successPattern: "T1", acctId, acctType, attempts });
+    // T2: add Origin header (Rails CSRF protection sometimes checks this)
+    const r2 = await rawFetch("T2: POST /posts/schedule [+Origin header]",
+      `${BASE}/posts/schedule`, "POST", body,
+      { Origin: "https://app.publer.com", Referer: "https://app.publer.com/" });
+    if (r2.ok) return res.json({ ok:true, successPattern:"T2", attempts });
 
-      // T2: account_ids array
-      const r2 = await rawPost(`T2 [${acctType}/${acctId.slice(-6)}] account_ids array`,
-        `${BASE}/posts/schedule`,
-        { post: { content: "ST1 test", account_ids: [acctId], schedule_time: testSchedule } }, wsHdr);
-      if (r2.ok) return res.json({ ok: true, successPattern: "T2", acctId, acctType, attempts });
+    // T3: multipart/form-data (some Rails APIs require this for media endpoints)
+    const boundary = "----Boundary" + Date.now();
+    const formBody = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="post[content]"`,
+      ``,
+      `ST1 test`,
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="post[profiles][]"`,
+      ``,
+      acctId,
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="post[schedule_time]"`,
+      ``,
+      sched,
+      `--${boundary}--`,
+    ].join("\r\n");
+    const r3 = await rawFetch("T3: POST /posts/schedule [multipart/form-data]",
+      `${BASE}/posts/schedule`, "POST", formBody,
+      { "Content-Type": `multipart/form-data; boundary=${boundary}` });
+    if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
+
+    // T4: GET /posts/schedule — does this endpoint exist as GET?
+    const r4 = await rawFetch("T4: GET /posts/schedule [what does this return?]",
+      `${BASE}/posts/schedule`, "GET", null, {});
+    // (not expecting ok, just inspecting)
+
+    // T5: POST /posts (the standard documented endpoint) — force application/json
+    const r5 = await rawFetch("T5: POST /posts [documented endpoint, no /schedule]",
+      `${BASE}/posts`, "POST", body, {});
+    if (r5.ok) return res.json({ ok:true, successPattern:"T5", attempts });
+
+    // T6: POST /posts with workspace_id IN the body (no header)
+    const r6 = await rawFetch("T6: POST /posts [workspace_id in body, no header]",
+      `${BASE}/posts`, "POST",
+      { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched, workspace_id: liveWsId } },
+      { "Publer-Workspace-Id": "" });
+    if (r6.ok) return res.json({ ok:true, successPattern:"T6", attempts });
+
+    // T7: instagram account if different from facebook
+    if (igAcct && String(igAcct.id) !== acctId) {
+      const r7 = await rawFetch(`T7: POST /posts/schedule [Instagram account only]`,
+        `${BASE}/posts/schedule`, "POST",
+        { post: { content: "ST1 test", profiles: [String(igAcct.id)], schedule_time: sched } }, {});
+      if (r7.ok) return res.json({ ok:true, successPattern:"T7", attempts });
     }
 
-    // T3: workspace ID in URL path (not header)
-    const firstAcctId = String(liveAccounts[0].id);
-    const r3 = await rawPost(`T3 workspace-in-URL /workspaces/${liveWsId}/posts/schedule`,
-      `${BASE}/workspaces/${liveWsId}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: [firstAcctId], schedule_time: testSchedule } }, {});
-    if (r3.ok) return res.json({ ok: true, successPattern: "T3", attempts });
-
-    // T4: try /posts (not /posts/schedule) with workspace in URL
-    const r4 = await rawPost(`T4 workspace-in-URL /workspaces/${liveWsId}/posts`,
-      `${BASE}/workspaces/${liveWsId}/posts`,
-      { post: { content: "ST1 test", profiles: [firstAcctId], schedule_time: testSchedule } }, {});
-    if (r4.ok) return res.json({ ok: true, successPattern: "T4", attempts });
-
-    // T5: completely empty body — if still 500, plan restriction is confirmed
-    const r5 = await rawPost("T5 empty body {} [plan restriction check]",
-      `${BASE}/posts/schedule`, {}, wsHdr);
-
-    // Plan restriction diagnosis: if empty {} gives same 500 as full body, it's a plan gate
-    const planRestricted = r5.status === 500;
+    // T8: no profiles field at all — just content
+    const r8 = await rawFetch("T8: POST /posts/schedule [only content, no profiles]",
+      `${BASE}/posts/schedule`, "POST",
+      { post: { content: "ST1 test", schedule_time: sched } }, {});
 
     return res.json({
       ok: false,
-      diagnosis: planRestricted
-        ? "LIKELY PLAN RESTRICTION: POST /posts/schedule returns HTTP 500 even for an empty {} body. This means Publer's server is failing before reading the request — almost always a plan/subscription gate. Check your Publer plan at app.publer.com/settings/subscription — API posting usually requires a paid plan."
-        : "Empty body returned different status — body format may be the issue.",
-      workspaceId: liveWsId,
-      workspaceDetails: wsDetails,
-      workspaceDetailsFull: wsDetailData,
-      liveAccounts: liveAccounts.map(a => ({
-        id: a.id,
-        type: a.provider||a.platform||a.type,
-        name: a.name||a.username,
-        needs_reconnect: a.needs_reconnect,
-        plan: a.plan || a.subscription || a.tier || null,
-        // Full raw object for inspection
-        _raw: a,
-      })),
+      liveWsId,
+      acctId,
+      liveAccounts: liveAccounts.map(a=>({ id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username, needs_reconnect:a.needs_reconnect })),
       attempts,
+      note: "Check responseHeaders on the 500s — look for x-error, www-authenticate, x-request-id fields. Also check if T4 (GET /posts/schedule) or T5 (POST /posts) return anything different.",
     });
   }
 
