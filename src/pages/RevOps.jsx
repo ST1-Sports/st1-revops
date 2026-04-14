@@ -10995,10 +10995,20 @@ function ModSettings() {
               )}
               {publerDebug&&(
                 <div style={{marginTop:8,background:B.bg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>DEBUG POST RESULT (HTTP {publerDebug.httpStatus})</div>
-                  <div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>
-                    {JSON.stringify(publerDebug,null,2).slice(0,1500)}
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:publerDebug.ok?B.green:B.orange,letterSpacing:.5,marginBottom:6}}>
+                    {publerDebug.ok?`✓ SUCCESS — ${publerDebug.successFormat}`:"DEBUG POST RESULTS (scroll to see all)"}
                   </div>
+                  {(publerDebug.attempts||[]).map((a,i)=>(
+                    <div key={i} style={{marginBottom:6,padding:"6px 8px",background:a.ok?`${B.green}10`:`${B.red}08`,borderRadius:4,border:`1px solid ${a.ok?B.green:B.red}30`}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:a.ok?B.green:B.red,marginBottom:3}}>
+                        {a.ok?"✓":"✕"} {a.path} — {a.bodyFormat} → HTTP {a.httpStatus}
+                      </div>
+                      <div style={{fontFamily:"monospace",fontSize:8,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
+                        {JSON.stringify(a.publerResponse)}
+                      </div>
+                    </div>
+                  ))}
+                  {!publerDebug.attempts&&<div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:180,overflowY:"auto"}}>{JSON.stringify(publerDebug,null,2)}</div>}
                 </div>
               )}
               {publerPosts&&(
