@@ -222,33 +222,23 @@ export default async function handler(req, res) {
 
   // ── Debug: try multiple endpoint patterns and return full raw responses ───────
   if (action === "debug-post") {
-    const targetPlatform = req.body.platform || "instagram";
-    const platformMap2 = {
-      facebook:  process.env.PUBLER_ACCOUNT_FACEBOOK,
-      instagram: process.env.PUBLER_ACCOUNT_INSTAGRAM,
-      linkedin:  process.env.PUBLER_ACCOUNT_LINKEDIN,
-      twitter:   process.env.PUBLER_ACCOUNT_TWITTER,
-    };
-    const envAccountId = platformMap2[targetPlatform] || process.env.PUBLER_ACCOUNT_IDS?.split(",")[0]?.trim();
+    // Expose workspace ID (last 6 chars) so we can verify it looks right
+    const wsIdTail = workspaceId ? `...${String(workspaceId).slice(-6)}` : "NOT SET";
+    const wsIdLen  = workspaceId ? String(workspaceId).length : 0;
 
     // Fetch live accounts
     const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
     const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
-    const liveAccount = liveAccounts.find(a => {
-      const svc = (a.provider || a.platform || a.type || a.service || "").toLowerCase();
-      return svc === targetPlatform;
-    }) || liveAccounts[0];
-    const liveAccountId = liveAccount ? String(liveAccount.id) : envAccountId;
-    const liveAccountNum = liveAccountId ? parseInt(liveAccountId, 10) : null;
+    const liveAccountId = liveAccounts[0] ? String(liveAccounts[0].id) : null;
 
     if (!liveAccountId) {
-      return res.json({ ok: false, liveAccounts, error: `No account ID for ${targetPlatform}` });
+      return res.json({ ok: false, wsIdTail, wsIdLen, liveAccounts, error: "No account ID found in GET /accounts" });
     }
 
     const testSchedule = new Date(Date.now() + 15 * 60 * 1000).toISOString();
     const attempts = [];
 
-    // Low-level raw fetch — captures full body regardless of status
+    // Low-level raw fetch — captures full body + selected response headers
     const rawPost = async (label, url, body, extraHeaders = {}) => {
       const headers = {
         Authorization: `Bearer-API ${apiKey}`,
@@ -260,129 +250,95 @@ export default async function handler(req, res) {
         const r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
         const text = await r.text();
         let data;
-        try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 500) }; }
-        attempts.push({ label, url, httpStatus: r.status, ok: r.ok, response: data });
+        try { data = JSON.parse(text); } catch { data = { _raw: text.slice(0, 800) }; }
+        // Capture any extra error info from headers
+        const xError = r.headers.get("x-error") || r.headers.get("x-message") || r.headers.get("x-exception") || null;
+        attempts.push({ label, httpStatus: r.status, ok: r.ok, response: data, xError });
         return { ok: r.ok, status: r.status, data };
       } catch(e) {
-        attempts.push({ label, url, httpStatus: 0, ok: false, response: { error: e.message } });
+        attempts.push({ label, httpStatus: 0, ok: false, response: { error: e.message } });
         return { ok: false, status: 0, data: { error: e.message } };
       }
     };
 
     const BASE = "https://app.publer.com/api/v1";
     const wsHdr = { "Publer-Workspace-Id": workspaceId };
+    const body = { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } };
 
-    // ── Round 1: Confirm /posts is definitely dead ─────────────────────────────
-    const r1 = await rawPost("R1: POST /posts [baseline confirm]",
-      `${BASE}/posts`,
+    // ── Confirm: /posts/schedule with workspace header (from last run → 500) ──
+    const rBase = await rawPost("S1: /posts/schedule [WITH workspace header]",
+      `${BASE}/posts/schedule`, body, wsHdr);
+    if (rBase.ok) return res.json({ ok: true, successPattern: "S1", attempts });
+
+    // ── Key test: /posts/schedule WITHOUT workspace header ─────────────────────
+    // If this changes the response (e.g. goes 422/400 instead of 500), the
+    // workspace ID is the problem.
+    const rNoWs = await rawPost("S2: /posts/schedule [NO workspace header]",
+      `${BASE}/posts/schedule`, body, {});
+    if (rNoWs.ok) return res.json({ ok: true, successPattern: "S2", attempts });
+
+    // ── Key test: workspace_id in body instead of header ──────────────────────
+    const rWsBody = await rawPost("S3: /posts/schedule [workspace_id in body]",
+      `${BASE}/posts/schedule`,
+      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule, workspace_id: workspaceId } },
+      {});
+    if (rWsBody.ok) return res.json({ ok: true, successPattern: "S3", attempts });
+
+    // ── Key test: workspace ID in URL path ─────────────────────────────────────
+    const rWsPath = await rawPost(`S4: /workspaces/${workspaceId}/posts/schedule [ws in URL]`,
+      `${BASE}/workspaces/${workspaceId}/posts/schedule`,
       { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } },
-      wsHdr);
-    if (r1.ok) return res.json({ ok: true, successPattern: "R1", attempts });
+      {});
+    if (rWsPath.ok) return res.json({ ok: true, successPattern: "S4", attempts });
 
-    // ── Round 2: /posts/schedule — the 500 endpoint from last run ─────────────
-    // Format A: { post: { content, profiles, schedule_time } }
-    const r2a = await rawPost("R2a: POST /posts/schedule [post+profiles+schedule_time]",
-      `${BASE}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } },
-      wsHdr);
-    if (r2a.ok) return res.json({ ok: true, successPattern: "R2a", attempts });
+    // ── Minimal body: just text, no profiles, no schedule ──────────────────────
+    // If this returns a different error (like "profiles required"), we'll learn
+    // what fields Publer actually validates.
+    const rMin = await rawPost("S5: /posts/schedule [minimal: just text]",
+      `${BASE}/posts/schedule`, { post: { content: "ST1 test" } }, wsHdr);
+    if (rMin.ok) return res.json({ ok: true, successPattern: "S5", attempts });
 
-    // Format B: { content, profiles, schedule_time } (flat, no post wrapper)
-    const r2b = await rawPost("R2b: POST /posts/schedule [flat+profiles+schedule_time]",
-      `${BASE}/posts/schedule`,
-      { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule },
-      wsHdr);
-    if (r2b.ok) return res.json({ ok: true, successPattern: "R2b", attempts });
+    const rEmpty = await rawPost("S6: /posts/schedule [empty body {}]",
+      `${BASE}/posts/schedule`, {}, wsHdr);
+    if (rEmpty.ok) return res.json({ ok: true, successPattern: "S6", attempts });
 
-    // Format C: { post: { content, account_ids: [num], scheduled_at } }
-    const idArr = liveAccountNum ? [liveAccountNum] : [liveAccountId];
-    const r2c = await rawPost("R2c: POST /posts/schedule [account_ids numeric, scheduled_at]",
-      `${BASE}/posts/schedule`,
-      { post: { content: "ST1 test", account_ids: idArr, scheduled_at: testSchedule } },
-      wsHdr);
-    if (r2c.ok) return res.json({ ok: true, successPattern: "R2c", attempts });
-
-    // Format D: profiles as integers
-    const r2d = await rawPost("R2d: POST /posts/schedule [profiles numeric]",
-      `${BASE}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: idArr, schedule_time: testSchedule } },
-      wsHdr);
-    if (r2d.ok) return res.json({ ok: true, successPattern: "R2d", attempts });
-
-    // Format E: no schedule (immediate)
-    const r2e = await rawPost("R2e: POST /posts/schedule [no schedule time]",
-      `${BASE}/posts/schedule`,
-      { post: { content: "ST1 test", profiles: [liveAccountId] } },
-      wsHdr);
-    if (r2e.ok) return res.json({ ok: true, successPattern: "R2e", attempts });
-
-    // ── Round 3: Publer v2 API variations ─────────────────────────────────────
-    const r3a = await rawPost("R3a: POST /api/v2/posts [v2, profiles array]",
-      "https://app.publer.com/api/v2/posts",
-      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } });
-    if (r3a.ok) return res.json({ ok: true, successPattern: "R3a", attempts });
-
-    const r3b = await rawPost("R3b: POST /api/v2/posts/schedule [v2 schedule]",
-      "https://app.publer.com/api/v2/posts/schedule",
-      { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } },
-      wsHdr);
-    if (r3b.ok) return res.json({ ok: true, successPattern: "R3b", attempts });
-
-    // ── Round 4: Form-encoded (the other 500 endpoint) ────────────────────────
+    // ── Try Bearer (not Bearer-API) on /posts/schedule ────────────────────────
+    // Checks if POST endpoints require different auth header than GET
     try {
-      const fHeaders = {
-        Authorization: `Bearer-API ${apiKey}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "Publer-Workspace-Id": workspaceId,
-      };
-      // Build form manually to avoid bracket issues
-      const formParts = [
-        `post[content]=ST1+test`,
-        `post[profiles][]=${encodeURIComponent(liveAccountId)}`,
-        `post[schedule_time]=${encodeURIComponent(testSchedule)}`,
-      ];
-      const r4a = await fetch(`${BASE}/posts`, { method: "POST", headers: fHeaders, body: formParts.join("&") });
-      const t4a = await r4a.text();
-      let d4a; try { d4a = JSON.parse(t4a); } catch { d4a = { _raw: t4a.slice(0, 500) }; }
-      attempts.push({ label: "R4a: POST /posts [form-encoded, brackets]", url: `${BASE}/posts`, httpStatus: r4a.status, ok: r4a.ok, response: d4a });
-      if (r4a.ok) return res.json({ ok: true, successPattern: "R4a", attempts });
-
-      // Also try /posts/schedule form-encoded
-      const r4b = await fetch(`${BASE}/posts/schedule`, { method: "POST", headers: fHeaders, body: formParts.join("&") });
-      const t4b = await r4b.text();
-      let d4b; try { d4b = JSON.parse(t4b); } catch { d4b = { _raw: t4b.slice(0, 500) }; }
-      attempts.push({ label: "R4b: POST /posts/schedule [form-encoded]", url: `${BASE}/posts/schedule`, httpStatus: r4b.status, ok: r4b.ok, response: d4b });
-      if (r4b.ok) return res.json({ ok: true, successPattern: "R4b", attempts });
-    } catch(fe) {
-      attempts.push({ label: "R4: form-encoded", error: fe.message });
+      const r7 = await fetch(`${BASE}/posts/schedule`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "Publer-Workspace-Id": workspaceId,
+        },
+        body: JSON.stringify(body),
+      });
+      const t7 = await r7.text();
+      let d7; try { d7 = JSON.parse(t7); } catch { d7 = { _raw: t7.slice(0, 500) }; }
+      attempts.push({ label: "S7: /posts/schedule [Bearer (not Bearer-API)]", httpStatus: r7.status, ok: r7.ok, response: d7 });
+      if (r7.ok) return res.json({ ok: true, successPattern: "S7", attempts });
+    } catch(e) {
+      attempts.push({ label: "S7: Bearer", error: e.message });
     }
 
-    // ── Round 5: Alternative paths ─────────────────────────────────────────────
-    for (const [label, path] of [
-      ["R5a: POST /schedule", "/schedule"],
-      ["R5b: POST /scheduled_posts", "/scheduled_posts"],
-      ["R5c: POST /publish", "/publish"],
-    ]) {
-      const r = await rawPost(label, `${BASE}${path}`,
-        { post: { content: "ST1 test", profiles: [liveAccountId], schedule_time: testSchedule } },
-        wsHdr);
-      if (r.ok) return res.json({ ok: true, successPattern: label, attempts });
+    // ── Summarize ──────────────────────────────────────────────────────────────
+    const byStatus = {};
+    for (const a of attempts) {
+      const k = String(a.httpStatus);
+      byStatus[k] = (byStatus[k] || []);
+      byStatus[k].push(a.label);
     }
-
-    // Summarize which returned non-404 (those endpoints exist)
-    const nonFour04 = attempts.filter(a => a.httpStatus !== 404 && a.httpStatus !== 0);
 
     return res.json({
       ok: false,
+      workspaceIdInfo: { tail: wsIdTail, length: wsIdLen },
       liveAccountId,
-      liveAccountNum,
       liveAccounts: liveAccounts.map(a => ({ id: a.id, type: a.provider||a.platform||a.type, name: a.name||a.username })),
-      diagnosis: nonFour04.length
-        ? `These endpoints responded with non-404 (may exist!): ${nonFour04.map(a=>`${a.label} → HTTP ${a.httpStatus}`).join(" | ")}`
-        : "All endpoints returned 404 — API key may be read-only or Publer has changed their API paths.",
-      nonFour04Attempts: nonFour04,
-      allAttempts: attempts,
+      statusSummary: byStatus,
+      diagnosis: "See statusSummary — if S1 (with ws header) = 500 but S2 (without) = 422/400, the workspace ID is wrong. If both 500, something else.",
+      attempts,
     });
   }
 
