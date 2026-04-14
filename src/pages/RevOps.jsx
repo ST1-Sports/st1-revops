@@ -5239,6 +5239,7 @@ function ModMarketing() {
   const [touchDraft,setTouchDraft]=useState({subject:"",body:""});
   // Execute tab
   const [filterSport,setFilterSport]=useState("all");
+  const [executeFilter,setExecuteFilter]=useState("all"); // status filter for enrolled contacts
   const [campContactSearch,setCampContactSearch]=useState("");
   const [enrollSel,setEnrollSel]=useState(new Set());
   const [sending,setSending]=useState(false);
@@ -7221,19 +7222,78 @@ function ModMarketing() {
                     </div>
                   )}
 
-                  {/* Stats */}
-                  <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap"}}>
-                    {[["ENROLLED",enrs.length,B.blue],["PENDING",totalPending,B.orange],["SENT",allSent,B.purple],["REPLIED",replied,B.green],["INTERESTED",interested,B.teal],["DONE",done,B.muted]].map(([l,v,c])=>(
-                      <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",textAlign:"center",minWidth:60}}>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c,lineHeight:1}}>{v}</div>
-                        <Lbl s={{marginTop:2}}>{l}</Lbl>
-                      </div>
-                    ))}
+                  {/* Stats — also serve as filter tabs */}
+                  <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                    {[["all","ALL",enrs.length,B.blue],["active","PENDING",totalPending,B.orange],["sent","SENT",allSent,B.purple],["replied","REPLIED",replied,B.green],["interested","INTERESTED",interested,"#0f9"[0]?B.teal:B.teal],["done","DONE",done,B.muted]].map(([filter,l,v,c])=>{
+                      const active=executeFilter===filter;
+                      return(
+                        <button key={filter} onClick={()=>setExecuteFilter(filter)}
+                          style={{background:active?c:B.white,color:active?B.white:B.muted,border:`1px solid ${active?c:B.border}`,borderRadius:5,padding:"5px 12px",textAlign:"center",minWidth:60,cursor:"pointer",transition:"all .15s"}}>
+                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:active?B.white:c,lineHeight:1}}>{v}</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,marginTop:2,opacity:.85}}>{l}</div>
+                        </button>
+                      );
+                    })}
                     <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
                       <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens} style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingReplies?"CHECKING...":"↻ REPLIES"}</button>
                       <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies} style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingOpens?"CHECKING...":"👁 OPENS"}</button>
                     </div>
                   </div>
+
+                  {/* ── INTERESTED section ── */}
+                  {interested>0&&(
+                    <div style={{marginBottom:20,border:`2px solid ${B.teal}`,borderRadius:8,overflow:"hidden"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.teal}12`}}>
+                        <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.teal}}>🎯</span>
+                        <div style={{flex:1}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1}}>INTERESTED · {interested} contact{interested!==1?"s":""}</div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>These contacts showed positive intent — convert them to deals now</div>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:0}}>
+                        {enrs.filter(e=>e.status==="interested").map((e,idx)=>{
+                          const c=contactMap[e.contactId];
+                          if(!c) return null;
+                          const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim();
+                          const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                          const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                          const existingDeal=(s.deals||[]).find(d=>d.contactId===c.id&&!["Closed Won","Closed Lost"].includes(d.stage));
+                          return(
+                            <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderTop:idx>0?`1px solid ${B.teal}30`:"none",background:B.white}}>
+                              <div style={{width:32,height:32,borderRadius:"50%",background:`${B.teal}20`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.teal}}>{name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
+                              </div>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600}}>{name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
+                                {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>✉ {c.email}</div>}
+                              </div>
+                              {existingDeal?(
+                                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4}}>✓ DEAL EXISTS · {existingDeal.stage}</span>
+                                </div>
+                              ):(
+                                <button onClick={()=>{
+                                  const dealId=mkId();
+                                  dispatch("ADD_DEAL",{
+                                    id:dealId,contactId:c.id,
+                                    name:`${selCamp.product||"Equipment"} — ${school||name}`,
+                                    company:school||name,stage:"Qualified Lead",
+                                    value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,
+                                    createdAt:today(),updatedAt:today(),
+                                  });
+                                  toast(`Deal created for ${name}`,"success");
+                                }}
+                                  style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                  + CREATE DEAL
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
@@ -7423,19 +7483,37 @@ function ModMarketing() {
               })()}
 
               {/* Enrolled contacts */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ENROLLED CONTACTS ({selCamp.enrollments.length})</div>
-                <div style={{display:"flex",gap:6}}>
-                  {["all",...allSports].map(sp=>(
-                    <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
-                  ))}
-                </div>
-              </div>
+              {(()=>{
+                // Map "sent" filter to contacts that have been sent at least one touch
+                const statusFilterFn = e => {
+                  if(executeFilter==="all") return true;
+                  if(executeFilter==="sent") return (e.step>0||e.lastSentAt)&&e.status==="active";
+                  if(executeFilter==="active") return e.status==="active"&&!(e.step>0||e.lastSentAt);
+                  return e.status===executeFilter;
+                };
+                const visibleCount=selCamp.enrollments.filter(e=>{
+                  const c=contactMap[e.contactId];
+                  return statusFilterFn(e)&&(!c||(filterSport==="all"||c.sport===filterSport));
+                }).length;
+                return(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>
+                      {executeFilter==="all"?"ALL CONTACTS":executeFilter.toUpperCase()} ({visibleCount})
+                    </div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {["all",...allSports].map(sp=>(
+                        <button key={sp} onClick={()=>setFilterSport(sp)} style={{background:filterSport===sp?B.orange:B.white,color:filterSport===sp?B.white:B.muted,border:`1px solid ${filterSport===sp?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{sp==="all"?"All":sp}</button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
               <div style={{display:"flex",flexDirection:"column",gap:5}}>
                 {selCamp.enrollments
                   .filter(e=>{
                     const c=contactMap[e.contactId];
-                    return !c||(filterSport==="all"||c.sport===filterSport);
+                    const statusMatch = executeFilter==="all"?true:executeFilter==="sent"?(e.step>0||e.lastSentAt)&&e.status==="active":executeFilter==="active"?e.status==="active"&&!(e.step>0||e.lastSentAt):e.status===executeFilter;
+                    return statusMatch&&(!c||(filterSport==="all"||c.sport===filterSport));
                   })
                   .sort((a,b)=>a.step-b.step)
                   .map(e=>{
