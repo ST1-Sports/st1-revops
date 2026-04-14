@@ -115,6 +115,7 @@ function mergeServerState(base, server) {
 function useStore() {
   const saveTimer = useRef(null);
   const serverTimer = useRef(null);
+  const pollTimer = useRef(null);
   const [s, setRaw] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE);
@@ -154,34 +155,48 @@ function useStore() {
     } catch {}
     return SEED;
   });
+  const [lastSynced, setLastSynced] = useState(null);
+  const [syncing, setSyncing] = useState(false);
 
-  // On mount: sync with server (bidirectional)
-  // - If server has data: merge it in (server wins on conflicts)
-  // - If server is empty: push local data up so other devices can see it
-  // - Always push merged result back so server stays current
-  useEffect(() => {
-    fetch("/api/state")
+  // Shared pull-and-merge logic used by mount + polling + manual sync
+  const pullFromServer = useCallback(() => {
+    setSyncing(true);
+    return fetch("/api/state")
       .then(r => r.json())
       .then(d => {
-        setRaw(prev => {
-          const {currentUserId: _cid, ...localData} = prev;
-          let merged;
-          if (d.state && typeof d.state === "object") {
-            merged = mergeServerState(prev, d.state);
-          } else {
-            // Server empty — use local state as-is, then push it up
-            merged = prev;
-          }
-          try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
-          // Always push merged state to server so all devices stay in sync
-          const {currentUserId: _cid2, ...toSync} = merged;
-          fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({state: toSync})}).catch(()=>{});
-          return merged;
-        });
+        if (d.state && typeof d.state === "object") {
+          setRaw(prev => {
+            const merged = mergeServerState(prev, d.state);
+            try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
+            // Push merged result back so server always has the union of all devices
+            const {currentUserId: _cid, ...toSync} = merged;
+            fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({state: toSync})}).catch(()=>{});
+            return merged;
+          });
+        } else {
+          // Server empty — push local state up so other devices can see it
+          setRaw(prev => {
+            const {currentUserId: _cid, ...toSync} = prev;
+            fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+              body: JSON.stringify({state: toSync})}).catch(()=>{});
+            return prev;
+          });
+        }
+        setLastSynced(Date.now());
+        setSyncing(false);
       })
-      .catch(() => {}); // graceful fallback to localStorage
+      .catch(() => { setSyncing(false); });
   }, []);
+
+  // Mount: initial sync
+  useEffect(() => { pullFromServer(); }, []);
+
+  // Poll every 30s — picks up changes from other devices/staff members
+  useEffect(() => {
+    pollTimer.current = setInterval(pullFromServer, 30000);
+    return () => clearInterval(pollTimer.current);
+  }, [pullFromServer]);
 
   const set = useCallback((fn) => {
     setRaw(prev => {
@@ -191,7 +206,7 @@ function useStore() {
       saveTimer.current = setTimeout(() => {
         try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
       }, 300);
-      // Sync to server (debounced 2.5s to batch rapid changes)
+      // Debounced server sync — catches any state changes not covered by dispatch's immediate sync
       if (serverTimer.current) clearTimeout(serverTimer.current);
       serverTimer.current = setTimeout(() => {
         const {currentUserId: _cid, ...toSync} = next;
@@ -202,7 +217,7 @@ function useStore() {
     });
   }, []);
 
-  return [s, set];
+  return [s, set, lastSynced, syncing, pullFromServer];
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -428,7 +443,7 @@ function urgentCount(s) {
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [s, set] = useStore();
+  const [s, set, lastSynced, syncing, pullFromServer] = useStore();
   const [mod, setMod]   = useState("briefing");
   const [slim, setSlim] = useState(false);
   const [toasts, setToasts] = useState([]);
@@ -471,7 +486,7 @@ export default function App() {
     return { ...rep, initials, color: B.blue, role: rep.title || "rep" };
   })();
   const crmSyncRef = useRef(null);
-  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef};
+  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer};
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
@@ -681,6 +696,22 @@ export default function App() {
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{l}</span>
                   </div>
                 ));
+              })()}
+              <div style={{width:1,height:14,background:B.border}}/>
+              {/* Live sync indicator */}
+              {(()=>{
+                const secAgo = lastSynced ? Math.round((Date.now()-lastSynced)/1000) : null;
+                const fresh  = secAgo !== null && secAgo < 60;
+                return(
+                  <button onClick={()=>pullFromServer()} title="Sync now — pull latest from server"
+                    style={{display:"flex",alignItems:"center",gap:5,background:"none",border:`1px solid ${fresh?B.green+"40":B.border}`,borderRadius:4,padding:"3px 9px",cursor:"pointer"}}>
+                    <div style={{width:6,height:6,borderRadius:"50%",background:syncing?B.orange:fresh?B.green:B.muted,
+                      animation:syncing?"pulse 1s infinite":undefined}}/>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:syncing?B.orange:fresh?B.green:B.muted}}>
+                      {syncing?"SYNCING…":secAgo===null?"SYNC":secAgo<10?"LIVE":secAgo<60?`${secAgo}s ago`:secAgo<3600?`${Math.round(secAgo/60)}m ago`:"SYNC"}
+                    </span>
+                  </button>
+                );
               })()}
               <div style={{width:1,height:14,background:B.border}}/>
               <button onClick={()=>{setShowSearch(true);setSearchQuery("");}} title="Search (press /)" style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:11,borderRadius:4,padding:"3px 9px",display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
