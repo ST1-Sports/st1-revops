@@ -10874,6 +10874,9 @@ function ModSettings() {
         const [publerChecking,setPublerChecking]=useState(false);
         const [publerPosts,setPublerPosts]=useState(null);
         const [publerPostsLoading,setPublerPostsLoading]=useState(false);
+        const [publerDebug,setPublerDebug]=useState(null);
+        const [publerDebugging,setPublerDebugging]=useState(false);
+        const [publerAccounts,setPublerAccounts]=useState(null);
 
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
@@ -10898,6 +10901,20 @@ function ModSettings() {
             setPublerPosts(d);
           }catch(e){setPublerPosts({error:e.message});}
           setPublerPostsLoading(false);
+        };
+        const debugPublerPost=async()=>{
+          setPublerDebugging(true);setPublerDebug(null);
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug-post",platform:"instagram"})}).then(r=>r.json());
+            setPublerDebug(d);
+          }catch(e){setPublerDebug({error:e.message});}
+          setPublerDebugging(false);
+        };
+        const loadPublerAccounts=async()=>{
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
+            setPublerAccounts(d);
+          }catch(e){setPublerAccounts({error:e.message});}
         };
 
         useEffect(()=>{checkGmail();checkPubler();},[]);
@@ -10939,8 +10956,10 @@ function ModSettings() {
             <div style={{marginBottom:failedPosts.length>0?14:0}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>PUBLER (social media posting)</div>
-                <div style={{display:"flex",gap:6}}>
-                  <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Check Queue"}</button>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <button onClick={loadPublerAccounts} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>👤 Accounts</button>
+                  <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Queue"}</button>
+                  <button onClick={debugPublerPost} disabled={publerDebugging} style={{background:"none",border:`1px solid ${B.orange}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.orange,cursor:"pointer"}}>{publerDebugging?"Testing…":"⚡ Debug Post"}</button>
                   <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
                 </div>
               </div>
@@ -10955,6 +10974,33 @@ function ModSettings() {
                   </div>
               )}
               {!publerInfo&&!publerChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
+              {publerAccounts&&(
+                <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
+                  {publerAccounts.error
+                    ?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Error: {publerAccounts.error}</div>
+                    :<>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>CONNECTED ACCOUNTS — copy IDs to Vercel env vars</div>
+                      {(publerAccounts.profiles||[]).map((a,i)=>(
+                        <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"3px 0",borderBottom:`1px solid ${B.border}`,display:"flex",gap:8,alignItems:"center"}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,minWidth:60}}>{a.service?.toUpperCase()||"?"}</span>
+                          <span style={{flex:1}}>{a.name}</span>
+                          <span style={{fontFamily:"monospace",fontSize:9,color:B.orange,background:`${B.orange}10`,padding:"1px 6px",borderRadius:3,userSelect:"all"}}>{a.id}</span>
+                          <span style={{fontSize:9,color:a.connected?B.green:B.red}}>{a.connected?"✓":"⚠ reconnect"}</span>
+                        </div>
+                      ))}
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:6}}>In Vercel → Settings → Environment Variables, add: PUBLER_ACCOUNT_INSTAGRAM, PUBLER_ACCOUNT_FACEBOOK, etc. with the IDs shown above.</div>
+                    </>
+                  }
+                </div>
+              )}
+              {publerDebug&&(
+                <div style={{marginTop:8,background:B.bg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>DEBUG POST RESULT (HTTP {publerDebug.httpStatus})</div>
+                  <div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:200,overflowY:"auto"}}>
+                    {JSON.stringify(publerDebug,null,2).slice(0,1500)}
+                  </div>
+                </div>
+              )}
               {publerPosts&&(
                 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
                   {publerPosts.error
