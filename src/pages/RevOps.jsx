@@ -7259,6 +7259,27 @@ function ModMarketing() {
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}`,sent>0?"success":"error");
                 };
 
+                // Mark a batch as already sent (no emails — just advances enrollment state)
+                const markBatchSent=async(batchEnrollments,batchKey)=>{
+                  const camp=campaigns.find(c=>c.id===selCamp.id);
+                  if(!camp) return;
+                  const todStr=today();
+                  const updEnr=[...(camp.enrollments||[])];
+                  for(const enroll of batchEnrollments){
+                    const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                    if(idx>=0){
+                      const ns=enroll.step+1;
+                      const done=ns>=(camp.touches||[]).length;
+                      const nt=(camp.touches||[])[ns];
+                      const nd=nt?new Date(Date.now()+nt.dayOffset*86400000).toISOString().slice(0,10):null;
+                      updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
+                    }
+                  }
+                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
+                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent:batchEnrollments.length,failed:0}}));
+                  toast(`Batch marked as sent — ${batchEnrollments.length} contacts advanced`,"success");
+                };
+
                 // Totals for stats row
                 const allSent=enrs.filter(e=>e.lastSentAt||e.step>0).length;
                 const replied=enrs.filter(e=>e.status==="replied").length;
@@ -7404,10 +7425,17 @@ function ModMarketing() {
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
                                     </div>
                                     {!wasSent&&(
-                                      <button onClick={()=>sendOneBatch(batch,batchKey)} disabled={sending}
-                                        style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap",flexShrink:0}}>
-                                        {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
-                                      </button>
+                                      <div style={{display:"flex",gap:5,flexShrink:0}}>
+                                        <button onClick={()=>sendOneBatch(batch,batchKey)} disabled={sending}
+                                          style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
+                                        </button>
+                                        <button onClick={()=>markBatchSent(batch,batchKey)} disabled={sending}
+                                          title="Mark as already sent — advances contacts without sending emails"
+                                          style={{background:B.surface,color:B.green,border:`1px solid ${B.green}50`,borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          ✓ MARK SENT
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
                                   {isExp&&(
