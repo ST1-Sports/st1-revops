@@ -259,14 +259,17 @@ function scoreTier(score) {
 }
 
 // ─── AI ───────────────────────────────────────────────────────────────────────
+const AI_MODEL = "claude-haiku-4-5-20251001";
 async function aiCall(prompt, opts={}) {
-  const body = {model:"claude-sonnet-4-20250514", max_tokens:opts.tokens||900,
+  const body = {model: opts.model || AI_MODEL, max_tokens:opts.tokens||900,
     messages:[{role:"user",content:prompt}]};
   if (opts.sys) body.system = opts.sys;
   if (opts.search) body.tools = [{type:"web_search_20250305",name:"web_search"}];
   const r = await fetch("/api/claude",
     {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if (!r.ok) throw new Error(`AI API error ${r.status}`);
   const d = await r.json();
+  if (d.error) throw new Error(d.error);
   const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
   if (opts.json) {
     try { const m=text.match(/[\[{][\s\S]*[\]}]/s); return m?JSON.parse(m[0]):null; } catch { return null; }
@@ -276,8 +279,10 @@ async function aiCall(prompt, opts={}) {
 
 async function aiCallConv(messages, sys, opts={}) {
   const r = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:opts.tokens||1400,system:sys,messages})});
+    body:JSON.stringify({model: opts.model || AI_MODEL,max_tokens:opts.tokens||1400,system:sys,messages})});
+  if (!r.ok) throw new Error(`AI API error ${r.status}`);
   const d = await r.json();
+  if (d.error) throw new Error(d.error);
   const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
   if(opts.json){try{const m=text.match(/[\[{][\s\S]*[\]}]/s);return m?JSON.parse(m[0]):null;}catch{return null;}}
   return text;
@@ -5353,80 +5358,105 @@ function ModMarketing() {
   const generateTouches = async (directionOverride) => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenRunning(true);
-    const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
-    const repLine = (() => { const rep = (s.reps||[]).find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
-    const is5Touch = (ctx.assetTypes||[]).includes("email5");
-    const touchCount = is5Touch ? 5 : 3;
-    const dayOffsets = is5Touch ? [0,3,7,14,21] : [0,4,10];
-    const touchJson = dayOffsets.map((d,i)=>`{"step":${i+1},"dayOffset":${d},"subject":"","body":""}`).join(",");
-    const direction = directionOverride || emailGenDirection || ctx.ctx || "";
-    const result = await aiCall(
-      `Create a ${touchCount}-touch outreach email sequence for ST1 Sports. ${ST1}.\n`+
-      `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
-      `${direction?`Direction / angle: ${direction}.\n`:""}`+
-      `${repLine?`${repLine}\n`:""}`+
-      `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
-      `Return JSON: {"touches":[${touchJson}]}\n`+
-      `Each email under 120 words. Use {{firstName}} {{orgName}} merge tags. `+
-      (is5Touch
-        ? `Touch 1: cold intro. Touch 2: follow-up referencing no reply. Touch 3: value add (stat, case study, or tip). Touch 4: urgency/offer. Touch 5: final breakup email.`
-        : `Touch 2 references no reply to touch 1. Touch 3 is a brief final check-in.`),
-      {json:true,tokens:is5Touch?2200:1400}
-    );
-    const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
-    saveCampAsset({touches});
+    try {
+      const windowHint = SPORT_WINDOWS[ctx.product?.split(" ")[0]]||"";
+      const repLine = (() => { const rep = (s.reps||[]).find(u=>u.id===ctx.repId); return rep?`The emails are written BY and signed by ${rep.name} (${rep.email}), a rep at ST1 Sports. Use their name in the signature.`:""; })();
+      const is5Touch = (ctx.assetTypes||[]).includes("email5");
+      const touchCount = is5Touch ? 5 : 3;
+      const dayOffsets = is5Touch ? [0,3,7,14,21] : [0,4,10];
+      const touchJson = dayOffsets.map((d,i)=>`{"step":${i+1},"dayOffset":${d},"subject":"","body":""}`).join(",");
+      const direction = directionOverride || emailGenDirection || ctx.ctx || "";
+      const result = await aiCall(
+        `Create a ${touchCount}-touch outreach email sequence for ST1 Sports. ${ST1}.\n`+
+        `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
+        `${direction?`Direction / angle: ${direction}.\n`:""}`+
+        `${repLine?`${repLine}\n`:""}`+
+        `${windowHint?`Outreach timing: ${windowHint} (before purchasing season).\n`:""}`+
+        `Return JSON: {"touches":[${touchJson}]}\n`+
+        `Each email under 120 words. Use {{firstName}} {{orgName}} merge tags. `+
+        (is5Touch
+          ? `Touch 1: cold intro. Touch 2: follow-up referencing no reply. Touch 3: value add (stat, case study, or tip). Touch 4: urgency/offer. Touch 5: final breakup email.`
+          : `Touch 2 references no reply to touch 1. Touch 3 is a brief final check-in.`),
+        {json:true,tokens:is5Touch?2200:1400}
+      );
+      const touches = (result?.touches||[]).map(t=>({...t,id:mkId()}));
+      if(!touches.length) { toast("AI returned an empty email sequence — try again","error"); }
+      else { saveCampAsset({touches}); toast(`${touches.length} emails generated`,"success"); }
+    } catch(e) {
+      toast(`Email generation failed: ${e.message}`,"error");
+    }
     setGenRunning(false);
   };
 
   const generateSocialDrafts = async () => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenSocialRunning(true);
-    const result = await aiCall(
-      `Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
-      `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
-      `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-      `Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
-      `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
-      {json:true,tokens:800}
-    );
-    const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
-    saveCampAsset({socialDrafts:posts});
+    try {
+      const result = await aiCall(
+        `Create 3 social media post captions for ST1 Sports.\n${ST1}\n`+
+        `Product: ${ctx.product}. Audience: ${ctx.audience}. Tone: ${ctx.tone||"friendly"}.\n`+
+        `${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+        `Return JSON: {"posts":[{"caption":"","platforms":["instagram","facebook"],"type":"post"},{"caption":"","platforms":["linkedin"],"type":"post"},{"caption":"","platforms":["instagram"],"type":"story"}]}\n`+
+        `Each caption under 150 chars. Include relevant hashtags. Vary the angle (awareness, social proof, urgency).`,
+        {json:true,tokens:800}
+      );
+      const posts = (result?.posts||[]).map(p=>({...p,id:mkId(),date:"",imageUrl:"",imagePrompt:"",imageGenerating:false,scheduledDate:""}));
+      if(!posts.length) { toast("AI returned no social posts — try again","error"); }
+      else { saveCampAsset({socialDrafts:posts}); }
+    } catch(e) {
+      toast(`Social post generation failed: ${e.message}`,"error");
+    }
     setGenSocialRunning(false);
   };
 
   const generateAdCopy = async () => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenAdRunning(true);
-    const result = await aiCall(
-      `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors and coaches"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-      `Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
-      {tokens:600}
-    );
-    saveCampAsset({adCopy:result||""});
+    try {
+      const result = await aiCall(
+        `Write paid ad copy for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors and coaches"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+        `Write 3 ad variations: headline (max 40 chars), primary text (max 125 chars), CTA. Format as plain text, each variation separated by "---".`,
+        {tokens:600}
+      );
+      if(!result?.trim()) toast("AI returned no ad copy — try again","error");
+      else saveCampAsset({adCopy:result});
+    } catch(e) {
+      toast(`Ad copy generation failed: ${e.message}`,"error");
+    }
     setGenAdRunning(false);
   };
 
   const generateCallScript = async () => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenCallRunning(true);
-    const result = await aiCall(
-      `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-      `Include: opening line, value prop (30 secs), 3 common objections with responses, closing CTA. Under 300 words.`,
-      {tokens:800}
-    );
-    saveCampAsset({callScript:result||""});
+    try {
+      const result = await aiCall(
+        `Write a cold call script for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+        `Include: opening line, value prop (30 secs), 3 common objections with responses, closing CTA. Under 300 words.`,
+        {tokens:800}
+      );
+      if(!result?.trim()) toast("AI returned no call script — try again","error");
+      else saveCampAsset({callScript:result});
+    } catch(e) {
+      toast(`Call script generation failed: ${e.message}`,"error");
+    }
     setGenCallRunning(false);
   };
 
   const generateDirectMail = async () => {
     const ctx = campDraft || selCamp; if(!ctx) return;
     setGenMailRunning(true);
-    const result = await aiCall(
-      `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
-      `Format as a professional letter. Include: compelling headline, 3 bullet benefits, social proof line, clear CTA, signature. Use {{firstName}} {{orgName}} merge tags. Under 250 words.`,
-      {tokens:700}
-    );
-    saveCampAsset({directMail:result||""});
+    try {
+      const result = await aiCall(
+        `Write a direct mail letter for ST1 Sports.\n${ST1}\nProduct: ${ctx.product}. Audience: ${ctx.audience||"Athletic Directors"}. Tone: ${ctx.tone||"friendly"}.\n${ctx.ctx?`Context: ${ctx.ctx}.\n`:""}`+
+        `Format as a professional letter. Include: compelling headline, 3 bullet benefits, social proof line, clear CTA, signature. Use {{firstName}} {{orgName}} merge tags. Under 250 words.`,
+        {tokens:700}
+      );
+      if(!result?.trim()) toast("AI returned no letter — try again","error");
+      else saveCampAsset({directMail:result});
+    } catch(e) {
+      toast(`Direct mail generation failed: ${e.message}`,"error");
+    }
     setGenMailRunning(false);
   };
 
