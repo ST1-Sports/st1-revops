@@ -102,13 +102,24 @@ function mergeServerState(base, server) {
     agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
     // Union-merge critical arrays so neither local nor server data is lost on mount.
     // If a campaign/list/deal exists on one side only, it survives.
+    // Every array that holds user-created records gets union-merged.
+    // This guarantees that data created on any device is never silently dropped.
     campaigns:    mergeById(base.campaigns,    server.campaigns),
     contacts:     mergeById(base.contacts,     server.contacts),
     contactLists: mergeById(base.contactLists, server.contactLists),
     deals:        mergeById(base.deals,        server.deals),
+    rfps:         mergeById(base.rfps,         server.rfps),
+    invoices:     mergeById(base.invoices,     server.invoices),
+    reorders:     mergeById(base.reorders,     server.reorders),
     strategies:   mergeById(base.strategies,   server.strategies),
     brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
+    socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
+    savedAds:     mergeById(base.savedAds,     server.savedAds),
+    templates:    mergeById(base.templates,    server.templates),
     reps:         mergeById(base.reps,         server.reps),
+    orders:       mergeById(base.orders,       server.orders),
+    alerts:       mergeById(base.alerts,       server.alerts),
+    activity:     mergeById(base.activity,     server.activity),
   };
 }
 
@@ -453,18 +464,16 @@ export default function App() {
   const dispatch = useCallback((action, payload) => {
     set(prev => {
       const next = reducer(prev, action, payload);
-      // Sync to server immediately for any action that mutates persistent data
-      const syncActions = [
-        "LOGOUT",
-        "ADD_CAMPAIGN","UPDATE_CAMPAIGN","DELETE_CAMPAIGN",
-        "ADD_CONTACT_LIST","DEL_CONTACT_LIST","ADD_CONTACTS",
-        "ADD_BRAND_ASSET","DEL_BRAND_ASSET",
-        "ADD_DEAL","UPDATE_DEAL","DEL_DEAL",
-        "ADD_ACCOUNT","UPDATE_ACCOUNT","DEL_ACCOUNT",
-        "ADD_STRATEGY","UPDATE_STRATEGY","DEL_STRATEGY",
-        "SAVE_SETTINGS","UPDATE_CONTACT","ADD_REP","UPDATE_REP","DEL_REP",
-      ];
-      if (syncActions.includes(action)) {
+      // Sync to server immediately for every action that mutates persistent data.
+      // Only skip high-frequency events (SCORE_CONTACT fires once per email send)
+      // and bulk-replace actions that come from Zoho/external syncs — the 2.5s
+      // debounced fallback in set() handles those.
+      const skipSync = new Set([
+        "LOGIN",                           // session-only, not persisted
+        "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
+        "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
+      ]);
+      if (!skipSync.has(action)) {
         const {currentUserId: _cid, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({state: toSync})}).catch(()=>{});
