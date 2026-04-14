@@ -83,14 +83,32 @@ const SEED = {
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
 
+// Merge two arrays of objects by id — union of both, server wins on same-id conflicts.
+// This prevents either side from wiping data the other device has.
+function mergeById(local=[], server=[]) {
+  const map = {};
+  for (const item of (local||[])) if (item?.id) map[item.id] = item;
+  for (const item of (server||[])) if (item?.id) map[item.id] = item; // server wins conflicts
+  const noId = (local||[]).filter(x => !x?.id);
+  return [...Object.values(map), ...noId];
+}
+
 function mergeServerState(base, server) {
   if (!server || typeof server !== "object") return base;
-  // Server is source of truth for data, but keep local session fields
   return {
     ...base,
     ...server,
     currentUserId: base.currentUserId, // always local
     agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
+    // Union-merge critical arrays so neither local nor server data is lost on mount.
+    // If a campaign/list/deal exists on one side only, it survives.
+    campaigns:    mergeById(base.campaigns,    server.campaigns),
+    contacts:     mergeById(base.contacts,     server.contacts),
+    contactLists: mergeById(base.contactLists, server.contactLists),
+    deals:        mergeById(base.deals,        server.deals),
+    strategies:   mergeById(base.strategies,   server.strategies),
+    brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
+    reps:         mergeById(base.reps,         server.reps),
   };
 }
 
@@ -428,7 +446,8 @@ export default function App() {
         "ADD_BRAND_ASSET","DEL_BRAND_ASSET",
         "ADD_DEAL","UPDATE_DEAL","DEL_DEAL",
         "ADD_ACCOUNT","UPDATE_ACCOUNT","DEL_ACCOUNT",
-        "SAVE_SETTINGS",
+        "ADD_STRATEGY","UPDATE_STRATEGY","DEL_STRATEGY",
+        "SAVE_SETTINGS","UPDATE_CONTACT","ADD_REP","UPDATE_REP","DEL_REP",
       ];
       if (syncActions.includes(action)) {
         const {currentUserId: _cid, ...toSync} = next;
