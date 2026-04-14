@@ -1902,7 +1902,13 @@ function ModDeals() {
     if(flt==="won") return d.stage==="Closed Won";
     if(flt==="all") return true;
     return d.stage===flt;
-  }).sort((a,b)=>b.value-a.value);
+  }).sort((a,b)=>{
+    // Closed Lost always sinks to the bottom; within groups sort by value desc
+    const aLost=a.stage==="Closed Lost"?1:0;
+    const bLost=b.stage==="Closed Lost"?1:0;
+    if(aLost!==bLost) return aLost-bLost;
+    return b.value-a.value;
+  });
   const sel_d=sel?s.deals.find(d=>d.id===sel):null;
 
   const addDeal=()=>{
@@ -7375,15 +7381,19 @@ function ModMarketing() {
                   </div>
 
                   {/* ── INTERESTED section ── */}
-                  {interested>0&&(
+                  {interested>0&&(()=>{
+                    const [intCollapsed,setIntCollapsed]=React.useState(false);
+                    return(
                     <div style={{marginBottom:20,border:`2px solid ${B.teal}`,borderRadius:8,overflow:"hidden"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.teal}12`}}>
+                      <div onClick={()=>setIntCollapsed(x=>!x)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.teal}12`,cursor:"pointer",userSelect:"none"}}>
                         <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.teal}}>🎯</span>
                         <div style={{flex:1}}>
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1}}>INTERESTED · {interested} contact{interested!==1?"s":""}</div>
-                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>These contacts showed positive intent — convert them to deals now</div>
+                          {!intCollapsed&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>These contacts showed positive intent — convert them to deals now</div>}
                         </div>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,opacity:.7}}>{intCollapsed?"▼ SHOW":"▲ HIDE"}</span>
                       </div>
+                      {!intCollapsed&&(
                       <div style={{display:"flex",flexDirection:"column",gap:0}}>
                         {enrs.filter(e=>e.status==="interested").map((e,idx)=>{
                           const c=contactMap[e.contactId];
@@ -7391,34 +7401,39 @@ function ModMarketing() {
                           const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim();
                           const school=typeof c.school==="string"?c.school:c.school?.name||"";
                           const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                          const existingDeal=(s.deals||[]).find(d=>d.contactId===c.id&&!["Closed Won","Closed Lost"].includes(d.stage));
+                          // Find ANY deal for this contact, including closed-lost
+                          const anyDeal=(s.deals||[]).find(d=>d.contactId===c.id);
+                          const activeDeal=anyDeal&&!["Closed Lost"].includes(anyDeal.stage)?anyDeal:null;
+                          const closedLostDeal=anyDeal&&anyDeal.stage==="Closed Lost"?anyDeal:null;
                           return(
-                            <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderTop:idx>0?`1px solid ${B.teal}30`:"none",background:B.white}}>
-                              <div style={{width:32,height:32,borderRadius:"50%",background:`${B.teal}20`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.teal}}>{name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
+                            <div key={e.contactId} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",borderTop:idx>0?`1px solid ${B.teal}30`:"none",background:closedLostDeal?`${B.red}06`:B.white}}>
+                              <div style={{width:32,height:32,borderRadius:"50%",background:closedLostDeal?`${B.red}20`:`${B.teal}20`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:closedLostDeal?B.red:B.teal}}>{name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
                               </div>
                               <div style={{flex:1,minWidth:0}}>
                                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600}}>{name}</div>
                                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{title}{school?` · ${school}`:""}</div>
                                 {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>✉ {c.email}</div>}
                               </div>
-                              {existingDeal?(
-                                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
-                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4}}>✓ DEAL EXISTS · {existingDeal.stage}</span>
+                              {activeDeal?(
+                                <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4,flexShrink:0}}>✓ DEAL · {activeDeal.stage}</span>
+                              ):closedLostDeal?(
+                                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5,flexShrink:0}}>
+                                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:`${B.red}15`,padding:"3px 8px",borderRadius:4}}>✗ CLOSED LOST</span>
+                                  <button onClick={()=>{
+                                    const dealId=mkId();
+                                    dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:`${selCamp.product||"Equipment"} — ${school||name}`,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today()});
+                                    toast(`New deal created for ${name}`,"success");
+                                  }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                    ↺ RE-OPEN DEAL
+                                  </button>
                                 </div>
                               ):(
                                 <button onClick={()=>{
                                   const dealId=mkId();
-                                  dispatch("ADD_DEAL",{
-                                    id:dealId,contactId:c.id,
-                                    name:`${selCamp.product||"Equipment"} — ${school||name}`,
-                                    company:school||name,stage:"Qualified Lead",
-                                    value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,
-                                    createdAt:today(),updatedAt:today(),
-                                  });
+                                  dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:`${selCamp.product||"Equipment"} — ${school||name}`,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today()});
                                   toast(`Deal created for ${name}`,"success");
-                                }}
-                                  style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                                }} style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
                                   + CREATE DEAL
                                 </button>
                               )}
@@ -7426,8 +7441,10 @@ function ModMarketing() {
                           );
                         })}
                       </div>
+                      )}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
