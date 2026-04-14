@@ -5351,6 +5351,7 @@ function ModMarketing() {
   const [pendingBatch,setPendingBatch]=useState(null);
   const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
   const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
+  const [intCollapsed,setIntCollapsed]=useState(false);
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
   const [segResult,setSegResult]=useState(null);
@@ -7381,9 +7382,7 @@ function ModMarketing() {
                   </div>
 
                   {/* ── INTERESTED section ── */}
-                  {interested>0&&(()=>{
-                    const [intCollapsed,setIntCollapsed]=React.useState(false);
-                    return(
+                  {interested>0&&(
                     <div style={{marginBottom:20,border:`2px solid ${B.teal}`,borderRadius:8,overflow:"hidden"}}>
                       <div onClick={()=>setIntCollapsed(x=>!x)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:`${B.teal}12`,cursor:"pointer",userSelect:"none"}}>
                         <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.teal}}>🎯</span>
@@ -7443,8 +7442,7 @@ function ModMarketing() {
                       </div>
                       )}
                     </div>
-                    );
-                  })()}
+                  )}
 
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
