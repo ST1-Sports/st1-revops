@@ -403,6 +403,16 @@ function reducer(prev, action, payload) {
     case "DELETE_SOCIAL_POST":  return {...prev, socialPosts:(prev.socialPosts||[]).filter(p=>p.id!==payload)};
     case "ADD_CAMPAIGN":    return {...prev, campaigns:[payload,...(prev.campaigns||[])]};
     case "UPDATE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "UPDATE_CAMPAIGN_TOUCH": {
+      // Applies a single touch update without requiring the full campaign object — safe for debounced saves
+      const {campId, touchIdx, touchDraft} = payload;
+      return {...prev, campaigns:(prev.campaigns||[]).map(c=>{
+        if(campId && c.id!==campId) return c;
+        if(!campId) return c; // need campId
+        const touches=(c.touches||[]).map((t,i)=>i===touchIdx?{...t,...touchDraft}:t);
+        return {...c,touches};
+      })};
+    }
     case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
@@ -5296,6 +5306,30 @@ function ModMarketing() {
   // Touch editing (assets tab)
   const [editingTouchIdx,setEditingTouchIdx]=useState(null);
   const [touchDraft,setTouchDraft]=useState({subject:"",body:""});
+  const touchSaveTimer=useRef(null);
+  const campDraftSaveTimer=useRef(null);
+  const editingTouchIdxRef=useRef(editingTouchIdx);
+  const selCampIdRef=useRef(null);
+  useEffect(()=>{editingTouchIdxRef.current=editingTouchIdx;},[editingTouchIdx]);
+  // Auto-save campDraft → store whenever it changes and has an id (covers all wizard touch/body edits)
+  useEffect(()=>{
+    if(!campDraft?.id) return;
+    clearTimeout(campDraftSaveTimer.current);
+    campDraftSaveTimer.current=setTimeout(()=>{ dispatch("UPDATE_CAMPAIGN",campDraft); },700);
+    return ()=>clearTimeout(campDraftSaveTimer.current);
+  },[campDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-save touchDraft → store whenever user types (no click required)
+  useEffect(()=>{
+    const idx=editingTouchIdxRef.current;
+    const campId=selCampIdRef.current;
+    if(idx===null||!campId||(!touchDraft.subject&&!touchDraft.body)) return;
+    clearTimeout(touchSaveTimer.current);
+    touchSaveTimer.current=setTimeout(()=>{
+      if(editingTouchIdxRef.current===null) return;
+      dispatch("UPDATE_CAMPAIGN_TOUCH",{campId,touchIdx:idx,touchDraft:{...touchDraft}});
+    },700);
+    return ()=>clearTimeout(touchSaveTimer.current);
+  },[touchDraft]); // eslint-disable-line react-hooks/exhaustive-deps
   // Execute tab
   const [filterSport,setFilterSport]=useState("all");
   const [executeFilter,setExecuteFilter]=useState("all"); // status filter for enrolled contacts
@@ -5330,6 +5364,7 @@ function ModMarketing() {
   const strategies = s.strategies || [];
   const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
+  selCampIdRef.current = selCamp?.id || null;
   const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
   const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
 
@@ -7222,62 +7257,81 @@ function ModMarketing() {
                 const touches=selCamp.touches||[];
                 const rep=selCamp.repId?(s.reps||[]).find(r=>r.id===selCamp.repId):null;
 
+                // Advance a single enrollment to the next step (shared by both send functions)
+                const advanceEnroll=(updEnr,enroll,todStr,camp)=>{
+                  const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                  if(idx<0) return;
+                  const ns=enroll.step+1;
+                  const done=ns>=(camp.touches||[]).length;
+                  const nt=(camp.touches||[])[ns];
+                  const nd=nt?new Date(Date.now()+nt.dayOffset*86400000).toISOString().slice(0,10):null;
+                  updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
+                };
+
                 // One-batch sender — sends exactly this list of enrollments for their current step
+                // Skips contacts marked "interested" and marks them as done after the batch
                 const sendOneBatch=async(batchEnrollments,batchKey)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
-                  let sent=0,failed=0,firstErr=null;
+                  let sent=0,failed=0,skipped=0,firstErr=null;
                   const todStr=today();
                   const updEnr=[...(camp.enrollments||[])];
-                  toast(`Sending ${batchEnrollments.length} emails…`,"info");
+                  const activeCount=batchEnrollments.filter(e=>e.status!=="interested").length;
+                  toast(`Sending ${activeCount} emails…`,"info");
                   for(const enroll of batchEnrollments){
+                    // Skip interested contacts — they expressed interest, don't continue emailing
+                    if(enroll.status==="interested"){ skipped++; continue; }
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
-                      const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
-                      if(idx>=0){
-                        const ns=enroll.step+1;
-                        const done=ns>=(camp.touches||[]).length;
-                        const nt=(camp.touches||[])[ns];
-                        const nd=nt?new Date(Date.now()+nt.dayOffset*86400000).toISOString().slice(0,10):null;
-                        updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
-                      }
+                      advanceEnroll(updEnr,enroll,todStr,camp);
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
                       sent++;
-                      if(sent<batchEnrollments.length) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
+                      if(sent<activeCount) await new Promise(r=>setTimeout(r,BETWEEN_EMAILS));
                     } else {
                       failed++;
                       const fe=contactMap[enroll.contactId]?.email||"unknown";
                       if(!firstErr) firstErr=`${fe}: ${res.reason}`;
                     }
                   }
+                  // Mark interested contacts in this batch as done — segment is complete for them
+                  for(const enroll of batchEnrollments){
+                    if(enroll.status==="interested"){
+                      const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                      if(idx>=0) updEnr[idx]={...updEnr[idx],status:"done",interestedAt:updEnr[idx].interestedAt||todStr};
+                    }
+                  }
                   dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
-                  // Mark this batch as sent so the row shows ✓ even before re-render removes it
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
                   setSending(false);
-                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}`,sent>0?"success":"error");
+                  const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
+                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}`,sent>0||skipped>0?"success":"error");
                 };
 
                 // Mark a batch as already sent (no emails — just advances enrollment state)
+                // Also skips and marks interested contacts as done
                 const markBatchSent=async(batchEnrollments,batchKey)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp) return;
                   const todStr=today();
                   const updEnr=[...(camp.enrollments||[])];
+                  let advanced=0,skipped=0;
                   for(const enroll of batchEnrollments){
-                    const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
-                    if(idx>=0){
-                      const ns=enroll.step+1;
-                      const done=ns>=(camp.touches||[]).length;
-                      const nt=(camp.touches||[])[ns];
-                      const nd=nt?new Date(Date.now()+nt.dayOffset*86400000).toISOString().slice(0,10):null;
-                      updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
+                    if(enroll.status==="interested"){
+                      // Mark as done — segment complete, they've expressed interest
+                      const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                      if(idx>=0) updEnr[idx]={...updEnr[idx],status:"done",interestedAt:updEnr[idx].interestedAt||todStr};
+                      skipped++;
+                    } else {
+                      advanceEnroll(updEnr,enroll,todStr,camp);
+                      advanced++;
                     }
                   }
                   dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
-                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent:batchEnrollments.length,failed:0}}));
-                  toast(`Batch marked as sent — ${batchEnrollments.length} contacts advanced`,"success");
+                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent:advanced,failed:0}}));
+                  const skipNote=skipped?` · ${skipped} interested moved to done`:"";
+                  toast(`${advanced} contacts advanced${skipNote}`,"success");
                 };
 
                 // Totals for stats row
@@ -7602,7 +7656,13 @@ function ModMarketing() {
                     const statusMatch = executeFilter==="all"?true:executeFilter==="sent"?(e.step>0||e.lastSentAt)&&e.status==="active":executeFilter==="active"?e.status==="active"&&!(e.step>0||e.lastSentAt):e.status===executeFilter;
                     return statusMatch&&(!c||(filterSport==="all"||c.sport===filterSport));
                   })
-                  .sort((a,b)=>a.step-b.step)
+                  .sort((a,b)=>{
+                    // Done contacts always sink to the bottom; interested float above done but below active
+                    const rank=s=>s==="done"?2:s==="interested"?1:0;
+                    const rd=rank(a.status)-rank(b.status);
+                    if(rd!==0) return rd;
+                    return a.step-b.step;
+                  })
                   .map(e=>{
                     const c=contactMap[e.contactId];
                     if(!c)return null;
