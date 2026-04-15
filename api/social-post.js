@@ -279,75 +279,61 @@ export default async function handler(req, res) {
 
     const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
-    // ── Confirmed from previous run: workspace header causes 500, no header = 401 ──
-    // Hypothesis: GET /accounts ignores the workspace header (works with or without),
-    // but POST /posts/schedule crashes when it tries to USE the workspace context.
-    // New tests focus on alternative account ID formats and API v2.
+    // ── Confirmed: empty body still 500 → crash is in before_action middleware ──
+    // Workspace numeric ID causes crash; workspace slug returns 401 "no access".
+    // New tests: bypass header entirely via query param, try different ID fields, inspect all workspace fields.
 
-    // T1: Use workspace `slug` or `handle` as header instead of numeric id
-    const wsSlug = rawWs.slug || rawWs.handle || rawWs.username || rawWs.name || liveWsId;
-    const r1 = await rawFetch(`T1: POST /posts/schedule [header=ws slug: ${wsSlug}]`,
-      `${BASE}/posts/schedule`, "POST", body,
-      { "Publer-Workspace-Id": wsSlug });
+    // Return full raw workspace keys immediately so we can inspect them
+    const wsKeys = Object.keys(rawWs);
+    const wsAllIds = wsKeys.filter(k => k === "id" || k.includes("id") || k.includes("uid") || k.includes("key") || k.includes("token") || k.includes("slug")).reduce((o,k)=>({...o,[k]:rawWs[k]}),{});
+
+    // T1: workspace_id as URL query param (bypasses header middleware entirely)
+    const r1 = await rawFetch("T1: POST /posts/schedule?workspace_id=X [query param]",
+      `${BASE}/posts/schedule?workspace_id=${liveWsId}`, "POST", body,
+      { "Publer-Workspace-Id": undefined });
     if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
 
-    // T2: API v2 endpoint
-    const r2 = await rawFetch("T2: POST /api/v2/posts [try v2 API]",
-      `https://app.publer.com/api/v2/posts`, "POST", body, {});
+    // T2: workspace_id in request body (not header, not query param)
+    const r2 = await rawFetch("T2: POST /posts/schedule [workspace_id in body]",
+      `${BASE}/posts/schedule`, "POST",
+      { workspace_id: liveWsId, post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
+      { "Publer-Workspace-Id": undefined });
     if (r2.ok) return res.json({ ok:true, successPattern:"T2", attempts });
 
-    // T3: POST /posts with workspace header (we only tried without header before)
-    const r3 = await rawFetch("T3: POST /posts WITH workspace header",
-      `${BASE}/posts`, "POST", body, {});
-    if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
+    // T3: Try every alternative workspace ID field as the header value
+    const altId = rawWs.uid || rawWs.uuid || rawWs.token || rawWs.key || rawWs.workspace_id || rawWs.slug || rawWs.handle;
+    if (altId && String(altId) !== liveWsId) {
+      const r3 = await rawFetch(`T3: POST /posts/schedule [header=altId: ${String(altId).slice(0,20)}]`,
+        `${BASE}/posts/schedule`, "POST", body,
+        { "Publer-Workspace-Id": String(altId) });
+      if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
+    }
 
-    // T4: Use numeric account id (parseInt) — maybe profiles expects integer not string
-    const numAcctId = parseInt(acctId, 10);
-    const r4 = await rawFetch(`T4: POST /posts/schedule [numeric acctId: ${numAcctId||"NaN"}]`,
-      `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", profiles: isNaN(numAcctId) ? [acctId] : [numAcctId], schedule_time: sched } }, {});
+    // T4: POST /posts/schedule with NO workspace header AND workspace_id in query AND body
+    const r4 = await rawFetch("T4: POST /posts/schedule [ws in query+body, no header]",
+      `${BASE}/posts/schedule?workspace_id=${liveWsId}`, "POST",
+      { workspace_id: liveWsId, post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
+      { "Publer-Workspace-Id": undefined });
     if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
 
-    // T5: Minimal body — no profiles, no schedule_time, just content (what is minimum?)
-    const r5 = await rawFetch("T5: POST /posts/schedule [ONLY content field]",
-      `${BASE}/posts/schedule`, "POST", { post: { content: "ST1 test" } }, {});
+    // T5: Try /create_post or /schedule_post (alternate URL patterns)
+    const r5 = await rawFetch("T5: POST /create_post [alternate URL]",
+      `${BASE}/create_post`, "POST", body, {});
     if (r5.ok) return res.json({ ok:true, successPattern:"T5", attempts });
 
-    // T6: Empty object body WITH workspace header — does it crash on empty too?
-    const r6 = await rawFetch("T6: POST /posts/schedule [EMPTY body {}]",
-      `${BASE}/posts/schedule`, "POST", {}, {});
-    if (r6.ok) return res.json({ ok:true, successPattern:"T6", attempts });
-
-    // T7: Use all account IDs (every connected account)
-    const allAcctIds = liveAccounts.map(a=>String(a.id));
-    const r7 = await rawFetch(`T7: POST /posts/schedule [ALL ${allAcctIds.length} accounts]`,
-      `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", profiles: allAcctIds, schedule_time: sched } }, {});
-    if (r7.ok) return res.json({ ok:true, successPattern:"T7", attempts });
-
-    // T8: Inspect raw workspace & account objects (diagnostic — always 'fails' but shows data)
-    attempts.push({
-      label: "T8: DIAGNOSTIC — raw workspace & account data",
-      httpStatus: 0,
-      ok: false,
-      responseBody: {
-        rawWorkspace: rawWs,
-        rawFirstAccount: liveAccounts[0] || null,
-        liveWsId,
-        acctId,
-        acctNoHdrWorks,
-      },
-    });
-
+    // T6: Return full workspace + account data for analysis (not truncated)
     return res.json({
       ok: false,
       liveWsId,
       acctId,
       acctNoHdrWorks,
-      rawWorkspace: rawWs,
-      liveAccounts: liveAccounts.map(a=>({ id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username, needs_reconnect:a.needs_reconnect })),
+      wsAllIdFields: wsAllIds,
+      wsAllKeys: wsKeys,
+      rawWorkspaceFull: rawWs,
+      rawFirstAccount: liveAccounts[0] || null,
+      allAccounts: liveAccounts.map(a=>({...a})),
       attempts,
-      note: "T8 shows raw workspace/account objects. Check if workspace has a slug/handle field. Check if GET /accounts works without workspace header (acctNoHdrWorks).",
+      note: "wsAllIdFields shows every ID-like field on the workspace object. wsAllKeys shows all field names.",
     });
   }
 
