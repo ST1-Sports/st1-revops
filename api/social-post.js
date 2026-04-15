@@ -239,13 +239,16 @@ export default async function handler(req, res) {
     const attempts = [];
 
     // Full raw fetch with header inspection
+    // Pass { "Publer-Workspace-Id": undefined } in extraHeaders to OMIT that header
     const rawFetch = async (label, url, method, reqBody, extraHeaders = {}) => {
-      const headers = {
+      const base = {
         Authorization: `Bearer-API ${apiKey}`,
         Accept: "application/json",
         "Publer-Workspace-Id": liveWsId,
-        ...extraHeaders,
       };
+      // Merge, then delete any keys explicitly set to undefined
+      const merged = { ...base, ...extraHeaders };
+      const headers = Object.fromEntries(Object.entries(merged).filter(([,v]) => v !== undefined));
       if (reqBody !== null && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
       const opts = { method, headers };
       if (reqBody !== null) opts.body = typeof reqBody === "string" ? reqBody : JSON.stringify(reqBody);
@@ -270,68 +273,58 @@ export default async function handler(req, res) {
 
     const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
-    // T1: baseline — our current approach (500)
-    const r1 = await rawFetch("T1: POST /posts/schedule [standard JSON]",
-      `${BASE}/posts/schedule`, "POST", body);
+    // ── Diagnostic: does removing the workspace header change 500→401? ──────────
+    // If T1 (no header) → 401 and T2 (with header) → 500, the header IS the trigger.
+    // If both → 500, the workspace header isn't the problem.
+
+    // T1: NO workspace header at all
+    const r1 = await rawFetch("T1: POST /posts/schedule [NO workspace header]",
+      `${BASE}/posts/schedule`, "POST", body,
+      { "Publer-Workspace-Id": undefined });
     if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
 
-    // T2: add Origin header (Rails CSRF protection sometimes checks this)
-    const r2 = await rawFetch("T2: POST /posts/schedule [+Origin header]",
-      `${BASE}/posts/schedule`, "POST", body,
-      { Origin: "https://app.publer.com", Referer: "https://app.publer.com/" });
+    // T2: workspace ID in URL path instead of header — /workspaces/{id}/posts
+    const r2 = await rawFetch("T2: POST /workspaces/{id}/posts [workspace in URL]",
+      `${BASE}/workspaces/${liveWsId}/posts`, "POST", body,
+      { "Publer-Workspace-Id": undefined });
     if (r2.ok) return res.json({ ok:true, successPattern:"T2", attempts });
 
-    // T3: multipart/form-data (some Rails APIs require this for media endpoints)
-    const boundary = "----Boundary" + Date.now();
-    const formBody = [
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="post[content]"`,
-      ``,
-      `ST1 test`,
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="post[profiles][]"`,
-      ``,
-      acctId,
-      `--${boundary}`,
-      `Content-Disposition: form-data; name="post[schedule_time]"`,
-      ``,
-      sched,
-      `--${boundary}--`,
-    ].join("\r\n");
-    const r3 = await rawFetch("T3: POST /posts/schedule [multipart/form-data]",
-      `${BASE}/posts/schedule`, "POST", formBody,
-      { "Content-Type": `multipart/form-data; boundary=${boundary}` });
+    // T3: workspace in URL — /workspaces/{id}/posts/schedule
+    const r3 = await rawFetch("T3: POST /workspaces/{id}/posts/schedule [workspace in URL]",
+      `${BASE}/workspaces/${liveWsId}/posts/schedule`, "POST", body,
+      { "Publer-Workspace-Id": undefined });
     if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
 
-    // T4: GET /posts/schedule — does this endpoint exist as GET?
-    const r4 = await rawFetch("T4: GET /posts/schedule [what does this return?]",
-      `${BASE}/posts/schedule`, "GET", null, {});
-    // (not expecting ok, just inspecting)
+    // T4: use `accounts` instead of `profiles` (alternate field name in Publer docs)
+    const r4 = await rawFetch("T4: POST /posts/schedule [accounts[] not profiles[]]",
+      `${BASE}/posts/schedule`, "POST",
+      { post: { content: "ST1 test", accounts: [acctId], schedule_time: sched } }, {});
+    if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
 
-    // T5: POST /posts (the standard documented endpoint) — force application/json
-    const r5 = await rawFetch("T5: POST /posts [documented endpoint, no /schedule]",
-      `${BASE}/posts`, "POST", body, {});
+    // T5: use `scheduled_at` instead of `schedule_time`
+    const r5 = await rawFetch("T5: POST /posts/schedule [scheduled_at not schedule_time]",
+      `${BASE}/posts/schedule`, "POST",
+      { post: { content: "ST1 test", profiles: [acctId], scheduled_at: sched } }, {});
     if (r5.ok) return res.json({ ok:true, successPattern:"T5", attempts });
 
-    // T6: POST /posts with workspace_id IN the body (no header)
-    const r6 = await rawFetch("T6: POST /posts [workspace_id in body, no header]",
-      `${BASE}/posts`, "POST",
-      { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched, workspace_id: liveWsId } },
-      { "Publer-Workspace-Id": "" });
+    // T6: URL-encoded body (some Rails APIs only accept this, not JSON, for POST)
+    const urlBody = `post[content]=ST1+test&post[profiles][]=${encodeURIComponent(acctId)}&post[schedule_time]=${encodeURIComponent(sched)}`;
+    const r6 = await rawFetch("T6: POST /posts/schedule [application/x-www-form-urlencoded]",
+      `${BASE}/posts/schedule`, "POST", urlBody,
+      { "Content-Type": "application/x-www-form-urlencoded" });
     if (r6.ok) return res.json({ ok:true, successPattern:"T6", attempts });
 
-    // T7: instagram account if different from facebook
-    if (igAcct && String(igAcct.id) !== acctId) {
-      const r7 = await rawFetch(`T7: POST /posts/schedule [Instagram account only]`,
-        `${BASE}/posts/schedule`, "POST",
-        { post: { content: "ST1 test", profiles: [String(igAcct.id)], schedule_time: sched } }, {});
-      if (r7.ok) return res.json({ ok:true, successPattern:"T7", attempts });
-    }
+    // T7: use Authorization: Bearer (not Bearer-API) — maybe POST uses different auth
+    const r7 = await rawFetch("T7: POST /posts/schedule [Bearer not Bearer-API]",
+      `${BASE}/posts/schedule`, "POST", body,
+      { Authorization: `Bearer ${apiKey}` });
+    if (r7.ok) return res.json({ ok:true, successPattern:"T7", attempts });
 
-    // T8: no profiles field at all — just content
-    const r8 = await rawFetch("T8: POST /posts/schedule [only content, no profiles]",
+    // T8: plural wrapper — { posts: [{ ... }] } instead of { post: { ... } }
+    const r8 = await rawFetch("T8: POST /posts/schedule [posts:[] plural wrapper]",
       `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", schedule_time: sched } }, {});
+      { posts: [{ content: "ST1 test", profiles: [acctId], schedule_time: sched }] }, {});
+    if (r8.ok) return res.json({ ok:true, successPattern:"T8", attempts });
 
     return res.json({
       ok: false,
@@ -339,7 +332,7 @@ export default async function handler(req, res) {
       acctId,
       liveAccounts: liveAccounts.map(a=>({ id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username, needs_reconnect:a.needs_reconnect })),
       attempts,
-      note: "Check responseHeaders on the 500s — look for x-error, www-authenticate, x-request-id fields. Also check if T4 (GET /posts/schedule) or T5 (POST /posts) return anything different.",
+      note: "Key diagnostic: if T1 (no header) returns 401 but T2/T3+ return 500, the workspace header is the crash trigger. If T2 or T3 return 404 we know the URL path structure.",
     });
   }
 
