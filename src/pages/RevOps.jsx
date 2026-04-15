@@ -11292,11 +11292,18 @@ function ModSettings() {
                   {(publerDebug.attempts||[]).map((a,i)=>(
                     <div key={i} style={{marginBottom:6,padding:"6px 8px",background:a.ok?`${B.green}10`:`${B.red}08`,borderRadius:4,border:`1px solid ${a.ok?B.green:B.red}30`}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:a.ok?B.green:B.red,marginBottom:3}}>
-                        {a.ok?"✓":"✕"} {a.path} — {a.bodyFormat} → HTTP {a.httpStatus}
+                        {a.ok?"✓":"✕"} {a.label||`${a.path} — ${a.bodyFormat}`} → HTTP {a.httpStatus}
                       </div>
-                      <div style={{fontFamily:"monospace",fontSize:8,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>
-                        {JSON.stringify(a.publerResponse)}
-                      </div>
+                      {(a.responseBody||a.publerResponse)&&(
+                        <div style={{fontFamily:"monospace",fontSize:8,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:60,overflowY:"auto"}}>
+                          {JSON.stringify(a.responseBody||a.publerResponse).slice(0,300)}
+                        </div>
+                      )}
+                      {a.responseHeaders&&Object.keys(a.responseHeaders).length>0&&(
+                        <div style={{fontFamily:"monospace",fontSize:7,color:B.orange,marginTop:2}}>
+                          hdrs: {JSON.stringify(a.responseHeaders).slice(0,200)}
+                        </div>
+                      )}
                     </div>
                   ))}
                   {!publerDebug.attempts&&<div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:180,overflowY:"auto"}}>{JSON.stringify(publerDebug,null,2)}</div>}
