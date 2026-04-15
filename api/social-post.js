@@ -226,14 +226,20 @@ export default async function handler(req, res) {
 
     const { data: wsData }  = await publerRequest("/workspaces", "GET", null, apiKey);
     const liveWorkspaces = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
-    const liveWsId = liveWorkspaces[0] ? String(liveWorkspaces[0].id) : workspaceId;
+    const rawWs = liveWorkspaces[0] || {};
+    const liveWsId = rawWs.id ? String(rawWs.id).trim() : workspaceId;
 
     const { data: accData } = await publerRequest("/accounts", "GET", null, apiKey, liveWsId);
     const liveAccounts = Array.isArray(accData) ? accData : (accData?.data || accData?.accounts || []);
     const fbAcct  = liveAccounts.find(a=>(a.provider||a.platform||a.type||"").toLowerCase()==="facebook") || liveAccounts[0];
     const igAcct  = liveAccounts.find(a=>(a.provider||a.platform||a.type||"").toLowerCase()==="instagram");
-    const acctId  = fbAcct ? String(fbAcct.id) : null;
+    const acctId  = fbAcct ? String(fbAcct.id).trim() : null;
     if (!acctId) return res.json({ ok:false, error:"No accounts", liveAccounts });
+
+    // Diagnostic: does GET /accounts work WITHOUT the workspace header?
+    // If yes, the header is being ignored for GET — which means workspace ID isn't validated on GET.
+    const { data: accNoHdr, ok: accNoHdrOk } = await publerRequest("/accounts", "GET", null, apiKey);
+    const acctNoHdrWorks = accNoHdrOk;
 
     const sched = new Date(Date.now() + 20 * 60 * 1000).toISOString();
     const attempts = [];
@@ -273,66 +279,75 @@ export default async function handler(req, res) {
 
     const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
-    // ── Diagnostic: does removing the workspace header change 500→401? ──────────
-    // If T1 (no header) → 401 and T2 (with header) → 500, the header IS the trigger.
-    // If both → 500, the workspace header isn't the problem.
+    // ── Confirmed from previous run: workspace header causes 500, no header = 401 ──
+    // Hypothesis: GET /accounts ignores the workspace header (works with or without),
+    // but POST /posts/schedule crashes when it tries to USE the workspace context.
+    // New tests focus on alternative account ID formats and API v2.
 
-    // T1: NO workspace header at all
-    const r1 = await rawFetch("T1: POST /posts/schedule [NO workspace header]",
+    // T1: Use workspace `slug` or `handle` as header instead of numeric id
+    const wsSlug = rawWs.slug || rawWs.handle || rawWs.username || rawWs.name || liveWsId;
+    const r1 = await rawFetch(`T1: POST /posts/schedule [header=ws slug: ${wsSlug}]`,
       `${BASE}/posts/schedule`, "POST", body,
-      { "Publer-Workspace-Id": undefined });
+      { "Publer-Workspace-Id": wsSlug });
     if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
 
-    // T2: workspace ID in URL path instead of header — /workspaces/{id}/posts
-    const r2 = await rawFetch("T2: POST /workspaces/{id}/posts [workspace in URL]",
-      `${BASE}/workspaces/${liveWsId}/posts`, "POST", body,
-      { "Publer-Workspace-Id": undefined });
+    // T2: API v2 endpoint
+    const r2 = await rawFetch("T2: POST /api/v2/posts [try v2 API]",
+      `https://app.publer.com/api/v2/posts`, "POST", body, {});
     if (r2.ok) return res.json({ ok:true, successPattern:"T2", attempts });
 
-    // T3: workspace in URL — /workspaces/{id}/posts/schedule
-    const r3 = await rawFetch("T3: POST /workspaces/{id}/posts/schedule [workspace in URL]",
-      `${BASE}/workspaces/${liveWsId}/posts/schedule`, "POST", body,
-      { "Publer-Workspace-Id": undefined });
+    // T3: POST /posts with workspace header (we only tried without header before)
+    const r3 = await rawFetch("T3: POST /posts WITH workspace header",
+      `${BASE}/posts`, "POST", body, {});
     if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
 
-    // T4: use `accounts` instead of `profiles` (alternate field name in Publer docs)
-    const r4 = await rawFetch("T4: POST /posts/schedule [accounts[] not profiles[]]",
+    // T4: Use numeric account id (parseInt) — maybe profiles expects integer not string
+    const numAcctId = parseInt(acctId, 10);
+    const r4 = await rawFetch(`T4: POST /posts/schedule [numeric acctId: ${numAcctId||"NaN"}]`,
       `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", accounts: [acctId], schedule_time: sched } }, {});
+      { post: { content: "ST1 test", profiles: isNaN(numAcctId) ? [acctId] : [numAcctId], schedule_time: sched } }, {});
     if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
 
-    // T5: use `scheduled_at` instead of `schedule_time`
-    const r5 = await rawFetch("T5: POST /posts/schedule [scheduled_at not schedule_time]",
-      `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", profiles: [acctId], scheduled_at: sched } }, {});
+    // T5: Minimal body — no profiles, no schedule_time, just content (what is minimum?)
+    const r5 = await rawFetch("T5: POST /posts/schedule [ONLY content field]",
+      `${BASE}/posts/schedule`, "POST", { post: { content: "ST1 test" } }, {});
     if (r5.ok) return res.json({ ok:true, successPattern:"T5", attempts });
 
-    // T6: URL-encoded body (some Rails APIs only accept this, not JSON, for POST)
-    const urlBody = `post[content]=ST1+test&post[profiles][]=${encodeURIComponent(acctId)}&post[schedule_time]=${encodeURIComponent(sched)}`;
-    const r6 = await rawFetch("T6: POST /posts/schedule [application/x-www-form-urlencoded]",
-      `${BASE}/posts/schedule`, "POST", urlBody,
-      { "Content-Type": "application/x-www-form-urlencoded" });
+    // T6: Empty object body WITH workspace header — does it crash on empty too?
+    const r6 = await rawFetch("T6: POST /posts/schedule [EMPTY body {}]",
+      `${BASE}/posts/schedule`, "POST", {}, {});
     if (r6.ok) return res.json({ ok:true, successPattern:"T6", attempts });
 
-    // T7: use Authorization: Bearer (not Bearer-API) — maybe POST uses different auth
-    const r7 = await rawFetch("T7: POST /posts/schedule [Bearer not Bearer-API]",
-      `${BASE}/posts/schedule`, "POST", body,
-      { Authorization: `Bearer ${apiKey}` });
+    // T7: Use all account IDs (every connected account)
+    const allAcctIds = liveAccounts.map(a=>String(a.id));
+    const r7 = await rawFetch(`T7: POST /posts/schedule [ALL ${allAcctIds.length} accounts]`,
+      `${BASE}/posts/schedule`, "POST",
+      { post: { content: "ST1 test", profiles: allAcctIds, schedule_time: sched } }, {});
     if (r7.ok) return res.json({ ok:true, successPattern:"T7", attempts });
 
-    // T8: plural wrapper — { posts: [{ ... }] } instead of { post: { ... } }
-    const r8 = await rawFetch("T8: POST /posts/schedule [posts:[] plural wrapper]",
-      `${BASE}/posts/schedule`, "POST",
-      { posts: [{ content: "ST1 test", profiles: [acctId], schedule_time: sched }] }, {});
-    if (r8.ok) return res.json({ ok:true, successPattern:"T8", attempts });
+    // T8: Inspect raw workspace & account objects (diagnostic — always 'fails' but shows data)
+    attempts.push({
+      label: "T8: DIAGNOSTIC — raw workspace & account data",
+      httpStatus: 0,
+      ok: false,
+      responseBody: {
+        rawWorkspace: rawWs,
+        rawFirstAccount: liveAccounts[0] || null,
+        liveWsId,
+        acctId,
+        acctNoHdrWorks,
+      },
+    });
 
     return res.json({
       ok: false,
       liveWsId,
       acctId,
+      acctNoHdrWorks,
+      rawWorkspace: rawWs,
       liveAccounts: liveAccounts.map(a=>({ id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username, needs_reconnect:a.needs_reconnect })),
       attempts,
-      note: "Key diagnostic: if T1 (no header) returns 401 but T2/T3+ return 500, the workspace header is the crash trigger. If T2 or T3 return 404 we know the URL path structure.",
+      note: "T8 shows raw workspace/account objects. Check if workspace has a slug/handle field. Check if GET /accounts works without workspace header (acctNoHdrWorks).",
     });
   }
 
