@@ -11306,7 +11306,7 @@ function ModSettings() {
                       )}
                     </div>
                   ))}
-                  {!publerDebug.attempts&&<div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:180,overflowY:"auto"}}>{JSON.stringify(publerDebug,null,2)}</div>}
+                  {!publerDebug.attempts&&<div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:300,overflowY:"auto"}}>{JSON.stringify(publerDebug,null,2)}</div>}
                 </div>
               )}
               {publerPosts&&(
