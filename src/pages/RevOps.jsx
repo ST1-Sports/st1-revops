@@ -7292,6 +7292,8 @@ function ModMarketing() {
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
                       advanceEnroll(updEnr,enroll,todStr,camp);
+                      // Save to DB immediately after each successful send — prevents data loss on reload
+                      dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:[...updEnr]});
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
                       sent++;
