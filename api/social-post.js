@@ -439,15 +439,24 @@ export default async function handler(req, res) {
       { post: { content: postText2, accounts: bestId ? [bestId] : [], scheduled_at: scheduledAt2 } },
       { Authorization: `Bearer ${apiKey}` });
 
-    // Check scheduled posts to see if any attempt created something
+    // Poll job status for successful attempt
+    let jobStatus = null;
+    const successAttempt = attempts.find(a => a.ok || a.status===200 || a.status===201);
+    if (successAttempt?.response?.job_id) {
+      await new Promise(r => setTimeout(r, 3000));
+      try {
+        const { data: jd } = await publerRequest(`/job_status/${successAttempt.response.job_id}`, "GET", null, apiKey, verboseWsId);
+        jobStatus = jd;
+      } catch(e) { jobStatus = { error: e.message }; }
+    }
+
+    // Check top scheduled posts after
     let afterList = null;
     try {
       const { data: listD } = await publerRequest("/posts?status=scheduled", "GET", null, apiKey, verboseWsId);
       const arr = Array.isArray(listD) ? listD : (listD?.data || listD?.posts || []);
       afterList = arr.slice(0,5).map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,100), scheduled_at:p.scheduled_at||p.schedule_time, state:p.state||p.status }));
     } catch {}
-
-    const successAttempt = attempts.find(a => a.ok || a.status===200 || a.status===201);
     return res.json({
       action: "send-verbose",
       workspaceId: verboseWsId,
@@ -460,10 +469,13 @@ export default async function handler(req, res) {
       attempts,
       top5PostsAfter: afterList,
       verdict: successAttempt ? `SUCCESS — ${successAttempt.label}` : `ALL FAILED — account ID or API key issue`,
+      jobStatus,
     });
   }
 
   // ── Post / Schedule ────────────────────────────────────────────────────────
+  // Confirmed working format: POST /posts/schedule with bulk wrapper
+  // { bulk: { state: "scheduled", posts: [{ content, accounts, scheduled_at }] } }
   if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
 
   const platformMap = {
@@ -476,7 +488,6 @@ export default async function handler(req, res) {
 
   const activePlatforms = (platforms || []).filter(Boolean);
 
-  // Only include public HTTPS image URLs — base64 / blob URLs won't work with Publer
   const publicMediaUrls = (mediaUrls || []).filter(
     u => typeof u === "string" && u.startsWith("https://") && !u.startsWith("data:")
   );
@@ -485,9 +496,6 @@ export default async function handler(req, res) {
 
   const postText = link && !post.includes(link) ? `${post}\n\n${link}` : post;
 
-  // Always schedule via /posts/schedule so posts appear in Publer's calendar.
-  // For "immediate" posts (no scheduleDate), queue 2 min from now so the user
-  // can see and cancel in Publer before it fires.
   const TWO_MIN = new Date(Date.now() + 2 * 60 * 1000);
   let scheduledAt;
   if (scheduleDate) {
@@ -497,29 +505,26 @@ export default async function handler(req, res) {
     scheduledAt = TWO_MIN.toISOString();
   }
 
-  // Publer POST /posts API v1 format:
-  //   { post: { content, profiles: [id], schedule_time, media: [{url}], is_story } }
-  // One request per platform so each succeeds/fails independently.
+  // Build one bulk post entry per platform account
   const missingAccounts = [];
-  const posts = [];
-  // Send all known content field aliases so whichever Publer accepts gets the text
+  const bulkPosts = [];
+
   for (const platform of activePlatforms) {
     const accountId = platformMap[platform];
     if (!accountId) { missingAccounts.push(platform); continue; }
-    const accArr = [String(accountId)];
-    posts.push({
+    bulkPosts.push({
       content: postText,
-      accounts: accArr,
+      accounts: [String(accountId)],
       scheduled_at: scheduledAt,
       ...(hasMedia ? { media_urls: publicMediaUrls } : {}),
       ...(isStory ? { is_story: true } : {}),
     });
   }
 
-  // Fallback: if no platform-specific IDs found, try PUBLER_ACCOUNT_IDS
-  if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
+  // Fallback: PUBLER_ACCOUNT_IDS env var
+  if (!bulkPosts.length && process.env.PUBLER_ACCOUNT_IDS) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
-    posts.push({
+    bulkPosts.push({
       content: postText,
       accounts: fallbackIds,
       scheduled_at: scheduledAt,
@@ -528,18 +533,17 @@ export default async function handler(req, res) {
     });
   }
 
-  if (!posts.length) {
+  if (!bulkPosts.length) {
     const missing = missingAccounts.join(", ");
     return res.status(400).json({
       error: `No account IDs configured for: ${missing}. In Settings → Load Accounts, copy the IDs, then add PUBLER_ACCOUNT_FACEBOOK / PUBLER_ACCOUNT_INSTAGRAM (etc.) to Vercel env vars.`,
     });
   }
 
-  // Use /posts/schedule (confirmed live endpoint). Always fetch the workspace ID
-  // fresh from GET /workspaces so a stale env var doesn't break posting.
+  // Fresh workspace ID
   let effectiveWsId = workspaceId;
   try {
-    const { ok: wsOk, data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const { data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
     const ws = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
     if (ws[0]?.id) effectiveWsId = String(ws[0].id);
   } catch {}
@@ -548,24 +552,20 @@ export default async function handler(req, res) {
     const allPostIds = [];
     const errors = [];
 
-    for (const post of posts) {
+    for (const bulkPost of bulkPosts) {
       const { ok, status: httpStatus, data } = await publerRequest(
-        "/posts/schedule", "POST", { post }, apiKey, effectiveWsId);
+        "/posts/schedule", "POST",
+        { bulk: { state: "scheduled", posts: [bulkPost] } },
+        apiKey, effectiveWsId);
+
       if (ok) {
-        const parsed = parseSuccess(data, true);
-        if (parsed) allPostIds.push(...parsed.postIds);
-        else if (data.id) allPostIds.push(String(data.id));
-        else if (data.job_id) allPostIds.push(String(data.job_id));
-      } else if (httpStatus === 500) {
-        // Publer server bug: the post IS created but their handler crashes before
-        // returning a success response. Treat 500 as tentative success.
-        // A placeholder ID lets the caller know something was submitted.
-        allPostIds.push(`publer-submitted-${Date.now()}`);
-        console.log("[publer] 500 on /posts/schedule — post likely created (known Publer server bug)");
+        const jobId = data.job_id || data.data?.job_id;
+        if (jobId) allPostIds.push(String(jobId));
+        else allPostIds.push(`publer-ok-${Date.now()}`);
       } else {
         const errMsg = extractError(data);
         errors.push(`${errMsg} (HTTP ${httpStatus})`);
-        console.error("[publer] post failed:", JSON.stringify(data).slice(0, 600));
+        console.error("[publer] bulk post failed:", JSON.stringify(data).slice(0, 600));
       }
     }
 
