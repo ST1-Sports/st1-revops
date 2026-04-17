@@ -382,11 +382,13 @@ export default async function handler(req, res) {
   // One request per platform so each succeeds/fails independently.
   const missingAccounts = [];
   const posts = [];
+  // Send all known content field aliases so whichever Publer accepts gets the text
+  const contentFields = { text: postText, content: postText, caption: postText, message: postText };
   for (const platform of activePlatforms) {
     const accountId = platformMap[platform];
     if (!accountId) { missingAccounts.push(platform); continue; }
     posts.push({
-      text: postText,
+      ...contentFields,
       profiles: [String(accountId)],
       schedule_time: scheduledAt,
       ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
@@ -398,7 +400,7 @@ export default async function handler(req, res) {
   if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
     posts.push({
-      text: postText,
+      ...contentFields,
       profiles: fallbackIds,
       schedule_time: scheduledAt,
       ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
