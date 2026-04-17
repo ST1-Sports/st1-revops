@@ -11224,6 +11224,8 @@ function ModSettings() {
         const [publerDebug,setPublerDebug]=useState(null);
         const [publerDebugging,setPublerDebugging]=useState(false);
         const [publerAccounts,setPublerAccounts]=useState(null);
+        const [publerSendDebug,setPublerSendDebug]=useState(null);
+        const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
@@ -11262,6 +11264,25 @@ function ModSettings() {
             const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
             setPublerAccounts(d);
           }catch(e){setPublerAccounts({error:e.message});}
+        };
+        const testSendToPubler=async()=>{
+          setPublerSendDebugging(true);setPublerSendDebug(null);
+          const n=new Date(Date.now()+5*60*1000);
+          const pad=v=>String(v).padStart(2,"0");
+          const tzOff=new Date().getTimezoneOffset();
+          const tzSign=tzOff<=0?"+":"-";
+          const tzH=pad(Math.floor(Math.abs(tzOff)/60));
+          const tzM=pad(Math.abs(tzOff)%60);
+          const scheduleDate=`${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
+          // Get first connected platform from accounts, fallback to instagram
+          const platforms=(publerAccounts?.profiles||[]).map(a=>a.service).filter(Boolean);
+          const testPlatforms=platforms.length?[platforms[0]]:["instagram"];
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({action:"send-verbose",post:"ST1 RevOps test post — please delete",platforms:testPlatforms,scheduleDate})}).then(r=>r.json());
+            setPublerSendDebug(d);
+          }catch(e){setPublerSendDebug({error:e.message});}
+          setPublerSendDebugging(false);
         };
 
         useEffect(()=>{checkGmail();checkPubler();},[]);
@@ -11307,6 +11328,7 @@ function ModSettings() {
                   <button onClick={loadPublerAccounts} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>👤 Accounts</button>
                   <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Queue"}</button>
                   <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+                  <button onClick={testSendToPubler} disabled={publerSendDebugging} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{publerSendDebugging?"Sending…":"✉ Test Send"}</button>
                 </div>
               </div>
               {publerInfo&&(
@@ -11340,6 +11362,33 @@ function ModSettings() {
                 </div>
               )}
               {false&&publerDebug&&null}
+              {publerSendDebug&&(
+                <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:.5}}>✉ TEST SEND RESULT</span>
+                    <button onClick={()=>setPublerSendDebug(null)} style={{background:"none",border:"none",cursor:"pointer",color:B.muted,fontSize:10}}>✕</button>
+                  </div>
+                  {publerSendDebug.error&&<div style={{color:B.red,marginBottom:4}}><b>Error:</b> {publerSendDebug.error}</div>}
+                  <div style={{marginBottom:3}}><b>Verdict:</b> <span style={{color:publerSendDebug.verdict==="SUCCESS"?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
+                  <div style={{marginBottom:3}}><b>Publer HTTP status:</b> {publerSendDebug.publerHttpStatus}</div>
+                  <div style={{marginBottom:3}}><b>Workspace ID used:</b> {publerSendDebug.workspaceId}</div>
+                  <div style={{marginBottom:3}}><b>Account ID used:</b> {publerSendDebug.accountId||"none"} {publerSendDebug.envAccountId?"(from env var)":"(live lookup — env var missing!)"}</div>
+                  <div style={{marginBottom:3}}><b>Request sent to Publer:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.requestSent,null,2)}</code></div>
+                  <div style={{marginBottom:3}}><b>Publer raw response:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.publerResponse,null,2)}</code></div>
+                  {publerSendDebug.scheduledPostsAfter&&(
+                    <div style={{marginBottom:3}}><b>Scheduled posts on Publer after ({publerSendDebug.scheduledPostsAfter.length}):</b>{" "}
+                      {publerSendDebug.scheduledPostsAfter.length===0
+                        ?<span style={{color:B.red}}>none — post did NOT land on calendar</span>
+                        :publerSendDebug.scheduledPostsAfter.map(sp=>(
+                          <div key={sp.id} style={{marginLeft:8,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>
+                            ID: {sp.id} | text: "<b>{sp.text||"(empty)"}</b>" | state: {sp.state}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+              )}
               {publerPosts&&(
                 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
                   {publerPosts.error
