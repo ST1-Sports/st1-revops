@@ -389,36 +389,55 @@ export default async function handler(req, res) {
     } catch(e) { profileLookup = { error: e.message }; }
 
     const attempts = [];
-    const tryPost = async (label, bodyObj) => {
+    const tryEndpoint = async (label, endpoint, bodyObj, extraHeaders = {}) => {
       try {
-        const r = await publerRequest("/posts/schedule", "POST", bodyObj, apiKey, verboseWsId);
-        attempts.push({ label, status: r.status, ok: r.ok, response: r.data });
+        const headers = { Authorization: `Bearer-API ${apiKey}`, "Content-Type": "application/json", Accept: "application/json", "Publer-Workspace-Id": verboseWsId, ...extraHeaders };
+        const cleanHeaders = Object.fromEntries(Object.entries(headers).filter(([,v])=>v!=null));
+        const opts = { method: "POST", headers: cleanHeaders };
+        if (bodyObj !== null) opts.body = JSON.stringify(bodyObj);
+        const r = await fetch(`${PUBLER_API}${endpoint}`, opts);
+        let data; try { data = await r.json(); } catch { data = { _raw: (await r.text().catch(()=>"")).slice(0,300) }; }
+        attempts.push({ label, endpoint, status: r.status, ok: r.ok, response: data });
         return r.ok || r.status === 200 || r.status === 201;
       } catch(e) {
-        attempts.push({ label, status: 0, ok: false, response: { error: e.message } });
+        attempts.push({ label, endpoint, status: 0, ok: false, response: { error: e.message } });
         return false;
       }
     };
 
-    // A: env var account ID (what is currently configured)
-    if (envAccIdStr) await tryPost(`A: env acct ID ${envAccIdStr.slice(0,8)}`, { post: { content: postText2, accounts: [envAccIdStr], scheduled_at: scheduledAt2 } });
-
-    // B: live account ID from /accounts (may differ from env var)
-    if (liveAccIdStr && liveAccIdStr !== envAccIdStr) await tryPost(`B: live acct ID ${liveAccIdStr.slice(0,8)} (from /accounts)`, { post: { content: postText2, accounts: [liveAccIdStr], scheduled_at: scheduledAt2 } });
-
-    // C: profile ID from /profiles (different endpoint)
-    if (profAccIdStr && profAccIdStr !== envAccIdStr && profAccIdStr !== liveAccIdStr) await tryPost(`C: profile ID ${profAccIdStr.slice(0,8)} (from /profiles)`, { post: { content: postText2, accounts: [profAccIdStr], scheduled_at: scheduledAt2 } });
-
-    // D: ALL live account IDs at once
-    const allLiveIds = (Array.isArray(accountLookup) ? accountLookup : []).map(a=>String(a.id)).filter(Boolean);
-    if (allLiveIds.length > 0) await tryPost(`D: ALL live acct IDs [${allLiveIds.join(",")}]`, { post: { content: postText2, accounts: allLiveIds, scheduled_at: scheduledAt2 } });
-
-    // E: use profiles field name instead of accounts
     const bestId = envAccIdStr || liveAccIdStr || profAccIdStr;
-    if (bestId) await tryPost(`E: profiles field name, ID ${bestId.slice(0,8)}`, { post: { content: postText2, profiles: [bestId], scheduled_at: scheduledAt2 } });
+    const allLiveIds = (Array.isArray(accountLookup) ? accountLookup : []).map(a=>String(a.id)).filter(Boolean);
 
-    // F: no account ID at all — let Publer pick defaults
-    await tryPost("F: no account ID (let Publer pick)", { post: { content: postText2, scheduled_at: scheduledAt2 } });
+    // A: current endpoint, current format
+    await tryEndpoint("A: /posts/schedule content+accounts+scheduled_at", "/posts/schedule",
+      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
+
+    // B: /posts endpoint (not /posts/schedule)
+    await tryEndpoint("B: /posts content+accounts+scheduled_at", "/posts",
+      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
+
+    // C: bulk format (different top-level structure)
+    await tryEndpoint("C: /posts/schedule BULK format", "/posts/schedule",
+      { bulk: { state: "scheduled", posts: [{ content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 }] } });
+
+    // D: /post singular endpoint
+    await tryEndpoint("D: /post singular endpoint", "/post",
+      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
+
+    // E: no workspace header — maybe workspace header is causing the 500
+    await tryEndpoint("E: /posts/schedule NO workspace header", "/posts/schedule",
+      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } },
+      { "Publer-Workspace-Id": null });
+
+    // F: absolute minimum — just content, no accounts, no schedule, no workspace header
+    await tryEndpoint("F: bare minimum, no ws header", "/posts/schedule",
+      { post: { content: postText2 } },
+      { "Publer-Workspace-Id": null });
+
+    // G: Bearer (not Bearer-API) auth format
+    await tryEndpoint("G: Bearer auth (not Bearer-API)", "/posts/schedule",
+      { post: { content: postText2, accounts: bestId ? [bestId] : [], scheduled_at: scheduledAt2 } },
+      { Authorization: `Bearer ${apiKey}` });
 
     // Check scheduled posts to see if any attempt created something
     let afterList = null;
