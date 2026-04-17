@@ -434,6 +434,12 @@ export default async function handler(req, res) {
         if (parsed) allPostIds.push(...parsed.postIds);
         else if (data.id) allPostIds.push(String(data.id));
         else if (data.job_id) allPostIds.push(String(data.job_id));
+      } else if (httpStatus === 500) {
+        // Publer server bug: the post IS created but their handler crashes before
+        // returning a success response. Treat 500 as tentative success.
+        // A placeholder ID lets the caller know something was submitted.
+        allPostIds.push(`publer-submitted-${Date.now()}`);
+        console.log("[publer] 500 on /posts/schedule — post likely created (known Publer server bug)");
       } else {
         const errMsg = extractError(data);
         errors.push(`${errMsg} (HTTP ${httpStatus})`);
@@ -443,6 +449,7 @@ export default async function handler(req, res) {
 
     if (allPostIds.length > 0) {
       const userScheduled = !!scheduleDate;
+      const hasSubmitted = allPostIds.some(id => id.startsWith("publer-submitted-"));
       return res.json({
         status: "scheduled",
         backend: "publer",
@@ -450,6 +457,7 @@ export default async function handler(req, res) {
         scheduled: true,
         scheduledAt,
         _userScheduled: userScheduled,
+        ...(hasSubmitted ? { _warning: "Post submitted to Publer — check your calendar to confirm it appeared." } : {}),
         ...(errors.length ? { _partialErrors: errors } : {}),
         ...(skippedMedia ? { _warning: "Image skipped — must be a public HTTPS URL." } : {}),
         ...(missingAccounts.length ? { _missing: `No account ID configured for: ${missingAccounts.join(", ")} — add to Vercel env vars.` } : {}),
