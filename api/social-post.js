@@ -277,7 +277,7 @@ export default async function handler(req, res) {
       }
     };
 
-    const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
+    const body = { post: { text: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
     // ── All POST methods now return 401 "no access" — API key permissions issue ──
     // The API key can READ the workspace but cannot POST to it.
@@ -293,7 +293,7 @@ export default async function handler(req, res) {
     if (profId) {
       const r1 = await rawFetch(`T1: POST /posts/schedule [profile IDs from /profiles: ${profId.slice(0,12)}]`,
         `${BASE}/posts/schedule`, "POST",
-        { post: { content: "ST1 test", profiles: allProfIds.length ? allProfIds : [profId], schedule_time: sched } }, {});
+        { post: { text: "ST1 test", profiles: allProfIds.length ? allProfIds : [profId], schedule_time: sched } }, {});
       if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
     }
 
@@ -310,7 +310,7 @@ export default async function handler(req, res) {
     // T3: POST with NO workspace context at all (profiles may determine workspace implicitly)
     const r3 = await rawFetch("T3: POST /posts/schedule [NO workspace ID anywhere]",
       `${BASE}/posts/schedule`, "POST",
-      { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
+      { post: { text: "ST1 test", profiles: [acctId], schedule_time: sched } },
       { "Publer-Workspace-Id": undefined });
     if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
 
@@ -320,7 +320,7 @@ export default async function handler(req, res) {
     if (numId && typeof numId === "number") {
       const r4 = await rawFetch(`T4: POST /posts/schedule [numeric profile id: ${numId}]`,
         `${BASE}/posts/schedule`, "POST",
-        { post: { content: "ST1 test", profiles: [numId], schedule_time: sched } }, {});
+        { post: { text: "ST1 test", profiles: [numId], schedule_time: sched } }, {});
       if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
     }
 
@@ -386,7 +386,7 @@ export default async function handler(req, res) {
     const accountId = platformMap[platform];
     if (!accountId) { missingAccounts.push(platform); continue; }
     posts.push({
-      content: postText,
+      text: postText,
       profiles: [String(accountId)],
       schedule_time: scheduledAt,
       ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
@@ -398,7 +398,7 @@ export default async function handler(req, res) {
   if (!posts.length && process.env.PUBLER_ACCOUNT_IDS) {
     const fallbackIds = process.env.PUBLER_ACCOUNT_IDS.split(",").map(s => s.trim()).filter(Boolean);
     posts.push({
-      content: postText,
+      text: postText,
       profiles: fallbackIds,
       schedule_time: scheduledAt,
       ...(hasMedia ? { media: publicMediaUrls.map(url => ({ url })) } : {}),
