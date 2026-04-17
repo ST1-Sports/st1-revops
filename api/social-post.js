@@ -279,61 +279,67 @@ export default async function handler(req, res) {
 
     const body = { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } };
 
-    // ── Confirmed: empty body still 500 → crash is in before_action middleware ──
-    // Workspace numeric ID causes crash; workspace slug returns 401 "no access".
-    // New tests: bypass header entirely via query param, try different ID fields, inspect all workspace fields.
+    // ── All POST methods now return 401 "no access" — API key permissions issue ──
+    // The API key can READ the workspace but cannot POST to it.
+    // New tests: try all workspace IDs, use /profiles endpoint, post without any workspace ctx.
 
-    // Return full raw workspace keys immediately so we can inspect them
-    const wsKeys = Object.keys(rawWs);
-    const wsAllIds = wsKeys.filter(k => k === "id" || k.includes("id") || k.includes("uid") || k.includes("key") || k.includes("token") || k.includes("slug")).reduce((o,k)=>({...o,[k]:rawWs[k]}),{});
+    // GET /profiles (different endpoint from /accounts — may return different IDs)
+    const { data: profData } = await publerRequest("/profiles", "GET", null, apiKey, liveWsId);
+    const liveProfiles = Array.isArray(profData) ? profData : (profData?.data || profData?.profiles || []);
+    const profId = liveProfiles[0] ? String(liveProfiles[0].id) : null;
+    const allProfIds = liveProfiles.map(p=>String(p.id));
 
-    // T1: workspace_id as URL query param (bypasses header middleware entirely)
-    const r1 = await rawFetch("T1: POST /posts/schedule?workspace_id=X [query param]",
-      `${BASE}/posts/schedule?workspace_id=${liveWsId}`, "POST", body,
-      { "Publer-Workspace-Id": undefined });
-    if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
-
-    // T2: workspace_id in request body (not header, not query param)
-    const r2 = await rawFetch("T2: POST /posts/schedule [workspace_id in body]",
-      `${BASE}/posts/schedule`, "POST",
-      { workspace_id: liveWsId, post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
-      { "Publer-Workspace-Id": undefined });
-    if (r2.ok) return res.json({ ok:true, successPattern:"T2", attempts });
-
-    // T3: Try every alternative workspace ID field as the header value
-    const altId = rawWs.uid || rawWs.uuid || rawWs.token || rawWs.key || rawWs.workspace_id || rawWs.slug || rawWs.handle;
-    if (altId && String(altId) !== liveWsId) {
-      const r3 = await rawFetch(`T3: POST /posts/schedule [header=altId: ${String(altId).slice(0,20)}]`,
-        `${BASE}/posts/schedule`, "POST", body,
-        { "Publer-Workspace-Id": String(altId) });
-      if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
+    // T1: POST using profile IDs from GET /profiles (not /accounts)
+    if (profId) {
+      const r1 = await rawFetch(`T1: POST /posts/schedule [profile IDs from /profiles: ${profId.slice(0,12)}]`,
+        `${BASE}/posts/schedule`, "POST",
+        { post: { content: "ST1 test", profiles: allProfIds.length ? allProfIds : [profId], schedule_time: sched } }, {});
+      if (r1.ok) return res.json({ ok:true, successPattern:"T1", attempts });
     }
 
-    // T4: POST /posts/schedule with NO workspace header AND workspace_id in query AND body
-    const r4 = await rawFetch("T4: POST /posts/schedule [ws in query+body, no header]",
-      `${BASE}/posts/schedule?workspace_id=${liveWsId}`, "POST",
-      { workspace_id: liveWsId, post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
+    // T2: Try each workspace ID separately (in case liveWorkspaces has >1 and we're using the wrong one)
+    for (const ws of liveWorkspaces) {
+      const wsId = String(ws.id);
+      if (wsId === liveWsId) continue; // already tried liveWsId
+      const r = await rawFetch(`T2: POST /posts/schedule [ws=${wsId} name=${ws.name||"?"}]`,
+        `${BASE}/posts/schedule`, "POST", body,
+        { "Publer-Workspace-Id": wsId });
+      if (r.ok) return res.json({ ok:true, successPattern:`T2 wsId=${wsId}`, attempts });
+    }
+
+    // T3: POST with NO workspace context at all (profiles may determine workspace implicitly)
+    const r3 = await rawFetch("T3: POST /posts/schedule [NO workspace ID anywhere]",
+      `${BASE}/posts/schedule`, "POST",
+      { post: { content: "ST1 test", profiles: [acctId], schedule_time: sched } },
       { "Publer-Workspace-Id": undefined });
-    if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
+    if (r3.ok) return res.json({ ok:true, successPattern:"T3", attempts });
 
-    // T5: Try /create_post or /schedule_post (alternate URL patterns)
-    const r5 = await rawFetch("T5: POST /create_post [alternate URL]",
-      `${BASE}/create_post`, "POST", body, {});
-    if (r5.ok) return res.json({ ok:true, successPattern:"T5", attempts });
+    // T4: POST /posts/schedule with only the account id (numeric, not hex string)
+    // Some Publer accounts use simple numeric IDs for posting
+    const numId = liveAccounts[0]?.id;
+    if (numId && typeof numId === "number") {
+      const r4 = await rawFetch(`T4: POST /posts/schedule [numeric profile id: ${numId}]`,
+        `${BASE}/posts/schedule`, "POST",
+        { post: { content: "ST1 test", profiles: [numId], schedule_time: sched } }, {});
+      if (r4.ok) return res.json({ ok:true, successPattern:"T4", attempts });
+    }
 
-    // T6: Return full workspace + account data for analysis (not truncated)
+    // T5: GET /workspaces — inspect every field on every workspace for clues
+    const wsDetails = liveWorkspaces.map(ws => ({ ...ws }));
+
     return res.json({
       ok: false,
+      DIAGNOSIS: "All POST attempts return 401 no-access. API key has READ access but not WRITE. Likely the API key was generated from personal account settings, not from inside the ST1 Sports workspace.",
+      ACTION_NEEDED: "In Publer: switch to ST1 Sports workspace → Settings → Integrations → API → generate new API key → update PUBLER_API_KEY in Vercel env vars.",
       liveWsId,
       acctId,
-      acctNoHdrWorks,
-      wsAllIdFields: wsAllIds,
-      wsAllKeys: wsKeys,
+      profId,
+      liveProfiles: liveProfiles.map(p=>({id:p.id,name:p.name||p.username,provider:p.provider||p.platform||p.type})),
+      allAccounts: liveAccounts.map(a=>({id:a.id,type:a.provider||a.platform||a.type,name:a.name||a.username})),
+      wsDetails,
       rawWorkspaceFull: rawWs,
-      rawFirstAccount: liveAccounts[0] || null,
-      allAccounts: liveAccounts.map(a=>({...a})),
+      wsAllIdFields: wsKeys.filter(k=>k==="id"||k.includes("id")||k.includes("token")||k.includes("key")||k.includes("slug")).reduce((o,k)=>({...o,[k]:rawWs[k]}),{}),
       attempts,
-      note: "wsAllIdFields shows every ID-like field on the workspace object. wsAllKeys shows all field names.",
     });
   }
 
