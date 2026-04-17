@@ -11268,7 +11268,6 @@ function ModSettings() {
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                   <button onClick={loadPublerAccounts} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>👤 Accounts</button>
                   <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Queue"}</button>
-                  <button onClick={debugPublerPost} disabled={publerDebugging} style={{background:"none",border:`1px solid ${B.orange}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.orange,cursor:"pointer"}}>{publerDebugging?"Testing…":"⚡ Debug Post"}</button>
                   <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
                 </div>
               </div>
@@ -11302,31 +11301,7 @@ function ModSettings() {
                   }
                 </div>
               )}
-              {publerDebug&&(
-                <div style={{marginTop:8,background:B.bg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:publerDebug.ok?B.green:B.orange,letterSpacing:.5,marginBottom:6}}>
-                    {publerDebug.ok?`✓ SUCCESS — ${publerDebug.successFormat}`:"DEBUG POST RESULTS (scroll to see all)"}
-                  </div>
-                  {(publerDebug.attempts||[]).map((a,i)=>(
-                    <div key={i} style={{marginBottom:6,padding:"6px 8px",background:a.ok?`${B.green}10`:`${B.red}08`,borderRadius:4,border:`1px solid ${a.ok?B.green:B.red}30`}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:a.ok?B.green:B.red,marginBottom:3}}>
-                        {a.ok?"✓":"✕"} {a.label||`${a.path} — ${a.bodyFormat}`} → HTTP {a.httpStatus}
-                      </div>
-                      {(a.responseBody||a.publerResponse)&&(
-                        <div style={{fontFamily:"monospace",fontSize:8,color:B.muted,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:60,overflowY:"auto"}}>
-                          {JSON.stringify(a.responseBody||a.publerResponse).slice(0,300)}
-                        </div>
-                      )}
-                      {a.responseHeaders&&Object.keys(a.responseHeaders).length>0&&(
-                        <div style={{fontFamily:"monospace",fontSize:7,color:B.orange,marginTop:2}}>
-                          hdrs: {JSON.stringify(a.responseHeaders).slice(0,200)}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {!publerDebug.attempts&&<div style={{fontFamily:"monospace",fontSize:9,color:B.text,wordBreak:"break-all",whiteSpace:"pre-wrap",maxHeight:300,overflowY:"auto"}}>{JSON.stringify(publerDebug,null,2)}</div>}
-                </div>
-              )}
+              {false&&publerDebug&&null}
               {publerPosts&&(
                 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
                   {publerPosts.error
