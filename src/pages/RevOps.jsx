@@ -5316,6 +5316,7 @@ function ModMarketing() {
   const campDraftSaveTimer=useRef(null);
   const editingTouchIdxRef=useRef(editingTouchIdx);
   const selCampIdRef=useRef(null);
+  const campaignsRef=useRef([]);
   useEffect(()=>{editingTouchIdxRef.current=editingTouchIdx;},[editingTouchIdx]);
   // Auto-save campDraft → store whenever it changes and has an id (covers all wizard touch/body edits)
   useEffect(()=>{
@@ -5372,6 +5373,7 @@ function ModMarketing() {
   const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
   selCampIdRef.current = selCamp?.id || null;
+  campaignsRef.current = campaigns;
   const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
   const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
 
@@ -7297,7 +7299,8 @@ function ModMarketing() {
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
                       advanceEnroll(updEnr,enroll,todStr,camp);
-                      const snapCamp={...camp,enrollments:[...updEnr]};
+                      const freshCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
+                      const snapCamp={...freshCamp,enrollments:[...updEnr]};
                       // Save to DB immediately after each successful send — prevents data loss on reload
                       dispatch("UPDATE_CAMPAIGN",snapCamp);
                       // Force localStorage write so rapid page reload can't lose this contact's send record
@@ -7319,7 +7322,8 @@ function ModMarketing() {
                       if(idx>=0) updEnr[idx]={...updEnr[idx],status:"done",interestedAt:updEnr[idx].interestedAt||todStr};
                     }
                   }
-                  dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updEnr});
+                  const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
+                  dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
                   setSending(false);
                   const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
@@ -7345,7 +7349,8 @@ function ModMarketing() {
                       advanced++;
                     }
                   }
-                  const updCamp={...camp,enrollments:updEnr};
+                  const freshMarkCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
+                  const updCamp={...freshMarkCamp,enrollments:updEnr};
                   dispatch("UPDATE_CAMPAIGN",updCamp);
                   // Force-write to localStorage immediately (bypass 300ms debounce) so a rapid
                   // page reload cannot cause these contacts to appear as pending again
