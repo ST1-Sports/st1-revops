@@ -8760,6 +8760,8 @@ function ModSocial() {
   const [genRunning,setGenRunning]=useState(false);
   const [editingPostId,setEditingPostId]=useState(null);
   const [editDraft,setEditDraft]=useState({});
+  const [verboseDebugId,setVerboseDebugId]=useState(null);
+  const [verboseResult,setVerboseResult]=useState(null);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
@@ -8992,6 +8994,7 @@ function ModSocial() {
                 const isLocalOnly=p.status==="local_only";
                 const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
                 const retryPost=async()=>{
+                  if(!(p.caption||"").trim()){toast("No caption to send","error");return;}
                   try{
                     // Build a future schedule time (5 min from now) so Publer can schedule correctly
                     const tzOff=new Date().getTimezoneOffset();
@@ -9007,10 +9010,14 @@ function ModSocial() {
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){
                       const jobId=data.postIds?.[0];
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:null,publerPostIds:data.postIds||[]});
-                      toast("Sent to Publer — checking result…","info");
-                      if(jobId) checkPublerJob(p.id,jobId,false);
-                      else{dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published"});toast("Published!","success");}
+                      const isFakeId=jobId?.startsWith("publer-submitted-");
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
+                      if(isFakeId||!jobId){
+                        toast("Sent to Publer — check your calendar to confirm","success");
+                      }else{
+                        toast("Sent to Publer — checking result…","info");
+                        checkPublerJob(p.id,jobId,false);
+                      }
                     }else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
@@ -9018,6 +9025,22 @@ function ModSocial() {
                       toast(msg,"error");
                     }
                   }catch(e){toast("Publer unreachable: "+e.message,"error");}
+                };
+                const runVerboseDebug=async()=>{
+                  setVerboseDebugId(p.id);setVerboseResult(null);
+                  try{
+                    const tzOff=new Date().getTimezoneOffset();
+                    const tzSign=tzOff<=0?"+":"-";
+                    const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
+                    const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
+                    const retryTime=new Date(Date.now()+5*60*1000);
+                    const pad=n=>String(n).padStart(2,"0");
+                    const retryIso=`${retryTime.getFullYear()}-${pad(retryTime.getMonth()+1)}-${pad(retryTime.getDate())}T${pad(retryTime.getHours())}:${pad(retryTime.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
+                    const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+                      body:JSON.stringify({action:"send-verbose",post:p.caption,platforms:p.platforms,mediaUrls:p.imageUrl?[p.imageUrl]:undefined,link:p.link||undefined,scheduleDate:retryIso})});
+                    const data=await r.json();
+                    setVerboseResult(data);
+                  }catch(e){setVerboseResult({error:e.message});}
                 };
                 const isEditing=editingPostId===p.id;
                 const saveEdit=async()=>{
@@ -9053,8 +9076,23 @@ function ModSocial() {
                           {p._source==="campaign_draft"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"1px 6px",borderRadius:3}}>DRAFT</span>}
                           {isLocalOnly&&<button onClick={retryPost} style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RETRY TO PUBLER</button>}
                           {!isLocalOnly&&p.status!=="draft"&&<button onClick={retryPost} style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>↻ RESEND</button>}
+                          {p.status!=="draft"&&<button onClick={runVerboseDebug} style={{background:"none",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:3,padding:"2px 9px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>🔍 DEBUG</button>}
                         </div>
                         {isLocalOnly&&p.publerError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:4}}>Error: {p.publerError}</div>}
+                        {verboseDebugId===p.id&&verboseResult&&(
+                          <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",marginBottom:6,fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:4}}>DEBUG SEND RESULT</div>
+                            <div style={{marginBottom:3}}><b>Verdict:</b> <span style={{color:verboseResult.verdict==="SUCCESS"?B.green:B.red}}>{verboseResult.verdict||"?"}</span></div>
+                            <div style={{marginBottom:3}}><b>Publer HTTP:</b> {verboseResult.publerHttpStatus}</div>
+                            <div style={{marginBottom:3}}><b>Workspace used:</b> {verboseResult.workspaceId}</div>
+                            <div style={{marginBottom:3}}><b>Account ID used:</b> {verboseResult.accountId} {verboseResult.envAccountId?"(env)":"(live lookup)"}</div>
+                            <div style={{marginBottom:3}}><b>Request sent:</b> <code style={{fontSize:9,wordBreak:"break-all"}}>{JSON.stringify(verboseResult.requestSent)}</code></div>
+                            <div style={{marginBottom:3}}><b>Publer response:</b> <code style={{fontSize:9,wordBreak:"break-all"}}>{JSON.stringify(verboseResult.publerResponse)}</code></div>
+                            {verboseResult.scheduledPostsAfter&&<div style={{marginBottom:3}}><b>Scheduled posts after ({verboseResult.scheduledPostsAfter.length}):</b> {verboseResult.scheduledPostsAfter.map(sp=><span key={sp.id} style={{marginRight:6}}>[{sp.id}] "{sp.text||"(empty)"}"</span>)}</div>}
+                            {verboseResult.error&&<div style={{color:B.red}}><b>Error:</b> {verboseResult.error}</div>}
+                            <button onClick={()=>{setVerboseDebugId(null);setVerboseResult(null);}} style={{marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:8,cursor:"pointer",color:B.muted}}>✕ CLOSE</button>
+                          </div>
+                        )}
                         {!isEditing&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{p.caption}</div>}
                       </div>
                       <div style={{display:"flex",gap:4,flexShrink:0}}>
@@ -11186,6 +11224,8 @@ function ModSettings() {
         const [publerDebug,setPublerDebug]=useState(null);
         const [publerDebugging,setPublerDebugging]=useState(false);
         const [publerAccounts,setPublerAccounts]=useState(null);
+        const [publerSendDebug,setPublerSendDebug]=useState(null);
+        const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
@@ -11224,6 +11264,25 @@ function ModSettings() {
             const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
             setPublerAccounts(d);
           }catch(e){setPublerAccounts({error:e.message});}
+        };
+        const testSendToPubler=async()=>{
+          setPublerSendDebugging(true);setPublerSendDebug(null);
+          const n=new Date(Date.now()+5*60*1000);
+          const pad=v=>String(v).padStart(2,"0");
+          const tzOff=new Date().getTimezoneOffset();
+          const tzSign=tzOff<=0?"+":"-";
+          const tzH=pad(Math.floor(Math.abs(tzOff)/60));
+          const tzM=pad(Math.abs(tzOff)%60);
+          const scheduleDate=`${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
+          // Get first connected platform from accounts, fallback to instagram
+          const platforms=(publerAccounts?.profiles||[]).map(a=>a.service).filter(Boolean);
+          const testPlatforms=platforms.length?[platforms[0]]:["instagram"];
+          try{
+            const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+              body:JSON.stringify({action:"send-verbose",post:"ST1 RevOps test post — please delete",platforms:testPlatforms,scheduleDate})}).then(r=>r.json());
+            setPublerSendDebug(d);
+          }catch(e){setPublerSendDebug({error:e.message});}
+          setPublerSendDebugging(false);
         };
 
         useEffect(()=>{checkGmail();checkPubler();},[]);
@@ -11269,6 +11328,7 @@ function ModSettings() {
                   <button onClick={loadPublerAccounts} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>👤 Accounts</button>
                   <button onClick={loadPublerPosts} disabled={publerPostsLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerPostsLoading?"Loading…":"🔍 Queue"}</button>
                   <button onClick={checkPubler} disabled={publerChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{publerChecking?"Checking…":"↻ Test"}</button>
+                  <button onClick={testSendToPubler} disabled={publerSendDebugging} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{publerSendDebugging?"Sending…":"✉ Test Send"}</button>
                 </div>
               </div>
               {publerInfo&&(
@@ -11302,6 +11362,33 @@ function ModSettings() {
                 </div>
               )}
               {false&&publerDebug&&null}
+              {publerSendDebug&&(
+                <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:.5}}>✉ TEST SEND RESULT</span>
+                    <button onClick={()=>setPublerSendDebug(null)} style={{background:"none",border:"none",cursor:"pointer",color:B.muted,fontSize:10}}>✕</button>
+                  </div>
+                  {publerSendDebug.error&&<div style={{color:B.red,marginBottom:4}}><b>Error:</b> {publerSendDebug.error}</div>}
+                  <div style={{marginBottom:3}}><b>Verdict:</b> <span style={{color:publerSendDebug.verdict==="SUCCESS"?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
+                  <div style={{marginBottom:3}}><b>Publer HTTP status:</b> {publerSendDebug.publerHttpStatus}</div>
+                  <div style={{marginBottom:3}}><b>Workspace ID used:</b> {publerSendDebug.workspaceId}</div>
+                  <div style={{marginBottom:3}}><b>Account ID used:</b> {publerSendDebug.accountId||"none"} {publerSendDebug.envAccountId?"(from env var)":"(live lookup — env var missing!)"}</div>
+                  <div style={{marginBottom:3}}><b>Request sent to Publer:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.requestSent,null,2)}</code></div>
+                  <div style={{marginBottom:3}}><b>Publer raw response:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.publerResponse,null,2)}</code></div>
+                  {publerSendDebug.scheduledPostsAfter&&(
+                    <div style={{marginBottom:3}}><b>Scheduled posts on Publer after ({publerSendDebug.scheduledPostsAfter.length}):</b>{" "}
+                      {publerSendDebug.scheduledPostsAfter.length===0
+                        ?<span style={{color:B.red}}>none — post did NOT land on calendar</span>
+                        :publerSendDebug.scheduledPostsAfter.map(sp=>(
+                          <div key={sp.id} style={{marginLeft:8,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>
+                            ID: {sp.id} | text: "<b>{sp.text||"(empty)"}</b>" | state: {sp.state}
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+              )}
               {publerPosts&&(
                 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px"}}>
                   {publerPosts.error

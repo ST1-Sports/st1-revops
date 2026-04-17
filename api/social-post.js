@@ -343,6 +343,102 @@ export default async function handler(req, res) {
     });
   }
 
+  // ── Verbose send (debug) ──────────────────────────────────────────────────
+  // Same as normal post but returns the exact request sent + raw Publer response
+  if (action === "send-verbose") {
+    if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
+
+    const platformMap2 = {
+      facebook:  process.env.PUBLER_ACCOUNT_FACEBOOK,
+      instagram: process.env.PUBLER_ACCOUNT_INSTAGRAM,
+      linkedin:  process.env.PUBLER_ACCOUNT_LINKEDIN,
+      twitter:   process.env.PUBLER_ACCOUNT_TWITTER,
+      tiktok:    process.env.PUBLER_ACCOUNT_TIKTOK,
+    };
+    const activePlatforms2 = (platforms || []).filter(Boolean);
+    const postText2 = link && !post.includes(link) ? `${post}\n\n${link}` : post;
+    const TWO_MIN2 = new Date(Date.now() + 2 * 60 * 1000);
+    let scheduledAt2;
+    if (scheduleDate) {
+      const t = new Date(scheduleDate);
+      scheduledAt2 = (t > TWO_MIN2 ? t : TWO_MIN2).toISOString();
+    } else {
+      scheduledAt2 = TWO_MIN2.toISOString();
+    }
+
+    // Fresh workspace ID
+    let verboseWsId = workspaceId;
+    let wsLookupResult = null;
+    try {
+      const { ok: wsOk, data: wsD } = await publerRequest("/workspaces", "GET", null, apiKey);
+      const ws = Array.isArray(wsD) ? wsD : (wsD?.data || wsD?.workspaces || []);
+      wsLookupResult = { ok: wsOk, workspaces: ws.map(w=>({id:w.id,name:w.name||w.title})) };
+      if (ws[0]?.id) verboseWsId = String(ws[0].id);
+    } catch(e) { wsLookupResult = { error: e.message }; }
+
+    // Accounts
+    let accountLookupResult = null;
+    let verboseAccId = null;
+    try {
+      const { ok: accOk, data: accD } = await publerRequest("/accounts", "GET", null, apiKey, verboseWsId);
+      const accounts = Array.isArray(accD) ? accD : (accD?.data || accD?.accounts || []);
+      accountLookupResult = { ok: accOk, accounts: accounts.map(a=>({id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username})) };
+      // Pick the first account that matches a selected platform, or just the first
+      for (const plat of activePlatforms2) {
+        const match = accounts.find(a => (a.provider||a.platform||a.type||"").toLowerCase() === plat.toLowerCase());
+        if (match) { verboseAccId = String(match.id); break; }
+      }
+      if (!verboseAccId && accounts[0]) verboseAccId = String(accounts[0].id);
+    } catch(e) { accountLookupResult = { error: e.message }; }
+
+    // Build post object - single account
+    const envAccId = activePlatforms2.length ? platformMap2[activePlatforms2[0]] : null;
+    const finalAccId = envAccId || verboseAccId;
+    const verbosePostObj = {
+      text: postText2,
+      content: postText2,
+      caption: postText2,
+      message: postText2,
+      profiles: finalAccId ? [String(finalAccId)] : [],
+      schedule_time: scheduledAt2,
+    };
+    const verbosePayload = { post: verbosePostObj };
+
+    // Send it and capture everything
+    let publerStatus, publerData;
+    try {
+      const r = await publerRequest("/posts/schedule", "POST", verbosePayload, apiKey, verboseWsId);
+      publerStatus = r.status;
+      publerData = r.data;
+    } catch(e) {
+      publerData = { error: e.message };
+      publerStatus = 0;
+    }
+
+    // Also fetch scheduled posts after to see if it landed
+    let afterList = null;
+    try {
+      const { data: listD } = await publerRequest("/posts?status=scheduled&per_page=5", "GET", null, apiKey, verboseWsId);
+      const arr = Array.isArray(listD) ? listD : (listD?.data || listD?.posts || []);
+      afterList = arr.map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,80), scheduled_at:p.scheduled_at, state:p.state||p.status }));
+    } catch {}
+
+    return res.json({
+      action: "send-verbose",
+      workspaceId: verboseWsId,
+      accountId: finalAccId,
+      envAccountId: envAccId,
+      liveAccountId: verboseAccId,
+      wsLookup: wsLookupResult,
+      accountLookup: accountLookupResult,
+      requestSent: verbosePayload,
+      publerHttpStatus: publerStatus,
+      publerResponse: publerData,
+      scheduledPostsAfter: afterList,
+      verdict: publerStatus===200||publerStatus===201 ? "SUCCESS" : publerStatus===500 ? "500 (may have saved — check scheduledPostsAfter)" : `FAILED (${publerStatus})`,
+    });
+  }
+
   // ── Post / Schedule ────────────────────────────────────────────────────────
   if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
 
