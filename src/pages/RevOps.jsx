@@ -11381,6 +11381,7 @@ function ModSettings() {
                       <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
                     </div>
                   ))}
+                  {publerSendDebug.jobStatus&&<div style={{marginBottom:4}}><b>Job status:</b> <code style={{fontSize:8}}>{JSON.stringify(publerSendDebug.jobStatus).slice(0,300)}</code></div>}
                   {publerSendDebug.top5PostsAfter&&(
                     <div style={{marginTop:4}}><b>Latest 5 posts on Publer after:</b>
                       {publerSendDebug.top5PostsAfter.map(sp=>(
