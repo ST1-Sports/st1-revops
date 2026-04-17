@@ -338,7 +338,7 @@ export default async function handler(req, res) {
       allAccounts: liveAccounts.map(a=>({id:a.id,type:a.provider||a.platform||a.type,name:a.name||a.username})),
       wsDetails,
       rawWorkspaceFull: rawWs,
-      wsAllIdFields: wsKeys.filter(k=>k==="id"||k.includes("id")||k.includes("token")||k.includes("key")||k.includes("slug")).reduce((o,k)=>({...o,[k]:rawWs[k]}),{}),
+      wsAllIdFields: Object.keys(rawWs).filter(k=>k==="id"||k.includes("id")||k.includes("token")||k.includes("key")||k.includes("slug")).reduce((o,k)=>({...o,[k]:rawWs[k]}),{}),
       attempts,
     });
   }
