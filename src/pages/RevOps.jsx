@@ -9082,13 +9082,14 @@ function ModSocial() {
                         {verboseDebugId===p.id&&verboseResult&&(
                           <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",marginBottom:6,fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
                             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:4}}>DEBUG SEND RESULT</div>
-                            <div style={{marginBottom:3}}><b>Verdict:</b> <span style={{color:verboseResult.verdict==="SUCCESS"?B.green:B.red}}>{verboseResult.verdict||"?"}</span></div>
-                            <div style={{marginBottom:3}}><b>Publer HTTP:</b> {verboseResult.publerHttpStatus}</div>
-                            <div style={{marginBottom:3}}><b>Workspace used:</b> {verboseResult.workspaceId}</div>
-                            <div style={{marginBottom:3}}><b>Account ID used:</b> {verboseResult.accountId} {verboseResult.envAccountId?"(env)":"(live lookup)"}</div>
-                            <div style={{marginBottom:3}}><b>Request sent:</b> <code style={{fontSize:9,wordBreak:"break-all"}}>{JSON.stringify(verboseResult.requestSent)}</code></div>
-                            <div style={{marginBottom:3}}><b>Publer response:</b> <code style={{fontSize:9,wordBreak:"break-all"}}>{JSON.stringify(verboseResult.publerResponse)}</code></div>
-                            {verboseResult.scheduledPostsAfter&&<div style={{marginBottom:3}}><b>Scheduled posts after ({verboseResult.scheduledPostsAfter.length}):</b> {verboseResult.scheduledPostsAfter.map(sp=><span key={sp.id} style={{marginRight:6}}>[{sp.id}] "{sp.text||"(empty)"}"</span>)}</div>}
+                            <div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(verboseResult.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{verboseResult.verdict||"?"}</span></div>
+                            <div style={{marginBottom:4}}><b>Workspace:</b> {verboseResult.workspaceId} | <b>Account:</b> {verboseResult.accountId}</div>
+                            {(verboseResult.attempts||[]).map((a,i)=>(
+                              <div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`,fontSize:9}}>
+                                <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
+                              </div>
+                            ))}
+                            {verboseResult.top5PostsAfter&&<div style={{marginTop:4,fontSize:9}}><b>Top 5 after:</b> {verboseResult.top5PostsAfter.map(sp=><span key={sp.id} style={{marginRight:6}}>[{sp.id}] "{sp.text||"(empty)"}"</span>)}</div>}
                             {verboseResult.error&&<div style={{color:B.red}}><b>Error:</b> {verboseResult.error}</div>}
                             <button onClick={()=>{setVerboseDebugId(null);setVerboseResult(null);}} style={{marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:8,cursor:"pointer",color:B.muted}}>✕ CLOSE</button>
                           </div>
@@ -11369,22 +11370,20 @@ function ModSettings() {
                     <button onClick={()=>setPublerSendDebug(null)} style={{background:"none",border:"none",cursor:"pointer",color:B.muted,fontSize:10}}>✕</button>
                   </div>
                   {publerSendDebug.error&&<div style={{color:B.red,marginBottom:4}}><b>Error:</b> {publerSendDebug.error}</div>}
-                  <div style={{marginBottom:3}}><b>Verdict:</b> <span style={{color:publerSendDebug.verdict==="SUCCESS"?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
-                  <div style={{marginBottom:3}}><b>Publer HTTP status:</b> {publerSendDebug.publerHttpStatus}</div>
-                  <div style={{marginBottom:3}}><b>Workspace ID used:</b> {publerSendDebug.workspaceId}</div>
-                  <div style={{marginBottom:3}}><b>Account ID used:</b> {publerSendDebug.accountId||"none"} {publerSendDebug.envAccountId?"(from env var)":"(live lookup — env var missing!)"}</div>
-                  <div style={{marginBottom:3}}><b>Request sent to Publer:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.requestSent,null,2)}</code></div>
-                  <div style={{marginBottom:3}}><b>Publer raw response:</b><br/><code style={{fontSize:8,wordBreak:"break-all",whiteSpace:"pre-wrap"}}>{JSON.stringify(publerSendDebug.publerResponse,null,2)}</code></div>
-                  {publerSendDebug.scheduledPostsAfter&&(
-                    <div style={{marginBottom:3}}><b>Scheduled posts on Publer after ({publerSendDebug.scheduledPostsAfter.length}):</b>{" "}
-                      {publerSendDebug.scheduledPostsAfter.length===0
-                        ?<span style={{color:B.red}}>none — post did NOT land on calendar</span>
-                        :publerSendDebug.scheduledPostsAfter.map(sp=>(
-                          <div key={sp.id} style={{marginLeft:8,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>
-                            ID: {sp.id} | text: "<b>{sp.text||"(empty)"}</b>" | state: {sp.state}
-                          </div>
-                        ))
-                      }
+                  <div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(publerSendDebug.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
+                  <div style={{marginBottom:3}}><b>Workspace:</b> {publerSendDebug.workspaceId} | <b>Account:</b> {publerSendDebug.accountId||"none"} {publerSendDebug.envAccountId?"(env)":"(live — env var missing!)"}</div>
+                  {(publerSendDebug.attempts||[]).map((a,i)=>(
+                    <div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`}}>
+                      <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
+                    </div>
+                  ))}
+                  {publerSendDebug.top5PostsAfter&&(
+                    <div style={{marginTop:4}}><b>Latest 5 posts on Publer after:</b>
+                      {publerSendDebug.top5PostsAfter.map(sp=>(
+                        <div key={sp.id} style={{marginLeft:8,padding:"2px 0",fontSize:9,borderBottom:`1px solid ${B.border}`}}>
+                          [{sp.id}] "{sp.text||"(empty)"}"
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
