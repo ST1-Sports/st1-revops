@@ -344,130 +344,79 @@ export default async function handler(req, res) {
   }
 
   // ── Verbose send (debug) ──────────────────────────────────────────────────
+  // Uses confirmed-working bulk format. Lean — avoids Vercel 10s timeout.
   if (action === "send-verbose") {
     if (!post?.trim()) return res.status(400).json({ error: "Post text is required" });
 
     const postText2 = link && !post.includes(link) ? `${post}\n\n${link}` : post;
-    const FIVE_MIN = new Date(Date.now() + 5 * 60 * 1000);
-    const scheduledAt2 = FIVE_MIN.toISOString();
+    const scheduledAt2 = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
-    // Fresh workspace + accounts
+    // Fresh workspace ID
     let verboseWsId = workspaceId;
-    let wsLookup = null, accountLookup = null, verboseAccId = null;
     try {
       const { data: wsD } = await publerRequest("/workspaces", "GET", null, apiKey);
       const ws = Array.isArray(wsD) ? wsD : (wsD?.data || wsD?.workspaces || []);
-      wsLookup = ws.map(w=>({id:w.id,name:w.name||w.title}));
       if (ws[0]?.id) verboseWsId = String(ws[0].id);
-    } catch(e) { wsLookup = { error: e.message }; }
+    } catch {}
 
+    // Live account IDs
+    let accountLookup = [], verboseAccId = null;
     try {
       const { data: accD } = await publerRequest("/accounts", "GET", null, apiKey, verboseWsId);
       const accs = Array.isArray(accD) ? accD : (accD?.data || accD?.accounts || []);
       accountLookup = accs.map(a=>({id:a.id, type:a.provider||a.platform||a.type, name:a.name||a.username}));
-      const activePlatforms2 = (platforms || []).filter(Boolean);
-      for (const plat of activePlatforms2) {
-        const match = accs.find(a=>(a.provider||a.platform||a.type||"").toLowerCase()===plat.toLowerCase());
-        if (match) { verboseAccId = String(match.id); break; }
-      }
-      if (!verboseAccId && accs[0]) verboseAccId = String(accs[0].id);
-    } catch(e) { accountLookup = { error: e.message }; }
+      if (accs[0]) verboseAccId = String(accs[0].id);
+    } catch {}
 
     const platformMap2 = { facebook:process.env.PUBLER_ACCOUNT_FACEBOOK, instagram:process.env.PUBLER_ACCOUNT_INSTAGRAM, linkedin:process.env.PUBLER_ACCOUNT_LINKEDIN, twitter:process.env.PUBLER_ACCOUNT_TWITTER, tiktok:process.env.PUBLER_ACCOUNT_TIKTOK };
     const activePlatforms2 = (platforms || []).filter(Boolean);
-    const envAccId = activePlatforms2.length ? platformMap2[activePlatforms2[0]] : null;
-    const envAccIdStr = envAccId ? String(envAccId) : null;
-    const liveAccIdStr = verboseAccId ? String(verboseAccId) : null;
-
-    // Also fetch profile IDs from /profiles endpoint (different from /accounts)
-    let profileLookup = null, profAccIdStr = null;
-    try {
-      const { data: profD } = await publerRequest("/profiles", "GET", null, apiKey, verboseWsId);
-      const profs = Array.isArray(profD) ? profD : (profD?.data || profD?.profiles || []);
-      profileLookup = profs.map(p=>({id:p.id, type:p.provider||p.platform||p.type, name:p.name||p.username}));
-      if (profs[0]) profAccIdStr = String(profs[0].id);
-    } catch(e) { profileLookup = { error: e.message }; }
-
+    const envAccIdStr = (activePlatforms2.length ? platformMap2[activePlatforms2[0]] : null) ? String(activePlatforms2.length ? platformMap2[activePlatforms2[0]] : "") : null;
+    const liveAccIdStr = verboseAccId;
     const attempts = [];
-    const tryEndpoint = async (label, endpoint, bodyObj, extraHeaders = {}) => {
+
+    const doBulk = async (label, accId) => {
+      if (!accId) { attempts.push({ label, status: 0, ok: false, response: { error: "no account ID" } }); return false; }
       try {
-        const headers = { Authorization: `Bearer-API ${apiKey}`, "Content-Type": "application/json", Accept: "application/json", "Publer-Workspace-Id": verboseWsId, ...extraHeaders };
-        const cleanHeaders = Object.fromEntries(Object.entries(headers).filter(([,v])=>v!=null));
-        const opts = { method: "POST", headers: cleanHeaders };
-        if (bodyObj !== null) opts.body = JSON.stringify(bodyObj);
-        const r = await fetch(`${PUBLER_API}${endpoint}`, opts);
-        let data; try { data = await r.json(); } catch { data = { _raw: (await r.text().catch(()=>"")).slice(0,300) }; }
-        attempts.push({ label, endpoint, status: r.status, ok: r.ok, response: data });
-        return r.ok || r.status === 200 || r.status === 201;
+        const { ok, status, data } = await publerRequest("/posts/schedule", "POST",
+          { bulk: { state: "scheduled", posts: [{ content: postText2, accounts: [accId], scheduled_at: scheduledAt2 }] } },
+          apiKey, verboseWsId);
+        attempts.push({ label, status, ok, response: data });
+        return ok || status === 200 || status === 201;
       } catch(e) {
-        attempts.push({ label, endpoint, status: 0, ok: false, response: { error: e.message } });
+        attempts.push({ label, status: 0, ok: false, response: { error: e.message } });
         return false;
       }
     };
 
-    const bestId = envAccIdStr || liveAccIdStr || profAccIdStr;
-    const allLiveIds = (Array.isArray(accountLookup) ? accountLookup : []).map(a=>String(a.id)).filter(Boolean);
+    await doBulk(`env ID ${(envAccIdStr||"").slice(0,8)}`, envAccIdStr);
+    if (liveAccIdStr && liveAccIdStr !== envAccIdStr) {
+      await doBulk(`live ID ${liveAccIdStr.slice(0,8)}`, liveAccIdStr);
+    }
 
-    // A: current endpoint, current format
-    await tryEndpoint("A: /posts/schedule content+accounts+scheduled_at", "/posts/schedule",
-      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
-
-    // B: /posts endpoint (not /posts/schedule)
-    await tryEndpoint("B: /posts content+accounts+scheduled_at", "/posts",
-      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
-
-    // C: bulk format (different top-level structure)
-    await tryEndpoint("C: /posts/schedule BULK format", "/posts/schedule",
-      { bulk: { state: "scheduled", posts: [{ content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 }] } });
-
-    // D: /post singular endpoint
-    await tryEndpoint("D: /post singular endpoint", "/post",
-      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } });
-
-    // E: no workspace header — maybe workspace header is causing the 500
-    await tryEndpoint("E: /posts/schedule NO workspace header", "/posts/schedule",
-      { post: { content: postText2, accounts: bestId ? [bestId] : allLiveIds, scheduled_at: scheduledAt2 } },
-      { "Publer-Workspace-Id": null });
-
-    // F: absolute minimum — just content, no accounts, no schedule, no workspace header
-    await tryEndpoint("F: bare minimum, no ws header", "/posts/schedule",
-      { post: { content: postText2 } },
-      { "Publer-Workspace-Id": null });
-
-    // G: Bearer (not Bearer-API) auth format
-    await tryEndpoint("G: Bearer auth (not Bearer-API)", "/posts/schedule",
-      { post: { content: postText2, accounts: bestId ? [bestId] : [], scheduled_at: scheduledAt2 } },
-      { Authorization: `Bearer ${apiKey}` });
-
-    // Poll job status for successful attempt — try multiple endpoints
-    let jobStatus = null;
     const successAttempt = attempts.find(a => a.ok || a.status===200 || a.status===201);
     const jobId = successAttempt?.response?.job_id;
+
+    // Job status — 2s wait, single endpoint
+    let jobStatus = null;
     if (jobId) {
-      await new Promise(r => setTimeout(r, 5000));
-      // Try both common Publer job status endpoints
-      for (const jPath of [`/job_status/${jobId}`, `/jobs/${jobId}`, `/bulk/status/${jobId}`]) {
-        try {
-          const { ok: jOk, data: jd } = await publerRequest(jPath, "GET", null, apiKey, verboseWsId);
-          if (jOk || (jd && !jd._rawError)) { jobStatus = { path: jPath, ...jd }; break; }
-        } catch {}
-      }
-      if (!jobStatus) jobStatus = { note: "All job status paths failed", jobId };
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const { data: jd } = await publerRequest(`/job_status/${jobId}`, "GET", null, apiKey, verboseWsId);
+        jobStatus = jd;
+      } catch(e) { jobStatus = { error: e.message }; }
     }
 
-    // Check ALL post states to find where the post landed
-    const allPostStates = {};
-    for (const state of ["scheduled", "draft", "failed", "published"]) {
+    // Check scheduled + failed post counts
+    let postCounts = {};
+    for (const st of ["scheduled", "failed"]) {
       try {
-        const { data: listD } = await publerRequest(`/posts?status=${state}`, "GET", null, apiKey, verboseWsId);
-        const arr = Array.isArray(listD) ? listD : (listD?.data || listD?.posts || []);
-        allPostStates[state] = arr.slice(0,3).map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,80), scheduled_at:p.scheduled_at, state:p.state||p.status }));
-      } catch(e) { allPostStates[state] = { error: e.message }; }
+        const { data: d } = await publerRequest(`/posts?status=${st}`, "GET", null, apiKey, verboseWsId);
+        const arr = Array.isArray(d) ? d : (d?.data || d?.posts || []);
+        postCounts[st] = arr.slice(0,3).map(p=>({ id:p.id, text:(p.text||p.content||"").slice(0,80) }));
+      } catch(e) { postCounts[st] = { error: e.message }; }
     }
-      afterList = arr.slice(0,5).map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,100), scheduled_at:p.scheduled_at||p.schedule_time, state:p.state||p.status }));
-    } catch {}
+
     return res.json({
-      action: "send-verbose",
       workspaceId: verboseWsId,
       envAccountId: envAccIdStr,
       liveAccountId: liveAccIdStr,
@@ -475,8 +424,8 @@ export default async function handler(req, res) {
       attempts,
       jobId,
       jobStatus,
-      allPostStates,
-      verdict: successAttempt ? `SUCCESS — ${successAttempt.label}` : `ALL FAILED — account ID or API key issue`,
+      postCounts,
+      verdict: successAttempt ? `SUCCESS — job ${jobId}` : `FAILED`,
     });
   }
 
