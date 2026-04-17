@@ -8992,6 +8992,7 @@ function ModSocial() {
                 const isLocalOnly=p.status==="local_only";
                 const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
                 const retryPost=async()=>{
+                  if(!(p.caption||"").trim()){toast("No caption to send","error");return;}
                   try{
                     // Build a future schedule time (5 min from now) so Publer can schedule correctly
                     const tzOff=new Date().getTimezoneOffset();
@@ -9007,10 +9008,14 @@ function ModSocial() {
                     const ok=(data.status==="success"||data.status==="scheduled")&&!data.error;
                     if(ok){
                       const jobId=data.postIds?.[0];
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:null,publerPostIds:data.postIds||[]});
-                      toast("Sent to Publer — checking result…","info");
-                      if(jobId) checkPublerJob(p.id,jobId,false);
-                      else{dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"published"});toast("Published!","success");}
+                      const isFakeId=jobId?.startsWith("publer-submitted-");
+                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
+                      if(isFakeId||!jobId){
+                        toast("Sent to Publer — check your calendar to confirm","success");
+                      }else{
+                        toast("Sent to Publer — checking result…","info");
+                        checkPublerJob(p.id,jobId,false);
+                      }
                     }else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
