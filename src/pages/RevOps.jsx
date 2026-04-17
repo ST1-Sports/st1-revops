@@ -11381,12 +11381,20 @@ function ModSettings() {
                       <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
                     </div>
                   ))}
-                  {publerSendDebug.jobStatus&&<div style={{marginBottom:4}}><b>Job status:</b> <code style={{fontSize:8}}>{JSON.stringify(publerSendDebug.jobStatus).slice(0,300)}</code></div>}
-                  {publerSendDebug.top5PostsAfter&&(
-                    <div style={{marginTop:4}}><b>Latest 5 posts on Publer after:</b>
-                      {publerSendDebug.top5PostsAfter.map(sp=>(
-                        <div key={sp.id} style={{marginLeft:8,padding:"2px 0",fontSize:9,borderBottom:`1px solid ${B.border}`}}>
-                          [{sp.id}] "{sp.text||"(empty)"}"
+                  {publerSendDebug.jobId&&<div style={{marginBottom:4}}><b>Job ID:</b> <code style={{fontSize:9}}>{publerSendDebug.jobId}</code></div>}
+                  {publerSendDebug.jobStatus&&<div style={{marginBottom:4,padding:"4px 6px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:3}}><b>Job status:</b> <code style={{fontSize:8,wordBreak:"break-all"}}>{JSON.stringify(publerSendDebug.jobStatus)}</code></div>}
+                  {publerSendDebug.allPostStates&&(
+                    <div style={{marginTop:4}}>
+                      <b>Posts on Publer by state after job:</b>
+                      {Object.entries(publerSendDebug.allPostStates).map(([state,posts])=>(
+                        <div key={state} style={{marginLeft:8,marginTop:3}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.4}}>{state.toUpperCase()} ({Array.isArray(posts)?posts.length:"err"}):</span>
+                          {Array.isArray(posts)&&posts.slice(0,2).map(sp=>(
+                            <div key={sp.id} style={{marginLeft:8,fontSize:9,color:B.text}}>
+                              [{sp.id}] "{sp.text||"(empty)"}"
+                            </div>
+                          ))}
+                          {!Array.isArray(posts)&&<span style={{fontSize:9,color:B.red}}> {posts.error}</span>}
                         </div>
                       ))}
                     </div>

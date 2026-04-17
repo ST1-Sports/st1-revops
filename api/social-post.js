@@ -439,22 +439,31 @@ export default async function handler(req, res) {
       { post: { content: postText2, accounts: bestId ? [bestId] : [], scheduled_at: scheduledAt2 } },
       { Authorization: `Bearer ${apiKey}` });
 
-    // Poll job status for successful attempt
+    // Poll job status for successful attempt — try multiple endpoints
     let jobStatus = null;
     const successAttempt = attempts.find(a => a.ok || a.status===200 || a.status===201);
-    if (successAttempt?.response?.job_id) {
-      await new Promise(r => setTimeout(r, 3000));
-      try {
-        const { data: jd } = await publerRequest(`/job_status/${successAttempt.response.job_id}`, "GET", null, apiKey, verboseWsId);
-        jobStatus = jd;
-      } catch(e) { jobStatus = { error: e.message }; }
+    const jobId = successAttempt?.response?.job_id;
+    if (jobId) {
+      await new Promise(r => setTimeout(r, 5000));
+      // Try both common Publer job status endpoints
+      for (const jPath of [`/job_status/${jobId}`, `/jobs/${jobId}`, `/bulk/status/${jobId}`]) {
+        try {
+          const { ok: jOk, data: jd } = await publerRequest(jPath, "GET", null, apiKey, verboseWsId);
+          if (jOk || (jd && !jd._rawError)) { jobStatus = { path: jPath, ...jd }; break; }
+        } catch {}
+      }
+      if (!jobStatus) jobStatus = { note: "All job status paths failed", jobId };
     }
 
-    // Check top scheduled posts after
-    let afterList = null;
-    try {
-      const { data: listD } = await publerRequest("/posts?status=scheduled", "GET", null, apiKey, verboseWsId);
-      const arr = Array.isArray(listD) ? listD : (listD?.data || listD?.posts || []);
+    // Check ALL post states to find where the post landed
+    const allPostStates = {};
+    for (const state of ["scheduled", "draft", "failed", "published"]) {
+      try {
+        const { data: listD } = await publerRequest(`/posts?status=${state}`, "GET", null, apiKey, verboseWsId);
+        const arr = Array.isArray(listD) ? listD : (listD?.data || listD?.posts || []);
+        allPostStates[state] = arr.slice(0,3).map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,80), scheduled_at:p.scheduled_at, state:p.state||p.status }));
+      } catch(e) { allPostStates[state] = { error: e.message }; }
+    }
       afterList = arr.slice(0,5).map(p => ({ id:p.id, text:(p.text||p.content||"").slice(0,100), scheduled_at:p.scheduled_at||p.schedule_time, state:p.state||p.status }));
     } catch {}
     return res.json({
@@ -462,14 +471,12 @@ export default async function handler(req, res) {
       workspaceId: verboseWsId,
       envAccountId: envAccIdStr,
       liveAccountId: liveAccIdStr,
-      profileId: profAccIdStr,
-      wsLookup,
       accountLookup,
-      profileLookup,
       attempts,
-      top5PostsAfter: afterList,
-      verdict: successAttempt ? `SUCCESS — ${successAttempt.label}` : `ALL FAILED — account ID or API key issue`,
+      jobId,
       jobStatus,
+      allPostStates,
+      verdict: successAttempt ? `SUCCESS — ${successAttempt.label}` : `ALL FAILED — account ID or API key issue`,
     });
   }
 
