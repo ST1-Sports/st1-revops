@@ -376,10 +376,18 @@ export default async function handler(req, res) {
     const platformMap2 = { facebook:process.env.PUBLER_ACCOUNT_FACEBOOK, instagram:process.env.PUBLER_ACCOUNT_INSTAGRAM, linkedin:process.env.PUBLER_ACCOUNT_LINKEDIN, twitter:process.env.PUBLER_ACCOUNT_TWITTER, tiktok:process.env.PUBLER_ACCOUNT_TIKTOK };
     const activePlatforms2 = (platforms || []).filter(Boolean);
     const envAccId = activePlatforms2.length ? platformMap2[activePlatforms2[0]] : null;
-    const finalAccId = envAccId || verboseAccId;
-    const accIdStr = finalAccId ? String(finalAccId) : null;
+    const envAccIdStr = envAccId ? String(envAccId) : null;
+    const liveAccIdStr = verboseAccId ? String(verboseAccId) : null;
 
-    // Try 4 different field name combinations — Publer API docs are inconsistent
+    // Also fetch profile IDs from /profiles endpoint (different from /accounts)
+    let profileLookup = null, profAccIdStr = null;
+    try {
+      const { data: profD } = await publerRequest("/profiles", "GET", null, apiKey, verboseWsId);
+      const profs = Array.isArray(profD) ? profD : (profD?.data || profD?.profiles || []);
+      profileLookup = profs.map(p=>({id:p.id, type:p.provider||p.platform||p.type, name:p.name||p.username}));
+      if (profs[0]) profAccIdStr = String(profs[0].id);
+    } catch(e) { profileLookup = { error: e.message }; }
+
     const attempts = [];
     const tryPost = async (label, bodyObj) => {
       try {
@@ -392,17 +400,25 @@ export default async function handler(req, res) {
       }
     };
 
-    // A: content + accounts + scheduled_at  (most common Publer v1 docs format)
-    await tryPost("A: content+accounts+scheduled_at", { post: { content: postText2, accounts: accIdStr ? [accIdStr] : [], scheduled_at: scheduledAt2 } });
+    // A: env var account ID (what is currently configured)
+    if (envAccIdStr) await tryPost(`A: env acct ID ${envAccIdStr.slice(0,8)}`, { post: { content: postText2, accounts: [envAccIdStr], scheduled_at: scheduledAt2 } });
 
-    // B: content + profiles + schedule_time  (what we were sending before)
-    await tryPost("B: content+profiles+schedule_time", { post: { content: postText2, profiles: accIdStr ? [accIdStr] : [], schedule_time: scheduledAt2 } });
+    // B: live account ID from /accounts (may differ from env var)
+    if (liveAccIdStr && liveAccIdStr !== envAccIdStr) await tryPost(`B: live acct ID ${liveAccIdStr.slice(0,8)} (from /accounts)`, { post: { content: postText2, accounts: [liveAccIdStr], scheduled_at: scheduledAt2 } });
 
-    // C: text + accounts + scheduled_at
-    await tryPost("C: text+accounts+scheduled_at", { post: { text: postText2, accounts: accIdStr ? [accIdStr] : [], scheduled_at: scheduledAt2 } });
+    // C: profile ID from /profiles (different endpoint)
+    if (profAccIdStr && profAccIdStr !== envAccIdStr && profAccIdStr !== liveAccIdStr) await tryPost(`C: profile ID ${profAccIdStr.slice(0,8)} (from /profiles)`, { post: { content: postText2, accounts: [profAccIdStr], scheduled_at: scheduledAt2 } });
 
-    // D: content + accounts + schedule_time
-    await tryPost("D: content+accounts+schedule_time", { post: { content: postText2, accounts: accIdStr ? [accIdStr] : [], schedule_time: scheduledAt2 } });
+    // D: ALL live account IDs at once
+    const allLiveIds = (Array.isArray(accountLookup) ? accountLookup : []).map(a=>String(a.id)).filter(Boolean);
+    if (allLiveIds.length > 0) await tryPost(`D: ALL live acct IDs [${allLiveIds.join(",")}]`, { post: { content: postText2, accounts: allLiveIds, scheduled_at: scheduledAt2 } });
+
+    // E: use profiles field name instead of accounts
+    const bestId = envAccIdStr || liveAccIdStr || profAccIdStr;
+    if (bestId) await tryPost(`E: profiles field name, ID ${bestId.slice(0,8)}`, { post: { content: postText2, profiles: [bestId], scheduled_at: scheduledAt2 } });
+
+    // F: no account ID at all — let Publer pick defaults
+    await tryPost("F: no account ID (let Publer pick)", { post: { content: postText2, scheduled_at: scheduledAt2 } });
 
     // Check scheduled posts to see if any attempt created something
     let afterList = null;
@@ -416,14 +432,15 @@ export default async function handler(req, res) {
     return res.json({
       action: "send-verbose",
       workspaceId: verboseWsId,
-      accountId: accIdStr,
-      envAccountId: envAccId,
-      liveAccountId: verboseAccId,
+      envAccountId: envAccIdStr,
+      liveAccountId: liveAccIdStr,
+      profileId: profAccIdStr,
       wsLookup,
       accountLookup,
+      profileLookup,
       attempts,
       top5PostsAfter: afterList,
-      verdict: successAttempt ? `SUCCESS with format ${successAttempt.label}` : `ALL FAILED — see attempts for details`,
+      verdict: successAttempt ? `SUCCESS — ${successAttempt.label}` : `ALL FAILED — account ID or API key issue`,
     });
   }
 

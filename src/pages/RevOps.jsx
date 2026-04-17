@@ -11371,7 +11371,11 @@ function ModSettings() {
                   </div>
                   {publerSendDebug.error&&<div style={{color:B.red,marginBottom:4}}><b>Error:</b> {publerSendDebug.error}</div>}
                   <div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(publerSendDebug.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{publerSendDebug.verdict||"?"}</span></div>
-                  <div style={{marginBottom:3}}><b>Workspace:</b> {publerSendDebug.workspaceId} | <b>Account:</b> {publerSendDebug.accountId||"none"} {publerSendDebug.envAccountId?"(env)":"(live — env var missing!)"}</div>
+                  <div style={{marginBottom:3}}><b>Workspace:</b> {publerSendDebug.workspaceId}</div>
+                  <div style={{marginBottom:3}}><b>Env account ID:</b> {publerSendDebug.envAccountId||"not set"}</div>
+                  <div style={{marginBottom:3}}><b>Live /accounts ID:</b> {publerSendDebug.liveAccountId||"none"}</div>
+                  <div style={{marginBottom:3}}><b>Live /profiles ID:</b> {publerSendDebug.profileId||"none"}</div>
+                  <div style={{marginBottom:3}}><b>All live accounts:</b> <code style={{fontSize:8}}>{JSON.stringify(publerSendDebug.accountLookup)}</code></div>
                   {(publerSendDebug.attempts||[]).map((a,i)=>(
                     <div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`}}>
                       <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
