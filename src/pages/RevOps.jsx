@@ -221,9 +221,10 @@ function useStore() {
         try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
       }, 300);
       // Debounced server sync — catches any state changes not covered by dispatch's immediate sync
+      // Strip contacts (synced from Zoho) and agentHistory (large, session-only) to keep payload small
       if (serverTimer.current) clearTimeout(serverTimer.current);
       serverTimer.current = setTimeout(() => {
-        const {currentUserId: _cid, ...toSync} = next;
+        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({state: toSync})}).catch(()=>{});
       }, 2500);
@@ -484,10 +485,12 @@ export default function App() {
       const skipSync = new Set([
         "LOGIN",                           // session-only, not persisted
         "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
+        "UPDATE_CAMPAIGN",                 // fires per-email during batch sends; debounce covers it
+        "UPDATE_CAMPAIGN_TOUCH",           // fires on every keystroke in touch editor
         "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
       ]);
       if (!skipSync.has(action)) {
-        const {currentUserId: _cid, ...toSync} = next;
+        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({state: toSync})}).catch(()=>{});
       }
@@ -7304,12 +7307,6 @@ function ModMarketing() {
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
                       advanceEnroll(updEnr,enroll,todStr,camp);
-                      const freshCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
-                      const snapCamp={...freshCamp,enrollments:[...updEnr]};
-                      // Save to DB immediately after each successful send — prevents data loss on reload
-                      dispatch("UPDATE_CAMPAIGN",snapCamp);
-                      // Force localStorage write so rapid page reload can't lose this contact's send record
-                      try{const ls=JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");ls.campaigns=(ls.campaigns||[]).map(c=>c.id===camp.id?snapCamp:c);localStorage.setItem("st1_revops_v2",JSON.stringify(ls));}catch{}
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
                       sent++;
@@ -7362,13 +7359,6 @@ function ModMarketing() {
                   const freshMarkCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   const updCamp={...freshMarkCamp,enrollments:updEnr};
                   dispatch("UPDATE_CAMPAIGN",updCamp);
-                  // Force-write to localStorage immediately (bypass 300ms debounce) so a rapid
-                  // page reload cannot cause these contacts to appear as pending again
-                  try {
-                    const ls=JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-                    ls.campaigns=(ls.campaigns||[]).map(c=>c.id===camp.id?updCamp:c);
-                    localStorage.setItem("st1_revops_v2",JSON.stringify(ls));
-                  } catch {}
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent:advanced,failed:0}}));
                   const skipNote=skipped?` · ${skipped} interested moved to done`:"";
                   toast(`${advanced} contacts advanced${skipNote}`,"success");
