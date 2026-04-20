@@ -7283,6 +7283,7 @@ function ModMarketing() {
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
+                  try {
                   let sent=0,failed=0,skipped=0,firstErr=null;
                   const todStr=today();
                   const updEnr=[...(camp.enrollments||[])];
@@ -7325,9 +7326,14 @@ function ModMarketing() {
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
-                  setSending(false);
                   const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}`,sent>0||skipped>0?"success":"error");
+                  } catch(err) {
+                    console.error("[sendOneBatch]",err);
+                    toast(`Send failed: ${err.message}`,"error");
+                  } finally {
+                    setSending(false);
+                  }
                 };
 
                 // Mark a batch as already sent (no emails — just advances enrollment state)
