@@ -2,7 +2,7 @@
  * Reddit Engagement Module — posting service.
  *
  * THIS SERVICE IS DISABLED BY DEFAULT.
- * Set REDDIT_POSTING_ENABLED=true to enable. The master flag REDDIT_ENABLED
+ * Set REDDIT_POSTING_ENABLED=true to enable. The master flag REDDIT_AUTOMATION_ENABLED
  * must also be true; that is enforced by index.js before this function is called.
  *
  * Gates — checked in order, all must pass:
@@ -21,18 +21,17 @@
  * Every attempt — including blocked ones — is written to RedditPostingAttempt
  * so there is a full audit trail. A logging failure never aborts the posting flow.
  *
- * Dry-run mode: runs all 11 gates, logs each result, persists the attempt with
- * dryRun=true, and returns { ok: true, dryRun: true } without making a Reddit
- * API call. Use this to verify credentials and gate configuration before going live.
+ * Dry-run mode: runs gates 1–9, skips the Claude guardrail and Reddit API call,
+ * persists the attempt with dryRun=true.
  *
  * No stealth, anti-detection, or deceptive behavior. All posting is via the
  * official Reddit OAuth2 API with a compliant User-Agent header.
  */
 
-const { postComment }   = require('./reddit-client');
-const { logPostAction } = require('./guardrails');
-const { checkContent }  = require('./content-check');
-const { _jaccardWords } = require('./validators');
+const { postComment }   = require('../reddit-client');
+const { logPostAction } = require('./db-guardrails');
+const { checkContent }  = require('./content-guardrail');
+const { _jaccardWords } = require('../validators');
 const { PrismaClient }  = require('@prisma/client');
 
 let prisma;
@@ -41,12 +40,6 @@ function getPrisma() {
   return prisma;
 }
 
-// Replies with word overlap above this threshold are considered near-duplicates.
-// Stricter than the reply-gen validator threshold (0.72) because we're comparing
-// against content that has already been published to Reddit.
-const SIMILARITY_THRESHOLD = 0.85;
-
-// How many days back to look when checking similarity against past posts.
 const SIMILARITY_LOOKBACK_DAYS = 14;
 
 /**
@@ -54,9 +47,9 @@ const SIMILARITY_LOOKBACK_DAYS = 14;
  *
  * @param {string}  replyDbId
  * @param {Object}  [opts]
- * @param {boolean} [opts.dryRun=false]       - Run all gates but skip the Reddit API call
- * @param {string}  [opts.decidedBy='system'] - User who triggered the post (for audit log)
- * @returns {Promise<import('./types').PostingResult>}
+ * @param {boolean} [opts.dryRun=false]
+ * @param {string}  [opts.decidedBy='system']
+ * @returns {Promise<import('../types').PostingResult>}
  */
 async function postApprovedReply(replyDbId, opts = {}) {
   const { dryRun = false, decidedBy = 'system' } = opts;
@@ -71,12 +64,9 @@ async function postApprovedReply(replyDbId, opts = {}) {
 
   const db = getPrisma();
 
-  // ── Load reply + thread ────────────────────────────────────────────────────
   const reply = await db.redditReply.findUnique({
-    where:   { id: replyDbId },
-    include: { thread: true },
+    where: { id: replyDbId }, include: { thread: true },
   });
-
   if (!reply) {
     const msg = `Reply not found: ${replyDbId}`;
     log('BLOCKED', 'not_found', msg);
@@ -136,7 +126,7 @@ async function postApprovedReply(replyDbId, opts = {}) {
   }
 
   // ── Gate 7: daily post cap ─────────────────────────────────────────────────
-  const maxPostsPerDay = parseInt(process.env.REDDIT_MAX_POSTS_PER_DAY || '3', 10);
+  const maxPostsPerDay = parseInt(process.env.REDDIT_DAILY_POST_LIMIT || '3', 10);
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
   const todayCount = await db.redditRateLog.count({
@@ -152,8 +142,7 @@ async function postApprovedReply(replyDbId, opts = {}) {
   // ── Gate 8: cooldown between posts ────────────────────────────────────────
   const cooldownMinutes = parseInt(process.env.REDDIT_POST_COOLDOWN_MINUTES || '30', 10);
   const lastPost = await db.redditRateLog.findFirst({
-    where:   { action: 'post' },
-    orderBy: { createdAt: 'desc' },
+    where: { action: 'post' }, orderBy: { createdAt: 'desc' },
   }).catch(() => null);
   if (lastPost) {
     const elapsedMins = (Date.now() - lastPost.createdAt.getTime()) / 60_000;
@@ -173,28 +162,24 @@ async function postApprovedReply(replyDbId, opts = {}) {
     select: { id: true, content: true, redditCommentId: true },
   }).catch(() => []);
 
+  const similarityThreshold = parseFloat(process.env.REDDIT_MAX_SIMILARITY_THRESHOLD || '0.85');
   for (const recent of recentReplies) {
     const similarity = _jaccardWords(reply.content, recent.content);
-    if (similarity > SIMILARITY_THRESHOLD) {
-      const msg = `Reply too similar (${(similarity * 100).toFixed(0)}% word overlap) to recently posted comment ${recent.redditCommentId}`;
+    if (similarity > similarityThreshold) {
+      const msg = `Reply too similar (${(similarity * 100).toFixed(0)}% word overlap, threshold ${(similarityThreshold * 100).toFixed(0)}%) to recently posted comment ${recent.redditCommentId}`;
       log('BLOCKED', 'similarity', msg);
       await saveAttempt(db, { replyId: replyDbId, threadId: thread.id, blockedBy: 'similarity', error: msg, dryRun, decidedBy });
       return blocked(msg, 'similarity');
     }
   }
 
-  // ── Gate 10 (dry-run skip point) ──────────────────────────────────────────
-  // Content guardrail calls Claude — skip in dry-run if gates 1–9 all passed
-  // so dry-run can validate env/config without consuming API tokens.
+  // ── Dry-run exit ──────────────────────────────────────────────────────────
   if (dryRun) {
     log('DRY_RUN', 'gates_1_9_passed', 'Stopping before content guardrail — dry-run mode');
     await saveAttempt(db, { replyId: replyDbId, threadId: thread.id, attempted: false, ok: true, dryRun: true, decidedBy });
     return {
-      ok:          true,
-      httpStatus:  0,
-      wasDisabled: false,
-      dryRun:      true,
-      message:     'Dry run: gates 1–9 passed, guardrail and API call skipped',
+      ok: true, httpStatus: 0, wasDisabled: false, dryRun: true,
+      message: 'Dry run: gates 1–9 passed, guardrail and API call skipped',
     };
   }
 
@@ -202,7 +187,7 @@ async function postApprovedReply(replyDbId, opts = {}) {
   log('INFO', 'guardrail', 'Running content guardrail check');
   let guardrail;
   try {
-    guardrail = await checkContent(replyDbId);
+    guardrail = await checkContent(replyDbId, { calledFrom: 'post_gate' });
   } catch (err) {
     const msg = `Content guardrail threw: ${err.message}`;
     log('ERROR', 'guardrail_error', msg);
@@ -230,7 +215,6 @@ async function postApprovedReply(replyDbId, opts = {}) {
     return { ok: false, httpStatus: 0, wasDisabled: false, error: msg };
   }
 
-  // ── Persist result ─────────────────────────────────────────────────────────
   await saveAttempt(db, {
     replyId:    replyDbId,
     threadId:   thread.id,
@@ -246,9 +230,7 @@ async function postApprovedReply(replyDbId, opts = {}) {
 
   if (result.ok) {
     log('SUCCESS', 'posted', `Comment posted: ${result.commentId} — ${result.commentUrl}`);
-
     await logPostAction();
-
     await db.redditReply.update({
       where: { id: replyDbId },
       data:  { postedAt: new Date(), redditCommentId: result.commentId || null },
@@ -264,32 +246,16 @@ async function postApprovedReply(replyDbId, opts = {}) {
   return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Build a standardised blocked result. wasDisabled=true only for the flag gate. */
 function blocked(error, blockedBy) {
-  return {
-    ok:          false,
-    httpStatus:  0,
-    wasDisabled: blockedBy === 'flag',
-    blockedBy,
-    error,
-  };
+  return { ok: false, httpStatus: 0, wasDisabled: blockedBy === 'flag', blockedBy, error };
 }
 
-/** Structured console logger for the posting flow. */
 function makeLogger(replyDbId) {
   return function log(level, gate, message) {
-    console.log(`[reddit/post] [${level}] [${gate}] reply=${replyDbId} — ${message}`);
+    console.log(`[reddit/posting] [${level}] [${gate}] reply=${replyDbId} — ${message}`);
   };
 }
 
-/**
- * Write a posting attempt record to the DB. Non-fatal — a log write failure
- * must never abort or alter the outcome of the posting flow.
- */
 async function saveAttempt(db, data) {
   try {
     await db.redditPostingAttempt.create({
@@ -308,7 +274,7 @@ async function saveAttempt(db, data) {
       },
     });
   } catch (err) {
-    console.error('[reddit/post] saveAttempt failed (non-fatal):', err.message);
+    console.error('[reddit/posting] saveAttempt failed (non-fatal):', err.message);
   }
 }
 

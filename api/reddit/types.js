@@ -148,10 +148,11 @@
  * Resolved feature flags — constructed once per request in index.js.
  *
  * @typedef {Object} RedditFlags
- * @property {boolean} enabled        - REDDIT_ENABLED === "true"
- * @property {boolean} postingEnabled - REDDIT_POSTING_ENABLED === "true"
- * @property {number}  maxPostsPerDay - REDDIT_MAX_POSTS_PER_DAY (default 3)
- * @property {number}  minThreadScore - REDDIT_MIN_THREAD_SCORE (default 5)
+ * @property {boolean} enabled         - REDDIT_AUTOMATION_ENABLED === "true"
+ * @property {boolean} postingEnabled  - REDDIT_POSTING_ENABLED === "true"
+ * @property {boolean} dryRun          - REDDIT_DRY_RUN === "true"
+ * @property {number}  dailyPostLimit  - REDDIT_DAILY_POST_LIMIT (default 3)
+ * @property {number}  minThreadScore  - REDDIT_MIN_THREAD_SCORE (default 5)
  */
 
 module.exports = {}; // no runtime exports — types are documentation only

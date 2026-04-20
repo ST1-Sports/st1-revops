@@ -455,9 +455,9 @@ const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleybal
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
 function urgentCount(s) {
-  return s.deals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
-    + s.invoices.filter(i=>i.status==="overdue").length
-    + s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
+  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
+    + (s.invoices||[]).filter(i=>i.status==="overdue").length
+    + (s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -583,8 +583,8 @@ export default function App() {
     {id:"deals",       icon:"◫", label:"Deals"},
     {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
     {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:s.invoices.filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
+    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -1045,7 +1045,7 @@ function ModAnalytics() {
                     <td style={{padding:"9px 10px",color:B.blue,fontWeight:500}}>{opened}</td>
                     <td style={{padding:"9px 10px",color:B.green,fontWeight:500}}>{replied}</td>
                     <td style={{padding:"9px 10px",color:B.muted}}>{done}</td>
-                    <td style={{padding:"9px 10px",color:B.muted}}>{rep?rep.name.split(" ")[0]:camp.repId||"—"}</td>
+                    <td style={{padding:"9px 10px",color:B.muted}}>{rep?(rep.name||"").split(" ")[0]:camp.repId||"—"}</td>
                     <td style={{padding:"9px 10px"}}>
                       {campDeals.length>0?(
                         <div>
@@ -1294,9 +1294,9 @@ function ModBriefing() {
   const [quickPrompt,setQuickPrompt]=useState("");
 
   const isOwner=cu?.role==="owner";
-  const myDeals=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
-  const myInv  =isOwner?s.invoices:s.invoices.filter(i=>i.assignee===cu?.id);
-  const myRfps =isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
+  const myDeals=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
+  const myInv  =isOwner?(s.invoices||[]):(s.invoices||[]).filter(i=>i.assignee===cu?.id);
+  const myRfps =isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
   const orders =s.orders||[];
   const cMap   =Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
 
@@ -1451,7 +1451,7 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
   return (
     <div style={{padding:"22px 26px"}}>
       <div style={{marginBottom:20}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:B.black,letterSpacing:.3}}>GOOD {new Date().getHours()<12?"MORNING":new Date().getHours()<17?"AFTERNOON":"EVENING"}, {cu?.name.split(" ")[0].toUpperCase()}</div>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:B.black,letterSpacing:.3}}>GOOD {new Date().getHours()<12?"MORNING":new Date().getHours()<17?"AFTERNOON":"EVENING"}, {(cu?.name||"").split(" ")[0].toUpperCase()}</div>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</div>
         <div style={{width:34,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
       </div>
@@ -1802,12 +1802,12 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
           <div className="card" style={{padding:14}}>
             <Lbl s={{marginBottom:10}}>Win Rate by Product</Lbl>
             {(()=>{
-              const wonDeals = s.deals.filter(d=>d.stage==="Closed Won");
-              const totalClosed = s.deals.filter(d=>["Closed Won","Closed Lost"].includes(d.stage));
+              const wonDeals = (s.deals||[]).filter(d=>d.stage==="Closed Won");
+              const totalClosed = (s.deals||[]).filter(d=>["Closed Won","Closed Lost"].includes(d.stage));
               if(totalClosed.length===0) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Win data appears as deals close</div>;
               const cats = PRODUCT_CATS.map(cat=>{
                 const won  = wonDeals.filter(d=>d.product===cat);
-                const lost = s.deals.filter(d=>d.stage==="Closed Lost"&&d.product===cat);
+                const lost = (s.deals||[]).filter(d=>d.stage==="Closed Lost"&&d.product===cat);
                 const rate = (won.length+lost.length)>0 ? Math.round(won.length/(won.length+lost.length)*100) : null;
                 const rev  = won.reduce((a,d)=>a+d.value,0);
                 return {cat,won:won.length,lost:lost.length,rate,rev};
@@ -2815,9 +2815,9 @@ function ModRFP() {
   const [sel,setSel]=useState(null);
   const [newItem,setNewItem]=useState("");
   const isOwner=cu?.role==="owner";
-  const rfps=isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
-  const sel_r=sel?s.rfps.find(r=>r.id===sel):null;
-  const toggleChk=(rid,cid)=>dispatch("UPDATE_RFP",{id:rid,checklist:s.rfps.find(r=>r.id===rid).checklist.map(c=>c.id===cid?{...c,done:!c.done}:c)});
+  const rfps=isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
+  const sel_r=sel?(s.rfps||[]).find(r=>r.id===sel):null;
+  const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
   const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...(s.rfps.find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
   return (
@@ -5956,7 +5956,7 @@ function ModMarketing() {
   };
   const saveTouchEdit = () => {
     if(!selCamp||editingTouchIdx===null) return;
-    dispatch("UPDATE_CAMPAIGN",{...selCamp,touches:selCamp.touches.map((t,i)=>i===editingTouchIdx?{...t,...touchDraft}:t)});
+    dispatch("UPDATE_CAMPAIGN",{...selCamp,touches:(selCamp.touches||[]).map((t,i)=>i===editingTouchIdx?{...t,...touchDraft}:t)});
     setEditingTouchIdx(null);
     toast("Email updated","success");
   };
@@ -6134,7 +6134,7 @@ function ModMarketing() {
                           <th key={u.id} style={{padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,textAlign:"center",minWidth:80}}>
                             <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
                               <div style={{width:8,height:8,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
-                              <span style={{color:u.color||B.muted}}>{u.name.split(" ")[0].toUpperCase()}</span>
+                              <span style={{color:u.color||B.muted}}>{(u.name||"?").split(" ")[0].toUpperCase()}</span>
                             </div>
                           </th>
                         ))}
@@ -6589,7 +6589,7 @@ function ModMarketing() {
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,padding:"2px 7px",borderRadius:3,letterSpacing:.5,flexShrink:0}}>{(camp.status||"draft").toUpperCase()}</span>
                           </div>
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{camp.product}{camp.audience?` · ${camp.audience}`:""}
-                            {camp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===camp.repId);return rep?<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>REP: {rep.name.split(" ")[0].toUpperCase()}</span>:null;})()}</div>
+                            {camp.repId&&(()=>{const rep=(s.reps||[]).find(r=>r.id===camp.repId);return rep?<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>REP: {(rep.name||"").split(" ")[0].toUpperCase()}</span>:null;})()}</div>
                           {(camp.startDate||camp.endDate)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{camp.startDate||""}{camp.endDate?` → ${camp.endDate}`:""}</div>}
                           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                             <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>✉ {(camp.touches||[]).length} touches</span>
@@ -6713,7 +6713,7 @@ function ModMarketing() {
                         </button>
                         {(s.reps||[]).map(rep=>(
                           <button key={rep.id} onClick={()=>setCampDraft(c=>({...c,repId:rep.id}))} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",borderRadius:5,border:`2px solid ${campDraft.repId===rep.id?B.orange:B.border}`,background:campDraft.repId===rep.id?B.orangeBg:B.surface,cursor:"pointer"}}>
-                            <div style={{width:24,height:24,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <div style={{width:24,height:24,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                             <div style={{flex:1,textAlign:"left"}}>
                               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:campDraft.repId===rep.id?B.orange:B.text,fontWeight:500}}>{rep.name}</div>
                               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{rep.email}</div>
@@ -7283,6 +7283,7 @@ function ModMarketing() {
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
+                  try {
                   let sent=0,failed=0,skipped=0,firstErr=null;
                   const todStr=today();
                   const updEnr=[...(camp.enrollments||[])];
@@ -7325,9 +7326,14 @@ function ModMarketing() {
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
-                  setSending(false);
                   const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}`,sent>0||skipped>0?"success":"error");
+                  } catch(err) {
+                    console.error("[sendOneBatch]",err);
+                    toast(`Send failed: ${err.message}`,"error");
+                  } finally {
+                    setSending(false);
+                  }
                 };
 
                 // Mark a batch as already sent (no emails — just advances enrollment state)
@@ -7375,7 +7381,7 @@ function ModMarketing() {
                   {/* Rep + Gmail status */}
                   {rep&&(
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:12}}>
-                      <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{rep.name.split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                      <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
                           ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail account ({rep.gmailEnvKey})</span>
@@ -7559,7 +7565,7 @@ function ModMarketing() {
               })()}
               {/* Sequence touchpoints — editable */}
               <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"flex-start"}}>
-                {selCamp.touches.map((t,i)=>(
+                {(selCamp.touches||[]).map((t,i)=>(
                   <div key={t.id||i} className="card" style={{flex:1,padding:10,borderTop:`2px solid ${B.orange}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
@@ -7610,7 +7616,7 @@ function ModMarketing() {
                 const doEnroll=()=>{
                   if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
                   const todayStr=today();
-                  const updated={...selCamp};
+                  const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
                   let count=0;
                   toEnroll.forEach(c=>{
                     if(!updated.enrollments.some(e=>e.contactId===c.id)){
@@ -7670,7 +7676,7 @@ function ModMarketing() {
                   if(executeFilter==="active") return e.status==="active"&&!(e.step>0||e.lastSentAt);
                   return e.status===executeFilter;
                 };
-                const visibleCount=selCamp.enrollments.filter(e=>{
+                const visibleCount=(selCamp.enrollments||[]).filter(e=>{
                   const c=contactMap[e.contactId];
                   return statusFilterFn(e)&&(!c||(filterSport==="all"||c.sport===filterSport));
                 }).length;
@@ -7688,7 +7694,7 @@ function ModMarketing() {
                 );
               })()}
               <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                {selCamp.enrollments
+                {(selCamp.enrollments||[])
                   .filter(e=>{
                     const c=contactMap[e.contactId];
                     const statusMatch = executeFilter==="all"?true:executeFilter==="sent"?(e.step>0||e.lastSentAt)&&e.status==="active":executeFilter==="active"?e.status==="active"&&!(e.step>0||e.lastSentAt):e.status===executeFilter;
@@ -7704,7 +7710,7 @@ function ModMarketing() {
                   .map(e=>{
                     const c=contactMap[e.contactId];
                     if(!c)return null;
-                    const touch=selCamp.touches[e.step];
+                    const touch=(selCamp.touches||[])[e.step];
                     const sc={active:B.blue,replied:B.green,interested:B.orange,meeting:B.purple,done:B.muted,unsubscribed:B.red,not_interested:B.muted}[e.status]||B.muted;
                     return (
                       <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
@@ -7789,7 +7795,7 @@ function ModMarketing() {
                     <div style={{marginBottom:20}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE — {selCamp.touches.length} TOUCH{selCamp.touches.length!==1?"ES":""}</div>
                       <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
-                        {selCamp.touches.map((t,i)=>(
+                        {(selCamp.touches||[]).map((t,i)=>(
                           <div key={t.id||i} className="card" style={{flex:"1 1 220px",padding:10,borderTop:`2px solid ${B.orange}`}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
                               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
@@ -10575,12 +10581,12 @@ function ModAgent() {
   },[s.agentDraft]);
 
   const buildContext=()=>{
-    const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
     const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
     const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
     const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
+    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
     const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
     const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
     const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
@@ -10607,7 +10613,7 @@ ${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}
 ${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
 
 === AR ===
-${fmt$(ar)} outstanding${s.invoices.filter(i=>i.status==="overdue").length>0?` — ${s.invoices.filter(i=>i.status==="overdue").length} overdue`:""}
+${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
 
 ${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
 === ACTIONS YOU CAN TAKE ===
@@ -10802,11 +10808,11 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 
   // Sidebar data
-  const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
   const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
   const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
@@ -11133,7 +11139,7 @@ function ModSettings() {
       const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         action:"send", to_email:rep.email, to_name:rep.name,
         subject:`ST1 RevOps — email test for ${rep.name}`,
-        body:`Hi ${rep.name.split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
+        body:`Hi ${(rep.name||"there").split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
         ...(rep.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
       })}).then(r=>r.json());
       if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
