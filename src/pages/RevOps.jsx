@@ -7296,7 +7296,8 @@ function ModMarketing() {
 
                 // One-batch sender — sends exactly this list of enrollments for their current step
                 // Skips contacts marked "interested" and marks them as done after the batch
-                const sendOneBatch=async(batchEnrollments,batchKey)=>{
+                // noEmailEnrs: contacts at this step with no email — auto-advanced without sending
+                const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
@@ -7305,7 +7306,7 @@ function ModMarketing() {
                   const todStr=today();
                   const updEnr=[...(camp.enrollments||[])];
                   const activeCount=batchEnrollments.filter(e=>e.status!=="interested").length;
-                  toast(`Sending ${activeCount} emails…`,"info");
+                  if(activeCount>0) toast(`Sending ${activeCount} emails…`,"info");
                   for(const enroll of batchEnrollments){
                     // Skip interested contacts — they expressed interest, don't continue emailing
                     if(enroll.status==="interested"){ skipped++; continue; }
@@ -7334,11 +7335,21 @@ function ModMarketing() {
                       if(idx>=0) updEnr[idx]={...updEnr[idx],status:"done",interestedAt:updEnr[idx].interestedAt||todStr};
                     }
                   }
+                  // Auto-advance contacts with no email — they can't receive emails but shouldn't stay stuck
+                  let noEmailAdv=0;
+                  for(const enroll of noEmailEnrs){
+                    const guardIdx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                    if(guardIdx>=0 && updEnr[guardIdx].step===enroll.step){
+                      advanceEnroll(updEnr,enroll,todStr,camp);
+                      noEmailAdv++;
+                    }
+                  }
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
                   const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
-                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}`,sent>0||skipped>0?"success":"error");
+                  const noEmailNote=noEmailAdv?` · ${noEmailAdv} skipped (no email)`:"";
+                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`,sent>0||skipped>0||noEmailAdv>0?"success":"error");
                   } catch(err) {
                     console.error("[sendOneBatch]",err);
                     toast(`Send failed: ${err.message}`,"error");
@@ -7480,12 +7491,14 @@ function ModMarketing() {
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
                     // Only contacts at exactly this step are eligible to receive this touch
-                    const pending=enrs.filter(e=>e.step===ti&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                    const allActive=enrs.filter(e=>e.step===ti&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                    const pending=allActive.filter(e=>contactMap[e.contactId]?.email);
+                    const noEmail=allActive.filter(e=>!contactMap[e.contactId]?.email);
                     // Contacts who already received this touch (step has moved past ti)
                     const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","not_interested","unsubscribed"].includes(e.status))).length;
                     const touchBatches=[];
                     for(let i=0;i<pending.length;i+=BATCH_SIZE) touchBatches.push(pending.slice(i,i+BATCH_SIZE));
-                    const allDone=pending.length===0;
+                    const allDone=pending.length===0&&noEmail.length===0;
 
                     return(
                       <div key={ti} style={{marginBottom:14,border:`1px solid ${allDone?B.green+"60":B.border}`,borderRadius:7,overflow:"hidden"}}>
@@ -7500,7 +7513,7 @@ function ModMarketing() {
                             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>
                               {allDone
                                 ?`✓ All ${receivedCount} contacts received this email`
-                                :`${pending.length} pending · ${receivedCount} already sent · ${touchBatches.length} batch${touchBatches.length!==1?"es":""}`
+                                :`${pending.length} pending · ${receivedCount} already sent · ${touchBatches.length} batch${touchBatches.length!==1?"es":""}${noEmail.length?` · ${noEmail.length} no email (auto-skipped on send)`:""}`
                               }
                             </div>
                           </div>
@@ -7510,6 +7523,16 @@ function ModMarketing() {
                         {/* Batches for this touch */}
                         {!allDone&&(
                           <div style={{padding:"10px 14px",display:"flex",flexDirection:"column",gap:6,borderTop:`1px solid ${B.border}`}}>
+                            {/* No email contacts only — nothing to send, show skip button */}
+                            {touchBatches.length===0&&noEmail.length>0&&(
+                              <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:`${B.yellow}10`,border:`1px solid ${B.yellow}60`,borderRadius:5}}>
+                                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{noEmail.length} contact{noEmail.length!==1?"s":""} have no email address — they can't receive this touch.</span>
+                                <button onClick={()=>sendOneBatch([],[],noEmail)} disabled={sending}
+                                  style={{background:B.surface,color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                  SKIP &amp; ADVANCE
+                                </button>
+                              </div>
+                            )}
                             {touchBatches.map((batch,bi)=>{
                               const isFirst=bi===0;
                               const expKey=`${ti}-${bi}`;
@@ -7528,7 +7551,7 @@ function ModMarketing() {
                                     </div>
                                     {!wasSent&&(
                                       <div style={{display:"flex",gap:5,flexShrink:0}}>
-                                        <button onClick={()=>sendOneBatch(batch,batchKey)} disabled={sending}
+                                        <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
                                           style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
                                           {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
                                         </button>
