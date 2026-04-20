@@ -7616,7 +7616,7 @@ function ModMarketing() {
                 const doEnroll=()=>{
                   if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
                   const todayStr=today();
-                  const updated={...selCamp};
+                  const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
                   let count=0;
                   toEnroll.forEach(c=>{
                     if(!updated.enrollments.some(e=>e.contactId===c.id)){
