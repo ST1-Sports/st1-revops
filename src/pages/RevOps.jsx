@@ -455,9 +455,9 @@ const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleybal
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
 function urgentCount(s) {
-  return s.deals.filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
-    + s.invoices.filter(i=>i.status==="overdue").length
-    + s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
+  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
+    + (s.invoices||[]).filter(i=>i.status==="overdue").length
+    + (s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -583,8 +583,8 @@ export default function App() {
     {id:"deals",       icon:"◫", label:"Deals"},
     {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
     {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:s.invoices.filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
+    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -1294,9 +1294,9 @@ function ModBriefing() {
   const [quickPrompt,setQuickPrompt]=useState("");
 
   const isOwner=cu?.role==="owner";
-  const myDeals=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
-  const myInv  =isOwner?s.invoices:s.invoices.filter(i=>i.assignee===cu?.id);
-  const myRfps =isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
+  const myDeals=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
+  const myInv  =isOwner?(s.invoices||[]):(s.invoices||[]).filter(i=>i.assignee===cu?.id);
+  const myRfps =isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
   const orders =s.orders||[];
   const cMap   =Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
 
@@ -1802,12 +1802,12 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
           <div className="card" style={{padding:14}}>
             <Lbl s={{marginBottom:10}}>Win Rate by Product</Lbl>
             {(()=>{
-              const wonDeals = s.deals.filter(d=>d.stage==="Closed Won");
-              const totalClosed = s.deals.filter(d=>["Closed Won","Closed Lost"].includes(d.stage));
+              const wonDeals = (s.deals||[]).filter(d=>d.stage==="Closed Won");
+              const totalClosed = (s.deals||[]).filter(d=>["Closed Won","Closed Lost"].includes(d.stage));
               if(totalClosed.length===0) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Win data appears as deals close</div>;
               const cats = PRODUCT_CATS.map(cat=>{
                 const won  = wonDeals.filter(d=>d.product===cat);
-                const lost = s.deals.filter(d=>d.stage==="Closed Lost"&&d.product===cat);
+                const lost = (s.deals||[]).filter(d=>d.stage==="Closed Lost"&&d.product===cat);
                 const rate = (won.length+lost.length)>0 ? Math.round(won.length/(won.length+lost.length)*100) : null;
                 const rev  = won.reduce((a,d)=>a+d.value,0);
                 return {cat,won:won.length,lost:lost.length,rate,rev};
@@ -2815,9 +2815,9 @@ function ModRFP() {
   const [sel,setSel]=useState(null);
   const [newItem,setNewItem]=useState("");
   const isOwner=cu?.role==="owner";
-  const rfps=isOwner?s.rfps:s.rfps.filter(r=>r.assignee===cu?.id);
-  const sel_r=sel?s.rfps.find(r=>r.id===sel):null;
-  const toggleChk=(rid,cid)=>dispatch("UPDATE_RFP",{id:rid,checklist:s.rfps.find(r=>r.id===rid).checklist.map(c=>c.id===cid?{...c,done:!c.done}:c)});
+  const rfps=isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
+  const sel_r=sel?(s.rfps||[]).find(r=>r.id===sel):null;
+  const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
   const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...(s.rfps.find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
   return (
@@ -10581,12 +10581,12 @@ function ModAgent() {
   },[s.agentDraft]);
 
   const buildContext=()=>{
-    const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
     const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=s.invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
     const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
     const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
+    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
     const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
     const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
     const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
@@ -10613,7 +10613,7 @@ ${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}
 ${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
 
 === AR ===
-${fmt$(ar)} outstanding${s.invoices.filter(i=>i.status==="overdue").length>0?` — ${s.invoices.filter(i=>i.status==="overdue").length} overdue`:""}
+${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
 
 ${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
 === ACTIONS YOU CAN TAKE ===
@@ -10808,11 +10808,11 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 
   // Sidebar data
-  const openDeals=s.deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
   const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
   const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=s.rfps.filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
