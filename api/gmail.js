@@ -79,7 +79,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, replyToMessageId } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, reply_to, from_name, replyToMessageId } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
@@ -155,7 +155,11 @@ export default async function handler(req, res) {
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
       const lines = [
         `To: ${toHeader}`,
-        ...(cc ? [`Cc: ${cc}`] : []),
+        ...(cc  ? [`Cc: ${cc}`]                     : []),
+        ...(bcc ? [`Bcc: ${bcc}`]                   : []),
+        ...(reply_to
+          ? [`Reply-To: ${from_name ? `${from_name} <${reply_to}>` : reply_to}`]
+          : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
         `Content-Type: ${contentType}`,
