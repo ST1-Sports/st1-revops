@@ -337,19 +337,19 @@ function reducer(prev, action, payload) {
   switch (action) {
     case "LOGIN":             return {...prev, currentUserId:payload};
     case "LOGOUT":            return {...prev, currentUserId:null};
-    case "ADD_DEAL":          return {...prev, deals:[payload,...prev.deals]};
-    case "UPDATE_DEAL":       return {...prev, deals:prev.deals.map(d=>d.id===payload.id?{...d,...payload}:d)};
-    case "ADD_INVOICE":       return {...prev, invoices:[payload,...prev.invoices]};
-    case "UPDATE_INVOICE":    return {...prev, invoices:prev.invoices.map(i=>i.id===payload.id?{...i,...payload}:i)};
-    case "ADD_RFP":           return {...prev, rfps:[payload,...prev.rfps]};
-    case "UPDATE_RFP":        return {...prev, rfps:prev.rfps.map(r=>r.id===payload.id?{...r,...payload}:r)};
+    case "ADD_DEAL":          return {...prev, deals:[payload,...(prev.deals||[])]};
+    case "UPDATE_DEAL":       return {...prev, deals:(prev.deals||[]).map(d=>d.id===payload.id?{...d,...payload}:d)};
+    case "ADD_INVOICE":       return {...prev, invoices:[payload,...(prev.invoices||[])]};
+    case "UPDATE_INVOICE":    return {...prev, invoices:(prev.invoices||[]).map(i=>i.id===payload.id?{...i,...payload}:i)};
+    case "ADD_RFP":           return {...prev, rfps:[payload,...(prev.rfps||[])]};
+    case "UPDATE_RFP":        return {...prev, rfps:(prev.rfps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "ADD_REORDER":       return {...prev, reorders:[payload,...(prev.reorders||[])]};
     case "SET_REORDERS":      return {...prev, reorders:payload};
     case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
     case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
-    case "UPDATE_CONTACT":      return {...prev, contacts:prev.contacts.map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
     case "SCORE_CONTACT": {
       const {contactId,type,note,campaignId} = payload;
       const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
@@ -389,9 +389,9 @@ function reducer(prev, action, payload) {
     case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
     case "DISMISS_BRIEF_ACTION":return {...prev, pendingBriefActions:(prev.pendingBriefActions||[]).filter((_,i)=>i!==payload)};
     case "SET_CONTACTS_LAST_SYNC": return {...prev, contactsLastSync:payload};
-    case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...prev.alerts.slice(0,49)]};
-    case "DISMISS_ALERT":     return {...prev, alerts:prev.alerts.map(a=>a.id===payload?{...a,sent:true}:a)};
-    case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...prev.activity.slice(0,199)]};
+    case "ADD_ALERT":         return {...prev, alerts:[{id:mkId(),ts:Date.now(),sent:false,...payload},...(prev.alerts||[]).slice(0,49)]};
+    case "DISMISS_ALERT":     return {...prev, alerts:(prev.alerts||[]).map(a=>a.id===payload?{...a,sent:true}:a)};
+    case "LOG":               return {...prev, activity:[{id:mkId(),ts:Date.now(),userId:prev.currentUserId,...payload},...(prev.activity||[]).slice(0,199)]};
     case "SAVE_INTEGRATIONS":   return {...prev, integrations:{...prev.integrations,...payload}};
     case "SAVE_COMPANY":        return {...prev, company:{...prev.company,...payload}};
     case "ADD_BRAND_ASSET":     return {...prev, brandAssets:[...( prev.brandAssets||[]),payload]};
@@ -595,9 +595,9 @@ export default function App() {
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"agent",       icon:"AI",label:"AI Agent"},
-    {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:s.reorders.filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
+    {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",         badge:s.alerts.filter(a=>!a.sent).length},
+    {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",    icon:"≡", label:"Activity"},
@@ -739,9 +739,9 @@ export default function App() {
                 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
               </button>
               <div style={{width:1,height:14,background:B.border}}/>
-              <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:s.alerts.filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
+              <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:(s.alerts||[]).filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
                 ◎
-                {s.alerts.filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{s.alerts.filter(a=>!a.sent).length}</span>}
+                {(s.alerts||[]).filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{(s.alerts||[]).filter(a=>!a.sent).length}</span>}
               </button>
             </div>
           </header>
@@ -1341,10 +1341,10 @@ function ModBriefing() {
           const d=await r.json();
           if(d.sent){
             const nextStep=enroll.step+1;
-            const done=nextStep>=seq.touches.length;
-            const nextTouch=seq.touches[nextStep];
+            const done=nextStep>=(seq.touches||[]).length;
+            const nextTouch=(seq.touches||[])[nextStep];
             const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
-            dispatch("UPDATE_SEQUENCE",{...seq,enrollments:seq.enrollments.map(e=>
+            dispatch("UPDATE_SEQUENCE",{...seq,enrollments:(seq.enrollments||[]).map(e=>
               e.contactId===enroll.contactId?{...e,step:nextStep,status:done?"done":"active",nextDate:nextDate||e.nextDate,lastContacted:todayStr2}:e
             )});
             dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:seq.id,note:"Touch sent"});
@@ -1895,7 +1895,7 @@ function ModDeals() {
   };
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
-  const pool=isOwner?s.deals:s.deals.filter(d=>d.assignee===cu?.id);
+  const pool=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
   const list=pool.filter(d=>{
     if(flt==="active") return !["Closed Won","Closed Lost","On Hold"].includes(d.stage);
     if(flt==="overdue") return d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received"].includes(d.stage);
@@ -1909,7 +1909,7 @@ function ModDeals() {
     if(aLost!==bLost) return aLost-bLost;
     return b.value-a.value;
   });
-  const sel_d=sel?s.deals.find(d=>d.id===sel):null;
+  const sel_d=sel?(s.deals||[]).find(d=>d.id===sel):null;
 
   const addDeal=()=>{
     if(!form.name) return;
@@ -2818,7 +2818,7 @@ function ModRFP() {
   const rfps=isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
   const sel_r=sel?(s.rfps||[]).find(r=>r.id===sel):null;
   const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
-  const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...(s.rfps.find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
+  const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -6815,16 +6815,16 @@ function ModMarketing() {
                       <textarea value={emailGenDirection} onChange={e=>setEmailGenDirection(e.target.value)} placeholder="e.g. Focus on spring season urgency, mention early-bird discount, emphasize team bonding angle…" rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
                     </div>
                     {genRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:10}}><Spin/>Writing emails…</div>}
-                    {(campDraft.touches||[]).length>0&&campDraft.touches.map((t,i)=>(
+                    {(campDraft.touches||[]).length>0&&(campDraft.touches||[]).map((t,i)=>(
                       <div key={t.id||i} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:6}}>TOUCH {t.step} — DAY {t.dayOffset}</div>
                         <div style={{marginBottom:6}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SUBJECT</div>
-                          <input value={t.subject||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,subject:e.target.value}:x)}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                          <input value={t.subject||""} onChange={e=>setCampDraft(c=>({...c,touches:(c.touches||[]).map((x,j)=>j===i?{...x,subject:e.target.value}:x)}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
                         <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>BODY</div>
-                          <textarea value={t.body||""} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,body:e.target.value}:x)}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/></div>
+                          <textarea value={t.body||""} onChange={e=>setCampDraft(c=>({...c,touches:(c.touches||[]).map((x,j)=>j===i?{...x,body:e.target.value}:x)}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/></div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Tags: {'{{firstName}}'} {'{{orgName}}'} {'{{sport}}'}</div>
                         <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,paddingTop:8,borderTop:`1px solid ${B.border}`}}>
-                          <input type="checkbox" id={`iq-${i}`} checked={!!t.isQuote} onChange={e=>setCampDraft(c=>({...c,touches:c.touches.map((x,j)=>j===i?{...x,isQuote:e.target.checked}:x)}))} style={{accentColor:B.orange,cursor:"pointer"}}/>
+                          <input type="checkbox" id={`iq-${i}`} checked={!!t.isQuote} onChange={e=>setCampDraft(c=>({...c,touches:(c.touches||[]).map((x,j)=>j===i?{...x,isQuote:e.target.checked}:x)}))} style={{accentColor:B.orange,cursor:"pointer"}}/>
                           <label htmlFor={`iq-${i}`} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:t.isQuote?B.orange:B.muted,cursor:"pointer"}}>💰 Pricing / Quote email — auto-creates deal &amp; BCCs quote tracker on send</label>
                         </div>
                       </div>
@@ -6930,7 +6930,7 @@ function ModMarketing() {
                   <div style={{marginBottom:20}}>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL TOUCHES</div>
                     <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                      {campDraft.touches.map((t,i)=>{
+                      {(campDraft.touches||[]).map((t,i)=>{
                         const base=campDraft.startDate||today();
                         const autoDate=(()=>{const d=new Date(base);d.setDate(d.getDate()+(t.dayOffset||0));return d.toISOString().slice(0,10);})();
                         const scheduled=t.scheduledDate||autoDate;
@@ -7793,7 +7793,7 @@ function ModMarketing() {
                   {/* Email touches */}
                   {(selCamp.touches||[]).length>0&&(
                     <div style={{marginBottom:20}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE — {selCamp.touches.length} TOUCH{selCamp.touches.length!==1?"ES":""}</div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE — {(selCamp.touches||[]).length} TOUCH{(selCamp.touches||[]).length!==1?"ES":""}</div>
                       <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
                         {(selCamp.touches||[]).map((t,i)=>(
                           <div key={t.id||i} className="card" style={{flex:"1 1 220px",padding:10,borderTop:`2px solid ${B.orange}`}}>
@@ -8277,7 +8277,7 @@ function ModCalendar() {
   (s.campaigns||[]).forEach(camp=>{
     // Email touches
     if(camp.startDate && (camp.touches||[]).length>0){
-      camp.touches.forEach(touch=>{
+      (camp.touches||[]).forEach(touch=>{
         const d=new Date(camp.startDate);
         d.setDate(d.getDate()+(touch.dayOffset||0));
         const dateStr=d.toISOString().slice(0,10);
@@ -11010,7 +11010,7 @@ function ModAlerts() {
   const {s,dispatch,toast}=useApp();
   const [channel,setChannel]=useState(s.integrations.slackChannel||"C0AQ7CMB01X");
   const [sending,setSending]=useState(false);
-  const pending=s.alerts.filter(a=>!a.sent);
+  const pending=(s.alerts||[]).filter(a=>!a.sent);
 
   const sendToSlack=async(msg)=>{
     const ch=channel||"C0AQ7CMB01X";
@@ -11030,7 +11030,7 @@ function ModAlerts() {
   };
 
   const send=async(id)=>{
-    const alert=s.alerts.find(a=>a.id===id);
+    const alert=(s.alerts||[]).find(a=>a.id===id);
     if(!alert)return;
     setSending(true);
     const msg=`<@U09F64R5QBA> 🔥 *ST1 RevOps Alert*\n${alert.msg}${alert.action?`\n→ ${alert.action}`:""}`;
@@ -11055,9 +11055,9 @@ function ModAlerts() {
         {pending.length>0&&<OBtn sm onClick={sendAll} disabled={sending}>{sending?"SENDING…":`SEND ALL (${pending.length})`}</OBtn>}
         {sending&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Sending to Slack…</span>}
       </div>
-      {s.alerts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>No alerts yet — signals from deals, invoices, and prospecting appear here</div>}
+      {(s.alerts||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>No alerts yet — signals from deals, invoices, and prospecting appear here</div>}
       <div style={{display:"flex",flexDirection:"column",gap:7}}>
-        {s.alerts.map(a=>(
+        {(s.alerts||[]).map(a=>(
           <div key={a.id} className="card" style={{padding:"10px 13px",borderLeft:`3px solid ${a.sent?B.border:B.orange}`,opacity:a.sent?.5:1,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
             <div style={{flex:1}}>
               <Lbl c={a.sent?B.muted:B.orange} s={{marginBottom:3}}>{a.sent?"✓ SENT":"🔥 PENDING"}</Lbl>
