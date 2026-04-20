@@ -11129,7 +11129,7 @@ function BrandAssetAddForm({dispatch,toast,s}) {
 
 function ModSettings() {
   const {s,dispatch,toast,setMod}=useApp();
-  const [ints,setInts]=useState({...s.integrations});
+  const [ints,setInts]=useState({...(s.integrations||{})});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
   const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
   const [pinForm,setPinForm]=useState(null); // repId being set, or null

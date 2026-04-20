@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect, useCallback, useRef } from 'react'
+import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, Component } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 
 // Main app shell (deals, briefing, invoicing, reorder, prospecting, etc.)
@@ -10,6 +10,50 @@ const PriceTool   = lazy(() => import('./pages/PriceTool.jsx'))
 const Expansion   = lazy(() => import('./pages/Expansion.jsx'))
 const Integrations= lazy(() => import('./pages/Integrations.jsx'))
 const Reddit      = lazy(() => import('./pages/Reddit.jsx'))
+
+// Top-level error boundary — catches crashes that escape the inner ErrBound
+// (e.g. null access in nav/header, unexpected server state merge)
+class RootErrorBoundary extends Component {
+  constructor(p) { super(p); this.state = { err: null, info: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) {
+    console.error('[ST1 RootCrash]', err, info?.componentStack);
+    this.setState({ info });
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <div style={{
+          height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: '#F2F2F0', flexDirection: 'column', gap: 16, padding: 32,
+        }}>
+          <div style={{
+            width: 48, height: 48, background: '#C0392B', borderRadius: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{ fontFamily: "'Russo One',sans-serif", fontSize: 17, color: '#fff' }}>ST1</span>
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 14, color: '#C0392B', fontWeight: 600 }}>
+            App crashed — please copy the error below and reload
+          </div>
+          <pre style={{
+            background: '#fff', border: '1px solid #f99', borderRadius: 8, padding: 16,
+            fontSize: 11, color: '#333', maxWidth: 700, whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 300,
+          }}>{this.state.err?.message}{'\n\n'}{this.state.err?.stack?.split('\n').slice(0,8).join('\n')}</pre>
+          <button
+            onClick={() => { this.setState({ err: null, info: null }); }}
+            style={{
+              background: '#F37321', color: '#fff', border: 'none', borderRadius: 6,
+              padding: '10px 24px', fontSize: 13, fontFamily: "'Lexend',sans-serif", cursor: 'pointer',
+            }}>
+            Reload App
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Full-screen loading spinner
 function PageLoader() {
@@ -138,22 +182,24 @@ function BgNotifications() {
 
 export default function App() {
   return (
-    <Suspense fallback={<PageLoader />}>
-      <BgNotifications />
-      <Routes>
-        {/* Main unified app — handles all daily ops */}
-        <Route path="/*"           element={<RevOps />} />
+    <RootErrorBoundary>
+      <Suspense fallback={<PageLoader />}>
+        <BgNotifications />
+        <Routes>
+          {/* Main unified app — handles all daily ops */}
+          <Route path="/*"           element={<RevOps />} />
 
-        {/* Standalone tools — opened from within RevOps or directly */}
-        <Route path="/rfp"         element={<RFPTool />} />
-        <Route path="/prices"      element={<PriceTool />} />
-        <Route path="/expansion"   element={<Expansion />} />
-        <Route path="/integrations"element={<Integrations />} />
-        <Route path="/reddit"      element={<Reddit />} />
+          {/* Standalone tools — opened from within RevOps or directly */}
+          <Route path="/rfp"         element={<RFPTool />} />
+          <Route path="/prices"      element={<PriceTool />} />
+          <Route path="/expansion"   element={<Expansion />} />
+          <Route path="/integrations"element={<Integrations />} />
+          <Route path="/reddit"      element={<Reddit />} />
 
-        {/* Catch-all */}
-        <Route path="*"            element={<Navigate to="/" replace />} />
-      </Routes>
-    </Suspense>
+          {/* Catch-all */}
+          <Route path="*"            element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
+    </RootErrorBoundary>
   )
 }
