@@ -179,19 +179,26 @@ function useStore() {
       .then(r => r.json())
       .then(d => {
         if (d.state && typeof d.state === "object") {
+          // Strip contacts + agentHistory from server state before merging:
+          // contacts come from Zoho sync (can be thousands of records — too large to round-trip
+          // through the server state), agentHistory is session-only.
+          const {contacts: _sc, agentHistory: _sah, ...serverClean} = d.state;
           setRaw(prev => {
-            const merged = mergeServerState(prev, d.state);
-            try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
-            // Push merged result back so server always has the union of all devices
-            const {currentUserId: _cid, ...toSync} = merged;
+            const merged = mergeServerState(prev, serverClean);
+            // Defer localStorage write to avoid blocking the main thread
+            setTimeout(() => {
+              try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
+            }, 0);
+            // Push back stripped payload so server stays small
+            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = merged;
             fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
               body: JSON.stringify({state: toSync})}).catch(()=>{});
             return merged;
           });
         } else {
-          // Server empty — push local state up so other devices can see it
+          // Server empty — push local state up so other devices can see it (without contacts)
           setRaw(prev => {
-            const {currentUserId: _cid, ...toSync} = prev;
+            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = prev;
             fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
               body: JSON.stringify({state: toSync})}).catch(()=>{});
             return prev;
@@ -206,19 +213,22 @@ function useStore() {
   // Mount: initial sync
   useEffect(() => { pullFromServer(); }, []);
 
-  // Poll every 30s — picks up changes from other devices/staff members
+  // Poll every 2 minutes — picks up changes from other devices/staff members
   useEffect(() => {
-    pollTimer.current = setInterval(pullFromServer, 30000);
+    pollTimer.current = setInterval(pullFromServer, 120000);
     return () => clearInterval(pollTimer.current);
   }, [pullFromServer]);
 
   const set = useCallback((fn) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
-      // Save to localStorage immediately (debounced)
+      // Save to localStorage (debounced) — use requestIdleCallback when available
+      // to avoid blocking the main thread on large state objects
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {}
+        const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {} };
+        if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
+        else doSave();
       }, 300);
       // Debounced server sync — catches any state changes not covered by dispatch's immediate sync
       // Strip contacts (synced from Zoho) and agentHistory (large, session-only) to keep payload small
