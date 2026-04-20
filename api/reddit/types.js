@@ -114,12 +114,18 @@
  * Result of attempting to post a comment to Reddit.
  *
  * @typedef {Object} PostingResult
- * @property {boolean} ok            - true if Reddit accepted the comment
- * @property {string}  [commentId]   - Reddit comment ID, e.g. "t1_xyz" (on success)
- * @property {string}  [commentUrl]  - Full permalink to the posted comment
- * @property {string}  [error]       - Error message on failure
- * @property {number}  httpStatus    - Raw HTTP status from Reddit
- * @property {boolean} wasDisabled   - true if posting was skipped due to feature flag
+ * @property {boolean} ok             - true if Reddit accepted the comment
+ * @property {string}  [commentId]    - Reddit comment ID, e.g. "t1_xyz" (on success)
+ * @property {string}  [commentUrl]   - Full permalink to the posted comment
+ * @property {string}  [error]        - Error message on failure or block
+ * @property {number}  httpStatus     - Raw HTTP status from Reddit (0 if not reached)
+ * @property {boolean} wasDisabled    - true if posting was skipped due to feature flag
+ * @property {string}  [blockedBy]    - Name of the gate that blocked the attempt:
+ *   "flag" | "not_found" | "not_approved" | "already_posted" | "one_per_thread" |
+ *   "mute_subreddit" | "mute_keyword" | "daily_cap" | "cooldown" | "similarity" |
+ *   "guardrail" | "guardrail_error" | "api_error"
+ * @property {boolean} [dryRun]       - true if this was a dry run (no API call made)
+ * @property {string}  [message]      - Human-readable status message (dry-run only)
  */
 
 /**

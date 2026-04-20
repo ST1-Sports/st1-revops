@@ -438,6 +438,32 @@ model RedditRateLog {
   @@index([action, createdAt])
 }
 
+// Full audit trail of every posting attempt — persisted regardless of outcome.
+// blockedBy names the gate that rejected the attempt; null means the Reddit API
+// was reached (see ok + httpStatus for the result).
+model RedditPostingAttempt {
+  id         String   @id @default(cuid())
+  replyId    String               // RedditReply.id (not a FK — preserve on reply deletion)
+  threadId   String               // RedditThread.id
+  attempted  Boolean  @default(false)  // true = Reddit API was called
+  ok         Boolean  @default(false)  // true = Reddit accepted the comment
+  httpStatus Int      @default(0)
+  commentId  String?              // Reddit comment ID (t1_xyz) on success
+  commentUrl String?
+  blockedBy  String?              // gate: flag | not_approved | already_posted |
+                                  //   one_per_thread | mute_subreddit | mute_keyword |
+                                  //   daily_cap | cooldown | similarity |
+                                  //   guardrail | guardrail_error | api_error
+  error      String?  @db.Text
+  dryRun     Boolean  @default(false)
+  decidedBy  String?              // user who triggered the post
+  createdAt  DateTime @default(now())
+
+  @@index([replyId])
+  @@index([threadId])
+  @@index([createdAt])
+}
+
 // ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
 
 model EmailOpen {

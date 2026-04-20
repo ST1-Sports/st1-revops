@@ -180,7 +180,10 @@ export default async function handler(req, res) {
 
       case 'post': {
         if (!body.replyId) return err(res, 'replyId is required', 400);
-        const result = await postApprovedReply(body.replyId);
+        const result = await postApprovedReply(body.replyId, {
+          dryRun:    body.dryRun    === true,
+          decidedBy: body.decidedBy || 'unknown',
+        });
         return ok(res, { result });
       }
 
