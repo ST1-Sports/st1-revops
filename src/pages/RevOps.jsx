@@ -4028,8 +4028,9 @@ function ModProspecting() {
                               let enrolled=0;
                               const updated={...seq,enrollments:[...(seq.enrollments||[])]};
                               bulkSel.forEach(cid=>{
+                                if(!contactMap[cid]?.email) return;
                                 if(!updated.enrollments.some(e=>e.contactId===cid)){
-                                  updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today});
+                                  updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today,sentSteps:[]});
                                   dispatch("SCORE_CONTACT",{contactId:cid,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
                                   enrolled++;
                                 }
@@ -4161,8 +4162,9 @@ function ModProspecting() {
                                     let count=0;
                                     const updated={...seq,enrollments:[...(seq.enrollments||[])]};
                                     unenrolled.forEach(c=>{
+                                      if(!c.email) return;
                                       if(!updated.enrollments.some(e=>e.contactId===c.id)){
-                                        updated.enrollments.push({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr});
+                                        updated.enrollments.push({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]});
                                         dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
                                         count++;
                                       }
@@ -4322,9 +4324,10 @@ function ModProspecting() {
                                   {campaigns.map(seq=>(
                                     <button key={seq.id} onClick={()=>{
                                       const today=new Date().toISOString().slice(0,10);
+                                      if(!c.email){ toast("Can't enroll — contact has no email address","warn"); setEnrollingContact(null); return; }
                                       const alreadyIn=(seq.enrollments||[]).some(e=>e.contactId===c.id);
                                       if(!alreadyIn){
-                                        dispatch("UPDATE_SEQUENCE",{...seq,enrollments:[...seq.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:today,nextDate:today}]});
+                                        dispatch("UPDATE_SEQUENCE",{...seq,enrollments:[...seq.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:today,nextDate:today,sentSteps:[]}]});
                                         dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});
                                         toast(`${c.fullName||c.firstName} enrolled in ${seq.name}`,"success");
                                       } else {
@@ -4582,7 +4585,7 @@ function ModProspecting() {
                   <button key={seq.id} onClick={()=>{
                     const today=new Date().toISOString().slice(0,10);let enrolled=0;
                     const updated={...seq,enrollments:[...(seq.enrollments||[])]};
-                    bulkSel.forEach(cid=>{if(!updated.enrollments.some(e=>e.contactId===cid)){updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today});dispatch("SCORE_CONTACT",{contactId:cid,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});enrolled++;}});
+                    bulkSel.forEach(cid=>{if(!contactMap[cid]?.email) return; if(!updated.enrollments.some(e=>e.contactId===cid)){updated.enrollments.push({contactId:cid,step:0,status:"active",enrolledAt:today,nextDate:today,sentSteps:[]});dispatch("SCORE_CONTACT",{contactId:cid,type:"enrolled",campaignId:seq.id,note:`Enrolled in ${seq.name}`});enrolled++;}});
                     dispatch("UPDATE_SEQUENCE",updated);setBulkEnrolling(false);setBulkSel(new Set());toast(`${enrolled} contacts enrolled in ${seq.name}`,"success");
                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,cursor:"pointer",borderRadius:3}}>{seq.name}</button>
                 ))}
@@ -5669,20 +5672,20 @@ function ModMarketing() {
     if(audienceMode==="list"&&campDraft.audienceListId){
       const list=(s.contactLists||[]).find(l=>l.id===campDraft.audienceListId);
       const listIds=list?.contactIds||[];
-      seg=contacts.filter(c=>listIds.includes(c.id));
+      seg=contacts.filter(c=>listIds.includes(c.id)&&c.email);
       // Stagger: contact at index i gets startDate + floor(i/batchSize) days
       enrollments=seg.map((c,i)=>{
         const dayOffset=Math.floor(i/batchSize);
         const startD=new Date(startDate);
         startD.setDate(startD.getDate()+dayOffset);
         const enrollDate=startD.toISOString().slice(0,10);
-        return {contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:enrollDate};
+        return {contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:enrollDate,sentSteps:[]};
       });
     } else {
       seg = segResult
-        ? contacts.filter(c=>selectedContacts.has(c.id))
-        : contacts.filter(c=>(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
-      enrollments=seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}));
+        ? contacts.filter(c=>selectedContacts.has(c.id)&&c.email)
+        : contacts.filter(c=>c.email&&(campDraft.audience==="all"||!campDraft.audience||(c.title||"").toLowerCase().includes((campDraft.audience||"").toLowerCase().split(" ")[0].toLowerCase())));
+      enrollments=seg.map(c=>({contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}));
     }
     const isEditing = !!campDraft.id;
     const campId = campDraft.id || mkId();
@@ -7294,9 +7297,9 @@ function ModMarketing() {
                   updEnr[idx]={...updEnr[idx],step:ns,status:done?"done":"active",nextDate:nd||enroll.nextDate,lastContacted:todStr,lastSentAt:todStr};
                 };
 
-                // One-batch sender — sends exactly this list of enrollments for their current step
-                // Skips contacts marked "interested" and marks them as done after the batch
-                // noEmailEnrs: contacts at this step with no email — auto-advanced without sending
+                // One-batch sender — sends exactly this list of enrollments for their current step.
+                // Guards against duplicate sends via the sentSteps array on each enrollment.
+                // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
                 const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
@@ -7308,15 +7311,15 @@ function ModMarketing() {
                   const activeCount=batchEnrollments.filter(e=>e.status!=="interested").length;
                   if(activeCount>0) toast(`Sending ${activeCount} emails…`,"info");
                   for(const enroll of batchEnrollments){
-                    // Skip interested contacts — they expressed interest, don't continue emailing
                     if(enroll.status==="interested"){ skipped++; continue; }
-                    // Double-send guard: re-check current enrollment step from updEnr before sending.
-                    // If this contact already advanced (from a prior send in this batch or a concurrent session),
-                    // skip them to prevent duplicate emails.
                     const guardIdx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
+                    // Hard dedup guards — skip if step already advanced or already sent this touch
                     if(guardIdx>=0 && updEnr[guardIdx].step!==enroll.step){ skipped++; continue; }
+                    if(guardIdx>=0 && (updEnr[guardIdx].sentSteps||[]).includes(enroll.step)){ skipped++; continue; }
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
+                      // Record sent step BEFORE advancing so dedup survives any re-render between sends
+                      if(guardIdx>=0) updEnr[guardIdx]={...updEnr[guardIdx],sentSteps:[...(updEnr[guardIdx].sentSteps||[]),enroll.step]};
                       advanceEnroll(updEnr,enroll,todStr,camp);
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
@@ -7328,7 +7331,7 @@ function ModMarketing() {
                       if(!firstErr) firstErr=`${fe}: ${res.reason}`;
                     }
                   }
-                  // Mark interested contacts in this batch as done — segment is complete for them
+                  // Mark interested contacts in this batch as done
                   for(const enroll of batchEnrollments){
                     if(enroll.status==="interested"){
                       const idx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
@@ -7347,7 +7350,7 @@ function ModMarketing() {
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
-                  const skipNote=skipped?` · ${skipped} interested (moved to done)`:"";
+                  const skipNote=skipped?` · ${skipped} already sent/interested`:"";
                   const noEmailNote=noEmailAdv?` · ${noEmailAdv} skipped (no email)`:"";
                   toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`,sent>0||skipped>0||noEmailAdv>0?"success":"error");
                   } catch(err) {
@@ -7646,8 +7649,9 @@ function ModMarketing() {
                   const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
                   let count=0;
                   toEnroll.forEach(c=>{
+                    if(!c.email) return;
                     if(!updated.enrollments.some(e=>e.contactId===c.id)){
-                      updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr}];
+                      updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}];
                       dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
                       count++;
                     }
