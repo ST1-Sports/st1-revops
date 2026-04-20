@@ -3,23 +3,16 @@
  *
  * Sends a structured Slack notification when a thread has reply variants ready
  * for human review. The message includes:
- *   - Thread title, subreddit, score, and link
- *   - Evaluation summary (fitScore, intent, reasoning)
+ *   - Thread title, subreddit, scores, and link
+ *   - Evaluator decision + reasoning_summary
  *   - Both reply variants with tone labels
  *   - A direct link to the approval UI in the RevOps app
  *
- * Approval happens in the RevOps web UI (/reddit page), not via Slack buttons.
- * This keeps the implementation simple and avoids needing a Slack App with
- * interactive components configured. The Slack message is informational only.
+ * Approval happens in the RevOps web UI (/reddit), not via Slack buttons.
+ * The Slack message is informational only — no interactive components needed.
  *
- * Uses the existing slackSend pattern: routes through /api/claude + MCP.
- * The channel is read from REDDIT_SLACK_CHANNEL env var, falling back to
- * the general integrations channel stored in app state (not accessible here,
- * so the env var is required for this service).
- *
- * TODO (Phase 4): activate when Slack channel is confirmed and end-to-end
- * flow is ready. Current implementation builds and returns the message body
- * without sending, to allow preview.
+ * Uses the existing Slack MCP pattern: routes through Anthropic SDK with
+ * MCP server config (same as slackSend in src/lib/api.js).
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -31,50 +24,58 @@ function getPrisma() {
 }
 
 /**
- * Build the Slack message text for a thread review notification.
- * Returns a Slack-formatted markdown string.
+ * Build the Slack message for a thread review notification.
  *
- * @param {Object} thread     - RedditThread DB record
- * @param {Object[]} replies  - RedditReply DB records (variant 1 and 2)
- * @param {string} appBaseUrl - Base URL of the RevOps deployment (for approval link)
- * @returns {string}
+ * @param {Object}   thread     - RedditThread DB record (with evaluation JSON)
+ * @param {Object[]} replies    - RedditReply DB records, ordered by variant asc
+ * @param {string}   appBaseUrl - RevOps deployment URL, e.g. "https://app.vercel.app"
+ * @returns {string}            - Slack-formatted markdown
  */
 function buildSlackMessage(thread, replies, appBaseUrl) {
-  const evaluation = thread.evaluation || {};
-  const fitScore   = evaluation.fitScore ?? '?';
-  const intent     = evaluation.intent   ?? 'unknown';
-  const reasoning  = evaluation.reasoning ?? '';
+  const ev  = thread.evaluation || {};
+
+  // New schema field names
+  const fitScore  = ev.fit_score         ?? '?';
+  const promoRisk = ev.promo_risk        ?? '?';
+  const decision  = ev.decision          ?? '?';
+  const intent    = ev.intent_type       ?? 'unknown';
+  const audience  = ev.audience_type     ?? 'unknown';
+  const reasoning = ev.reasoning_summary ?? '';
+  const angle     = ev.value_angle       ?? '';
 
   const approvalUrl = `${appBaseUrl}/reddit?thread=${thread.id}`;
 
-  const variantLines = replies.map(r =>
-    `*Variant ${r.variant}* (${getVariantTone(r.variant, evaluation)})\n> ${r.content}`
-  ).join('\n\n');
+  const variantLines = replies.map(r => {
+    // DB stores content in "content" column; the tone is stored in notes via reply-gen
+    return `*Variant ${r.variant}*\n> ${r.content}`;
+  }).join('\n\n');
 
   return [
-    `*Reddit thread ready for review*`,
+    `*Reddit thread ready for review — ${decision}*`,
     ``,
     `*Thread:* ${thread.title}`,
     `*Subreddit:* r/${thread.subreddit} · *Score:* ${thread.score} · *Comments:* ${thread.commentCount}`,
     `*Link:* ${thread.url}`,
     ``,
-    `*Fit score:* ${fitScore}/10 · *Intent:* ${intent}`,
+    `*Fit:* ${fitScore}/10 · *Promo risk:* ${promoRisk}/10 · *Intent:* ${intent} · *Audience:* ${audience}`,
     reasoning ? `*Reasoning:* ${reasoning}` : null,
+    angle     ? `*Value angle:* ${angle}`   : null,
     ``,
     `*Reply variants:*`,
     variantLines,
     ``,
-    `*Approve or reject in RevOps:* ${approvalUrl}`,
+    `*Review and approve in RevOps:*`,
+    approvalUrl,
   ].filter(l => l !== null).join('\n');
 }
 
 /**
  * Send a Slack notification for a thread awaiting review.
- * Updates the thread status to NOTIFIED and stamps reply slackNotifiedAt.
+ * Updates thread status to NOTIFIED and stamps replies with slackNotifiedAt.
  *
- * @param {string} threadDbId  - RedditThread.id
- * @param {string} appBaseUrl  - Base URL of the deployment, e.g. "https://app.vercel.app"
- * @param {boolean} [dryRun]   - If true, return the message body without sending
+ * @param {string}  threadDbId  - RedditThread.id
+ * @param {string}  appBaseUrl  - Base URL of the deployment
+ * @param {boolean} [dryRun]    - If true, return message without sending
  * @returns {Promise<{ sent: boolean, message: string, error?: string }>}
  */
 async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
@@ -89,7 +90,6 @@ async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
     where:   { id: threadDbId },
     include: { replies: { orderBy: { variant: 'asc' } } },
   });
-
   if (!thread) throw new Error(`Thread not found: ${threadDbId}`);
   if (!thread.replies.length) throw new Error(`No replies generated for thread ${threadDbId}`);
 
@@ -99,12 +99,9 @@ async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
     return { sent: false, message, dryRun: true };
   }
 
-  // Route through the existing /api/claude + MCP pattern (same as slackSend in src/lib/api.js)
-  // This function runs server-side, so we call the Anthropic SDK directly with MCP config.
-  // The MCP Slack server handles the actual message delivery.
   try {
     const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_KEY });
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
 
     await client.messages.create({
       model:      'claude-sonnet-4-6',
@@ -116,27 +113,14 @@ async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
       }],
     });
 
-    // Update DB — thread is now awaiting human decision
     const now = new Date();
-    await db.redditThread.update({
-      where: { id: threadDbId },
-      data:  { status: 'NOTIFIED' },
-    });
-    await db.redditReply.updateMany({
-      where: { threadId: threadDbId },
-      data:  { slackNotifiedAt: now },
-    });
+    await db.redditThread.update({ where: { id: threadDbId }, data: { status: 'NOTIFIED' } });
+    await db.redditReply.updateMany({ where: { threadId: threadDbId }, data: { slackNotifiedAt: now } });
 
     return { sent: true, message };
   } catch (err) {
     return { sent: false, message, error: err.message };
   }
-}
-
-/** Map variant number to tone label from evaluation topics (best-effort). */
-function getVariantTone(variantNum, evaluation) {
-  // Tones are stored in the reply row — this is a fallback for display
-  return variantNum === 1 ? 'direct' : 'conversational';
 }
 
 module.exports = { buildSlackMessage, notifySlack };

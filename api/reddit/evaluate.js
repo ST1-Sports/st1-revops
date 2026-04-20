@@ -1,21 +1,27 @@
 /**
  * Reddit Engagement Module — thread fitness evaluator.
  *
- * Calls Claude with the evaluation prompt to produce a structured EvaluatorResult
- * for a candidate thread. The result is stored in RedditThread.evaluation and
- * drives the shouldReply decision.
+ * Calls Claude with the eval.md prompt (SYSTEM/USER format) and returns a
+ * structured EvaluatorResult. The result is stored in RedditThread.evaluation
+ * and drives the reply generation and Slack review workflow.
  *
- * The prompt template lives at ./prompts/eval.md — edit it there, not here.
+ * Prompt variables required by eval.md:
+ *   subreddit_rules — subreddit-specific rules (empty string if not available)
+ *   title           — thread title
+ *   body            — thread body (self-post text)
+ *   top_comments    — concatenated top comment summaries (empty if not fetched)
+ *   subreddit       — subreddit name without r/
+ *   author          — OP username
  *
- * TODO (Phase 3): activate the live Claude call and DB update. Current
- * implementation returns a clearly-labelled placeholder result so the rest
- * of the workflow can be exercised end-to-end before prompts are finalised.
+ * NOTE: top_comments is not yet fetched during ingestion. It defaults to an
+ * empty string and should be populated once reddit-client.getTopComments is
+ * implemented (Phase 3).
  */
 
-const fs      = require('fs');
-const path    = require('path');
 const Anthropic = require('@anthropic-ai/sdk');
 const { PrismaClient } = require('@prisma/client');
+const { load } = require('./prompt-loader');
+const { validateEvaluatorResult, parseJson } = require('./validators');
 
 let prisma;
 function getPrisma() {
@@ -23,48 +29,46 @@ function getPrisma() {
   return prisma;
 }
 
-const EVAL_PROMPT_PATH = path.join(__dirname, 'prompts', 'eval.md');
-
-// Loaded once per cold start
-let _evalPrompt;
-function getEvalPrompt() {
-  if (!_evalPrompt) _evalPrompt = fs.readFileSync(EVAL_PROMPT_PATH, 'utf8');
-  return _evalPrompt;
-}
-
 /**
  * Evaluate a single thread for brand fit.
  *
- * Looks up the thread by its DB id, calls Claude, validates the response shape,
- * and updates the DB record to EVALUATED status.
+ * Fetches the thread from the DB, calls Claude, validates the response,
+ * and updates the thread record to EVALUATED status.
  *
- * @param {string} threadDbId  - RedditThread.id (cuid)
- * @param {boolean} [dryRun]   - If true, skip DB writes (useful for testing)
+ * @param {string}  threadDbId       - RedditThread.id (cuid)
+ * @param {Object}  [opts]
+ * @param {string}  [opts.subredditRules=''] - Subreddit rules text
+ * @param {string}  [opts.topComments='']    - Pre-fetched top comments
+ * @param {boolean} [opts.dryRun=false]      - Skip DB writes when true
  * @returns {Promise<import('./types').EvaluatorResult>}
  */
-async function evaluateThread(threadDbId, dryRun = false) {
+async function evaluateThread(threadDbId, opts = {}) {
+  const { subredditRules = '', topComments = '', dryRun = false } = opts;
   const db = getPrisma();
 
   const thread = await db.redditThread.findUnique({ where: { id: threadDbId } });
   if (!thread) throw new Error(`Thread not found: ${threadDbId}`);
 
-  const prompt = getEvalPrompt()
-    .replace('{{SUBREDDIT}}',    thread.subreddit)
-    .replace('{{TITLE}}',        thread.title)
-    .replace('{{BODY}}',         thread.body || '(no body text)')
-    .replace('{{SCORE}}',        String(thread.score))
-    .replace('{{COMMENT_COUNT}}',String(thread.commentCount));
+  const { system, user } = load('eval', {
+    subreddit_rules: subredditRules || 'No specific rules provided.',
+    title:           thread.title,
+    body:            thread.body || '(no body text)',
+    top_comments:    topComments || '(no comments fetched)',
+    subreddit:       thread.subreddit,
+    author:          thread.author,
+  });
 
-  const client = new Anthropic.default({ apiKey: process.env.ANTHROPIC_KEY });
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
 
   const message = await client.messages.create({
     model:      'claude-sonnet-4-6',
-    max_tokens: 512,
-    messages:   [{ role: 'user', content: prompt }],
+    max_tokens: 600,
+    system,
+    messages:   [{ role: 'user', content: user }],
   });
 
-  const rawText = message.content?.[0]?.text || '';
-  const result  = parseEvalResponse(rawText, threadDbId);
+  const raw = message.content?.[0]?.text || '';
+  const result = parseAndValidate(raw, threadDbId);
 
   if (!dryRun) {
     await db.redditThread.update({
@@ -77,34 +81,26 @@ async function evaluateThread(threadDbId, dryRun = false) {
 }
 
 /**
- * Parse and validate the raw Claude response into an EvaluatorResult.
- * Extracts the JSON block (Claude may wrap it in markdown fences).
+ * Parse raw Claude output into a validated EvaluatorResult.
+ * Throws with a descriptive message if the JSON is invalid or the schema fails.
  *
- * @param {string} rawText
+ * @param {string} raw
  * @param {string} threadDbId
  * @returns {import('./types').EvaluatorResult}
  */
-function parseEvalResponse(rawText, threadDbId) {
-  // Strip markdown code fences if present
-  const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/) || rawText.match(/(\{[\s\S]*\})/);
-  const jsonStr   = jsonMatch ? jsonMatch[1] : rawText;
+function parseAndValidate(raw, threadDbId) {
+  const parsed = parseJson(raw, `eval:${threadDbId}`);
+  const { valid, errors } = validateEvaluatorResult(parsed);
 
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonStr.trim());
-  } catch {
-    throw new Error(`[reddit/evaluate] Claude returned non-JSON for ${threadDbId}: ${rawText.slice(0, 200)}`);
+  if (!valid) {
+    throw new Error(
+      `[reddit/evaluate] Invalid evaluator output for ${threadDbId}:\n` +
+      errors.map(e => `  • ${e}`).join('\n') +
+      `\nRaw (first 400 chars): ${raw.slice(0, 400)}`
+    );
   }
 
-  // Validate required fields; supply safe defaults for optional ones
-  return {
-    fitScore:    typeof parsed.fitScore    === 'number' ? parsed.fitScore    : 0,
-    intent:      typeof parsed.intent      === 'string' ? parsed.intent      : 'other',
-    topics:      Array.isArray(parsed.topics)           ? parsed.topics      : [],
-    reasoning:   typeof parsed.reasoning   === 'string' ? parsed.reasoning   : '',
-    shouldReply: typeof parsed.shouldReply === 'boolean'? parsed.shouldReply : parsed.fitScore >= 6,
-    redFlags:    Array.isArray(parsed.redFlags)         ? parsed.redFlags    : [],
-  };
+  return parsed;
 }
 
-module.exports = { evaluateThread, parseEvalResponse };
+module.exports = { evaluateThread, parseAndValidate };
