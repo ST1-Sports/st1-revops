@@ -53,22 +53,27 @@
  */
 
 /**
- * One generated reply variant (from GeneratedReplySet.variants).
- *
- * @typedef {Object} ReplyVariant
- * @property {1|2}    id      - Variant number
- * @property {string} body    - Reply text, ≤300 chars, no URLs
- * @property {string} tone    - "practical"|"reframe"|"empathetic"|"technical"|"conversational"
- * @property {string} notes   - Reviewer context (never posted), max 30 words
- */
-
-/**
  * Full result returned by the reply generator (reply.md).
- * Contains exactly 2 variants.
+ * Matches the JSON schema defined in the SYSTEM block of reply.md exactly.
+ *
+ * When Claude determines there is no credible value-add for a thread, it returns
+ * the literal string "SKIP" instead of JSON. In that case generateReplies()
+ * returns { skip: true } and no DB rows are written.
+ *
+ * DB mapping (RedditReply table):
+ *   primary_reply → { variant: 1, content: primary_reply }
+ *   safer_reply   → { variant: 2, content: safer_reply }
+ *
+ * why_it_works and risk_notes are reviewer metadata; they are returned in the
+ * API response but not persisted (no DB column for them yet).
  *
  * @typedef {Object} GeneratedReplySet
- * @property {string}         thread_summary - One-sentence summary for reviewer context
- * @property {ReplyVariant[]} variants       - Exactly 2 variants
+ * @property {string}  primary_reply - Strongest useful answer; variant 1 in DB
+ * @property {string}  safer_reply   - Less promotional alternative; variant 2 in DB
+ * @property {string}  why_it_works  - Reviewer context explaining the angle, max 60 words
+ * @property {string}  risk_notes    - Reviewer-facing risk flags, max 50 words
+ * @property {boolean} cta_present   - true if model detected a CTA (hard error; reply unusable)
+ * @property {true}    [skip]        - Present and true when Claude returned SKIP
  */
 
 /**

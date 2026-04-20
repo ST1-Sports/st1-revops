@@ -379,7 +379,9 @@ function ReplyCard({ reply, thread, flags, isBusy, onApprove, onPost }) {
       background: isApproved ? '#f0fdf4' : C.surface,
     }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>VARIANT {reply.variant}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>
+          {reply.variant === 1 ? 'PRIMARY' : 'SAFER'}
+        </span>
         {isPosted && (
           <span style={pill(C.green)}>POSTED</span>
         )}
