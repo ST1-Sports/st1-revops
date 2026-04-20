@@ -79,13 +79,16 @@
 /**
  * Result from the posting guardrail (guardrail.md).
  *
+ * Two separate approval gates allow finer control:
+ *   approved_for_review=true, approved_for_post=false → surface to human but flag for editing
+ *   approved_for_review=false                         → block entirely; don't surface
+ *
  * @typedef {Object} GuardrailResult
- * @property {boolean}  safe      - false if any check failed
- * @property {"APPROVE"|"BLOCK"|"EDIT_REQUIRED"} decision
- * @property {string[]} failures  - One entry per failed check
- * @property {string[]} warnings  - Soft concerns (non-blocking)
- * @property {number}   char_count - Exact character count of the reply under review
- * @property {string}   summary   - One-sentence assessment, max 40 words
+ * @property {boolean} approved_for_review - Show to human reviewer
+ * @property {boolean} approved_for_post   - Ready to post as-is (requires approved_for_review=true)
+ * @property {string}  block_reason        - Non-empty when either gate is false
+ * @property {string}  edit_suggestion     - Specific fix suggestion when approved_for_post=false
+ * @property {number}  final_risk_score    - Integer 1–10; overall posting risk
  */
 
 // ─────────────────────────────────────────────────────────────────────────────

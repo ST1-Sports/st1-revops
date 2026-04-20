@@ -23,6 +23,7 @@
 
 const { postComment }     = require('./reddit-client');
 const { logPostAction }   = require('./guardrails');
+const { checkContent }    = require('./content-check');
 const { PrismaClient }    = require('@prisma/client');
 
 let prisma;
@@ -83,6 +84,18 @@ async function postApprovedReply(replyDbId) {
     return {
       ok: false, httpStatus: 0, wasDisabled: false,
       error: `Thread already has a posted reply (${existingPost.redditCommentId}). One reply per thread max.`,
+    };
+  }
+
+  // Content guardrail — final Claude check before posting
+  const guardrail = await checkContent(replyDbId);
+  if (!guardrail.approved_for_post) {
+    return {
+      ok:          false,
+      httpStatus:  0,
+      wasDisabled: false,
+      error:       `Content guardrail blocked posting: ${guardrail.block_reason}` +
+                   (guardrail.edit_suggestion ? ` Suggestion: ${guardrail.edit_suggestion}` : ''),
     };
   }
 

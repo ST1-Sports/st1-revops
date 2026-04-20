@@ -18,11 +18,9 @@
 const EVAL_DECISIONS    = ['REPLY', 'MONITOR', 'SKIP'];
 const INTENT_TYPES      = ['buying_now', 'researching', 'general_discussion', 'support_request', 'off_topic'];
 const AUDIENCE_TYPES    = ['coach', 'parent', 'athlete', 'admin', 'unknown'];
-const GUARDRAIL_DECISIONS = ['APPROVE', 'BLOCK', 'EDIT_REQUIRED'];
 
 const MAX_REASONING_WORDS    = 70;
 const MAX_VALUE_ANGLE_WORDS  = 40;
-const MAX_SUMMARY_WORDS      = 40;
 const MAX_WHY_IT_WORKS_WORDS = 60;
 const MAX_RISK_NOTES_WORDS   = 50;
 const SIMILARITY_THRESHOLD   = 0.72; // Jaccard word overlap — replies above this are too similar
@@ -204,11 +202,16 @@ function validateGeneratedReplySet(obj) {
 /**
  * Validate the output of the posting guardrail (guardrail.md → Claude → parsed JSON).
  *
- * Checks:
- *   safe (boolean), decision (enum), failures and warnings (arrays),
- *   char_count (non-negative integer), summary (string ≤40 words).
- *   Also checks internal consistency (safe=false ↔ failures non-empty,
- *   APPROVE ↔ safe=true).
+ * Schema (matches guardrail.md exactly):
+ *   approved_for_review — show to human reviewer (boolean)
+ *   approved_for_post   — ready to post without edits (boolean)
+ *   block_reason        — non-empty when either gate is false (string)
+ *   edit_suggestion     — optional fix suggestion (string, may be empty)
+ *   final_risk_score    — integer 1–10
+ *
+ * Consistency rules:
+ *   - approved_for_review=false implies approved_for_post must also be false
+ *   - if either gate is false, block_reason must be non-empty
  *
  * @param   {any} obj
  * @returns {{ valid: boolean, errors: string[] }}
@@ -220,53 +223,40 @@ function validateGuardrailResult(obj) {
     return { valid: false, errors: ['Result is not an object'] };
   }
 
-  // safe
-  if (typeof obj.safe !== 'boolean') {
-    errors.push('safe must be a boolean');
+  // approved_for_review
+  if (typeof obj.approved_for_review !== 'boolean') {
+    errors.push('approved_for_review must be a boolean');
   }
 
-  // decision
-  if (!GUARDRAIL_DECISIONS.includes(obj.decision)) {
-    errors.push(`decision must be one of ${GUARDRAIL_DECISIONS.join(' | ')}, got: ${JSON.stringify(obj.decision)}`);
+  // approved_for_post
+  if (typeof obj.approved_for_post !== 'boolean') {
+    errors.push('approved_for_post must be a boolean');
   }
 
-  // failures
-  if (!Array.isArray(obj.failures)) {
-    errors.push('failures must be an array');
+  // block_reason
+  if (typeof obj.block_reason !== 'string') {
+    errors.push('block_reason must be a string (may be empty)');
   }
 
-  // warnings
-  if (!Array.isArray(obj.warnings)) {
-    errors.push('warnings must be an array');
+  // edit_suggestion
+  if (typeof obj.edit_suggestion !== 'string') {
+    errors.push('edit_suggestion must be a string (may be empty)');
   }
 
-  // char_count
-  if (!Number.isInteger(obj.char_count) || obj.char_count < 0) {
-    errors.push('char_count must be a non-negative integer');
+  // final_risk_score
+  if (!Number.isInteger(obj.final_risk_score) || obj.final_risk_score < 1 || obj.final_risk_score > 10) {
+    errors.push(`final_risk_score must be an integer 1–10, got: ${JSON.stringify(obj.final_risk_score)}`);
   }
 
-  // summary
-  const summaryWords = _wordCount(obj.summary);
-  if (typeof obj.summary !== 'string' || obj.summary.trim().length === 0) {
-    errors.push('summary must be a non-empty string');
-  } else if (summaryWords > MAX_SUMMARY_WORDS) {
-    errors.push(`summary exceeds ${MAX_SUMMARY_WORDS} words (got ${summaryWords})`);
+  // Consistency: can't be approved for post if not approved for review
+  if (obj.approved_for_review === false && obj.approved_for_post === true) {
+    errors.push('approved_for_post=true requires approved_for_review=true');
   }
 
-  // Consistency checks
-  const hasFailures = Array.isArray(obj.failures) && obj.failures.length > 0;
-
-  if (obj.safe === true && hasFailures) {
-    errors.push('safe=true but failures is non-empty — inconsistent');
-  }
-  if (obj.safe === false && !hasFailures) {
-    errors.push('safe=false but failures is empty — must describe what failed');
-  }
-  if (obj.decision === 'APPROVE' && obj.safe !== true) {
-    errors.push('decision=APPROVE requires safe=true');
-  }
-  if (obj.decision === 'BLOCK' && obj.safe !== false) {
-    errors.push('decision=BLOCK requires safe=false');
+  // Consistency: blocked gates require a reason
+  const anyBlocked = obj.approved_for_review === false || obj.approved_for_post === false;
+  if (anyBlocked && typeof obj.block_reason === 'string' && obj.block_reason.trim() === '') {
+    errors.push('block_reason must be non-empty when approved_for_review or approved_for_post is false');
   }
 
   return { valid: errors.length === 0, errors };
@@ -334,5 +324,4 @@ module.exports = {
   EVAL_DECISIONS,
   INTENT_TYPES,
   AUDIENCE_TYPES,
-  GUARDRAIL_DECISIONS,
 };

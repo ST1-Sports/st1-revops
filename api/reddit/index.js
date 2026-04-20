@@ -17,6 +17,7 @@
  *   notify          — send Slack notification for a thread awaiting review
  *   approve         — record human approval of a reply variant
  *   reject          — record human rejection of all variants
+ *   check           — run content guardrail on a reply (Claude review before post)
  *   post            — post an approved reply to Reddit (requires REDDIT_POSTING_ENABLED)
  *   analytics       — refresh engagement metrics for posted replies
  *   threads         — list threads from DB (for review UI)
@@ -31,6 +32,7 @@ const { notifySlack }        = require('./slack-review');
 const { postApprovedReply }  = require('./post');
 const { refreshAnalytics }   = require('./analytics');
 const { muteSubreddit, muteKeyword } = require('./guardrails');
+const { checkContent }       = require('./content-check');
 const { PrismaClient }       = require('@prisma/client');
 
 let prisma;
@@ -164,6 +166,16 @@ export default async function handler(req, res) {
           data:  { status: 'REJECTED' },
         });
         return ok(res, { rejected: true, threadId });
+      }
+
+      case 'check': {
+        if (!body.replyId) return err(res, 'replyId is required', 400);
+        const guardrail = await checkContent(body.replyId, {
+          subredditRules: body.subredditRules || '',
+          topComments:    body.topComments    || '',
+          dryRun:         body.dryRun === true,
+        });
+        return ok(res, { guardrail });
       }
 
       case 'post': {
