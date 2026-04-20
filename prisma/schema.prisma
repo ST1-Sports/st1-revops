@@ -364,6 +364,78 @@ model InboundQuote {
   @@index([processed])
 }
 
+// ── REDDIT ENGAGEMENT MODULE ──────────────────────────────────────────────────
+// Approval-first workflow: ingest → evaluate → generate replies → Slack review
+// → human approval → post. Posting is disabled by default (REDDIT_POSTING_ENABLED).
+
+enum RedditThreadStatus {
+  PENDING    // ingested, not yet evaluated
+  EVALUATED  // fitness score computed, awaiting reply generation
+  NOTIFIED   // Slack notification sent, awaiting human decision
+  APPROVED   // human approved a reply variant
+  REJECTED   // human rejected all variants
+  POSTED     // comment successfully posted to Reddit
+  SKIPPED    // filtered out by guardrails (mute, dedupe, low score)
+}
+
+model RedditThread {
+  id           String              @id @default(cuid())
+  redditId     String              @unique  // Reddit thing ID, e.g. t3_abc123
+  subreddit    String
+  title        String
+  body         String              @db.Text
+  url          String
+  author       String
+  score        Int                 @default(0)
+  commentCount Int                 @default(0)
+  ingestedAt   DateTime            @default(now())
+  status       RedditThreadStatus  @default(PENDING)
+  evaluation   Json?               // EvaluatorResult — fitScore, reasoning, topics[], intent
+  replies      RedditReply[]
+
+  @@index([status])
+  @@index([subreddit])
+  @@index([ingestedAt])
+}
+
+model RedditReply {
+  id              String       @id @default(cuid())
+  threadId        String
+  thread          RedditThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  variant         Int          // 1 or 2
+  content         String       @db.Text
+  slackNotifiedAt DateTime?
+  approvedBy      String?      // user identifier who approved
+  approvedAt      DateTime?
+  rejectedAt      DateTime?
+  rejectionReason String?
+  postedAt        DateTime?
+  redditCommentId String?      // Reddit comment ID after posting
+  upvotes         Int?         // fetched by analytics polling
+  createdAt       DateTime     @default(now())
+
+  @@index([threadId])
+}
+
+// Muted subreddits and keywords — checked during guardrail pass
+model RedditMute {
+  id        String   @id @default(cuid())
+  type      String   // "subreddit" | "keyword"
+  value     String
+  createdAt DateTime @default(now())
+
+  @@unique([type, value])
+}
+
+// One row per post action — used for rate-limit enforcement
+model RedditRateLog {
+  id        String   @id @default(cuid())
+  action    String   // "post" | "ingest"
+  createdAt DateTime @default(now())
+
+  @@index([action, createdAt])
+}
+
 // ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
 
 model EmailOpen {
