@@ -9,6 +9,7 @@ const RFPTool     = lazy(() => import('./pages/RFPTool.jsx'))
 const PriceTool   = lazy(() => import('./pages/PriceTool.jsx'))
 const Expansion   = lazy(() => import('./pages/Expansion.jsx'))
 const Integrations= lazy(() => import('./pages/Integrations.jsx'))
+const Reddit      = lazy(() => import('./pages/Reddit.jsx'))
 
 // Full-screen loading spinner
 function PageLoader() {
@@ -148,6 +149,7 @@ export default function App() {
         <Route path="/prices"      element={<PriceTool />} />
         <Route path="/expansion"   element={<Expansion />} />
         <Route path="/integrations"element={<Integrations />} />
+        <Route path="/reddit"      element={<Reddit />} />
 
         {/* Catch-all */}
         <Route path="*"            element={<Navigate to="/" replace />} />
