@@ -174,7 +174,7 @@ async function handleApprove({ threadId, replyId }, decidedBy, responseUrl, thre
   );
 
   try {
-    const result = await postApprovedReply(replyId);
+    const result = await postApprovedReply(replyId, { decidedBy });
     console.log(`[slack/actions] post:${replyId} result:`, result.ok, result.commentId || result.error);
 
     if (result.ok) {
