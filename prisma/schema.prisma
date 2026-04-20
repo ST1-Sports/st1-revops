@@ -379,19 +379,21 @@ enum RedditThreadStatus {
 }
 
 model RedditThread {
-  id           String              @id @default(cuid())
-  redditId     String              @unique  // Reddit thing ID, e.g. t3_abc123
-  subreddit    String
-  title        String
-  body         String              @db.Text
-  url          String
-  author       String
-  score        Int                 @default(0)
-  commentCount Int                 @default(0)
-  ingestedAt   DateTime            @default(now())
-  status       RedditThreadStatus  @default(PENDING)
-  evaluation   Json?               // EvaluatorResult — fitScore, reasoning, topics[], intent
-  replies      RedditReply[]
+  id             String              @id @default(cuid())
+  redditId       String              @unique  // Reddit thing ID, e.g. t3_abc123
+  subreddit      String
+  title          String
+  body           String              @db.Text
+  url            String
+  author         String
+  score          Int                 @default(0)
+  commentCount   Int                 @default(0)
+  ingestedAt     DateTime            @default(now())
+  status         RedditThreadStatus  @default(PENDING)
+  evaluation     Json?               // EvaluatorResult — fitScore, reasoning, topics[], intent
+  slackMessageTs String?             // Slack message timestamp (ts) for in-place updates
+  slackChannelId String?             // Slack channel ID where the review card was posted
+  replies        RedditReply[]
 
   @@index([status])
   @@index([subreddit])
