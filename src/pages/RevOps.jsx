@@ -99,6 +99,9 @@ function mergeServerState(base, server) {
     ...base,
     ...server,
     currentUserId: base.currentUserId, // always local
+    // Always merge integrations/company so a partial server state never nulls them out
+    integrations: {...(base.integrations||{}), ...(typeof server.integrations==="object"&&server.integrations?server.integrations:{})},
+    company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
     agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
     // Union-merge critical arrays so neither local nor server data is lost on mount.
     // If a campaign/list/deal exists on one side only, it survives.
@@ -703,12 +706,13 @@ export default function App() {
               {(()=>{
                 let st={};
                 try{st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");}catch{}
+                const intg = s.integrations||{};
                 return [
-                  ["Books",    st.books    || !!s.integrations.zohoToken],
-                  ["CRM",      st.crm      || !!s.integrations.zohoCrmToken],
+                  ["Books",    st.books    || !!intg.zohoToken],
+                  ["CRM",      st.crm      || !!intg.zohoCrmToken],
                   ["Campaigns",st.campaigns],
-                  ["Gmail",    st.gmail    || !!s.integrations.gmailToken],
-                  ["Slack",    st.slack    !== false && !!s.integrations.slackChannel],
+                  ["Gmail",    st.gmail    || !!intg.gmailToken],
+                  ["Slack",    st.slack    !== false && !!intg.slackChannel],
                 ].map(([l,v])=>(
                   <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
                     <div className={v?"":"blink"} style={{width:6,height:6,borderRadius:"50%",background:v?B.green:B.muted}}/>
@@ -11008,7 +11012,7 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 // ════════════════════════════════════════════════════════════════════════════
 function ModAlerts() {
   const {s,dispatch,toast}=useApp();
-  const [channel,setChannel]=useState(s.integrations.slackChannel||"C0AQ7CMB01X");
+  const [channel,setChannel]=useState((s.integrations||{}).slackChannel||"C0AQ7CMB01X");
   const [sending,setSending]=useState(false);
   const pending=(s.alerts||[]).filter(a=>!a.sent);
 
