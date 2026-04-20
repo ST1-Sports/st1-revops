@@ -41,7 +41,28 @@ async function checkGuardrails(thread, flags) {
     failures.push(`Thread score ${thread.score} is below minimum ${minScore}`);
   }
 
-  const subredditMute = await db.redditMute.findUnique({
+  // ── Env-level subreddit mute (REDDIT_MUTED_SUBREDDITS) ────────────────────
+  const envMutedSubs = (process.env.REDDIT_MUTED_SUBREDDITS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (envMutedSubs.includes(thread.subreddit.toLowerCase())) {
+    muteReason = `Subreddit r/${thread.subreddit} is muted (env)`;
+    failures.push(muteReason);
+  }
+
+  // ── Env-level keyword mute (REDDIT_MUTED_KEYWORDS) ────────────────────────
+  if (!muteReason) {
+    const envMutedKws = (process.env.REDDIT_MUTED_KEYWORDS || '')
+      .split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+    const searchText = `${thread.title} ${thread.body}`.toLowerCase();
+    const matchedKw = envMutedKws.find(kw => searchText.includes(kw));
+    if (matchedKw) {
+      muteReason = `Keyword mute matched: "${matchedKw}" (env)`;
+      failures.push(muteReason);
+    }
+  }
+
+  // ── DB subreddit mute ──────────────────────────────────────────────────────
+  const subredditMute = !muteReason && await db.redditMute.findUnique({
     where: { type_value: { type: 'subreddit', value: thread.subreddit.toLowerCase() } },
   }).catch(() => null);
 
@@ -50,7 +71,8 @@ async function checkGuardrails(thread, flags) {
     failures.push(muteReason);
   }
 
-  if (!subredditMute) {
+  // ── DB keyword mute ────────────────────────────────────────────────────────
+  if (!muteReason) {
     const keywordMutes = await db.redditMute.findMany({ where: { type: 'keyword' } }).catch(() => []);
     const searchText = `${thread.title} ${thread.body}`.toLowerCase();
     for (const km of keywordMutes) {
@@ -73,7 +95,7 @@ async function checkGuardrails(thread, flags) {
   }
 
   if (flags.postingEnabled) {
-    const maxPosts = flags.maxPostsPerDay ?? 3;
+    const maxPosts = flags.dailyPostLimit ?? 3;
     const dayStart = new Date();
     dayStart.setHours(0, 0, 0, 0);
 

@@ -48,25 +48,68 @@ api/reddit/
 
 All requests accept `dryRun: true` to simulate without side effects.
 
-## Feature flags (env vars)
+## Environment variables
 
-| Variable                     | Default | Description |
-|------------------------------|---------|-------------|
-| REDDIT_ENABLED               | false   | Master switch — gates all actions except status |
-| REDDIT_POSTING_ENABLED       | false   | Enables actual posting to Reddit |
-| REDDIT_MAX_POSTS_PER_DAY     | 3       | Daily post cap |
-| REDDIT_POST_COOLDOWN_MINUTES | 30      | Minimum minutes between posts |
-| REDDIT_MIN_THREAD_SCORE      | 5       | Minimum Reddit score to ingest |
-| REDDIT_TARGET_SUBREDDITS     | —       | Comma-separated subreddits to monitor |
-| REDDIT_BRAND_KEYWORDS        | —       | Comma-separated keywords to detect in threads |
-| REDDIT_CLIENT_ID             | —       | Reddit app client ID |
-| REDDIT_CLIENT_SECRET         | —       | Reddit app client secret |
-| REDDIT_REFRESH_TOKEN         | —       | Reddit OAuth2 refresh token (for posting) |
-| REDDIT_USERNAME              | —       | Reddit account username |
-| REDDIT_USER_AGENT            | —       | User-Agent header (required by Reddit ToS) |
-| REDDIT_SLACK_CHANNEL         | —       | Slack channel ID for review cards |
-| SLACK_BOT_TOKEN              | —       | Slack bot token (chat:write scope) |
-| SLACK_SIGNING_SECRET         | —       | Slack signing secret (for /api/slack/actions) |
+### Feature flags
+
+| Variable                    | Default | Description |
+|-----------------------------|---------|-------------|
+| REDDIT_AUTOMATION_ENABLED   | false   | Master switch — enables ingestion, evaluation, Slack notifications |
+| REDDIT_POSTING_ENABLED      | false   | Enables posting to Reddit after human approval |
+| REDDIT_DRY_RUN              | false   | Simulation mode — Claude runs but nothing is written or posted |
+
+### Reddit OAuth credentials
+
+| Variable              | Description |
+|-----------------------|-------------|
+| REDDIT_CLIENT_ID      | App client ID from reddit.com/prefs/apps |
+| REDDIT_CLIENT_SECRET  | App client secret |
+| REDDIT_REFRESH_TOKEN  | OAuth2 refresh token — required only for posting |
+| REDDIT_USERNAME       | Reddit account username (required by Reddit API ToS) |
+| REDDIT_USER_AGENT     | e.g. `ST1RevOps/1.0 by u/yourname` (required by Reddit ToS) |
+
+### Targeting
+
+| Variable                  | Description |
+|---------------------------|-------------|
+| REDDIT_TARGET_SUBREDDITS  | Comma-separated subreddits to monitor (no r/ prefix) |
+| REDDIT_BRAND_KEYWORDS     | Comma-separated brand keywords for thread detection |
+
+### Rate limits and safety thresholds
+
+| Variable                          | Default | Description |
+|-----------------------------------|---------|-------------|
+| REDDIT_DAILY_POST_LIMIT           | 3       | Max Reddit posts per calendar day (UTC) |
+| REDDIT_POST_COOLDOWN_MINUTES      | 30      | Minimum minutes between any two posts |
+| REDDIT_MIN_THREAD_SCORE           | 5       | Minimum Reddit upvote score to ingest |
+| REDDIT_MAX_SIMILARITY_THRESHOLD   | 0.85    | Jaccard threshold for posting similarity check (Gate 9) |
+
+### Static mute lists
+
+Checked before DB mute entries. Useful for permanent exclusions managed via env rather than the UI.
+
+| Variable                  | Description |
+|---------------------------|-------------|
+| REDDIT_MUTED_SUBREDDITS   | Comma-separated subreddits to always skip |
+| REDDIT_MUTED_KEYWORDS     | Comma-separated keywords — blocks threads at ingestion |
+
+### Slack
+
+| Variable                    | Description |
+|-----------------------------|-------------|
+| SLACK_BOT_TOKEN             | Bot token (chat:write scope) |
+| SLACK_SIGNING_SECRET        | Verifies Slack action payloads at /api/slack/actions |
+| SLACK_REDDIT_REVIEW_CHANNEL | Channel ID where Reddit review cards are posted |
+
+### Claude model selection
+
+All three default to `claude-sonnet-4-6` if unset.
+
+| Variable                                | Description |
+|-----------------------------------------|-------------|
+| ANTHROPIC_MODEL_FOR_REDDIT_EVALUATION   | Model for thread fitness evaluation |
+| ANTHROPIC_MODEL_FOR_REDDIT_REPLY_GENERATION | Model for reply variant generation |
+| ANTHROPIC_MODEL_FOR_REDDIT_GUARDRAIL    | Model for content guardrail checks |
 
 ## Posting gates
 

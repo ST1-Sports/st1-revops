@@ -46,10 +46,11 @@ function getPrisma() {
 /** Resolve feature flags from env vars. @returns {import('./types').RedditFlags} */
 function resolveFlags() {
   return {
-    enabled:        process.env.REDDIT_ENABLED         === 'true',
-    postingEnabled: process.env.REDDIT_POSTING_ENABLED === 'true',
-    maxPostsPerDay: parseInt(process.env.REDDIT_MAX_POSTS_PER_DAY || '3', 10),
-    minThreadScore: parseInt(process.env.REDDIT_MIN_THREAD_SCORE  || '5',  10),
+    enabled:         process.env.REDDIT_AUTOMATION_ENABLED === 'true',
+    postingEnabled:  process.env.REDDIT_POSTING_ENABLED    === 'true',
+    dryRun:          process.env.REDDIT_DRY_RUN            === 'true',
+    dailyPostLimit:  parseInt(process.env.REDDIT_DAILY_POST_LIMIT  || '3', 10),
+    minThreadScore:  parseInt(process.env.REDDIT_MIN_THREAD_SCORE  || '5',  10),
   };
 }
 
@@ -80,7 +81,7 @@ export default async function handler(req, res) {
         hasClientId:     Boolean(process.env.REDDIT_CLIENT_ID),
         hasClientSecret: Boolean(process.env.REDDIT_CLIENT_SECRET),
         hasRefreshToken: Boolean(process.env.REDDIT_REFRESH_TOKEN),
-        hasSlackChannel: Boolean(process.env.REDDIT_SLACK_CHANNEL),
+        hasSlackChannel: Boolean(process.env.SLACK_REDDIT_REVIEW_CHANNEL),
         targetSubreddits: (process.env.REDDIT_TARGET_SUBREDDITS || '').split(',').filter(Boolean),
         brandKeywords:    (process.env.REDDIT_BRAND_KEYWORDS    || '').split(',').filter(Boolean),
       },
@@ -88,14 +89,14 @@ export default async function handler(req, res) {
   }
 
   if (!flags.enabled) {
-    return err(res, 'Reddit module is disabled. Set REDDIT_ENABLED=true to enable.', 403);
+    return err(res, 'Reddit module is disabled. Set REDDIT_AUTOMATION_ENABLED=true to enable.', 403);
   }
 
   try {
     switch (action) {
 
       case 'ingest': {
-        const result = await ingestThreads(flags, body.overrides || {}, body.dryRun === true);
+        const result = await ingestThreads(flags, body.overrides || {}, body.dryRun === true || flags.dryRun);
         return ok(res, result);
       }
 
@@ -104,7 +105,7 @@ export default async function handler(req, res) {
         const evaluation = await evaluateThread(body.threadId, {
           subredditRules: body.subredditRules || '',
           topComments:    body.topComments    || '',
-          dryRun:         body.dryRun === true,
+          dryRun:         body.dryRun === true || flags.dryRun,
         });
         return ok(res, { evaluation });
       }
@@ -112,7 +113,7 @@ export default async function handler(req, res) {
       case 'generate': {
         if (!body.threadId) return err(res, 'threadId is required', 400);
         const replySet = await generateReplies(body.threadId, {
-          dryRun:             body.dryRun             === true,
+          dryRun:             body.dryRun             === true || flags.dryRun,
           allowVendorMention: body.allowVendorMention === true,
           allowLinks:         body.allowLinks         === true,
           subredditRules:     body.subredditRules     || '',
@@ -133,7 +134,7 @@ export default async function handler(req, res) {
       case 'notify': {
         if (!body.threadId) return err(res, 'threadId is required', 400);
         const appBaseUrl = body.appBaseUrl || `https://${req.headers.host}`;
-        const result = await notifySlack(body.threadId, appBaseUrl, body.dryRun === true);
+        const result = await notifySlack(body.threadId, appBaseUrl, body.dryRun === true || flags.dryRun);
         return ok(res, result);
       }
 
@@ -175,7 +176,7 @@ export default async function handler(req, res) {
         const guardrail = await checkContent(body.replyId, {
           subredditRules: body.subredditRules || '',
           topComments:    body.topComments    || '',
-          dryRun:         body.dryRun === true,
+          dryRun:         body.dryRun === true || flags.dryRun,
         });
         return ok(res, { guardrail });
       }
@@ -183,14 +184,14 @@ export default async function handler(req, res) {
       case 'post': {
         if (!body.replyId) return err(res, 'replyId is required', 400);
         const result = await postApprovedReply(body.replyId, {
-          dryRun:    body.dryRun    === true,
+          dryRun:    body.dryRun === true || flags.dryRun,
           decidedBy: body.decidedBy || 'unknown',
         });
         return ok(res, { result });
       }
 
       case 'analytics': {
-        const records = await refreshAnalytics(body.dryRun === true);
+        const records = await refreshAnalytics(body.dryRun === true || flags.dryRun);
         return ok(res, { records });
       }
 

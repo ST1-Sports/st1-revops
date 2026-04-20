@@ -10,8 +10,8 @@
  * Action callbacks are handled by /api/slack/actions.
  *
  * Required env vars:
- *   SLACK_BOT_TOKEN      — bot token with chat:write scope
- *   REDDIT_SLACK_CHANNEL — channel ID (bot must be invited to the channel)
+ *   SLACK_BOT_TOKEN             — bot token with chat:write scope
+ *   SLACK_REDDIT_REVIEW_CHANNEL — channel ID (bot must be invited to the channel)
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -173,10 +173,10 @@ function buildSlackBlocks(thread, replies, appBaseUrl) {
  */
 async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
   const token     = process.env.SLACK_BOT_TOKEN;
-  const channelId = process.env.REDDIT_SLACK_CHANNEL;
+  const channelId = process.env.SLACK_REDDIT_REVIEW_CHANNEL;
 
   if (!token)     return { sent: false, error: 'SLACK_BOT_TOKEN not configured' };
-  if (!channelId) return { sent: false, error: 'REDDIT_SLACK_CHANNEL not configured' };
+  if (!channelId) return { sent: false, error: 'SLACK_REDDIT_REVIEW_CHANNEL not configured' };
 
   const db = getPrisma();
 

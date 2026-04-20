@@ -59,7 +59,7 @@ async function checkContent(replyDbId, opts = {}) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
 
   const message = await client.messages.create({
-    model:      'claude-sonnet-4-6',
+    model:      process.env.ANTHROPIC_MODEL_FOR_REDDIT_GUARDRAIL || 'claude-sonnet-4-6',
     max_tokens: 400,
     system,
     messages:   [{ role: 'user', content: user }],

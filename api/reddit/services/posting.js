@@ -2,7 +2,7 @@
  * Reddit Engagement Module — posting service.
  *
  * THIS SERVICE IS DISABLED BY DEFAULT.
- * Set REDDIT_POSTING_ENABLED=true to enable. The master flag REDDIT_ENABLED
+ * Set REDDIT_POSTING_ENABLED=true to enable. The master flag REDDIT_AUTOMATION_ENABLED
  * must also be true; that is enforced by index.js before this function is called.
  *
  * Gates — checked in order, all must pass:
@@ -40,7 +40,6 @@ function getPrisma() {
   return prisma;
 }
 
-const SIMILARITY_THRESHOLD   = 0.85;
 const SIMILARITY_LOOKBACK_DAYS = 14;
 
 /**
@@ -127,7 +126,7 @@ async function postApprovedReply(replyDbId, opts = {}) {
   }
 
   // ── Gate 7: daily post cap ─────────────────────────────────────────────────
-  const maxPostsPerDay = parseInt(process.env.REDDIT_MAX_POSTS_PER_DAY || '3', 10);
+  const maxPostsPerDay = parseInt(process.env.REDDIT_DAILY_POST_LIMIT || '3', 10);
   const dayStart = new Date();
   dayStart.setUTCHours(0, 0, 0, 0);
   const todayCount = await db.redditRateLog.count({
@@ -163,10 +162,11 @@ async function postApprovedReply(replyDbId, opts = {}) {
     select: { id: true, content: true, redditCommentId: true },
   }).catch(() => []);
 
+  const similarityThreshold = parseFloat(process.env.REDDIT_MAX_SIMILARITY_THRESHOLD || '0.85');
   for (const recent of recentReplies) {
     const similarity = _jaccardWords(reply.content, recent.content);
-    if (similarity > SIMILARITY_THRESHOLD) {
-      const msg = `Reply too similar (${(similarity * 100).toFixed(0)}% word overlap) to recently posted comment ${recent.redditCommentId}`;
+    if (similarity > similarityThreshold) {
+      const msg = `Reply too similar (${(similarity * 100).toFixed(0)}% word overlap, threshold ${(similarityThreshold * 100).toFixed(0)}%) to recently posted comment ${recent.redditCommentId}`;
       log('BLOCKED', 'similarity', msg);
       await saveAttempt(db, { replyId: replyDbId, threadId: thread.id, blockedBy: 'similarity', error: msg, dryRun, decidedBy });
       return blocked(msg, 'similarity');
