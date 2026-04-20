@@ -1,24 +1,20 @@
 /**
- * Reddit Engagement Module — guardrail checker.
+ * Reddit Engagement Module — database-level guardrail checker.
  *
  * Runs before evaluation to determine whether a candidate thread should be
  * processed. Checks (in order):
- *   1. Subreddit mute list (RedditMute table)
- *   2. Keyword mute list (RedditMute table)
- *   3. Deduplication — thread already has a reply record in DB
- *   4. Rate limit — daily post cap not exceeded
- *   5. Minimum score threshold (env var REDDIT_MIN_THREAD_SCORE)
+ *   1. Minimum score threshold (REDDIT_MIN_THREAD_SCORE, default 5)
+ *   2. Subreddit mute list
+ *   3. Keyword mute list
+ *   4. Deduplication — thread already exists in DB
+ *   5. Daily post cap (when postingEnabled flag is set)
  *
- * Returns a GuardrailResult. Callers must check `result.pass` before
- * continuing the workflow; a failing thread should be marked SKIPPED.
- *
- * TODO (Phase 3): wire Prisma queries when DB is available in the environment.
- *                 Current implementation returns a deterministic placeholder.
+ * Separate from content-guardrail.js (Claude-based content review).
+ * Also provides mute-list management functions and post action logging.
  */
 
 const { PrismaClient } = require('@prisma/client');
 
-// Reuse a single Prisma instance per function invocation (Vercel best practice)
 let prisma;
 function getPrisma() {
   if (!prisma) prisma = new PrismaClient();
@@ -26,11 +22,11 @@ function getPrisma() {
 }
 
 /**
- * Check all guardrails for a candidate thread.
+ * Check all DB guardrails for a candidate thread.
  *
- * @param {import('./types').CandidateThread} thread
- * @param {import('./types').RedditFlags}     flags
- * @returns {Promise<import('./types').GuardrailResult>}
+ * @param {import('../types').CandidateThread} thread
+ * @param {import('../types').RedditFlags}     flags
+ * @returns {Promise<{ pass: boolean, failures: string[], muteReason?: string, isDuplicate: boolean, rateLimited: boolean }>}
  */
 async function checkGuardrails(thread, flags) {
   const failures = [];
@@ -41,12 +37,10 @@ async function checkGuardrails(thread, flags) {
   const db = getPrisma();
   const minScore = flags.minThreadScore ?? 5;
 
-  // 1. Minimum score filter
   if (thread.score < minScore) {
     failures.push(`Thread score ${thread.score} is below minimum ${minScore}`);
   }
 
-  // 2. Subreddit mute
   const subredditMute = await db.redditMute.findUnique({
     where: { type_value: { type: 'subreddit', value: thread.subreddit.toLowerCase() } },
   }).catch(() => null);
@@ -56,12 +50,8 @@ async function checkGuardrails(thread, flags) {
     failures.push(muteReason);
   }
 
-  // 3. Keyword mute — check thread title + body against all keyword mutes
   if (!subredditMute) {
-    const keywordMutes = await db.redditMute.findMany({
-      where: { type: 'keyword' },
-    }).catch(() => []);
-
+    const keywordMutes = await db.redditMute.findMany({ where: { type: 'keyword' } }).catch(() => []);
     const searchText = `${thread.title} ${thread.body}`.toLowerCase();
     for (const km of keywordMutes) {
       if (searchText.includes(km.value.toLowerCase())) {
@@ -72,9 +62,8 @@ async function checkGuardrails(thread, flags) {
     }
   }
 
-  // 4. Deduplication — do we already have a reply (any status) for this thread?
   const existingThread = await db.redditThread.findUnique({
-    where: { redditId: thread.redditId },
+    where:  { redditId: thread.redditId },
     select: { id: true, status: true },
   }).catch(() => null);
 
@@ -83,7 +72,6 @@ async function checkGuardrails(thread, flags) {
     failures.push(`Thread ${thread.redditId} already ingested (status: ${existingThread.status})`);
   }
 
-  // 5. Daily post rate limit
   if (flags.postingEnabled) {
     const maxPosts = flags.maxPostsPerDay ?? 3;
     const dayStart = new Date();
@@ -99,20 +87,12 @@ async function checkGuardrails(thread, flags) {
     }
   }
 
-  return {
-    pass: failures.length === 0,
-    failures,
-    muteReason,
-    isDuplicate,
-    rateLimited,
-  };
+  return { pass: failures.length === 0, failures, muteReason, isDuplicate, rateLimited };
 }
 
 /**
  * Log a posting action to the rate-limit table.
- * Call this immediately after a successful Reddit post.
- *
- * @returns {Promise<void>}
+ * Call immediately after a successful Reddit post.
  */
 async function logPostAction() {
   const db = getPrisma();
@@ -120,10 +100,8 @@ async function logPostAction() {
 }
 
 /**
- * Add a subreddit to the mute list.
- *
+ * Add a subreddit to the mute list (idempotent).
  * @param {string} subreddit
- * @returns {Promise<void>}
  */
 async function muteSubreddit(subreddit) {
   const db = getPrisma();
@@ -135,10 +113,8 @@ async function muteSubreddit(subreddit) {
 }
 
 /**
- * Add a keyword to the mute list.
- *
+ * Add a keyword to the mute list (idempotent).
  * @param {string} keyword
- * @returns {Promise<void>}
  */
 async function muteKeyword(keyword) {
   const db = getPrisma();

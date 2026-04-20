@@ -1,20 +1,14 @@
 /**
- * Reddit Engagement Module — analytics service.
+ * Reddit Engagement Module — engagement metrics service.
  *
- * Polls Reddit for engagement metrics on posted comments and writes an
- * AnalyticsRecord to the RedditReply row. Called on a manual trigger from
- * the review UI (no cron job — Vercel Hobby does not support cron on serverless).
+ * Polls Reddit for upvote counts and moderation status on posted comments.
+ * Triggered manually via the review UI (action="analytics") since Vercel Hobby
+ * does not support scheduled cron jobs on serverless functions.
  *
- * Metrics collected:
- *   - Current upvote count
- *   - Reddit score (net upvotes)
- *   - Whether the comment was removed by a moderator
- *
- * TODO (Phase 6): activate live polling. Current implementation returns a
- * clearly-labelled placeholder so the UI can render analytics stubs.
+ * Metrics stored back to RedditReply.upvotes on each poll.
  */
 
-const { getCommentMetrics } = require('./reddit-client');
+const { getCommentMetrics } = require('../reddit-client');
 const { PrismaClient }      = require('@prisma/client');
 
 let prisma;
@@ -27,17 +21,13 @@ function getPrisma() {
  * Poll Reddit for engagement metrics on all posted replies and update DB.
  *
  * @param {boolean} [dryRun] - If true, return metrics without writing to DB
- * @returns {Promise<import('./types').AnalyticsRecord[]>}
+ * @returns {Promise<import('../types').AnalyticsRecord[]>}
  */
 async function refreshAnalytics(dryRun = false) {
   const db = getPrisma();
 
-  // Only fetch metrics for replies that were actually posted
   const postedReplies = await db.redditReply.findMany({
-    where: {
-      postedAt:        { not: null },
-      redditCommentId: { not: null },
-    },
+    where:  { postedAt: { not: null }, redditCommentId: { not: null } },
     select: { id: true, redditCommentId: true },
   });
 
@@ -55,7 +45,7 @@ async function refreshAnalytics(dryRun = false) {
     const record = {
       replyId:         reply.id,
       redditCommentId: reply.redditCommentId,
-      upvotes:         metrics.score,    // Reddit score = upvotes - downvotes
+      upvotes:         metrics.score,
       score:           metrics.score,
       removed:         metrics.removed,
       fetchedAt:       new Date().toISOString(),
@@ -75,10 +65,10 @@ async function refreshAnalytics(dryRun = false) {
 }
 
 /**
- * Fetch the analytics snapshot for a single reply.
+ * Fetch the current analytics snapshot for a single reply.
  *
- * @param {string} replyDbId - RedditReply.id
- * @returns {Promise<import('./types').AnalyticsRecord | null>}
+ * @param {string} replyDbId
+ * @returns {Promise<import('../types').AnalyticsRecord | null>}
  */
 async function getReplyAnalytics(replyDbId) {
   const db = getPrisma();
@@ -90,7 +80,8 @@ async function getReplyAnalytics(replyDbId) {
 
   if (!reply || !reply.redditCommentId) return null;
 
-  const metrics = await getCommentMetrics(reply.redditCommentId).catch(() => ({ score: reply.upvotes ?? 0, removed: false }));
+  const metrics = await getCommentMetrics(reply.redditCommentId)
+    .catch(() => ({ score: reply.upvotes ?? 0, removed: false }));
 
   return {
     replyId:         reply.id,

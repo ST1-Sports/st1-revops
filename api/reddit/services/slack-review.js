@@ -1,16 +1,17 @@
 /**
  * Reddit Engagement Module — Slack review notifier.
  *
- * Sends a Block Kit message to Slack when reply variants are ready for review.
- * The message includes thread context, evaluator scores, both reply variants,
+ * Posts a Block Kit review card to Slack when reply variants are ready.
+ * The card includes thread context, evaluator scores, both reply variants,
  * and six action buttons:
  *   Approve & Post | Approve Safer | Edit Reply
  *   Skip | Mute r/subreddit | Mute Keyword
  *
- * Requires SLACK_BOT_TOKEN (bot token with chat:write scope) and
- * REDDIT_SLACK_CHANNEL (channel ID). The bot must be invited to the channel.
- *
  * Action callbacks are handled by /api/slack/actions.
+ *
+ * Required env vars:
+ *   SLACK_BOT_TOKEN      — bot token with chat:write scope
+ *   REDDIT_SLACK_CHANNEL — channel ID (bot must be invited to the channel)
  */
 
 const { PrismaClient } = require('@prisma/client');
@@ -21,20 +22,11 @@ function getPrisma() {
   return prisma;
 }
 
-/** Truncate to max chars, appending ellipsis if cut. */
 function trunc(str, max) {
   if (!str) return '';
   return str.length <= max ? str : str.slice(0, max) + '\u2026';
 }
 
-/**
- * Find the first brand keyword (from REDDIT_BRAND_KEYWORDS env) that appears
- * in the thread title or body. Used to pre-populate the Mute Keyword button.
- * Returns empty string if none found.
- *
- * @param {Object} thread
- * @returns {string}
- */
 function detectKeyword(thread) {
   const keywords = (process.env.REDDIT_BRAND_KEYWORDS || '').split(',').map(k => k.trim()).filter(Boolean);
   if (!keywords.length) return '';
@@ -45,11 +37,8 @@ function detectKeyword(thread) {
 /**
  * Build the Slack Block Kit blocks for a thread review message.
  *
- * Button `value` fields encode JSON with the IDs the action handler needs.
- * Each actions block holds ≤5 elements (Slack limit).
- *
  * @param {Object}   thread     - RedditThread DB record (with evaluation JSON)
- * @param {Object[]} replies    - RedditReply records, ordered variant asc
+ * @param {Object[]} replies    - RedditReply records ordered variant asc
  * @param {string}   appBaseUrl - RevOps deployment URL
  * @returns {Object[]}          - Slack Block Kit blocks array
  */
@@ -59,7 +48,6 @@ function buildSlackBlocks(thread, replies, appBaseUrl) {
   const safer   = replies.find(r => r.variant === 2);
   const keyword = detectKeyword(thread);
 
-  // Button value payloads (JSON-encoded strings, max 2000 chars each)
   const vApprovePost  = JSON.stringify({ threadId: thread.id, replyId: primary?.id ?? null });
   const vApproveSafer = JSON.stringify({ threadId: thread.id, replyId: safer?.id   ?? null });
   const vEdit         = JSON.stringify({ threadId: thread.id, appBaseUrl });
@@ -82,9 +70,9 @@ function buildSlackBlocks(thread, replies, appBaseUrl) {
     {
       type: 'section',
       fields: [
-        { type: 'mrkdwn', text: `*Fit score*\n${ev.fit_score   ?? '?'}/10` },
-        { type: 'mrkdwn', text: `*Promo risk*\n${ev.promo_risk ?? '?'}/10` },
-        { type: 'mrkdwn', text: `*Intent*\n${ev.intent_type    ?? 'unknown'}` },
+        { type: 'mrkdwn', text: `*Fit score*\n${ev.fit_score    ?? '?'}/10` },
+        { type: 'mrkdwn', text: `*Promo risk*\n${ev.promo_risk  ?? '?'}/10` },
+        { type: 'mrkdwn', text: `*Intent*\n${ev.intent_type     ?? 'unknown'}` },
         { type: 'mrkdwn', text: `*Audience*\n${ev.audience_type ?? 'unknown'}` },
       ],
     },
@@ -109,87 +97,65 @@ function buildSlackBlocks(thread, replies, appBaseUrl) {
   if (primary) {
     blocks.push({
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*PRIMARY REPLY*\n\`\`\`${trunc(primary.content, 280)}\`\`\``,
-      },
+      text: { type: 'mrkdwn', text: `*PRIMARY REPLY*\n\`\`\`${trunc(primary.content, 280)}\`\`\`` },
     });
   }
 
   if (safer) {
     blocks.push({
       type: 'section',
-      text: {
-        type: 'mrkdwn',
-        text: `*SAFER REPLY*\n\`\`\`${trunc(safer.content, 280)}\`\`\``,
-      },
+      text: { type: 'mrkdwn', text: `*SAFER REPLY*\n\`\`\`${trunc(safer.content, 280)}\`\`\`` },
     });
   }
 
   blocks.push({ type: 'divider' });
 
-  // Primary actions (approve + edit) — max 5 per block
   blocks.push({
     type: 'actions',
     block_id: 'reddit_primary_actions',
     elements: [
       {
-        type:      'button',
-        style:     'primary',
-        action_id: 'approve_post',
-        text:      { type: 'plain_text', text: 'Approve & Post' },
-        value:     vApprovePost,
+        type: 'button', style: 'primary', action_id: 'approve_post',
+        text: { type: 'plain_text', text: 'Approve & Post' }, value: vApprovePost,
       },
       {
-        type:      'button',
-        action_id: 'approve_safer',
-        text:      { type: 'plain_text', text: 'Approve Safer' },
-        value:     vApproveSafer,
+        type: 'button', action_id: 'approve_safer',
+        text: { type: 'plain_text', text: 'Approve Safer' }, value: vApproveSafer,
       },
       {
-        type:      'button',
-        action_id: 'edit_reply',
-        text:      { type: 'plain_text', text: 'Edit Reply' },
-        value:     vEdit,
+        type: 'button', action_id: 'edit_reply',
+        text: { type: 'plain_text', text: 'Edit Reply' }, value: vEdit,
       },
     ],
   });
 
-  // Secondary actions (destructive / moderation)
   blocks.push({
     type: 'actions',
     block_id: 'reddit_secondary_actions',
     elements: [
       {
-        type:      'button',
-        style:     'danger',
-        action_id: 'skip_thread',
-        text:      { type: 'plain_text', text: 'Skip' },
-        value:     vSkip,
+        type: 'button', style: 'danger', action_id: 'skip_thread',
+        text: { type: 'plain_text', text: 'Skip' }, value: vSkip,
         confirm: {
           title:   { type: 'plain_text', text: 'Skip this thread?' },
-          text:    { type: 'mrkdwn',     text: 'The thread will be marked rejected and removed from the queue.' },
+          text:    { type: 'mrkdwn', text: 'The thread will be marked rejected and removed from the queue.' },
           confirm: { type: 'plain_text', text: 'Skip' },
           deny:    { type: 'plain_text', text: 'Cancel' },
         },
       },
       {
-        type:      'button',
-        action_id: 'mute_subreddit',
-        text:      { type: 'plain_text', text: `Mute r/${thread.subreddit}` },
-        value:     vMuteSub,
+        type: 'button', action_id: 'mute_subreddit',
+        text:  { type: 'plain_text', text: `Mute r/${thread.subreddit}` }, value: vMuteSub,
         confirm: {
           title:   { type: 'plain_text', text: `Mute r/${thread.subreddit}?` },
-          text:    { type: 'mrkdwn',     text: 'Future threads from this subreddit will be filtered out.' },
+          text:    { type: 'mrkdwn', text: 'Future threads from this subreddit will be filtered out.' },
           confirm: { type: 'plain_text', text: 'Mute' },
           deny:    { type: 'plain_text', text: 'Cancel' },
         },
       },
       {
-        type:      'button',
-        action_id: 'mute_keyword',
-        text:      { type: 'plain_text', text: keyword ? `Mute "${keyword}"` : 'Mute Keyword' },
-        value:     vMuteKw,
+        type: 'button', action_id: 'mute_keyword',
+        text:  { type: 'plain_text', text: keyword ? `Mute "${keyword}"` : 'Mute Keyword' }, value: vMuteKw,
       },
     ],
   });
@@ -198,11 +164,11 @@ function buildSlackBlocks(thread, replies, appBaseUrl) {
 }
 
 /**
- * Post a Block Kit review card to Slack and update the thread/reply records.
+ * Post a Block Kit review card to Slack and update thread/reply records.
  *
- * @param {string}  threadDbId  - RedditThread.id (cuid)
- * @param {string}  appBaseUrl  - Base URL of the deployment, e.g. "https://app.vercel.app"
- * @param {boolean} [dryRun]    - If true, return blocks without sending
+ * @param {string}  threadDbId
+ * @param {string}  appBaseUrl
+ * @param {boolean} [dryRun]
  * @returns {Promise<{ sent: boolean, blocks?: Object[], ts?: string, error?: string }>}
  */
 async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
@@ -218,43 +184,31 @@ async function notifySlack(threadDbId, appBaseUrl, dryRun = false) {
     where:   { id: threadDbId },
     include: { replies: { orderBy: { variant: 'asc' } } },
   });
-  if (!thread)              throw new Error(`Thread not found: ${threadDbId}`);
+  if (!thread)               throw new Error(`Thread not found: ${threadDbId}`);
   if (!thread.replies.length) throw new Error(`No replies generated for thread ${threadDbId}`);
 
   const blocks = buildSlackBlocks(thread, thread.replies, appBaseUrl || '');
 
-  if (dryRun) {
-    return { sent: false, blocks, dryRun: true };
-  }
+  if (dryRun) return { sent: false, blocks, dryRun: true };
 
   const resp = await fetch('https://slack.com/api/chat.postMessage', {
     method:  'POST',
-    headers: {
-      'Content-Type':  'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
     body: JSON.stringify({
       channel: channelId,
       blocks,
-      // Fallback text for notifications / accessibility
       text: `Reddit thread ready for review: r/${thread.subreddit} — ${thread.title}`,
     }),
   });
 
   const data = await resp.json();
 
-  if (!data.ok) {
-    return { sent: false, blocks, error: data.error || 'Slack API error' };
-  }
+  if (!data.ok) return { sent: false, blocks, error: data.error || 'Slack API error' };
 
   const now = new Date();
   await db.redditThread.update({
     where: { id: threadDbId },
-    data:  {
-      status:         'NOTIFIED',
-      slackMessageTs: data.ts,
-      slackChannelId: channelId,
-    },
+    data:  { status: 'NOTIFIED', slackMessageTs: data.ts, slackChannelId: channelId },
   });
   await db.redditReply.updateMany({
     where: { threadId: threadDbId },

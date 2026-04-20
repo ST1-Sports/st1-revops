@@ -20,19 +20,21 @@
  *   check           — run content guardrail on a reply (Claude review before post)
  *   post            — post an approved reply to Reddit (requires REDDIT_POSTING_ENABLED)
  *   analytics       — refresh engagement metrics for posted replies
+ *   report          — aggregated analytics report (funnel, subreddits, variants, guardrails)
  *   threads         — list threads from DB (for review UI)
  *   mute-add        — add a subreddit or keyword to the mute list
  *   mute-list       — list all mute entries
  */
 
-const { ingestThreads }      = require('./ingest');
-const { evaluateThread }     = require('./evaluate');
-const { generateReplies }    = require('./reply-gen');
-const { notifySlack }        = require('./slack-review');
-const { postApprovedReply }  = require('./post');
-const { refreshAnalytics }   = require('./analytics');
-const { muteSubreddit, muteKeyword } = require('./guardrails');
-const { checkContent }       = require('./content-check');
+const { ingestThreads }      = require('./services/ingestion');
+const { evaluateThread }     = require('./services/evaluator');
+const { generateReplies }    = require('./services/reply-generator');
+const { notifySlack }        = require('./services/slack-review');
+const { postApprovedReply }  = require('./services/posting');
+const { refreshAnalytics }   = require('./services/analytics');
+const { muteSubreddit, muteKeyword } = require('./services/db-guardrails');
+const { checkContent }       = require('./services/content-guardrail');
+const { generateReport }     = require('./services/report');
 const { PrismaClient }       = require('@prisma/client');
 
 let prisma;
@@ -190,6 +192,11 @@ export default async function handler(req, res) {
       case 'analytics': {
         const records = await refreshAnalytics(body.dryRun === true);
         return ok(res, { records });
+      }
+
+      case 'report': {
+        const report = await generateReport({ days: body.days || 90 });
+        return ok(res, { report });
       }
 
       case 'threads': {

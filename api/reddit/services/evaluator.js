@@ -12,16 +12,12 @@
  *   top_comments    — concatenated top comment summaries (empty if not fetched)
  *   subreddit       — subreddit name without r/
  *   author          — OP username
- *
- * NOTE: top_comments is not yet fetched during ingestion. It defaults to an
- * empty string and should be populated once reddit-client.getTopComments is
- * implemented (Phase 3).
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { PrismaClient } = require('@prisma/client');
-const { load } = require('./prompt-loader');
-const { validateEvaluatorResult, parseJson } = require('./validators');
+const { load } = require('../prompt-loader');
+const { validateEvaluatorResult, parseJson } = require('../validators');
 
 let prisma;
 function getPrisma() {
@@ -35,12 +31,12 @@ function getPrisma() {
  * Fetches the thread from the DB, calls Claude, validates the response,
  * and updates the thread record to EVALUATED status.
  *
- * @param {string}  threadDbId       - RedditThread.id (cuid)
+ * @param {string}  threadDbId
  * @param {Object}  [opts]
- * @param {string}  [opts.subredditRules=''] - Subreddit rules text
- * @param {string}  [opts.topComments='']    - Pre-fetched top comments
- * @param {boolean} [opts.dryRun=false]      - Skip DB writes when true
- * @returns {Promise<import('./types').EvaluatorResult>}
+ * @param {string}  [opts.subredditRules='']
+ * @param {string}  [opts.topComments='']
+ * @param {boolean} [opts.dryRun=false]
+ * @returns {Promise<import('../types').EvaluatorResult>}
  */
 async function evaluateThread(threadDbId, opts = {}) {
   const { subredditRules = '', topComments = '', dryRun = false } = opts;
@@ -80,21 +76,13 @@ async function evaluateThread(threadDbId, opts = {}) {
   return result;
 }
 
-/**
- * Parse raw Claude output into a validated EvaluatorResult.
- * Throws with a descriptive message if the JSON is invalid or the schema fails.
- *
- * @param {string} raw
- * @param {string} threadDbId
- * @returns {import('./types').EvaluatorResult}
- */
 function parseAndValidate(raw, threadDbId) {
   const parsed = parseJson(raw, `eval:${threadDbId}`);
   const { valid, errors } = validateEvaluatorResult(parsed);
 
   if (!valid) {
     throw new Error(
-      `[reddit/evaluate] Invalid evaluator output for ${threadDbId}:\n` +
+      `[reddit/evaluator] Invalid evaluator output for ${threadDbId}:\n` +
       errors.map(e => `  • ${e}`).join('\n') +
       `\nRaw (first 400 chars): ${raw.slice(0, 400)}`
     );

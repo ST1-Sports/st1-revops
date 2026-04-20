@@ -2,28 +2,20 @@
  * Reddit Engagement Module — content guardrail service.
  *
  * Runs the guardrail.md prompt against a specific reply before it is shown
- * for review or posted. This is separate from guardrails.js (which handles
- * DB-level mute/dedupe/rate-limit checks) and focuses exclusively on the
- * content quality review via Claude.
+ * for review or posted. Separate from db-guardrails.js (mute/dedupe/rate-limit
+ * DB checks) — this service handles AI-based content quality review.
  *
- * The `recent_replies_last_14_days` context is built by querying the last
- * 14 days of posted RedditReply records so the model can detect repetition
- * risk across recent account activity.
+ * Every check result is persisted to RedditGuardrailLog for analytics regardless
+ * of outcome (pass or block), so approval rates and risk score trends are queryable.
  *
- * Prompt variables supplied to guardrail.md:
- *   subreddit                — subreddit name without r/
- *   subreddit_rules          — rules text passed in by caller (empty if unavailable)
- *   title                    — thread title
- *   body                     — thread body
- *   top_comments             — top comment summaries (empty if not fetched)
- *   reply                    — the proposed reply text to review
- *   recent_replies_last_14_days — formatted snippet of recent posted replies
+ * The recent_replies_last_14_days context is built from posted RedditReply records
+ * so Claude can detect repetition risk across recent account activity.
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
 const { PrismaClient } = require('@prisma/client');
-const { load } = require('./prompt-loader');
-const { validateGuardrailResult, parseJson } = require('./validators');
+const { load } = require('../prompt-loader');
+const { validateGuardrailResult, parseJson } = require('../validators');
 
 let prisma;
 function getPrisma() {
@@ -34,16 +26,16 @@ function getPrisma() {
 /**
  * Run the content guardrail on a specific reply.
  *
- * @param {string} replyDbId      - RedditReply.id (cuid)
+ * @param {string} replyDbId
  * @param {Object} [opts]
  * @param {string} [opts.subredditRules='']
  * @param {string} [opts.topComments='']
- * @param {boolean}[opts.dryRun=false]  - Skip DB writes; still calls Claude
- * @returns {Promise<import('./types').GuardrailResult>}
+ * @param {boolean}[opts.dryRun=false]
+ * @param {string} [opts.calledFrom='check_action']  - For analytics ("check_action" | "post_gate")
+ * @returns {Promise<import('../types').GuardrailResult>}
  */
 async function checkContent(replyDbId, opts = {}) {
   const { subredditRules = '', topComments = '', dryRun = false } = opts;
-
   const db = getPrisma();
 
   const reply = await db.redditReply.findUnique({
@@ -55,12 +47,12 @@ async function checkContent(replyDbId, opts = {}) {
   const recentRepliesText = await buildRecentRepliesContext(db);
 
   const { system, user } = load('guardrail', {
-    subreddit:                reply.thread.subreddit,
-    subreddit_rules:          subredditRules || 'No specific rules provided.',
-    title:                    reply.thread.title,
-    body:                     reply.thread.body || '(no body text)',
-    top_comments:             topComments || '(no comments fetched)',
-    reply:                    reply.content,
+    subreddit:                   reply.thread.subreddit,
+    subreddit_rules:             subredditRules || 'No specific rules provided.',
+    title:                       reply.thread.title,
+    body:                        reply.thread.body || '(no body text)',
+    top_comments:                topComments || '(no comments fetched)',
+    reply:                       reply.content,
     recent_replies_last_14_days: recentRepliesText,
   });
 
@@ -76,13 +68,24 @@ async function checkContent(replyDbId, opts = {}) {
   const raw = message.content?.[0]?.text || '';
   const result = parseAndValidate(raw, replyDbId);
 
+  saveGuardrailLog(db, {
+    replyId:           replyDbId,
+    threadId:          reply.threadId,
+    subreddit:         reply.thread.subreddit,
+    approvedForReview: result.approved_for_review,
+    approvedForPost:   result.approved_for_post,
+    finalRiskScore:    result.final_risk_score,
+    blockReason:       result.block_reason    || null,
+    editSuggestion:    result.edit_suggestion || null,
+    calledFrom:        opts.calledFrom || 'check_action',
+    dryRun,
+  });
+
   return result;
 }
 
 /**
- * Build the recent_replies_last_14_days context string by querying DB for
- * replies posted in the last 14 days. Returns a formatted list, or a
- * no-history placeholder if none exist.
+ * Build the recent_replies_last_14_days context string from DB.
  *
  * @param {import('@prisma/client').PrismaClient} db
  * @returns {Promise<string>}
@@ -91,18 +94,13 @@ async function buildRecentRepliesContext(db) {
   const since = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
 
   const recent = await db.redditReply.findMany({
-    where: {
-      postedAt:   { gte: since },
-      redditCommentId: { not: null },
-    },
+    where:   { postedAt: { gte: since }, redditCommentId: { not: null } },
     include: { thread: { select: { subreddit: true, title: true } } },
     orderBy: { postedAt: 'desc' },
-    take: 10,
+    take:    10,
   });
 
-  if (recent.length === 0) {
-    return 'No replies posted in the last 14 days.';
-  }
+  if (recent.length === 0) return 'No replies posted in the last 14 days.';
 
   return recent.map((r, i) => {
     const date = r.postedAt ? r.postedAt.toISOString().slice(0, 10) : 'unknown';
@@ -110,27 +108,27 @@ async function buildRecentRepliesContext(db) {
   }).join('\n\n');
 }
 
-/**
- * Parse and validate raw Claude output into a GuardrailResult.
- * Throws with a descriptive message if the JSON is invalid or schema fails.
- *
- * @param {string} raw
- * @param {string} replyDbId
- * @returns {import('./types').GuardrailResult}
- */
 function parseAndValidate(raw, replyDbId) {
-  const parsed = parseJson(raw, `content-check:${replyDbId}`);
+  const parsed = parseJson(raw, `content-guardrail:${replyDbId}`);
   const { valid, errors } = validateGuardrailResult(parsed);
 
   if (!valid) {
     throw new Error(
-      `[reddit/content-check] Invalid guardrail output for ${replyDbId}:\n` +
+      `[reddit/content-guardrail] Invalid guardrail output for ${replyDbId}:\n` +
       errors.map(e => `  • ${e}`).join('\n') +
       `\nRaw (first 400 chars): ${raw.slice(0, 400)}`
     );
   }
 
   return parsed;
+}
+
+async function saveGuardrailLog(db, data) {
+  try {
+    await db.redditGuardrailLog.create({ data });
+  } catch (err) {
+    console.error('[reddit/content-guardrail] saveGuardrailLog failed (non-fatal):', err.message);
+  }
 }
 
 module.exports = { checkContent, buildRecentRepliesContext };

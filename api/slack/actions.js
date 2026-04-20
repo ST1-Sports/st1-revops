@@ -27,8 +27,8 @@
 
 import crypto from 'crypto';
 import { PrismaClient } from '@prisma/client';
-import { postApprovedReply } from '../reddit/post.js';
-import { muteSubreddit, muteKeyword } from '../reddit/guardrails.js';
+import { postApprovedReply } from '../reddit/services/posting.js';
+import { muteSubreddit, muteKeyword } from '../reddit/services/db-guardrails.js';
 
 // Disable Vercel's automatic body parser so we can read the raw body
 // for Slack signature verification.

@@ -1,190 +1,109 @@
 # Reddit Engagement Module
 
-Approval-first Reddit workflow for ST1 Sports RevOps.
+Approval-first workflow for monitoring Reddit, generating replies with Claude, and posting via the official Reddit OAuth2 API.
 
-**Default state: ingestion and evaluation are disabled. Posting is always disabled until explicitly opted in.**
-
----
-
-## What it does
-
-1. **Ingest** candidate Reddit threads from configured subreddits matching brand keywords
-2. **Evaluate** each thread with Claude to score brand fit (0–10) and extract intent
-3. **Generate** 2 reply variants per passing thread
-4. **Notify** the team via Slack with a link to the approval UI
-5. **Approve or reject** via the RevOps web UI at `/reddit`
-6. **Post** to Reddit only after explicit human approval (disabled by default)
-7. **Log** engagement metrics (upvotes, removals) for posted comments
-
----
-
-## Feature flags
-
-| Env var | Default | Effect |
-|---------|---------|--------|
-| `REDDIT_ENABLED` | `false` | Master switch. Enables ingestion, evaluation, reply generation, and Slack notifications. |
-| `REDDIT_POSTING_ENABLED` | `false` | Separately enables Reddit posting. Must be `true` **and** a reply must be approved before anything posts. |
-
-Both flags must be set in the Vercel dashboard. They cannot be enabled from the UI.
-
----
-
-## Setup
-
-### 1. Create a Reddit app
-
-1. Go to [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps)
-2. Click **Create app**
-3. Type: **Script** (for a single account) or **Web app** (for multi-user)
-4. Set the redirect URI to: `https://YOUR-DOMAIN.vercel.app/api/reddit-setup`
-5. Copy the **client ID** (shown under the app name) and **client secret**
-
-### 2. Get a refresh token (for posting)
-
-For read-only ingestion, client credentials are sufficient (no refresh token needed).
-
-For posting, you need a refresh token scoped to `submit` and `identity`:
-
-```bash
-# Replace with your values
-CLIENT_ID=your_client_id
-CLIENT_SECRET=your_client_secret
-REDIRECT_URI=https://YOUR-DOMAIN.vercel.app/api/reddit-setup
-
-# Step 1: open this URL in a browser, authorize the app
-https://www.reddit.com/api/v1/authorize?client_id=CLIENT_ID&response_type=code&state=random&redirect_uri=REDIRECT_URI&duration=permanent&scope=submit,identity,read
-
-# Step 2: exchange the code for tokens
-curl -X POST https://www.reddit.com/api/v1/access_token \
-  -u CLIENT_ID:CLIENT_SECRET \
-  -d "grant_type=authorization_code&code=CODE_FROM_REDIRECT&redirect_uri=REDIRECT_URI"
-```
-
-Save the `refresh_token` from the response as `REDDIT_REFRESH_TOKEN`.
-
-### 3. Add env vars to Vercel
-
-```bash
-REDDIT_CLIENT_ID=
-REDDIT_CLIENT_SECRET=
-REDDIT_REFRESH_TOKEN=          # Only needed for posting
-REDDIT_USERNAME=               # Reddit account username
-REDDIT_USER_AGENT=             # e.g. "ST1RevOps/1.0 by u/yourname"
-
-REDDIT_ENABLED=false
-REDDIT_POSTING_ENABLED=false
-
-REDDIT_SLACK_CHANNEL=          # Slack channel ID for review notifications
-REDDIT_TARGET_SUBREDDITS=hockey,baseball,sportsparents,youthsports
-REDDIT_BRAND_KEYWORDS=sports uniforms,team jerseys,custom teamwear
-REDDIT_MAX_POSTS_PER_DAY=3
-REDDIT_MIN_THREAD_SCORE=5
-```
-
-### 4. Run DB migration
-
-The module adds 4 new Prisma models. After updating env vars:
-
-```bash
-npm run db:push     # or npm run db:migrate for production
-```
-
----
-
-## API reference
-
-All actions are POST to `/api/reddit` with `{ "action": "...", ...params }`.
-
-### Always available
-
-| Action | Params | Returns |
-|--------|--------|---------|
-| `status` | — | Feature flags, env config summary |
-
-### Requires `REDDIT_ENABLED=true`
-
-| Action | Required params | Returns |
-|--------|----------------|---------|
-| `ingest` | `overrides?`, `dryRun?` | `{ ingested, skipped, threads[] }` |
-| `evaluate` | `threadId` | `{ evaluation: EvaluatorResult }` |
-| `generate` | `threadId` | `{ replySet: GeneratedReplySet }` |
-| `notify` | `threadId`, `appBaseUrl?` | `{ sent, message }` |
-| `approve` | `threadId`, `replyId`, `decidedBy?` | `{ approved, replyId }` |
-| `reject` | `threadId`, `reason?` | `{ rejected, threadId }` |
-| `analytics` | `dryRun?` | `{ records: AnalyticsRecord[] }` |
-| `threads` | `status?`, `limit?` | `{ threads[] }` |
-| `mute-add` | `type` ("subreddit"\|"keyword"), `value` | `{ muted, type, value }` |
-| `mute-list` | — | `{ mutes[] }` |
-
-### Requires `REDDIT_POSTING_ENABLED=true` and prior approval
-
-| Action | Required params | Returns |
-|--------|----------------|---------|
-| `post` | `replyId` | `{ result: PostingResult }` |
-
----
-
-## Data flow
-
-```
-ingest → [guardrail check] → RedditThread (PENDING)
-  ↓ evaluate
-  RedditThread (EVALUATED) + EvaluatorResult stored in .evaluation
-  ↓ generate
-  RedditReply × 2 created
-  ↓ notify
-  Slack message sent → RedditThread (NOTIFIED)
-  ↓ approve (human, in /reddit UI)
-  RedditReply.approvedAt set → RedditThread (APPROVED)
-  ↓ post (only if REDDIT_POSTING_ENABLED=true)
-  RedditReply.postedAt + redditCommentId set → RedditThread (POSTED)
-  ↓ analytics
-  RedditReply.upvotes updated
-```
-
----
-
-## Content guardrails (enforced in code, not configurable)
-
-- No URLs in generated replies
-- Max 280 characters per reply
-- One reply per thread maximum
-- Muted subreddits and keywords skipped at ingest
-- Daily post cap (default 3, set via `REDDIT_MAX_POSTS_PER_DAY`)
-- Duplicate thread deduplication via database unique constraint
-- Posting disabled by default — env flag + database approval both required
-
----
-
-## File structure
+## Directory layout
 
 ```
 api/reddit/
-  index.js          ← Vercel function entry point, action router
-  types.js          ← JSDoc type definitions (all data shapes)
-  reddit-client.js  ← Reddit OAuth2 + API calls
-  ingest.js         ← Thread search + guardrail + DB write
-  evaluate.js       ← Claude evaluation call + response parsing
-  reply-gen.js      ← Claude reply generation + content guardrails
-  guardrails.js     ← Mute list, dedupe, rate-limit checks
-  slack-review.js   ← Slack notification sender
-  post.js           ← Reddit posting (double-gated, disabled by default)
-  analytics.js      ← Engagement metric polling
+  index.js              Vercel serverless entry point — dispatches on action=
+  prompt-loader.js      Loads .md prompt files from prompts/
+  reddit-client.js      Reddit OAuth2 client (search, post, metrics)
+  validators.js         JSON schema validators for Claude outputs
+  types.js              JSDoc type definitions
   prompts/
-    eval.md         ← Evaluation prompt template
-    reply.md        ← Reply generation prompt template
-    guardrail.md    ← Content safety check prompt template
-  README.md         ← This file
+    evaluate.md         Thread evaluation prompt (fit_score, promo_risk, …)
+    reply-gen.md        Reply generation prompt (primary + safer variants)
+    guardrail.md        Content guardrail prompt (approved_for_review/post, risk_score)
+  services/
+    ingestion.js        Search Reddit, apply DB guardrails, persist threads
+    evaluator.js        Run Claude evaluation on a pending thread
+    reply-generator.js  Generate reply variants (primary + safer) for an evaluated thread
+    content-guardrail.js  Claude-based content review before approval/posting
+    db-guardrails.js    DB-level guardrails: score filter, mute list, dedup, rate cap
+    slack-review.js     Build Block Kit cards and post Slack review notifications
+    posting.js          10-gate posting flow with full audit logging
+    analytics.js        Poll Reddit for upvote/moderation metrics on posted replies
+    report.js           Aggregate analytics report (funnel, subreddits, variants, guardrails)
 ```
 
----
+## Actions (POST /api/reddit)
 
-## Risks and known limitations
+| action      | Required fields          | Description |
+|-------------|--------------------------|-------------|
+| status      | —                        | Feature flag state (always allowed) |
+| ingest      | —                        | Fetch Reddit threads, apply guardrails, persist |
+| evaluate    | threadId                 | Run Claude evaluation on a pending thread |
+| generate    | threadId                 | Generate primary + safer reply variants |
+| notify      | threadId                 | Send Slack review card |
+| approve     | threadId, replyId        | Record human approval |
+| reject      | threadId                 | Reject all variants |
+| check       | replyId                  | Run Claude content guardrail |
+| post        | replyId                  | Post approved reply (requires REDDIT_POSTING_ENABLED=true) |
+| analytics   | —                        | Refresh upvote metrics for posted replies |
+| report      | days? (default 90)       | Aggregated analytics report |
+| threads     | status?, limit?          | List threads from DB |
+| mute-add    | type, value              | Add subreddit or keyword to mute list |
+| mute-list   | —                        | List all mute entries |
 
-| Risk | Mitigation |
-|------|-----------|
-| Reddit API ToS | User agent is required; do not exceed 60 req/min. One reply per thread, no vote manipulation. |
-| Vercel function timeout (30s) | Ingest + evaluate in separate calls, not a single pipeline call. |
-| Access token not cached | Fresh token per invocation. Adds ~200ms per call. Future: cache in `Setting` table. |
-| Slack MCP send failures | `notifySlack` returns `{ sent: false, error }` without throwing; approval link still works. |
-| Posting without approval | Blocked at two layers: env flag + DB `approvedAt` check. |
+All requests accept `dryRun: true` to simulate without side effects.
+
+## Feature flags (env vars)
+
+| Variable                     | Default | Description |
+|------------------------------|---------|-------------|
+| REDDIT_ENABLED               | false   | Master switch — gates all actions except status |
+| REDDIT_POSTING_ENABLED       | false   | Enables actual posting to Reddit |
+| REDDIT_MAX_POSTS_PER_DAY     | 3       | Daily post cap |
+| REDDIT_POST_COOLDOWN_MINUTES | 30      | Minimum minutes between posts |
+| REDDIT_MIN_THREAD_SCORE      | 5       | Minimum Reddit score to ingest |
+| REDDIT_TARGET_SUBREDDITS     | —       | Comma-separated subreddits to monitor |
+| REDDIT_BRAND_KEYWORDS        | —       | Comma-separated keywords to detect in threads |
+| REDDIT_CLIENT_ID             | —       | Reddit app client ID |
+| REDDIT_CLIENT_SECRET         | —       | Reddit app client secret |
+| REDDIT_REFRESH_TOKEN         | —       | Reddit OAuth2 refresh token (for posting) |
+| REDDIT_USERNAME              | —       | Reddit account username |
+| REDDIT_USER_AGENT            | —       | User-Agent header (required by Reddit ToS) |
+| REDDIT_SLACK_CHANNEL         | —       | Slack channel ID for review cards |
+| SLACK_BOT_TOKEN              | —       | Slack bot token (chat:write scope) |
+| SLACK_SIGNING_SECRET         | —       | Slack signing secret (for /api/slack/actions) |
+
+## Posting gates
+
+Checked in order — all must pass before a reply reaches Reddit:
+
+1. `REDDIT_POSTING_ENABLED=true`
+2. Reply exists in DB
+3. Reply has `approvedAt` set (human approval)
+4. Reply not already posted (`postedAt` is null)
+5. No other reply for the same thread already posted
+6. Subreddit not in mute list
+7. Thread title/body contains no muted keyword
+8. Daily post cap not exceeded
+9. Post cooldown not active
+10. Reply content not too similar to a recent post (Jaccard < 0.85, 14-day window)
+11. Claude content guardrail approves (`approved_for_post: true`)
+
+Every attempt — including blocked ones — is written to `RedditPostingAttempt` for the audit trail.
+
+## Guardrail schema
+
+Claude returns:
+```json
+{
+  "approved_for_review": true,
+  "approved_for_post": false,
+  "block_reason": "Too promotional",
+  "edit_suggestion": "Remove the product name from line 2",
+  "final_risk_score": 7
+}
+```
+
+`approved_for_review=false` implies `approved_for_post=false`. A blocked result always includes a non-empty `block_reason`.
+
+## Slack review flow
+
+1. `notify` action posts a Block Kit card with thread context, evaluation scores, and both reply variants.
+2. Reviewer clicks one of six buttons: Approve & Post, Approve Safer, Edit Reply, Skip, Mute Subreddit, Mute Keyword.
+3. `/api/slack/actions` handles the callback, acks within 3s, processes async, updates the card via `response_url`.
+4. If `REDDIT_POSTING_ENABLED=false`, approval is recorded but posting is deferred for manual execution.

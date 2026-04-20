@@ -2,18 +2,12 @@
  * Reddit Engagement Module — thread ingestion service.
  *
  * Searches configured subreddits for candidate threads matching brand keywords,
- * runs guardrail checks on each candidate, and persists passing threads to the
- * RedditThread table with status PENDING.
- *
- * Called by the index.js router on action="ingest".
- *
- * TODO (Phase 3): this is currently a placeholder that returns a structured
- * preview without writing to the DB. Remove the `dryRun` guard once the
- * full workflow is wired.
+ * runs DB guardrail checks on each candidate, and persists passing threads to
+ * the RedditThread table with status PENDING.
  */
 
-const { searchSubreddit } = require('./reddit-client');
-const { checkGuardrails }  = require('./guardrails');
+const { searchSubreddit } = require('../reddit-client');
+const { checkGuardrails }  = require('./db-guardrails');
 const { PrismaClient }     = require('@prisma/client');
 
 let prisma;
@@ -23,7 +17,7 @@ function getPrisma() {
 }
 
 /**
- * Resolve ingestion config from env vars and optional overrides.
+ * Resolve ingestion config from env vars and optional per-call overrides.
  *
  * @param {Object} [overrides]
  * @param {string[]} [overrides.subreddits]
@@ -33,7 +27,6 @@ function getPrisma() {
 function resolveConfig(overrides = {}) {
   const envSubreddits = (process.env.REDDIT_TARGET_SUBREDDITS || '')
     .split(',').map(s => s.trim()).filter(Boolean);
-
   const envKeywords = (process.env.REDDIT_BRAND_KEYWORDS || '')
     .split(',').map(k => k.trim()).filter(Boolean);
 
@@ -49,8 +42,8 @@ function resolveConfig(overrides = {}) {
  * For each configured (subreddit × keyword) pair, searches Reddit, runs
  * guardrails on each result, and persists passing threads to the DB.
  *
- * @param {import('./types').RedditFlags} flags
- * @param {Object} [overrides]   - Optional subreddits/keywords override for manual runs
+ * @param {import('../types').RedditFlags} flags
+ * @param {Object}  [overrides]  - Optional subreddits/keywords override for manual runs
  * @param {boolean} [dryRun]     - If true, return candidates without persisting
  * @returns {Promise<{ ingested: number, skipped: number, threads: Object[] }>}
  */
@@ -68,7 +61,7 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
     };
   }
 
-  const seen = new Set();      // dedupe within this run
+  const seen = new Set();
   const candidates = [];
   const db = dryRun ? null : getPrisma();
 
@@ -78,7 +71,7 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
       try {
         results = await searchSubreddit(subreddit, keyword, 25);
       } catch (err) {
-        console.error(`[reddit/ingest] search failed r/${subreddit} "${keyword}":`, err.message);
+        console.error(`[reddit/ingestion] search failed r/${subreddit} "${keyword}":`, err.message);
         continue;
       }
 
@@ -87,7 +80,7 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
         seen.add(thread.redditId);
 
         const guardrail = await checkGuardrails(thread, flags).catch(err => {
-          console.error('[reddit/ingest] guardrail error:', err.message);
+          console.error('[reddit/ingestion] guardrail error:', err.message);
           return { pass: false, failures: ['Guardrail check threw an error'], isDuplicate: false, rateLimited: false };
         });
 
@@ -110,9 +103,8 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
               status:       'PENDING',
             },
           }).catch(err => {
-            // Unique constraint = already ingested in a concurrent run; safe to ignore
             if (!err.message.includes('Unique constraint')) {
-              console.error('[reddit/ingest] DB write error:', err.message);
+              console.error('[reddit/ingestion] DB write error:', err.message);
             }
           });
         }

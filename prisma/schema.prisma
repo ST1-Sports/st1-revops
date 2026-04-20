@@ -464,6 +464,28 @@ model RedditPostingAttempt {
   @@index([createdAt])
 }
 
+// One row per Claude content-guardrail check — stored for every check regardless
+// of outcome so approval rates and risk score trends can be computed over time.
+model RedditGuardrailLog {
+  id                String   @id @default(cuid())
+  replyId           String               // RedditReply.id (not a FK)
+  threadId          String               // RedditThread.id
+  subreddit         String
+  approvedForReview Boolean
+  approvedForPost   Boolean
+  finalRiskScore    Int
+  blockReason       String?  @db.Text
+  editSuggestion    String?  @db.Text
+  calledFrom        String   // "check_action" | "post_gate"
+  dryRun            Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  @@index([replyId])
+  @@index([subreddit])
+  @@index([approvedForPost])
+  @@index([createdAt])
+}
+
 // ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
 
 model EmailOpen {

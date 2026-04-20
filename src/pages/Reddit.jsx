@@ -82,6 +82,9 @@ export default function Reddit() {
   const [error,     setError]    = useState(null)
   const [filter,    setFilter]   = useState('all')
   const [action,    setAction]   = useState(null)  // { type, threadId, replyId }
+  const [view,      setView]     = useState('threads')  // 'threads' | 'stats'
+  const [report,    setReport]   = useState(null)
+  const [reportLoading, setReportLoading] = useState(false)
 
   // Load status + flags on mount
   useEffect(() => {
@@ -163,6 +166,29 @@ export default function Reddit() {
     else setError(r.error)
   }
 
+  const loadReport = useCallback(async (days = 90) => {
+    setReportLoading(true)
+    setError(null)
+    try {
+      const r = await fetch('/api/reddit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'report', days }),
+      })
+      const d = await r.json()
+      if (d.ok) setReport(d.report)
+      else setError(d.error)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReportLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (view === 'stats' && flags?.enabled && !report) loadReport()
+  }, [view, flags, report, loadReport])
+
   // ── render ────────────────────────────────────────────────────────────────
 
   return (
@@ -211,44 +237,81 @@ export default function Reddit() {
         </div>
       )}
 
-      {/* Filter tabs */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20 }}>
-        {['all', 'PENDING', 'EVALUATED', 'NOTIFIED', 'APPROVED', 'POSTED', 'REJECTED', 'SKIPPED'].map(f => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            style={{
-              padding: '6px 14px', borderRadius: 6, border: `1px solid ${filter === f ? C.orange : C.border}`,
-              background: filter === f ? C.orange : C.surface,
-              color: filter === f ? '#fff' : C.mid,
-              fontSize: 12, fontWeight: 600, cursor: 'pointer',
-              fontFamily: "'Lexend Zetta', sans-serif",
-            }}
-          >
-            {f}
-          </button>
-        ))}
+      {/* View + filter tabs */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+        <button
+          onClick={() => setView('threads')}
+          style={{
+            padding: '6px 14px', borderRadius: 6, border: `1px solid ${view === 'threads' ? C.dark : C.border}`,
+            background: view === 'threads' ? C.dark : C.surface,
+            color: view === 'threads' ? '#fff' : C.mid,
+            fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            fontFamily: "'Lexend Zetta', sans-serif",
+          }}
+        >
+          Threads
+        </button>
+        <button
+          onClick={() => setView('stats')}
+          style={{
+            padding: '6px 14px', borderRadius: 6, border: `1px solid ${view === 'stats' ? C.dark : C.border}`,
+            background: view === 'stats' ? C.dark : C.surface,
+            color: view === 'stats' ? '#fff' : C.mid,
+            fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            fontFamily: "'Lexend Zetta', sans-serif",
+          }}
+        >
+          Stats
+        </button>
+
+        {view === 'threads' && (
+          <>
+            <div style={{ width: 1, height: 20, background: C.border, margin: '0 4px' }} />
+            {['all', 'PENDING', 'EVALUATED', 'NOTIFIED', 'APPROVED', 'POSTED', 'REJECTED', 'SKIPPED'].map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                style={{
+                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${filter === f ? C.orange : C.border}`,
+                  background: filter === f ? C.orange : C.surface,
+                  color: filter === f ? '#fff' : C.mid,
+                  fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  fontFamily: "'Lexend Zetta', sans-serif",
+                }}
+              >
+                {f}
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
+      {/* Stats view */}
+      {view === 'stats' && (
+        <StatsView report={report} loading={reportLoading} onRefresh={() => loadReport()} />
+      )}
+
       {/* Thread list */}
-      {!flags?.enabled ? (
-        <EmptyState message="Enable the Reddit module to start ingesting threads." />
-      ) : loading ? (
-        <LoadingState />
-      ) : threads.length === 0 ? (
-        <EmptyState message={`No threads with status "${filter}". Run an ingestion to populate.`} />
-      ) : (
-        threads.map(thread => (
-          <ThreadCard
-            key={thread.id}
-            thread={thread}
-            flags={flags}
-            pendingAction={action}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onPost={handlePost}
-          />
-        ))
+      {view === 'threads' && (
+        !flags?.enabled ? (
+          <EmptyState message="Enable the Reddit module to start ingesting threads." />
+        ) : loading ? (
+          <LoadingState />
+        ) : threads.length === 0 ? (
+          <EmptyState message={`No threads with status "${filter}". Run an ingestion to populate.`} />
+        ) : (
+          threads.map(thread => (
+            <ThreadCard
+              key={thread.id}
+              thread={thread}
+              flags={flags}
+              pendingAction={action}
+              onApprove={handleApprove}
+              onReject={handleReject}
+              onPost={handlePost}
+            />
+          ))
+        )
       )}
     </div>
   )
@@ -436,6 +499,174 @@ function PostedMetrics({ reply }) {
       Posted {reply.postedAt ? new Date(reply.postedAt).toLocaleDateString() : ''}
       {reply.upvotes != null && ` · ${reply.upvotes} upvotes`}
       {reply.redditCommentId && ` · ID: ${reply.redditCommentId}`}
+    </div>
+  )
+}
+
+function StatsView({ report, loading, onRefresh }) {
+  if (loading) return <LoadingState />
+  if (!report) return (
+    <div style={{ ...card, textAlign: 'center', padding: '48px 24px', color: C.muted }}>
+      <div style={{ fontSize: 14, marginBottom: 16 }}>No report data yet.</div>
+      <button onClick={onRefresh} style={btn(true)}>Load Report</button>
+    </div>
+  )
+
+  const { period, funnel, subreddits, replyVariants, skipByIntent, skipByAudience, guardrailSummary, gateBlocks, postingSuccess } = report
+
+  return (
+    <div>
+      {/* Period + refresh */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <span style={{ fontSize: 13, color: C.muted }}>
+          {period.from} → {period.to} ({period.days} days)
+        </span>
+        <button onClick={onRefresh} style={{ ...btn(false), fontSize: 12 }}>Refresh</button>
+      </div>
+
+      {/* Funnel */}
+      <div style={card}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>PIPELINE FUNNEL</div>
+        <div style={{ display: 'flex', gap: 0, flexWrap: 'wrap' }}>
+          {[
+            { label: 'Ingested',    value: funnel.ingested },
+            { label: 'Evaluated',   value: funnel.evaluated },
+            { label: 'Replies Gen', value: funnel.repliesGenerated },
+            { label: 'Notified',    value: funnel.slackNotified },
+            { label: 'Approved',    value: funnel.approved },
+            { label: 'Posted',      value: funnel.posted, color: C.green },
+            { label: 'Rejected',    value: funnel.rejected, color: C.red },
+            { label: 'Skipped',     value: funnel.skipped, color: C.muted },
+          ].map(({ label, value, color }) => (
+            <div key={label} style={{ minWidth: 90, padding: '0 16px 0 0', marginBottom: 8 }}>
+              <div style={{ fontSize: 24, fontWeight: 700, color: color || C.dark }}>{value}</div>
+              <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Reply variant approval rates */}
+      <div style={card}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>REPLY VARIANT PERFORMANCE</div>
+        <div style={{ display: 'flex', gap: 24 }}>
+          {[
+            { label: 'Primary', data: replyVariants.primary },
+            { label: 'Safer',   data: replyVariants.safer },
+          ].map(({ label, data }) => (
+            <div key={label} style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 6 }}>{label}</div>
+              <div style={{ fontSize: 12, color: C.mid }}>Generated: {data.generated}</div>
+              <div style={{ fontSize: 12, color: C.mid }}>Approved: {data.approved}</div>
+              <div style={{ marginTop: 8 }}>
+                <ApprovalBar rate={data.approvalRate} />
+                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                  {(data.approvalRate * 100).toFixed(0)}% approval rate
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Subreddit table */}
+      {subreddits.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SUBREDDIT PERFORMANCE</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {['Subreddit', 'Ingested', 'Approved', 'Posted', 'Post Rate', 'Avg Fit', 'Avg Upvotes'].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '4px 10px 8px', color: C.muted, fontWeight: 600, fontSize: 11 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {subreddits.map(s => (
+                <tr key={s.subreddit} style={{ borderBottom: `1px solid ${C.border}` }}>
+                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>r/{s.subreddit}</td>
+                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.ingested}</td>
+                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.approved}</td>
+                  <td style={{ padding: '8px 10px', color: C.green, fontWeight: 600 }}>{s.posted}</td>
+                  <td style={{ padding: '8px 10px' }}>
+                    <span style={{ ...pill(s.postRate >= 0.3 ? C.green : s.postRate >= 0.1 ? C.yellow : C.muted) }}>
+                      {(s.postRate * 100).toFixed(0)}%
+                    </span>
+                  </td>
+                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.avgFitScore ?? '—'}</td>
+                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.avgUpvotes ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Skip reasons */}
+      {(skipByIntent.length > 0 || skipByAudience.length > 0) && (
+        <div style={{ display: 'flex', gap: 16 }}>
+          <div style={{ ...card, flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SKIPPED BY INTENT</div>
+            {skipByIntent.slice(0, 8).map(({ intent, count }) => (
+              <div key={intent} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.mid }}>{intent}</span>
+                <span style={{ fontWeight: 600 }}>{count}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ ...card, flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SKIPPED BY AUDIENCE</div>
+            {skipByAudience.slice(0, 8).map(({ audience, count }) => (
+              <div key={audience} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.mid }}>{audience}</span>
+                <span style={{ fontWeight: 600 }}>{count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Guardrail + gate blocks */}
+      <div style={{ display: 'flex', gap: 16 }}>
+        <div style={{ ...card, flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>CONTENT GUARDRAIL</div>
+          <div style={{ fontSize: 13, color: C.mid, marginBottom: 4 }}>Total checks: <strong style={{ color: C.dark }}>{guardrailSummary.total}</strong></div>
+          <div style={{ fontSize: 13, color: C.mid, marginBottom: 4 }}>Avg risk score: <strong style={{ color: C.dark }}>{guardrailSummary.avgRiskScore ?? '—'}/10</strong></div>
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 12, color: C.muted }}>Approved for post</div>
+            <ApprovalBar rate={guardrailSummary.total > 0 ? guardrailSummary.approvedForPost / guardrailSummary.total : 0} />
+            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+              {guardrailSummary.approvedForPost} / {guardrailSummary.total}
+            </div>
+          </div>
+        </div>
+
+        {gateBlocks.length > 0 && (
+          <div style={{ ...card, flex: 1 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>POSTING GATE BLOCKS</div>
+            {gateBlocks.slice(0, 8).map(({ gate, label, count }) => (
+              <div key={gate} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
+                <span style={{ color: C.mid }}>{label}</span>
+                <span style={{ fontWeight: 600 }}>{count}</span>
+              </div>
+            ))}
+            {postingSuccess && (
+              <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
+                {postingSuccess.succeeded}/{postingSuccess.totalAttempts} attempts succeeded
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ApprovalBar({ rate }) {
+  const pct = Math.round((rate || 0) * 100)
+  return (
+    <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden', marginTop: 6 }}>
+      <div style={{ height: '100%', width: `${pct}%`, background: pct >= 50 ? C.green : C.yellow, borderRadius: 3 }} />
     </div>
   )
 }
