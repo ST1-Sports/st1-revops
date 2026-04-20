@@ -5956,7 +5956,7 @@ function ModMarketing() {
   };
   const saveTouchEdit = () => {
     if(!selCamp||editingTouchIdx===null) return;
-    dispatch("UPDATE_CAMPAIGN",{...selCamp,touches:selCamp.touches.map((t,i)=>i===editingTouchIdx?{...t,...touchDraft}:t)});
+    dispatch("UPDATE_CAMPAIGN",{...selCamp,touches:(selCamp.touches||[]).map((t,i)=>i===editingTouchIdx?{...t,...touchDraft}:t)});
     setEditingTouchIdx(null);
     toast("Email updated","success");
   };
@@ -7676,7 +7676,7 @@ function ModMarketing() {
                   if(executeFilter==="active") return e.status==="active"&&!(e.step>0||e.lastSentAt);
                   return e.status===executeFilter;
                 };
-                const visibleCount=selCamp.enrollments.filter(e=>{
+                const visibleCount=(selCamp.enrollments||[]).filter(e=>{
                   const c=contactMap[e.contactId];
                   return statusFilterFn(e)&&(!c||(filterSport==="all"||c.sport===filterSport));
                 }).length;
@@ -7694,7 +7694,7 @@ function ModMarketing() {
                 );
               })()}
               <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                {selCamp.enrollments
+                {(selCamp.enrollments||[])
                   .filter(e=>{
                     const c=contactMap[e.contactId];
                     const statusMatch = executeFilter==="all"?true:executeFilter==="sent"?(e.step>0||e.lastSentAt)&&e.status==="active":executeFilter==="active"?e.status==="active"&&!(e.step>0||e.lastSentAt):e.status===executeFilter;
@@ -7710,7 +7710,7 @@ function ModMarketing() {
                   .map(e=>{
                     const c=contactMap[e.contactId];
                     if(!c)return null;
-                    const touch=selCamp.touches[e.step];
+                    const touch=(selCamp.touches||[])[e.step];
                     const sc={active:B.blue,replied:B.green,interested:B.orange,meeting:B.purple,done:B.muted,unsubscribed:B.red,not_interested:B.muted}[e.status]||B.muted;
                     return (
                       <div key={e.contactId} className="card fu" style={{padding:"9px 12px",borderLeft:`3px solid ${sc}`}}>
