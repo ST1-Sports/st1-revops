@@ -97,13 +97,32 @@ export default async function handler(req, res) {
 
       case 'evaluate': {
         if (!body.threadId) return err(res, 'threadId is required', 400);
-        const evaluation = await evaluateThread(body.threadId, body.dryRun === true);
+        const evaluation = await evaluateThread(body.threadId, {
+          subredditRules: body.subredditRules || '',
+          topComments:    body.topComments    || '',
+          dryRun:         body.dryRun === true,
+        });
         return ok(res, { evaluation });
       }
 
       case 'generate': {
         if (!body.threadId) return err(res, 'threadId is required', 400);
-        const replySet = await generateReplies(body.threadId, body.dryRun === true);
+        const replySet = await generateReplies(body.threadId, {
+          dryRun:             body.dryRun             === true,
+          allowVendorMention: body.allowVendorMention === true,
+          allowLinks:         body.allowLinks         === true,
+          subredditRules:     body.subredditRules     || '',
+          topComments:        body.topComments        || '',
+        });
+        // Claude returned SKIP — no value-add for this thread
+        if (replySet.skip) {
+          const db = getPrisma();
+          await db.redditThread.update({
+            where: { id: body.threadId },
+            data:  { status: 'SKIPPED' },
+          });
+          return ok(res, { skip: true, reason: 'Reply writer found no credible value-add for this thread' });
+        }
         return ok(res, { replySet });
       }
 

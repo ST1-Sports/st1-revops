@@ -18,14 +18,14 @@
 const EVAL_DECISIONS    = ['REPLY', 'MONITOR', 'SKIP'];
 const INTENT_TYPES      = ['buying_now', 'researching', 'general_discussion', 'support_request', 'off_topic'];
 const AUDIENCE_TYPES    = ['coach', 'parent', 'athlete', 'admin', 'unknown'];
-const REPLY_TONES       = ['practical', 'reframe', 'empathetic', 'technical', 'conversational'];
 const GUARDRAIL_DECISIONS = ['APPROVE', 'BLOCK', 'EDIT_REQUIRED'];
 
-const MAX_REPLY_CHARS        = 300;
 const MAX_REASONING_WORDS    = 70;
 const MAX_VALUE_ANGLE_WORDS  = 40;
 const MAX_SUMMARY_WORDS      = 40;
-const SIMILARITY_THRESHOLD   = 0.72; // Jaccard word overlap — variants above this are too similar
+const MAX_WHY_IT_WORKS_WORDS = 60;
+const MAX_RISK_NOTES_WORDS   = 50;
+const SIMILARITY_THRESHOLD   = 0.72; // Jaccard word overlap — replies above this are too similar
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -102,12 +102,38 @@ function validateEvaluatorResult(obj) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Detect whether a raw Claude response is a SKIP signal rather than JSON.
+ * The reply prompt instructs Claude to return the literal string "SKIP" when
+ * there is no credible value-add for the thread.
+ *
+ * @param   {string} raw - Raw text from the Claude response
+ * @returns {boolean}
+ */
+function isSkipResponse(raw) {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  // Exact match or wrapped in quotes/backticks
+  if (/^["'`]?SKIP["'`]?$/i.test(trimmed)) return true;
+  // SKIP with no JSON object present — model declined with explanation
+  if (/\bSKIP\b/i.test(trimmed) && !trimmed.includes('{')) return true;
+  return false;
+}
+
+/**
  * Validate the output of the reply generator (reply.md → Claude → parsed JSON).
  *
- * Checks:
- *   thread_summary present, variants is array of exactly 2,
- *   each variant has id (1|2), body (≤300 chars, no URLs), tone (enum), notes.
- *   Also checks that the two variant bodies are not too similar (Jaccard).
+ * Schema (matches reply.md exactly):
+ *   primary_reply  — strongest useful answer (string)
+ *   safer_reply    — less promotional alternative (string)
+ *   why_it_works   — reviewer context, max 60 words (string)
+ *   risk_notes     — reviewer risk flags, max 50 words (string)
+ *   cta_present    — whether the model detected a CTA (boolean; true = hard error)
+ *
+ * Also checks:
+ *   - No URLs in either reply (unless allow_links was true — not enforced here,
+ *     caller is responsible for that flag; we always flag URLs as a safety net)
+ *   - Jaccard similarity between primary and safer replies (must differ in angle)
+ *   - cta_present=true is treated as a validation error (reply is unusable)
  *
  * @param   {any} obj
  * @returns {{ valid: boolean, errors: string[] }}
@@ -116,64 +142,56 @@ function validateGeneratedReplySet(obj) {
   const errors = [];
 
   if (!obj || typeof obj !== 'object') {
-    return { valid: false, errors: ['Result is not an object'] };
+    return { valid: false, errors: ['Result is not an object — expected reply schema or SKIP'] };
   }
 
-  // thread_summary
-  if (typeof obj.thread_summary !== 'string' || obj.thread_summary.trim().length === 0) {
-    errors.push('thread_summary must be a non-empty string');
+  // primary_reply
+  if (typeof obj.primary_reply !== 'string' || obj.primary_reply.trim().length === 0) {
+    errors.push('primary_reply must be a non-empty string');
+  } else if (/https?:\/\//i.test(obj.primary_reply)) {
+    errors.push('primary_reply contains a URL — not allowed by default');
   }
 
-  // variants array
-  if (!Array.isArray(obj.variants)) {
-    errors.push('variants must be an array');
-    return { valid: false, errors };
-  }
-  if (obj.variants.length !== 2) {
-    errors.push(`variants must contain exactly 2 items, got ${obj.variants.length}`);
-    // Still validate what's there
+  // safer_reply
+  if (typeof obj.safer_reply !== 'string' || obj.safer_reply.trim().length === 0) {
+    errors.push('safer_reply must be a non-empty string');
+  } else if (/https?:\/\//i.test(obj.safer_reply)) {
+    errors.push('safer_reply contains a URL — not allowed by default');
   }
 
-  const bodies = [];
-  for (const v of obj.variants) {
-    const prefix = `variant ${v?.id ?? '?'}`;
-
-    if (![1, 2].includes(v?.id)) {
-      errors.push(`${prefix}: id must be 1 or 2, got: ${JSON.stringify(v?.id)}`);
-    }
-
-    if (typeof v?.body !== 'string' || v.body.trim().length === 0) {
-      errors.push(`${prefix}: body must be a non-empty string`);
-    } else {
-      if (v.body.length > MAX_REPLY_CHARS) {
-        errors.push(`${prefix}: body is ${v.body.length} characters — max is ${MAX_REPLY_CHARS}`);
-      }
-      if (/https?:\/\//i.test(v.body)) {
-        errors.push(`${prefix}: body contains a URL — remove it`);
-      }
-      if (/\b\w+\.\w{2,4}\b/.test(v.body) && /https?/.test(v.body) === false) {
-        // Bare domain heuristic — only flag when combined with path-like pattern
-        // (avoids false positives on "e.g." or version numbers like "v1.2")
-      }
-      bodies.push(v.body);
-    }
-
-    if (!REPLY_TONES.includes(v?.tone)) {
-      errors.push(`${prefix}: tone must be one of ${REPLY_TONES.join(' | ')}, got: ${JSON.stringify(v?.tone)}`);
-    }
-
-    if (typeof v?.notes !== 'string' || v.notes.trim().length === 0) {
-      errors.push(`${prefix}: notes must be a non-empty string`);
-    }
+  // why_it_works
+  const whyWords = _wordCount(obj.why_it_works);
+  if (typeof obj.why_it_works !== 'string' || obj.why_it_works.trim().length === 0) {
+    errors.push('why_it_works must be a non-empty string');
+  } else if (whyWords > MAX_WHY_IT_WORKS_WORDS) {
+    errors.push(`why_it_works exceeds ${MAX_WHY_IT_WORKS_WORDS} words (got ${whyWords})`);
   }
 
-  // Similarity check — variants must differ meaningfully in angle
-  if (bodies.length === 2) {
-    const similarity = _jaccardWords(bodies[0], bodies[1]);
+  // risk_notes
+  const riskWords = _wordCount(obj.risk_notes);
+  if (typeof obj.risk_notes !== 'string' || obj.risk_notes.trim().length === 0) {
+    errors.push('risk_notes must be a non-empty string');
+  } else if (riskWords > MAX_RISK_NOTES_WORDS) {
+    errors.push(`risk_notes exceeds ${MAX_RISK_NOTES_WORDS} words (got ${riskWords})`);
+  }
+
+  // cta_present — model self-reports whether a CTA slipped through; treat as hard error
+  if (typeof obj.cta_present !== 'boolean') {
+    errors.push('cta_present must be a boolean');
+  } else if (obj.cta_present === true) {
+    errors.push('cta_present=true — reply contains a call to action; discard or rewrite before using');
+  }
+
+  // Similarity check — primary and safer must differ in angle
+  if (
+    typeof obj.primary_reply === 'string' && obj.primary_reply.length > 0 &&
+    typeof obj.safer_reply   === 'string' && obj.safer_reply.length > 0
+  ) {
+    const similarity = _jaccardWords(obj.primary_reply, obj.safer_reply);
     if (similarity > SIMILARITY_THRESHOLD) {
       errors.push(
-        `Variants are too similar (${(similarity * 100).toFixed(0)}% word overlap) ` +
-        `— they must differ in angle, not just phrasing`
+        `primary_reply and safer_reply are too similar (${(similarity * 100).toFixed(0)}% word overlap)` +
+        ` — they must differ in angle, not just phrasing`
       );
     }
   }
@@ -308,6 +326,7 @@ module.exports = {
   validateGeneratedReplySet,
   validateGuardrailResult,
   parseJson,
+  isSkipResponse,
   // Exported for testing
   _wordCount,
   _jaccardWords,
