@@ -6134,7 +6134,7 @@ function ModMarketing() {
                           <th key={u.id} style={{padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,textAlign:"center",minWidth:80}}>
                             <div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
                               <div style={{width:8,height:8,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
-                              <span style={{color:u.color||B.muted}}>{u.name.split(" ")[0].toUpperCase()}</span>
+                              <span style={{color:u.color||B.muted}}>{(u.name||"?").split(" ")[0].toUpperCase()}</span>
                             </div>
                           </th>
                         ))}
@@ -11139,7 +11139,7 @@ function ModSettings() {
       const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         action:"send", to_email:rep.email, to_name:rep.name,
         subject:`ST1 RevOps — email test for ${rep.name}`,
-        body:`Hi ${rep.name.split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
+        body:`Hi ${(rep.name||"there").split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
         ...(rep.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
       })}).then(r=>r.json());
       if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
