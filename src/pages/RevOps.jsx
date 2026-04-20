@@ -7559,7 +7559,7 @@ function ModMarketing() {
               })()}
               {/* Sequence touchpoints — editable */}
               <div style={{display:"flex",gap:8,marginBottom:16,alignItems:"flex-start"}}>
-                {selCamp.touches.map((t,i)=>(
+                {(selCamp.touches||[]).map((t,i)=>(
                   <div key={t.id||i} className="card" style={{flex:1,padding:10,borderTop:`2px solid ${B.orange}`}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
@@ -7789,7 +7789,7 @@ function ModMarketing() {
                     <div style={{marginBottom:20}}>
                       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:10}}>✉ EMAIL SEQUENCE — {selCamp.touches.length} TOUCH{selCamp.touches.length!==1?"ES":""}</div>
                       <div style={{display:"flex",gap:8,alignItems:"flex-start",flexWrap:"wrap"}}>
-                        {selCamp.touches.map((t,i)=>(
+                        {(selCamp.touches||[]).map((t,i)=>(
                           <div key={t.id||i} className="card" style={{flex:"1 1 220px",padding:10,borderTop:`2px solid ${B.orange}`}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
                               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>TOUCH {t.step} · DAY {t.dayOffset}</div>
