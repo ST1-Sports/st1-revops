@@ -9086,7 +9086,7 @@ function ModSocial() {
                 return(
                   <div key={p.id} className="card" style={{padding:"12px 16px",borderLeft:isLocalOnly?`3px solid ${B.red}`:"none"}}>
                     <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
-                      {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt=""/>}
+                      {p.imageUrl&&<img src={p.imageUrl} style={{width:60,height:60,objectFit:"cover",borderRadius:6,flexShrink:0}} alt="" onError={e=>{e.target.style.display="none";}}/>}
                       <div style={{flex:1,minWidth:0}}>
                         <div style={{display:"flex",gap:5,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
                           {(p.platforms||[]).map(pl=>(
@@ -9105,7 +9105,8 @@ function ModSocial() {
                           <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 10px",marginBottom:6,fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
                             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:4}}>DEBUG SEND RESULT</div>
                             <div style={{marginBottom:6}}><b>Verdict:</b> <span style={{color:(verboseResult.verdict||"").startsWith("SUCCESS")?B.green:B.red,fontWeight:700}}>{verboseResult.verdict||"?"}</span></div>
-                            <div style={{marginBottom:4}}><b>Workspace:</b> {verboseResult.workspaceId} | <b>Account:</b> {verboseResult.accountId}</div>
+                            <div style={{marginBottom:4}}><b>Workspace:</b> {verboseResult.workspaceId} | <b>Env acct:</b> {verboseResult.envAccountId||"—"} | <b>Live acct:</b> {verboseResult.liveAccountId||"—"}</div>
+                            {(verboseResult.accountLookup||[]).length>0&&<div style={{marginBottom:4,fontSize:9,color:B.muted}}><b>Accounts:</b> {verboseResult.accountLookup.map(a=>`${a.name||a.id} (${a.type||"?"})`).join(", ")}</div>}
                             {(verboseResult.attempts||[]).map((a,i)=>(
                               <div key={i} style={{marginBottom:3,padding:"3px 6px",background:a.ok||a.status===200||a.status===201?`${B.green}10`:`${B.red}08`,borderRadius:3,border:`1px solid ${a.ok||a.status===200||a.status===201?B.green:B.red}20`,fontSize:9}}>
                                 <b style={{color:a.ok||a.status===200||a.status===201?B.green:B.red}}>{a.label}</b> → HTTP {a.status} | {JSON.stringify(a.response).slice(0,120)}
