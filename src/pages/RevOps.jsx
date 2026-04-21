@@ -5975,11 +5975,20 @@ function ModMarketing() {
   const postCampPostNow = async (campId, post) => {
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({post:post.caption,platforms:post.platforms,mediaUrls:post.imageUrl?[post.imageUrl]:[]})});
+        body:JSON.stringify({
+          post:post.caption,
+          platforms:post.platforms,
+          mediaUrls:post.imageUrl?[post.imageUrl]:[],
+          scheduleDate:post.date&&post.time?`${post.date}T${post.time}:00`:undefined,
+          link:post.link||undefined,
+          isStory:post.type==="story",
+        })});
       const d=await r.json();
       if(d.status==="success"||d.postIds?.length){
         const camp=campaigns.find(c=>c.id===campId);
         if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:(camp.socialPosts||[]).map(p=>p.id===post.id?{...p,posted:true,postedAt:today()}:p)});
+        if(d._warning) toast(`⚠ ${d._warning}`,"warn");
+        if(d._partialErrors?.length) toast(`⚠ Partial errors: ${d._partialErrors.join(", ")}`,"warn");
         toast("Posted successfully","success");
       }else{toast(d.error||"Post failed","error");}
     }catch(e){toast(e?.message||"Post failed","error");}
@@ -8880,6 +8889,8 @@ function ModSocial() {
         dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
         if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
         if(data._missing) toast(`⚠ ${data._missing}`,"warn");
+        if(data._warning) toast(`⚠ ${data._warning}`,"warn");
+        if(data._partialErrors?.length) toast(`⚠ Partial errors: ${data._partialErrors.join(", ")}`,"warn");
         toast("Sent to Publer — checking result…","info");
         // Poll job status in background to confirm success or surface failure
         if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);
@@ -9184,6 +9195,11 @@ function ModSocial() {
               <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
+              {imageUrl&&imageUrl.startsWith("data:")&&(
+                <div style={{marginTop:6,padding:"6px 10px",background:"#fff3cd",border:"1px solid #f0c040",borderRadius:4,fontSize:11,color:"#7a5a00"}}>
+                  ⚠ This image is a local preview — it cannot be sent to Publer. Save it as a Brand Asset first (it will upload to a public URL), then use it from there.
+                </div>
+              )}
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
