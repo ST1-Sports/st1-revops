@@ -5372,6 +5372,7 @@ function ModMarketing() {
   const [pendingBatch,setPendingBatch]=useState(null);
   const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
   const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
+  const [lastSendErr,setLastSendErr]=useState(null); // persistent error from last send attempt
   const [intCollapsed,setIntCollapsed]=useState(false);
   // Audience segmentation (wizard step 5)
   const [segRunning,setSegRunning]=useState(false);
@@ -5812,7 +5813,9 @@ function ModMarketing() {
       : [co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
     const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
     const subject=mergeTags(touch.subject,c)||`Following up — ${camp.product||camp.name}`;
-    const plainBody=mergeTags(touch.body,c)+sigText;
+    const mergedBody=mergeTags(touch.body,c);
+    // Ensure body is never empty — API rejects it
+    const plainBody=(mergedBody.trim()?mergedBody:"(No email body — edit this touch in the Assets tab)")+sigText;
     const eid=`${camp.id}~${enroll.contactId}~${enroll.step}`;
     const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;
     const esc=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -5835,8 +5838,15 @@ function ModMarketing() {
           ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
         })});
       const d=await r.json();
-      return d.sent?{ok:true}:{ok:false,reason:d.error||"send failed"};
-    }catch(err){return {ok:false,reason:err.message};}
+      if(d.sent) return {ok:true};
+      // Surface detailed error so it shows in the UI
+      const reason=d.error||(d.raw?.error?.message)||"send failed";
+      console.error("[sendOneEmail] API error →",d);
+      return {ok:false,reason};
+    }catch(err){
+      console.error("[sendOneEmail] fetch error →",err);
+      return {ok:false,reason:err.message};
+    }
   };
 
   const BATCH_SIZE = 25;
@@ -7304,6 +7314,7 @@ function ModMarketing() {
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp||sending) return;
                   setSending(true);
+                  setLastSendErr(null);
                   try {
                   let sent=0,failed=0,skipped=0,firstErr=null;
                   const todStr=today();
@@ -7352,10 +7363,14 @@ function ModMarketing() {
                   if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
                   const skipNote=skipped?` · ${skipped} already sent/interested`:"";
                   const noEmailNote=noEmailAdv?` · ${noEmailAdv} skipped (no email)`:"";
-                  toast(`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`,sent>0||skipped>0||noEmailAdv>0?"success":"error");
+                  const msg=`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`;
+                  toast(msg,sent>0||skipped>0||noEmailAdv>0?"success":"error");
+                  if(failed>0||sent===0&&skipped===0&&noEmailAdv===0) setLastSendErr(msg);
                   } catch(err) {
                     console.error("[sendOneBatch]",err);
-                    toast(`Send failed: ${err.message}`,"error");
+                    const errMsg=`Send crashed: ${err.message}`;
+                    toast(errMsg,"error");
+                    setLastSendErr(errMsg);
                   } finally {
                     setSending(false);
                   }
@@ -7395,6 +7410,18 @@ function ModMarketing() {
                 const done=enrs.filter(e=>e.status==="done").length;
                 const totalPending=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut).length;
 
+                // Test Gmail connectivity (calls profile action)
+                const testGmailConn=async()=>{
+                  const repKey=rep?.gmailEnvKey||"";
+                  try{
+                    const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+                      body:JSON.stringify({action:"profile",...(repKey?{repEnvKey:repKey}:{})})});
+                    const d=await r.json();
+                    if(d.email){toast(`Gmail OK — connected as ${d.email}`,"success");setLastSendErr(null);}
+                    else{const e=d.error||"unknown error";toast(`Gmail error: ${e}`,"error");setLastSendErr(`Gmail connection failed: ${e}`);}
+                  }catch(err){toast(`Gmail test failed: ${err.message}`,"error");setLastSendErr(`Gmail connection failed: ${err.message}`);}
+                };
+
                 return(<>
                   {/* Rep + Gmail status */}
                   {rep&&(
@@ -7406,7 +7433,20 @@ function ModMarketing() {
                           :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from your account with their signature. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Sales Reps → Edit → set Gmail Key</a>.</span>
                         }
                       </div>
+                      <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
                       <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                    </div>
+                  )}
+
+                  {/* Persistent error banner from last send attempt */}
+                  {lastSendErr&&(
+                    <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fee2e2",border:"1px solid #fca5a5",borderRadius:6,marginBottom:12}}>
+                      <span style={{flexShrink:0,fontSize:14}}>⚠️</span>
+                      <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#b91c1c",lineHeight:1.5}}>{lastSendErr}</div>
+                      <div style={{display:"flex",gap:6,flexShrink:0}}>
+                        <button onClick={testGmailConn} style={{background:"#b91c1c",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>TEST GMAIL</button>
+                        <button onClick={()=>setLastSendErr(null)} style={{background:"none",border:"none",color:"#b91c1c",cursor:"pointer",fontSize:16,padding:0,lineHeight:1}}>×</button>
+                      </div>
                     </div>
                   )}
 
