@@ -436,6 +436,42 @@ function reducer(prev, action, payload) {
   }
 }
 
+// ─── GMAIL STATUS BANNER ──────────────────────────────────────────────────────
+// Auto-checks Gmail connectivity on mount. Used in the campaign execute tab.
+function GmailStatusBanner({repKey=""}) {
+  const [status,setStatus]=React.useState(null); // null=checking {ok,email,error}
+  React.useEffect(()=>{
+    let active=true;
+    fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"profile",...(repKey?{repEnvKey:repKey}:{})})})
+      .then(r=>r.json())
+      .then(d=>{if(active) setStatus(d.email?{ok:true,email:d.email}:{ok:false,error:d.error||"unknown error"});})
+      .catch(err=>{if(active) setStatus({ok:false,error:err.message});});
+    return()=>{active=false;};
+  },[repKey]);
+  if(!status) return(
+    <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f8f8f6",border:"1px solid #e0e0d0",borderRadius:5,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#888"}}>
+      <span style={{opacity:.6}}>⏳</span> Checking Gmail connection…
+    </div>
+  );
+  if(status.ok) return(
+    <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:5,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#15803d"}}>
+      <span>✓</span> Gmail connected — sending as <strong style={{marginLeft:3}}>{status.email}</strong>
+    </div>
+  );
+  return(
+    <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:5,marginBottom:8}}>
+      <span style={{flexShrink:0}}>⚠️</span>
+      <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#b91c1c",lineHeight:1.5}}>
+        <strong>Gmail not connected:</strong> {status.error}
+        {(status.error||"").includes("not configured")&&<span> — visit <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>/api/gmail-setup</a> to connect Gmail.</span>}
+        {(status.error||"").includes("token refresh failed")&&<span> — your token may have expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>Re-authorize Gmail →</a></span>}
+        {(status.error||"").includes("invalid_grant")&&<span> — token revoked or expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>Re-authorize Gmail →</a></span>}
+      </div>
+    </div>
+  );
+}
+
 // ─── SHARED HELPERS ───────────────────────────────────────────────────────────
 const mergeTags=(text,c)=>(text||"")
   .replace(/\{\{firstName\}\}/gi,c?.firstName||(c?.fullName||"").split(" ")[0]||"there")
@@ -7312,7 +7348,9 @@ function ModMarketing() {
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
                 const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
-                  if(!camp||sending) return;
+                  console.log("[sendOneBatch] camp=",camp?.id,"sending=",sending,"batch=",batchEnrollments.length,"noEmail=",noEmailEnrs.length);
+                  if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
+                  if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
                   setSending(true);
                   setLastSendErr(null);
                   try {
@@ -7423,9 +7461,12 @@ function ModMarketing() {
                 };
 
                 return(<>
+                  {/* Always-visible Gmail connectivity check — auto-runs on mount */}
+                  <GmailStatusBanner repKey={rep?.gmailEnvKey||""} />
+
                   {/* Rep + Gmail status */}
                   {rep&&(
-                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:8}}>
                       <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
@@ -7435,6 +7476,15 @@ function ModMarketing() {
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
                       <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                    </div>
+                  )}
+
+                  {/* Stuck-sending reset — if sending got stuck, show a reset button */}
+                  {sending&&(
+                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"7px 12px",background:`${B.orange}10`,border:`1px solid ${B.orange}40`,borderRadius:5,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>
+                      <span style={{animation:"spin 1s linear infinite",display:"inline-block"}}>⏳</span>
+                      <span style={{flex:1}}>Sending in progress…</span>
+                      <button onClick={()=>setSending(false)} style={{background:"none",border:`1px solid ${B.orange}60`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.orange,cursor:"pointer"}}>RESET</button>
                     </div>
                   )}
 
