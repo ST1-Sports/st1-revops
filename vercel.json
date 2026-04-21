@@ -14,7 +14,8 @@
     "api/zoho.js":                                { "maxDuration": 30 },
     "api/inbound-email.js":                       { "maxDuration": 15 },
     "api/state.js":                                { "maxDuration": 15 },
-    "api/reddit/index.js":                         { "maxDuration": 30 }
+    "api/reddit/index.js":                         { "maxDuration": 30 },
+    "api/social-post.js":                          { "maxDuration": 60 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
