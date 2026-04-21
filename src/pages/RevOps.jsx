@@ -439,16 +439,26 @@ function reducer(prev, action, payload) {
 // ─── GMAIL STATUS BANNER ──────────────────────────────────────────────────────
 // Auto-checks Gmail connectivity on mount. Used in the campaign execute tab.
 function GmailStatusBanner({repKey=""}) {
-  const [status,setStatus]=React.useState(null); // null=checking {ok,email,error}
-  React.useEffect(()=>{
-    let active=true;
+  const [status,setStatus]=React.useState(null); // null=checking | {ok,email} | {ok:false,error,type}
+  const check=React.useCallback(()=>{
+    setStatus(null);
     fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"profile",...(repKey?{repEnvKey:repKey}:{})})})
-      .then(r=>r.json())
-      .then(d=>{if(active) setStatus(d.email?{ok:true,email:d.email}:{ok:false,error:d.error||"unknown error"});})
-      .catch(err=>{if(active) setStatus({ok:false,error:err.message});});
-    return()=>{active=false;};
+      .then(r=>{
+        if(!r.ok) return r.json().then(d=>{throw new Error(d.error||`HTTP ${r.status}`);});
+        return r.json();
+      })
+      .then(d=>setStatus(d.email?{ok:true,email:d.email}:{ok:false,error:d.error||"unknown",type:"auth"}))
+      .catch(err=>{
+        const msg=err.message||"";
+        const type=msg==="Failed to fetch"?"network":
+                   msg.includes("not configured")?"setup":
+                   msg.includes("invalid_grant")||msg.includes("token")?"expired":"auth";
+        setStatus({ok:false,error:msg,type});
+      });
   },[repKey]);
+  React.useEffect(()=>{check();},[check]);
+
   if(!status) return(
     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f8f8f6",border:"1px solid #e0e0d0",borderRadius:5,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#888"}}>
       <span style={{opacity:.6}}>⏳</span> Checking Gmail connection…
@@ -457,17 +467,22 @@ function GmailStatusBanner({repKey=""}) {
   if(status.ok) return(
     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:5,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#15803d"}}>
       <span>✓</span> Gmail connected — sending as <strong style={{marginLeft:3}}>{status.email}</strong>
+      <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
     </div>
   );
+  const fixes={
+    network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
+    setup:<>Gmail is not configured. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Click here to connect Gmail →</a></>,
+    expired:<>Your Gmail authorization has expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+    auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+  };
   return(
     <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:5,marginBottom:8}}>
-      <span style={{flexShrink:0}}>⚠️</span>
-      <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#b91c1c",lineHeight:1.5}}>
-        <strong>Gmail not connected:</strong> {status.error}
-        {(status.error||"").includes("not configured")&&<span> — visit <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>/api/gmail-setup</a> to connect Gmail.</span>}
-        {(status.error||"").includes("token refresh failed")&&<span> — your token may have expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>Re-authorize Gmail →</a></span>}
-        {(status.error||"").includes("invalid_grant")&&<span> — token revoked or expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",textDecorationLine:"underline"}}>Re-authorize Gmail →</a></span>}
+      <span style={{flexShrink:0,fontSize:15}}>⚠️</span>
+      <div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#b91c1c",lineHeight:1.6}}>
+        {fixes[status.type]||fixes.auth}
       </div>
+      <button onClick={check} style={{flexShrink:0,background:"#b91c1c",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>RETRY</button>
     </div>
   );
 }
