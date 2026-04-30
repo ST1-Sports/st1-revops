@@ -736,11 +736,148 @@ function QuoteModule({ userRole }) {
   )
 }
 
+// ─── MODULE 5: RESEARCH & INTEL ──────────────────────────────────────────────
+const INTEL_KEY = 'st1_intel'
+
+function linkify(text) {
+  const urlRe = /(https?:\/\/[^\s)>\]]+)/g
+  const parts = []
+  let last = 0, m
+  while ((m = urlRe.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index))
+    parts.push(<a key={m.index} href={m[0]} target="_blank" rel="noopener noreferrer" style={{ color: B.orange, wordBreak: 'break-all' }}>{m[0]}</a>)
+    last = m.index + m[0].length
+  }
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
+function ResearchModule({ userRole }) {
+  const [query,   setQuery]   = useState('')
+  const [output,  setOutput]  = useState('')
+  const [loading, setLoading] = useState(false)
+  const [err,     setErr]     = useState('')
+  const [saved,   setSaved]   = useState(false)
+  const [history, setHistory] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(INTEL_KEY) || '[]') } catch { return [] }
+  })
+
+  async function handleRun() {
+    if (!query.trim()) return
+    setLoading(true); setErr(''); setOutput(''); setSaved(false)
+    try {
+      const res = await routeTask({ task: query.trim(), input: '', userRole })
+      setOutput(res.output || '')
+    } catch (e) {
+      setErr(e.message || 'Research failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleSave() {
+    const entry = {
+      id:        Date.now(),
+      query:     query.trim(),
+      output,
+      savedAt:   new Date().toISOString(),
+    }
+    const next = [entry, ...history].slice(0, 50)
+    localStorage.setItem(INTEL_KEY, JSON.stringify(next))
+    setHistory(next)
+    setSaved(true)
+  }
+
+  function handleDelete(id) {
+    const next = history.filter(e => e.id !== id)
+    localStorage.setItem(INTEL_KEY, JSON.stringify(next))
+    setHistory(next)
+  }
+
+  const paragraphs = output ? output.split(/\n{2,}/) : []
+
+  return (
+    <div>
+      <ModHeader icon="🔍" label="Research & Intel" desc="Live market research with cited sources. Results are saved to your Intel library." />
+
+      <Card>
+        <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, marginBottom:4 }}>RESEARCH QUERY</div>
+        <textarea
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          rows={3}
+          placeholder="e.g. What are Lincoln Public Schools buying for fall 2025? What's BSN Sports pricing on Rawlings helmets?"
+          style={{ ...IS, resize: 'vertical', minHeight: 70 }}
+        />
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+          <GenBtn loading={loading} label="RUN RESEARCH" onClick={handleRun} />
+          {output && !saved && (
+            <button
+              onClick={handleSave}
+              style={{ background: B.greenBg, color: B.green, border: `1px solid ${B.green}40`, borderRadius: 6, padding: '8px 16px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}
+            >
+              SAVE TO INTEL
+            </button>
+          )}
+          {saved && <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.green }}>Saved to Intel library</span>}
+        </div>
+        <ErrMsg msg={err} />
+      </Card>
+
+      {output && (
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2 }}>RESEARCH RESULTS</span>
+            <CopyBtn text={output} />
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, lineHeight: 1.7 }}>
+            {paragraphs.map((p, i) => (
+              <p key={i} style={{ margin: '0 0 12px' }}>{linkify(p)}</p>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {history.length > 0 && (
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>INTEL LIBRARY</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {history.map(e => (
+              <div key={e.id} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: '10px 12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, fontWeight: 600, color: B.text, marginBottom: 3 }}>{e.query}</div>
+                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>{new Date(e.savedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                    <button
+                      onClick={() => { setQuery(e.query); setOutput(e.output); setSaved(true); window.scrollTo(0, 0) }}
+                      style={{ background: B.orangeBg, color: B.orange, border: `1px solid ${B.orange}30`, borderRadius: 5, padding: '4px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}
+                    >
+                      VIEW
+                    </button>
+                    <button
+                      onClick={() => handleDelete(e.id)}
+                      style={{ background: 'none', border: 'none', color: B.muted, fontSize: 14, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}
+                      title="Delete"
+                    >×</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
   if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
   if (mod.id === 'social')     return <SocialModule     userRole={userRole} />
   if (mod.id === 'image')      return <ImageModule      userRole={userRole} />
   if (mod.id === 'quote')      return <QuoteModule      userRole={userRole} />
+  if (mod.id === 'research')   return <ResearchModule   userRole={userRole} />
   return <PlaceholderPanel mod={mod} />
 }
 
