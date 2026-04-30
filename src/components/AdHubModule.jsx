@@ -499,20 +499,310 @@ function DashboardTab({ platforms, dateRange, userRole }) {
   )
 }
 
-function CampaignsTab({ platforms }) {
+// ─── CAMPAIGNS TAB ───────────────────────────────────────────────────────────
+async function fetchAllCampaigns(platforms) {
+  const results = await Promise.allSettled(
+    platforms.map(pid => {
+      const p = PLATFORMS.find(x => x.id === pid)
+      return fetch(`${p.endpoint}?action=campaigns`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) throw new Error(data.error)
+          return Array.isArray(data) ? data : []
+        })
+    })
+  )
+  const campaigns = []
+  const errors    = {}
+  platforms.forEach((pid, i) => {
+    if (results[i].status === 'fulfilled') campaigns.push(...results[i].value)
+    else errors[pid] = results[i].reason?.message || 'Failed'
+  })
+  return { campaigns, errors }
+}
+
+async function campaignAction(pid, body) {
+  const p = PLATFORMS.find(x => x.id === pid)
+  const r = await fetch(p.endpoint, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  })
+  const d = await r.json()
+  if (d.error) throw new Error(d.error)
+  return d
+}
+
+function statusColor(status = '') {
+  const s = status.toUpperCase()
+  if (s === 'ACTIVE' || s === 'ENABLED' || s === 'ENABLE') return B.green
+  if (s === 'PAUSED' || s === 'PAUSE'   || s === 'DISABLE') return '#C77800'
+  return B.gray2
+}
+
+function StatusBadge({ status }) {
+  const label = (status || 'UNKNOWN').replace(/_/g, ' ')
   return (
-    <Card>
-      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 16 }}>ALL CAMPAIGNS</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {platforms.map(pid => (
-          <div key={pid} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12 }}>
-            <PlatformBadge platform={pid} size="sm" />
-            <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2, flex: 1 }}>Connect {PLATFORMS.find(p => p.id === pid)?.label} to load campaigns</span>
-            <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.gray2, letterSpacing: 1 }}>NOT CONNECTED</span>
-          </div>
-        ))}
+    <span style={{
+      fontFamily:    "'Lexend Zetta',sans-serif",
+      fontSize:      7,
+      letterSpacing: 1,
+      color:         statusColor(status),
+      background:    statusColor(status) + '18',
+      border:        `1px solid ${statusColor(status)}40`,
+      borderRadius:  4,
+      padding:       '2px 7px',
+    }}>
+      {label}
+    </span>
+  )
+}
+
+function BudgetEditor({ campaign, onSave }) {
+  const [editing, setEditing] = useState(false)
+  const [value,   setValue]   = useState(String(campaign.dailyBudget ?? ''))
+  const [saving,  setSaving]  = useState(false)
+  const [err,     setErr]     = useState('')
+
+  async function save() {
+    const num = parseFloat(value)
+    if (isNaN(num) || num <= 0) { setErr('Invalid'); return }
+    setSaving(true); setErr('')
+    try {
+      await onSave(num)
+      setEditing(false)
+    } catch (e) { setErr(e.message) }
+    finally { setSaving(false) }
+  }
+
+  if (!editing) return (
+    <button
+      onClick={() => setEditing(true)}
+      style={{ background: 'none', border: 'none', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: campaign.dailyBudget ? B.text : B.gray2, cursor: 'pointer', padding: 0, textDecoration: 'underline dotted' }}
+    >
+      {campaign.dailyBudget ? `$${campaign.dailyBudget.toFixed(0)}/day` : '—'}
+    </button>
+  )
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <input
+        autoFocus
+        value={value}
+        onChange={e => setValue(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+        style={{ width: 70, padding: '3px 6px', fontFamily: "'Lexend',sans-serif", fontSize: 11, border: `1px solid ${err ? B.red : B.orange}`, borderRadius: 4, outline: 'none' }}
+      />
+      <button onClick={save} disabled={saving} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 4, padding: '3px 8px', fontSize: 9, cursor: 'pointer' }}>
+        {saving ? '…' : '✓'}
+      </button>
+      <button onClick={() => setEditing(false)} style={{ background: 'none', border: 'none', color: B.muted, cursor: 'pointer', fontSize: 13, lineHeight: 1 }}>×</button>
+    </div>
+  )
+}
+
+function DrillDown({ campaign, dateRange }) {
+  const [rows,    setRows]    = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err,     setErr]     = useState('')
+
+  useEffect(() => {
+    const p = PLATFORMS.find(x => x.id === campaign.platform)
+    if (!p) { setLoading(false); return }
+    fetch(`${p.endpoint}?action=insights&level=adset&dateRange=${dateRange}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) throw new Error(d.error)
+        setRows(Array.isArray(d) ? d : [])
+      })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false))
+  }, [campaign.id, dateRange])
+
+  if (loading) return <div style={{ padding: '12px 16px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Loading ad sets…</div>
+  if (err)     return <div style={{ padding: '12px 16px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.red }}>{err}</div>
+  if (!rows.length) return <div style={{ padding: '12px 16px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No ad set data available.</div>
+
+  return (
+    <div style={{ padding: '10px 16px 14px', background: B.surface, borderTop: `1px solid ${B.border}` }}>
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5, marginBottom: 8 }}>AD SETS</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+        <thead>
+          <tr style={{ borderBottom: `1px solid ${B.border}` }}>
+            {['Ad Set', 'Spend', 'Revenue', 'ROAS', 'Impressions', 'Clicks', 'CTR'].map(h => (
+              <th key={h} style={{ padding: '5px 8px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1, textAlign: h === 'Ad Set' ? 'left' : 'right' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, i) => (
+            <tr key={r.id + i} style={{ borderBottom: `1px solid ${B.border}` }}>
+              <td style={{ padding: '7px 8px', fontFamily: "'Lexend',sans-serif", color: B.text, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.text }}>{fmtUsd(r.spend)}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.text }}>{fmtUsd(r.revenue)}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: r.roas >= 2 ? B.green : B.text }}>{fmtRoas(r.roas)}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtNum(r.impressions)}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtNum(r.clicks)}</td>
+              <td style={{ padding: '7px 8px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtPct(r.ctr)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function CampaignRow({ campaign, dateRange, onRefresh }) {
+  const [expanded, setExpanded] = useState(false)
+  const [acting,   setActing]   = useState(false)
+  const [flash,    setFlash]    = useState('')
+
+  const isActive = ['ACTIVE', 'ENABLED', 'ENABLE'].includes((campaign.status || '').toUpperCase())
+
+  async function doAction(action, extra = {}) {
+    setActing(true); setFlash('')
+    try {
+      await campaignAction(campaign.platform, { action, id: campaign.id, ...extra })
+      setFlash(action === 'pause' ? 'Paused' : action === 'resume' ? 'Resumed' : 'Updated')
+      setTimeout(() => { setFlash(''); onRefresh() }, 1200)
+    } catch (e) {
+      setFlash(`Error: ${e.message}`)
+    } finally {
+      setActing(false)
+    }
+  }
+
+  return (
+    <div style={{ border: `1px solid ${B.border}`, borderRadius: 8, overflow: 'hidden', background: B.white }}>
+      {/* Main row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 14px' }}>
+        <button
+          onClick={() => setExpanded(v => !v)}
+          style={{ background: 'none', border: 'none', color: B.muted, cursor: 'pointer', fontSize: 11, padding: 0, flexShrink: 0, width: 16, textAlign: 'center' }}
+        >
+          {expanded ? '▾' : '▸'}
+        </button>
+
+        <PlatformBadge platform={campaign.platform} size="sm" />
+
+        <span style={{ flex: 1, fontFamily: "'Lexend',sans-serif", fontSize: 12, fontWeight: 500, color: B.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {campaign.name}
+        </span>
+
+        <StatusBadge status={campaign.status} />
+
+        <BudgetEditor
+          campaign={campaign}
+          onSave={v => doAction('set_budget', { dailyBudget: v })}
+        />
+
+        {flash
+          ? <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: flash.startsWith('Error') ? B.red : B.green, minWidth: 70 }}>{flash}</span>
+          : (
+            <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+              {isActive
+                ? (
+                  <button
+                    onClick={() => doAction('pause')}
+                    disabled={acting}
+                    style={{ background: '#FFF8E6', color: '#C77800', border: '1px solid #C7780030', borderRadius: 5, padding: '4px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.3, cursor: 'pointer' }}
+                  >
+                    PAUSE
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => doAction('resume')}
+                    disabled={acting}
+                    style={{ background: B.greenBg, color: B.green, border: `1px solid ${B.green}30`, borderRadius: 5, padding: '4px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.3, cursor: 'pointer' }}
+                  >
+                    RESUME
+                  </button>
+                )
+              }
+            </div>
+          )
+        }
       </div>
-    </Card>
+
+      {expanded && <DrillDown campaign={campaign} dateRange={dateRange} />}
+    </div>
+  )
+}
+
+function CampaignsTab({ platforms, dateRange }) {
+  const [campaigns, setCampaigns] = useState([])
+  const [loading,   setLoading]   = useState(false)
+  const [errors,    setErrors]    = useState({})
+  const [filter,    setFilter]    = useState('all')   // all | active | paused
+
+  const load = useCallback(async () => {
+    if (!platforms.length) return
+    setLoading(true)
+    const { campaigns: c, errors: e } = await fetchAllCampaigns(platforms)
+    setCampaigns(c); setErrors(e); setLoading(false)
+  }, [platforms.join(',')])
+
+  useEffect(() => { load() }, [load])
+
+  const filtered = filter === 'all'
+    ? campaigns
+    : campaigns.filter(c => {
+        const s = (c.status || '').toUpperCase()
+        return filter === 'active' ? ['ACTIVE', 'ENABLED'].includes(s) : ['PAUSED', 'DISABLE', 'DISABLED'].includes(s)
+      })
+
+  const errPlatforms = Object.keys(errors)
+
+  return (
+    <div>
+      {errPlatforms.length > 0 && (
+        <div style={{ marginBottom: 12, padding: '9px 14px', background: '#FFF8E6', border: '1px solid #C7780030', borderRadius: 6, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#C77800' }}>
+          Could not load: {errPlatforms.map(pid => `${PLATFORMS.find(p => p.id === pid)?.label} (${errors[pid]})`).join(' · ')}
+        </div>
+      )}
+
+      <Card style={{ marginBottom: 12, padding: '10px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          {/* Status filter */}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[['all', 'ALL'], ['active', 'ACTIVE'], ['paused', 'PAUSED']].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setFilter(id)}
+                style={{
+                  background:  filter === id ? B.orange : B.surface,
+                  color:       filter === id ? B.white  : B.muted,
+                  border:      filter === id ? 'none'   : `1px solid ${B.border}`,
+                  borderRadius: 5, padding: '4px 12px', fontSize: 9,
+                  fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer',
+                }}
+              >
+                {label} {id === 'all' ? `(${campaigns.length})` : id === 'active' ? `(${campaigns.filter(c => ['ACTIVE','ENABLED'].includes((c.status||'').toUpperCase())).length})` : `(${campaigns.filter(c => ['PAUSED','DISABLE','DISABLED'].includes((c.status||'').toUpperCase())).length})`}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={load}
+            style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 5, padding: '4px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}
+          >
+            {loading ? '…' : '↻ REFRESH'}
+          </button>
+        </div>
+      </Card>
+
+      {loading && !campaigns.length
+        ? <Card><div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Loading campaigns…</div></Card>
+        : filtered.length === 0
+        ? <Card><div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No campaigns found. Connect platforms to see your campaigns here.</div></Card>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {filtered.map((c, i) => (
+              <CampaignRow key={c.id + c.platform + i} campaign={c} dateRange={dateRange} onRefresh={load} />
+            ))}
+          </div>
+        )
+      }
+    </div>
   )
 }
 
@@ -600,7 +890,7 @@ export default function AdHubModule({ userRole }) {
       )}
 
       {tab === 'dashboard' && <DashboardTab platforms={platforms} dateRange={dateRange} userRole={userRole} />}
-      {tab === 'campaigns' && <CampaignsTab platforms={platforms} />}
+      {tab === 'campaigns' && <CampaignsTab platforms={platforms} dateRange={dateRange} />}
       {tab === 'create'    && <CreateTab />}
     </div>
   )
