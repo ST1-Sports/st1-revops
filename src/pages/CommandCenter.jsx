@@ -408,9 +408,141 @@ function SocialModule({ userRole }) {
   )
 }
 
+// ─── IMAGE GENERATOR ─────────────────────────────────────────────────────────
+const USE_CASES = ['Product Promo','Social Post','Email Banner','Event Flyer']
+const MOODS     = ['Bold','Clean','Energetic']
+
+const MOOD_STYLE = { Bold:'DESIGN', Clean:'REALISTIC', Energetic:'REALISTIC' }
+const CASE_SIZE  = { 'Product Promo':'square', 'Social Post':'square', 'Email Banner':'landscape', 'Event Flyer':'story' }
+
+function ImageModule({ userRole }) {
+  const [useCase,   setUseCase]   = useState('Product Promo')
+  const [product,   setProduct]   = useState('')
+  const [mood,      setMood]      = useState('Clean')
+  const [colors,    setColors]    = useState('')
+  const [loading,   setLoading]   = useState(false)
+  const [imageUrl,  setImageUrl]  = useState(null)
+  const [prompt,    setPrompt]    = useState('')
+  const [error,     setError]     = useState(null)
+
+  async function generate() {
+    if (!product.trim()) return
+    setLoading(true); setError(null); setImageUrl(null); setPrompt('')
+
+    // Step 1 — Claude builds the image prompt via routeTask
+    const task = [
+      `Create an image generation prompt for a "${useCase}" for ST1 Sports athletic equipment brand.`,
+      `Featured product or brand: ${product.trim()}.`,
+      `Visual mood: ${mood}. Brand colors: orange (#F37321) and black.`,
+      colors.trim() ? `Additional colors: ${colors.trim()}.` : '',
+      'Athletic sports marketing context. Professional commercial quality.',
+      'Return ONLY the image prompt text — no preamble, no explanation.',
+    ].filter(Boolean).join(' ')
+
+    try {
+      const r = await routeTask({ task, input: { useCase, product, mood, colors }, userRole })
+      const builtPrompt = (r.output || '').trim()
+      setPrompt(builtPrompt)
+
+      // Step 2 — call image API with the generated prompt
+      const imgRes = await fetch('/api/adengine/generate-product-image', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          prompt:  builtPrompt,
+          style:   MOOD_STYLE[mood] || 'REALISTIC',
+          sizeKey: CASE_SIZE[useCase] || 'square',
+        }),
+      })
+      const imgData = await imgRes.json()
+      if (!imgRes.ok) throw new Error(imgData.error || `Image API error ${imgRes.status}`)
+      setImageUrl(imgData.imageUrl)
+    } catch(e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function download() {
+    if (!imageUrl) return
+    const a = document.createElement('a')
+    a.href = imageUrl
+    a.download = `st1-${useCase.toLowerCase().replace(/\s+/g,'-')}-${Date.now()}.jpg`
+    a.click()
+  }
+
+  return (
+    <div style={{ padding:28, overflowY:'auto', flex:1 }}>
+      <ModHeader icon="🖼" label="Image Generator" desc="Builds an ST1-branded image prompt via AI, then generates the image with Ideogram." />
+
+      <Card>
+        <Row2>
+          <Field label="USE CASE">
+            <Sel value={useCase} onChange={e=>setUseCase(e.target.value)}>
+              {USE_CASES.map(u=><option key={u}>{u}</option>)}
+            </Sel>
+          </Field>
+          <Field label="PRODUCT OR BRAND *">
+            <Inp value={product} onChange={e=>setProduct(e.target.value)} placeholder="Wilson A2000, DeMarini CF, BWTF…" />
+          </Field>
+        </Row2>
+
+        <Field label="MOOD">
+          <div style={{ display:'flex', gap:6 }}>
+            {MOODS.map(m => (
+              <button key={m} onClick={()=>setMood(m)} style={{ background:mood===m?B.orange:B.surface, color:mood===m?B.white:B.muted, border:`1px solid ${mood===m?B.orange:B.border}`, borderRadius:6, padding:'6px 16px', fontSize:11, fontFamily:"'Lexend',sans-serif", cursor:'pointer', fontWeight:mood===m?600:400 }}>
+                {m}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="ACCENT COLORS (optional)">
+          <Inp value={colors} onChange={e=>setColors(e.target.value)} placeholder="e.g. navy blue, gold, white…" />
+        </Field>
+
+        <div style={{ display:'flex', justifyContent:'flex-end', marginTop:4 }}>
+          <GenBtn onClick={generate} loading={loading} disabled={!product.trim()} label={loading ? 'GENERATING…' : 'GENERATE IMAGE →'} />
+        </div>
+      </Card>
+
+      <ErrMsg msg={error} />
+
+      {/* Generated prompt (shown for reference) */}
+      {prompt && !imageUrl && (
+        <Card>
+          <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, marginBottom:6 }}>GENERATED PROMPT</div>
+          <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.text, lineHeight:1.6 }}>{prompt}</div>
+        </Card>
+      )}
+
+      {/* Output image */}
+      {imageUrl && (
+        <Card>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+            <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:B.orange, letterSpacing:2 }}>GENERATED IMAGE</span>
+            <div style={{ display:'flex', gap:8 }}>
+              <CopyBtn text={prompt} label="COPY PROMPT" />
+              <button onClick={download} style={{ background:B.orange, color:B.white, border:'none', borderRadius:4, padding:'4px 12px', fontSize:9, fontFamily:"'Lexend Zetta',sans-serif", letterSpacing:.5, cursor:'pointer' }}>
+                DOWNLOAD ↓
+              </button>
+            </div>
+          </div>
+          <img src={imageUrl} alt="Generated" style={{ width:'100%', borderRadius:8, display:'block' }} />
+          <div style={{ marginTop:10, fontFamily:"'Lexend',sans-serif", fontSize:10, color:B.muted, lineHeight:1.5 }}>
+            <strong>Prompt:</strong> {prompt}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
   if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
   if (mod.id === 'social')     return <SocialModule     userRole={userRole} />
+  if (mod.id === 'image')      return <ImageModule      userRole={userRole} />
   return <PlaceholderPanel mod={mod} />
 }
 
