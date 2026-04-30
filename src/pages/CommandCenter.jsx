@@ -539,10 +539,208 @@ function ImageModule({ userRole }) {
   )
 }
 
+// ─── SMART QUOTE BUILDER ─────────────────────────────────────────────────────
+function parseQuote(text) {
+  try { const p = JSON.parse(text.trim()); if (p?.items) return p } catch {}
+  try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); if (p?.items) return p } } catch {}
+  return null
+}
+
+const fmt$ = n => '$' + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
+
+function QuoteModule({ userRole }) {
+  const [query,      setQuery]      = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [items,      setItems]      = useState(null)   // [{vendor,sku,description,unitPrice,qty}]
+  const [notes,      setNotes]      = useState('')
+  const [margin,     setMargin]     = useState(18)
+  const [error,      setError]      = useState(null)
+  const [quoteText,  setQuoteText]  = useState(null)
+  const [sendMsg,    setSendMsg]    = useState('')
+
+  function sellPrice(unitPrice) { return unitPrice * (1 + margin / 100) }
+  function lineTotal(item)      { return sellPrice(item.unitPrice) * item.qty }
+  const runningTotal = items ? items.reduce((s, item) => s + lineTotal(item), 0) : 0
+
+  function updateQty(i, val) {
+    const q = Math.max(1, parseInt(val) || 1)
+    setItems(prev => prev.map((item, idx) => idx === i ? { ...item, qty: q } : item))
+  }
+
+  async function generate() {
+    const q = query.trim()
+    if (!q) return
+    setLoading(true); setError(null); setItems(null); setNotes(''); setQuoteText(null)
+
+    // Fetch matching products first
+    let catalog = ''
+    try {
+      const search = q.split(/\s+/).slice(0,4).join(' ')
+      const res    = await fetch(`/api/adengine/products?search=${encodeURIComponent(search)}&pageSize=60`)
+      const data   = await res.json()
+      const prods  = data.products || []
+      catalog = prods.length
+        ? 'Product catalog:\n' + prods.map(p =>
+            `- ${p.name} | Brand: ${p.brand||'—'} | SKU: ${p.slug} | Price: $${p.price||'0'} | Stock: ${p.stock_status}`
+          ).join('\n')
+        : 'No catalog data available — estimate based on typical ST1 Sports pricing.'
+    } catch { catalog = 'Catalog unavailable — estimate pricing.' }
+
+    const task = [
+      'You are a sports equipment quoting specialist for ST1 Sports.',
+      `Customer request: "${q}"`,
+      catalog,
+      'Match products to the request. Return JSON only:',
+      '{"items":[{"vendor":"...","sku":"...","description":"...","unitPrice":0.00,"qty":1}],"notes":"..."}',
+    ].join('\n')
+
+    try {
+      const r = await routeTask({ task, input: { query: q }, userRole })
+      const parsed = parseQuote(r.output || '')
+      if (!parsed) throw new Error('Could not parse quote response — try rephrasing your request.')
+      setItems((parsed.items || []).map(item => ({ ...item, unitPrice: +item.unitPrice||0, qty: +item.qty||1 })))
+      setNotes(parsed.notes || '')
+    } catch(e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function buildQuoteText() {
+    const lines = items.map(item =>
+      `${item.description}\n  Vendor: ${item.vendor}  |  SKU: ${item.sku}  |  Qty: ${item.qty}  |  Unit: ${fmt$(sellPrice(item.unitPrice))}  |  Total: ${fmt$(lineTotal(item))}`
+    ).join('\n\n')
+    return [
+      'ST1 SPORTS — PRICE QUOTATION',
+      '─'.repeat(44),
+      lines,
+      '─'.repeat(44),
+      `SUBTOTAL: ${fmt$(runningTotal)}`,
+      '',
+      'Valid for 30 days. Tax-exempt institutions: please provide exemption certificate.',
+      'ST1 Sports  |  matt@st1sports.com  |  719-256-0275',
+    ].join('\n')
+  }
+
+  const thStyle = { fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, padding:'6px 10px', textAlign:'left', borderBottom:`1px solid ${B.border}`, whiteSpace:'nowrap' }
+  const tdStyle = { fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.text, padding:'8px 10px', borderBottom:`1px solid ${B.border}` }
+
+  return (
+    <div style={{ padding:28, overflowY:'auto', flex:1 }}>
+      <ModHeader icon="▤" label="Smart Quote Builder" desc="Describe what you need in plain English — AI matches your catalog and builds a line-item quote." />
+
+      <Card>
+        <Field label="WHAT DO YOU NEED? *">
+          <div style={{ display:'flex', gap:8 }}>
+            <Inp
+              value={query}
+              onChange={e=>setQuery(e.target.value)}
+              onKeyDown={e=>e.key==='Enter'&&generate()}
+              placeholder='e.g. "3 dozen NFHS baseballs and 2 batting helmets"'
+            />
+            <GenBtn onClick={generate} loading={loading} disabled={!query.trim()} />
+          </div>
+        </Field>
+      </Card>
+
+      <ErrMsg msg={error} />
+
+      {items && (
+        <>
+          {/* Margin slider */}
+          <Card style={{ marginBottom:10 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:16, flexWrap:'wrap' }}>
+              <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5 }}>MARGIN</div>
+              <input
+                type="range" min={0} max={60} value={margin}
+                onChange={e=>setMargin(+e.target.value)}
+                style={{ flex:1, minWidth:120, accentColor:B.orange }}
+              />
+              <span style={{ fontFamily:"'Russo One',sans-serif", fontSize:16, color:B.orange, minWidth:40 }}>{margin}%</span>
+              <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:9, color:B.muted, letterSpacing:.5 }}>
+                SUBTOTAL <span style={{ color:B.text, fontSize:14, fontFamily:"'Russo One',sans-serif" }}>{fmt$(runningTotal)}</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Line-item table */}
+          <Card style={{ padding:0, overflow:'hidden' }}>
+            <div style={{ overflowX:'auto' }}>
+              <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                <thead>
+                  <tr style={{ background:B.surface }}>
+                    <th style={thStyle}>VENDOR</th>
+                    <th style={thStyle}>SKU</th>
+                    <th style={thStyle}>DESCRIPTION</th>
+                    <th style={{ ...thStyle, textAlign:'right' }}>UNIT PRICE</th>
+                    <th style={{ ...thStyle, textAlign:'center' }}>QTY</th>
+                    <th style={{ ...thStyle, textAlign:'right' }}>LINE TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item, i) => (
+                    <tr key={i}>
+                      <td style={tdStyle}>{item.vendor}</td>
+                      <td style={{ ...tdStyle, fontFamily:"'Lexend Zetta',sans-serif", fontSize:9, color:B.muted }}>{item.sku}</td>
+                      <td style={tdStyle}>{item.description}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt$(sellPrice(item.unitPrice))}</td>
+                      <td style={{ ...tdStyle, textAlign:'center' }}>
+                        <input
+                          type="number" min={1} value={item.qty}
+                          onChange={e=>updateQty(i,e.target.value)}
+                          style={{ width:52, textAlign:'center', background:B.surface, border:`1px solid ${B.border}`, borderRadius:4, padding:'3px 6px', fontSize:11, fontFamily:"'Lexend',sans-serif", color:B.text }}
+                        />
+                      </td>
+                      <td style={{ ...tdStyle, textAlign:'right', fontWeight:600 }}>{fmt$(lineTotal(item))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {notes && (
+              <div style={{ padding:'10px 14px', borderTop:`1px solid ${B.border}`, fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.muted }}>{notes}</div>
+            )}
+          </Card>
+
+          {/* Actions */}
+          <div style={{ display:'flex', gap:8, marginTop:4 }}>
+            <button
+              onClick={() => setQuoteText(quoteText ? null : buildQuoteText())}
+              style={{ background:B.orange, color:B.white, border:'none', borderRadius:6, padding:'9px 18px', fontSize:10, fontFamily:"'Lexend Zetta',sans-serif", letterSpacing:.5, cursor:'pointer' }}
+            >
+              {quoteText ? 'HIDE QUOTE' : 'GENERATE QUOTE →'}
+            </button>
+            <button
+              onClick={() => { setSendMsg('Email send coming soon — use Generate Quote to copy and paste.'); setTimeout(()=>setSendMsg(''),3000) }}
+              style={{ background:B.surface, color:B.muted, border:`1px solid ${B.border}`, borderRadius:6, padding:'9px 18px', fontSize:10, fontFamily:"'Lexend',sans-serif", cursor:'pointer' }}
+            >
+              Send to Customer
+            </button>
+            {sendMsg && <span style={{ fontFamily:"'Lexend',sans-serif", fontSize:10, color:B.muted, alignSelf:'center' }}>{sendMsg}</span>}
+          </div>
+
+          {/* Formatted quote */}
+          {quoteText && (
+            <Card style={{ marginTop:10 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+                <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:B.orange, letterSpacing:2 }}>FORMATTED QUOTE</span>
+                <CopyBtn text={quoteText} />
+              </div>
+              <pre style={{ fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.text, lineHeight:1.7, whiteSpace:'pre-wrap', margin:0 }}>{quoteText}</pre>
+            </Card>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
   if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
   if (mod.id === 'social')     return <SocialModule     userRole={userRole} />
   if (mod.id === 'image')      return <ImageModule      userRole={userRole} />
+  if (mod.id === 'quote')      return <QuoteModule      userRole={userRole} />
   return <PlaceholderPanel mod={mod} />
 }
 
