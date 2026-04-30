@@ -19,7 +19,12 @@
     "api/ads/google.js":                           { "maxDuration": 30 },
     "api/ads/linkedin.js":                         { "maxDuration": 30 },
     "api/ads/tiktok.js":                           { "maxDuration": 30 },
-    "api/ads/microsoft.js":                        { "maxDuration": 30 }
+    "api/ads/microsoft.js":                        { "maxDuration": 30 },
+    "api/ads/youtube.js":                          { "maxDuration": 30 },
+    "api/ads/status.js":                           { "maxDuration": 30 },
+    "api/ads/attribution.js":                      { "maxDuration": 30 },
+    "api/analytics/ga4.js":                        { "maxDuration": 30 },
+    "api/analytics/gtm.js":                        { "maxDuration": 30 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

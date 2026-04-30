@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
 import ToolManagerComponent from '../components/ToolManager.jsx'
 import AdHubModule from '../components/AdHubModule.jsx'
+import AnalyticsWidget from '../components/AnalyticsWidget.jsx'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -94,6 +95,14 @@ const MODULES = [
     label: 'Ad Hub',
     cap:  'workflow',
     desc: 'Unified ad analytics, campaign management, and creative launch across all platforms.',
+  },
+  {
+    id:        'analytics',
+    icon:      '📈',
+    label:     'Analytics',
+    cap:       'workflow',
+    desc:      'Google Analytics 4 real-time traffic and Google Tag Manager container status.',
+    adminOnly: true,
   },
   {
     id:        'tool-manager',
@@ -1132,6 +1141,7 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
   if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} />
+  if (mod.id === 'analytics')    return <AnalyticsWidget />
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
