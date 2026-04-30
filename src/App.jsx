@@ -10,6 +10,7 @@ const PriceTool   = lazy(() => import('./pages/PriceTool.jsx'))
 const Expansion   = lazy(() => import('./pages/Expansion.jsx'))
 const Integrations= lazy(() => import('./pages/Integrations.jsx'))
 const Reddit      = lazy(() => import('./pages/Reddit.jsx'))
+const CommandCenter = lazy(() => import('./pages/CommandCenter.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
 // (e.g. null access in nav/header, unexpected server state merge)
@@ -195,6 +196,7 @@ export default function App() {
           <Route path="/expansion"   element={<Expansion />} />
           <Route path="/integrations"element={<Integrations />} />
           <Route path="/reddit"      element={<Reddit />} />
+          <Route path="/command-center" element={<CommandCenter />} />
 
           {/* Catch-all */}
           <Route path="*"            element={<Navigate to="/" replace />} />

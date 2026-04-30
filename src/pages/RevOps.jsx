@@ -675,6 +675,7 @@ export default function App() {
     {id:"rfp-tool",    icon:"📋", label:"RFP Automation", href:"/rfp"},
     {id:"prices",      icon:"$",  label:"Price Manager",  href:"/prices"},
     {id:"expansion",   icon:"◉",  label:"Expansion",      href:"/expansion"},
+    {id:"command-center", icon:"⌘", label:"Command Center", href:"/command-center"},
   ];
 
   return (
