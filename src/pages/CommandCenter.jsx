@@ -96,169 +96,196 @@ const MODULES = [
   },
 ]
 
-// ─── PLACEHOLDER PANEL ────────────────────────────────────────────────────────
-function PlaceholderPanel({ mod, userRole }) {
-  const [task,    setTask]    = useState('')
-  const [result,  setResult]  = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState(null)
+// ─── SHARED ATOMS ────────────────────────────────────────────────────────────
+const IS = { width:'100%', background:B.surface, border:`1px solid ${B.border}`, borderRadius:6, padding:'9px 12px', fontSize:12, fontFamily:"'Lexend',sans-serif", color:B.text, outline:'none' }
 
-  async function handleRoute() {
-    const t = task.trim()
-    if (!t) return
-    setLoading(true)
-    setResult(null)
-    setError(null)
+function Card({ children, style }) {
+  return <div style={{ background:B.white, border:`1px solid ${B.border}`, borderRadius:10, padding:20, boxShadow:'0 1px 4px rgba(0,0,0,.05)', marginBottom:14, ...style }}>{children}</div>
+}
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:10 }}>
+      <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, marginBottom:4 }}>{label}</div>
+      {children}
+    </div>
+  )
+}
+function Row2({ children }) {
+  return <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>{children}</div>
+}
+function Inp(p) { return <input style={IS} {...p} /> }
+function Sel({ children, ...p }) { return <select style={{ ...IS, cursor:'pointer' }} {...p}>{children}</select> }
+function Tarea(p) { return <textarea style={{ ...IS, resize:'vertical', minHeight:72 }} {...p} /> }
+
+function GenBtn({ onClick, loading, disabled, label='GENERATE →' }) {
+  return (
+    <button onClick={onClick} disabled={loading||disabled} style={{ background:(loading||disabled)?B.gray2:B.orange, color:B.white, border:'none', borderRadius:6, padding:'10px 22px', fontSize:11, fontFamily:"'Lexend Zetta',sans-serif", letterSpacing:.5, cursor:(loading||disabled)?'default':'pointer', flexShrink:0 }}>
+      {loading ? 'GENERATING…' : label}
+    </button>
+  )
+}
+function CopyBtn({ text, label='COPY' }) {
+  const [ok, setOk] = useState(false)
+  function copy() { navigator.clipboard?.writeText(text).catch(()=>{}); setOk(true); setTimeout(()=>setOk(false),1500) }
+  return (
+    <button onClick={copy} style={{ background:ok?B.greenBg:B.surface, color:ok?B.green:B.muted, border:`1px solid ${ok?B.green:B.border}`, borderRadius:4, padding:'4px 10px', fontSize:9, fontFamily:"'Lexend Zetta',sans-serif", letterSpacing:.5, cursor:'pointer', flexShrink:0 }}>
+      {ok ? '✓ COPIED' : label}
+    </button>
+  )
+}
+function ErrMsg({ msg }) {
+  if (!msg) return null
+  return <div style={{ margin:'10px 0', padding:'9px 14px', background:B.redBg, border:`1px solid ${B.red}30`, borderRadius:6, fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.red }}>{msg}</div>
+}
+function Toggle({ checked, onChange, label }) {
+  return (
+    <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer' }}>
+      <div onClick={()=>onChange(!checked)} style={{ width:34, height:18, borderRadius:9, background:checked?B.orange:B.gray2, position:'relative', transition:'background .15s', flexShrink:0 }}>
+        <span style={{ position:'absolute', top:2, left:checked?18:2, width:14, height:14, borderRadius:'50%', background:B.white, transition:'left .15s', boxShadow:'0 1px 2px rgba(0,0,0,.25)' }}/>
+      </div>
+      <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:checked?B.orange:B.muted, letterSpacing:1 }}>{label}</span>
+    </label>
+  )
+}
+function ModHeader({ icon, label, desc }) {
+  return (
+    <div style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:22 }}>
+      <div style={{ width:40, height:40, background:B.orange, borderRadius:8, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, fontSize:18 }}>{icon}</div>
+      <div>
+        <h1 style={{ fontFamily:"'Russo One',sans-serif", fontSize:20, color:B.black, letterSpacing:.3, margin:0 }}>{label}</h1>
+        <p style={{ fontFamily:"'Lexend',sans-serif", fontSize:11, color:B.muted, margin:'3px 0 0', lineHeight:1.5 }}>{desc}</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── SALES COPYWRITER ─────────────────────────────────────────────────────────
+const EMAIL_TYPES = ['Cold Outreach','Follow-Up','RFP Response','Re-engagement','Seasonal Promo']
+const COPY_SYS =
+  'You are a B2B sales copywriter for ST1 Sports, a nationwide athletic equipment supplier ' +
+  'carrying Wilson, DeMarini, Louisville Slugger, EvoShield, Warstic, Diamond, All-Star, Molten, ' +
+  'Gill Athletics, ATEC and more. Primary customers are K-12 athletic directors and coaches at ' +
+  'tax-exempt institutions. Under 200 words per variant, direct and sport-specific.'
+const BWTF_NOTE =
+  ' ST1 acquired BWTF (Bruce Whiting Track & Field) giving strong brand recognition in ' +
+  'Minnesota and North Dakota — lean into BWTF heritage and regional trust.'
+
+function parseVariants(text) {
+  if (!text) return []
+  try { const p = JSON.parse(text.trim()); if (Array.isArray(p) && p.length) return p.slice(0,3) } catch {}
+  try { const m = text.match(/\[[\s\S]*\]/); if (m) { const p = JSON.parse(m[0]); if (Array.isArray(p)) return p.slice(0,3) } } catch {}
+  const chunks = text.split(/\n(?=(?:Variant|Email|Option)?\s*[123]\b|---)/i).filter(c => c.trim().length > 20)
+  if (chunks.length >= 2) return chunks.slice(0,3).map(c => {
+    const sub = c.match(/Subject[:\s]+(.+)/i)
+    return { subject: sub?.[1]?.trim() || '', body: c.replace(/Subject[:\s]+.+\n?/i,'').trim() }
+  })
+  return [{ subject: '', body: text.trim() }]
+}
+
+function SalesCopyModule({ userRole }) {
+  const [emailType, setEmailType] = useState('Cold Outreach')
+  const [prospect,  setProspect]  = useState('')
+  const [org,       setOrg]       = useState('')
+  const [sport,     setSport]     = useState('')
+  const [context,   setContext]   = useState('')
+  const [bwtf,      setBwtf]      = useState(false)
+  const [loading,   setLoading]   = useState(false)
+  const [variants,  setVariants]  = useState(null)
+  const [error,     setError]     = useState(null)
+
+  async function generate() {
+    if (!prospect.trim()) return
+    setLoading(true); setError(null); setVariants(null)
+    const sys  = bwtf ? COPY_SYS + BWTF_NOTE : COPY_SYS
+    const task = [
+      sys,
+      `Write 3 distinct "${emailType}" email variants to ${prospect.trim()}${org.trim() ? ` at ${org.trim()}` : ''}.`,
+      sport.trim()   ? `Sport/activity: ${sport.trim()}.`   : '',
+      context.trim() ? `Context: ${context.trim()}.`         : '',
+      'Return JSON only — no extra text: [{"subject":"...","body":"..."},{"subject":"...","body":"..."},{"subject":"...","body":"..."}]',
+    ].filter(Boolean).join(' ')
     try {
-      const r = await routeTask({ task: t, input: {}, userRole })
-      setResult(r)
-    } catch (e) {
-      setError(e.message || 'Routing failed')
+      const r = await routeTask({ task, input: { emailType, prospect, org, sport, context, bwtf }, userRole })
+      setVariants(parseVariants(r.output || ''))
+    } catch(e) {
+      setError(e.message)
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflowY: 'auto', padding: 32 }}>
-
-      {/* Module header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-          <div style={{
-            width: 42, height: 42, background: B.orange, borderRadius: 8,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}>
-            <span style={{ fontSize: 20 }}>{mod.icon}</span>
-          </div>
-          <div>
-            <h1 style={{
-              fontFamily: "'Russo One',sans-serif", fontSize: 22, color: B.black,
-              letterSpacing: 0.3, margin: 0,
-            }}>{mod.label}</h1>
-            <p style={{
-              fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted,
-              margin: '3px 0 0', lineHeight: 1.5,
-            }}>{mod.desc}</p>
-          </div>
+    <div style={{ padding:28, overflowY:'auto', flex:1 }}>
+      <ModHeader icon="✍" label="Sales Copywriter" desc="3 AI-drafted email variants tailored to your prospect, sport, and deal context." />
+      <Card>
+        <Row2>
+          <Field label="EMAIL TYPE">
+            <Sel value={emailType} onChange={e=>setEmailType(e.target.value)}>
+              {EMAIL_TYPES.map(t=><option key={t}>{t}</option>)}
+            </Sel>
+          </Field>
+          <Field label="SPORT / ACTIVITY">
+            <Inp value={sport} onChange={e=>setSport(e.target.value)} placeholder="Baseball, Track & Field, Soccer…" />
+          </Field>
+        </Row2>
+        <Row2>
+          <Field label="PROSPECT NAME *">
+            <Inp value={prospect} onChange={e=>setProspect(e.target.value)} placeholder="Coach Smith" />
+          </Field>
+          <Field label="ORGANIZATION">
+            <Inp value={org} onChange={e=>setOrg(e.target.value)} placeholder="Lincoln High School" />
+          </Field>
+        </Row2>
+        <Field label="ADDITIONAL CONTEXT">
+          <Tarea value={context} onChange={e=>setContext(e.target.value)} rows={3} placeholder="Previous conversations, specific needs, budget context…" />
+        </Field>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:4 }}>
+          <Toggle checked={bwtf} onChange={setBwtf} label="BWTF MODE (MN / ND)" />
+          <GenBtn onClick={generate} loading={loading} disabled={!prospect.trim()} />
         </div>
-      </div>
+      </Card>
 
-      {/* AI Router demo */}
-      <div style={{
-        background: B.white, border: `1px solid ${B.border}`, borderRadius: 10,
-        padding: 20, marginBottom: 24,
-        boxShadow: '0 1px 4px rgba(0,0,0,.05)',
-      }}>
-        <div style={{
-          fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange,
-          letterSpacing: 2, marginBottom: 12,
-        }}>AI ROUTER DEMO</div>
+      <ErrMsg msg={error} />
 
-        <div style={{ display: 'flex', gap: 8 }}>
-          <input
-            value={task}
-            onChange={e => setTask(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && handleRoute()}
-            placeholder={`Describe a task to route through the AI (e.g. "write a follow-up email for ${mod.label.toLowerCase()}")`}
-            style={{
-              flex: 1, background: B.surface, border: `1px solid ${B.border}`,
-              borderRadius: 6, padding: '9px 12px', fontSize: 12,
-              fontFamily: "'Lexend',sans-serif", color: B.text, outline: 'none',
-            }}
-          />
-          <button
-            onClick={handleRoute}
-            disabled={loading || !task.trim()}
-            style={{
-              background: loading || !task.trim() ? B.gray2 : B.orange,
-              color: B.white, border: 'none', borderRadius: 6,
-              padding: '9px 18px', fontSize: 11, fontWeight: 600,
-              fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5,
-              cursor: loading || !task.trim() ? 'default' : 'pointer',
-              flexShrink: 0, transition: 'background .15s',
-            }}
-          >
-            {loading ? 'ROUTING…' : 'ROUTE →'}
-          </button>
-        </div>
-
-        {error && (
-          <div style={{
-            marginTop: 12, padding: '8px 12px', background: B.redBg,
-            border: `1px solid ${B.red}30`, borderRadius: 6,
-            fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.red,
-          }}>{error}</div>
-        )}
-
-        {result && (
-          <div style={{
-            marginTop: 12, padding: 14, background: B.surface,
-            border: `1px solid ${B.border}`, borderRadius: 8,
-          }}>
-            <div style={{ display: 'flex', gap: 16, marginBottom: result.output ? 10 : 0, flexWrap: 'wrap' }}>
-              <Chip label="CAPABILITY" value={result.capability} />
-              <Chip label="PLUGIN"     value={result.pluginUsed} />
+      {variants && variants.map((v, i) => (
+        <Card key={i}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+            <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:B.orange, letterSpacing:2 }}>VARIANT {i+1}</span>
+            <CopyBtn text={v.subject ? `Subject: ${v.subject}\n\n${v.body}` : v.body} />
+          </div>
+          {v.subject && (
+            <div style={{ background:B.surface, border:`1px solid ${B.border}`, borderRadius:5, padding:'7px 11px', marginBottom:10 }}>
+              <div style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:7, color:B.muted, letterSpacing:1.5, marginBottom:3 }}>SUBJECT</div>
+              <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:12, color:B.text, fontWeight:500 }}>{v.subject}</div>
             </div>
-            {result.output && (
-              <div style={{
-                fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text,
-                lineHeight: 1.6, whiteSpace: 'pre-wrap',
-                borderTop: `1px solid ${B.border}`, paddingTop: 10,
-              }}>{result.output}</div>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+          <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:12, color:B.text, lineHeight:1.75, whiteSpace:'pre-wrap' }}>{v.body}</div>
+        </Card>
+      ))}
+    </div>
+  )
+}
 
-      {/* Coming soon */}
-      <div style={{
-        flex: 1, background: B.white, border: `1px solid ${B.border}`,
-        borderRadius: 10, display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', gap: 12, minHeight: 220,
-        boxShadow: '0 1px 4px rgba(0,0,0,.05)',
-      }}>
-        <div style={{
-          width: 56, height: 56, background: B.orangeBg,
-          borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center',
-        }}>
-          <span style={{ fontSize: 26 }}>{mod.icon}</span>
+// ─── PLACEHOLDER (remaining modules) ─────────────────────────────────────────
+function PlaceholderPanel({ mod }) {
+  return (
+    <div style={{ padding:28, flex:1, display:'flex', flexDirection:'column' }}>
+      <ModHeader icon={mod.icon} label={mod.label} desc={mod.desc} />
+      <div style={{ flex:1, background:B.white, border:`1px solid ${B.border}`, borderRadius:10, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:12, minHeight:220 }}>
+        <div style={{ width:52, height:52, background:B.orangeBg, borderRadius:12, display:'flex', alignItems:'center', justifyContent:'center', fontSize:24 }}>{mod.icon}</div>
+        <div style={{ textAlign:'center' }}>
+          <div style={{ fontFamily:"'Russo One',sans-serif", fontSize:15, color:B.black, marginBottom:5 }}>{mod.label}</div>
+          <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:12, color:B.muted }}>Coming soon</div>
         </div>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{
-            fontFamily: "'Russo One',sans-serif", fontSize: 16, color: B.black,
-            letterSpacing: 0.3, marginBottom: 6,
-          }}>{mod.label}</div>
-          <div style={{
-            fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted,
-          }}>Coming soon</div>
-        </div>
-        <div style={{
-          background: `${B.orange}14`, border: `1px solid ${B.orange}40`,
-          borderRadius: 20, padding: '4px 14px',
-          fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8,
-          color: B.orange, letterSpacing: 2,
-        }}>IN DEVELOPMENT</div>
+        <div style={{ background:`${B.orange}14`, border:`1px solid ${B.orange}40`, borderRadius:20, padding:'4px 14px', fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color:B.orange, letterSpacing:2 }}>IN DEVELOPMENT</div>
       </div>
     </div>
   )
 }
 
-function Chip({ label, value }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <span style={{
-        fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7,
-        color: B.muted, letterSpacing: 1.5,
-      }}>{label}</span>
-      <span style={{
-        fontFamily: "'Lexend',sans-serif", fontSize: 11, fontWeight: 500,
-        color: B.orange, background: B.orangeBg,
-        border: `1px solid ${B.orange}30`, borderRadius: 4,
-        padding: '2px 8px', display: 'inline-block',
-      }}>{value || '—'}</span>
-    </div>
-  )
+function ActivePanel({ mod, userRole }) {
+  if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
+  return <PlaceholderPanel mod={mod} />
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
@@ -453,7 +480,7 @@ export default function CommandCenter() {
         {/* Panel */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
           {activeMod && (
-            <PlaceholderPanel mod={activeMod} userRole={userRole} key={activeMod.id} />
+            <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />
           )}
         </div>
       </div>
