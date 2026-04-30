@@ -806,23 +806,510 @@ function CampaignsTab({ platforms, dateRange }) {
   )
 }
 
-function CreateTab() {
+// ─── CREATE CAMPAIGN WIZARD ───────────────────────────────────────────────────
+const STEPS = ['Name + Objective', 'Audience', 'Creative', 'Budget + Schedule', 'Launch']
+const CTAS  = ['Learn More', 'Shop Now', 'Get a Quote', 'Contact Us', 'Sign Up', 'Download']
+
+const EMPTY_CAMPAIGN = {
+  name:       '',
+  objective:  'CONVERSIONS',
+  audience:   'athletic_directors',
+  customAudience: '',
+  headline:   '',
+  body:       '',
+  cta:        'Get a Quote',
+  imageUrl:   '',
+  dailyBudget: 50,
+  startDate:  new Date().toISOString().slice(0, 10),
+  endDate:    '',
+  platforms:  ['meta'],
+}
+
+function StepIndicator({ current }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24 }}>
+      {STEPS.map((label, i) => (
+        <React.Fragment key={i}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: i < current ? B.green : i === current ? B.orange : B.surface,
+              border: `2px solid ${i < current ? B.green : i === current ? B.orange : B.border}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9,
+              color: i <= current ? B.white : B.muted,
+              flexShrink: 0,
+            }}>
+              {i < current ? '✓' : i + 1}
+            </div>
+            <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: i === current ? B.orange : B.muted, letterSpacing: 0.5, whiteSpace: 'nowrap' }}>
+              {label.toUpperCase()}
+            </span>
+          </div>
+          {i < STEPS.length - 1 && (
+            <div style={{ flex: 1, height: 2, background: i < current ? B.green : B.border, margin: '0 6px', marginBottom: 18 }} />
+          )}
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+function FieldBlock({ label, children }) {
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5, marginBottom: 5 }}>{label}</div>
+      {children}
+    </div>
+  )
+}
+
+function WizardInput(props) {
+  return <input style={{ ...INP, boxSizing: 'border-box' }} {...props} />
+}
+function WizardTextarea(props) {
+  return <textarea style={{ ...INP, resize: 'vertical', minHeight: 72, boxSizing: 'border-box' }} {...props} />
+}
+function WizardSelect({ children, ...props }) {
+  return <select style={{ ...INP, cursor: 'pointer', boxSizing: 'border-box' }} {...props}>{children}</select>
+}
+
+function ObjectiveCard({ id, label, desc, selected, onSelect }) {
+  return (
+    <div
+      onClick={() => onSelect(id)}
+      style={{
+        border:     `2px solid ${selected ? B.orange : B.border}`,
+        background: selected ? B.orangeBg : B.white,
+        borderRadius: 8, padding: '12px 14px', cursor: 'pointer', transition: 'all .12s',
+      }}
+    >
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: selected ? B.orange : B.text, letterSpacing: 0.5, marginBottom: 3 }}>{label}</div>
+      <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>{desc}</div>
+    </div>
+  )
+}
+
+function AudienceCard({ preset, selected, onSelect }) {
+  return (
+    <div
+      onClick={() => onSelect(preset.id)}
+      style={{
+        border:     `2px solid ${selected ? B.orange : B.border}`,
+        background: selected ? B.orangeBg : B.white,
+        borderRadius: 8, padding: '12px 14px', cursor: 'pointer', transition: 'all .12s',
+      }}
+    >
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: selected ? B.orange : B.text, letterSpacing: 0.5, marginBottom: 3 }}>{preset.label}</div>
+      <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>{preset.desc}</div>
+    </div>
+  )
+}
+
+function Step1({ campaign, onChange }) {
+  return (
+    <div>
+      <FieldBlock label="CAMPAIGN NAME *">
+        <WizardInput
+          value={campaign.name}
+          onChange={e => onChange('name', e.target.value)}
+          placeholder="e.g. Fall 2025 Baseball — Athletic Directors"
+        />
+      </FieldBlock>
+      <FieldBlock label="OBJECTIVE">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {OBJECTIVES.map(o => (
+            <ObjectiveCard
+              key={o.id}
+              id={o.id}
+              label={o.label}
+              desc={{ AWARENESS: 'Maximize reach and brand recall', TRAFFIC: 'Drive clicks to your website', CONVERSIONS: 'Generate orders and leads', LEAD_GEN: 'Capture contact info on-platform' }[o.id]}
+              selected={campaign.objective === o.id}
+              onSelect={v => onChange('objective', v)}
+            />
+          ))}
+        </div>
+      </FieldBlock>
+    </div>
+  )
+}
+
+function Step2({ campaign, onChange }) {
+  return (
+    <div>
+      <FieldBlock label="AUDIENCE PRESET">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+          {AUDIENCE_PRESETS.map(p => (
+            <AudienceCard
+              key={p.id}
+              preset={p}
+              selected={campaign.audience === p.id}
+              onSelect={v => onChange('audience', v)}
+            />
+          ))}
+        </div>
+      </FieldBlock>
+      {campaign.audience === 'custom' && (
+        <FieldBlock label="CUSTOM TARGETING NOTES">
+          <WizardTextarea
+            value={campaign.customAudience}
+            onChange={e => onChange('customAudience', e.target.value)}
+            placeholder="Describe your target audience — job titles, locations, interests, company size…"
+            rows={3}
+          />
+        </FieldBlock>
+      )}
+    </div>
+  )
+}
+
+function Step3({ campaign, onChange, userRole }) {
+  const [generating, setGenerating] = useState(false)
+
+  async function generateCopy() {
+    setGenerating(true)
+    try {
+      const audience = AUDIENCE_PRESETS.find(p => p.id === campaign.audience)?.label || campaign.audience
+      const obj      = OBJECTIVES.find(o => o.id === campaign.objective)?.label      || campaign.objective
+      const res = await routeTask({
+        task: `Write a short ad for ST1 Sports. Campaign: "${campaign.name}". Objective: ${obj}. Audience: ${audience} at K-12 schools. Return JSON with exactly: {"headline": "...", "body": "..."}. Headline under 40 chars, body under 125 chars. Direct, benefit-focused.`,
+        input: '', userRole,
+      })
+      try {
+        const raw  = res.output?.match(/\{[\s\S]*\}/)?.[0]
+        const json = JSON.parse(raw)
+        if (json.headline) onChange('headline', json.headline)
+        if (json.body)     onChange('body',     json.body)
+      } catch {}
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <button
+          onClick={generateCopy}
+          disabled={generating || !campaign.name}
+          style={{ background: generating || !campaign.name ? B.gray2 : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '7px 14px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: generating || !campaign.name ? 'default' : 'pointer' }}
+        >
+          {generating ? 'GENERATING…' : '✦ AI GENERATE COPY'}
+        </button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <FieldBlock label="HEADLINE *">
+          <WizardInput
+            value={campaign.headline}
+            onChange={e => onChange('headline', e.target.value)}
+            placeholder="e.g. Outfit Your Team for Less"
+            maxLength={40}
+          />
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, marginTop: 3 }}>{campaign.headline.length}/40 chars</div>
+        </FieldBlock>
+        <FieldBlock label="CALL TO ACTION">
+          <WizardSelect value={campaign.cta} onChange={e => onChange('cta', e.target.value)}>
+            {CTAS.map(c => <option key={c} value={c}>{c}</option>)}
+          </WizardSelect>
+        </FieldBlock>
+      </div>
+      <FieldBlock label="BODY COPY *">
+        <WizardTextarea
+          value={campaign.body}
+          onChange={e => onChange('body', e.target.value)}
+          placeholder="e.g. ST1 Sports supplies K-12 athletic programs with top brands at tax-exempt pricing. Wilson, DeMarini, Louisville Slugger and more."
+          rows={3}
+          maxLength={125}
+        />
+        <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, marginTop: 3 }}>{campaign.body.length}/125 chars</div>
+      </FieldBlock>
+      <FieldBlock label="IMAGE URL (OPTIONAL — paste from Image Generator)">
+        <WizardInput
+          value={campaign.imageUrl}
+          onChange={e => onChange('imageUrl', e.target.value)}
+          placeholder="https://…"
+        />
+      </FieldBlock>
+      {campaign.imageUrl && (
+        <img
+          src={campaign.imageUrl}
+          alt="Ad creative preview"
+          style={{ maxWidth: 280, maxHeight: 160, borderRadius: 8, border: `1px solid ${B.border}`, marginTop: 4 }}
+          onError={e => { e.target.style.display = 'none' }}
+        />
+      )}
+    </div>
+  )
+}
+
+function Step4({ campaign, onChange }) {
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <FieldBlock label="DAILY BUDGET (USD) *">
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted }}>$</span>
+            <WizardInput
+              type="number"
+              min="1"
+              value={campaign.dailyBudget}
+              onChange={e => onChange('dailyBudget', parseFloat(e.target.value) || 0)}
+              style={{ ...INP, paddingLeft: 22, boxSizing: 'border-box' }}
+            />
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, marginTop: 4 }}>
+            Monthly est. ${(campaign.dailyBudget * 30).toLocaleString()}
+          </div>
+        </FieldBlock>
+        <FieldBlock label="LIFETIME BUDGET (OPTIONAL)">
+          <div style={{ position: 'relative' }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted }}>$</span>
+            <WizardInput
+              type="number"
+              min="1"
+              placeholder="No cap"
+              style={{ ...INP, paddingLeft: 22, boxSizing: 'border-box' }}
+            />
+          </div>
+        </FieldBlock>
+        <FieldBlock label="START DATE *">
+          <WizardInput
+            type="date"
+            value={campaign.startDate}
+            onChange={e => onChange('startDate', e.target.value)}
+          />
+        </FieldBlock>
+        <FieldBlock label="END DATE (OPTIONAL)">
+          <WizardInput
+            type="date"
+            value={campaign.endDate}
+            min={campaign.startDate}
+            onChange={e => onChange('endDate', e.target.value)}
+          />
+        </FieldBlock>
+      </div>
+      <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: '12px 14px', marginTop: 6 }}>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5, marginBottom: 8 }}>BUDGET SUMMARY</div>
+        <div style={{ display: 'flex', gap: 24 }}>
+          <div>
+            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1 }}>DAILY</div>
+            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 18, color: B.orange }}>${campaign.dailyBudget}</div>
+          </div>
+          <div>
+            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1 }}>30-DAY EST.</div>
+            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 18, color: B.text }}>${(campaign.dailyBudget * 30).toLocaleString()}</div>
+          </div>
+          {campaign.endDate && campaign.startDate && (
+            <div>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1 }}>CAMPAIGN TOTAL EST.</div>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 18, color: B.text }}>
+                ${(campaign.dailyBudget * Math.max(1, Math.ceil((new Date(campaign.endDate) - new Date(campaign.startDate)) / 86400000))).toLocaleString()}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function Step5({ campaign, onChange, onLaunch, launching, launchResults }) {
+  function togglePlatform(pid) {
+    const current = campaign.platforms
+    onChange('platforms', current.includes(pid) ? current.filter(p => p !== pid) : [...current, pid])
+  }
+
+  return (
+    <div>
+      <FieldBlock label="SELECT PLATFORMS TO LAUNCH ON">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 18 }}>
+          {PLATFORMS.map(p => {
+            const on     = campaign.platforms.includes(p.id)
+            const result = launchResults[p.id]
+            return (
+              <div
+                key={p.id}
+                onClick={() => !result && togglePlatform(p.id)}
+                style={{
+                  border:     `2px solid ${result?.ok ? B.green : result?.err ? B.red : on ? p.color : B.border}`,
+                  background: result?.ok ? B.greenBg : result?.err ? B.redBg : on ? p.bg : B.white,
+                  borderRadius: 8, padding: '12px 14px',
+                  cursor:     result ? 'default' : 'pointer',
+                  transition: 'all .12s',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: on ? p.color : B.muted, letterSpacing: 0.5 }}>{p.label.toUpperCase()}</span>
+                  <span style={{ fontSize: 14 }}>
+                    {result?.ok ? '✓' : result?.err ? '✗' : on ? '●' : '○'}
+                  </span>
+                </div>
+                {result?.err && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.red }}>{result.err}</div>}
+                {result?.ok  && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.green }}>Launched (paused for review)</div>}
+              </div>
+            )
+          })}
+        </div>
+      </FieldBlock>
+
+      <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: '12px 14px', marginBottom: 18 }}>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5, marginBottom: 8 }}>REVIEW BEFORE LAUNCH</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontFamily: "'Lexend',sans-serif", fontSize: 11 }}>
+          <div><span style={{ color: B.muted }}>Name: </span><strong>{campaign.name || '—'}</strong></div>
+          <div><span style={{ color: B.muted }}>Objective: </span><strong>{OBJECTIVES.find(o => o.id === campaign.objective)?.label}</strong></div>
+          <div><span style={{ color: B.muted }}>Audience: </span><strong>{AUDIENCE_PRESETS.find(a => a.id === campaign.audience)?.label}</strong></div>
+          <div><span style={{ color: B.muted }}>Daily Budget: </span><strong>${campaign.dailyBudget}/day</strong></div>
+          <div><span style={{ color: B.muted }}>Start: </span><strong>{campaign.startDate || '—'}</strong></div>
+          <div><span style={{ color: B.muted }}>End: </span><strong>{campaign.endDate || 'No end date'}</strong></div>
+          <div><span style={{ color: B.muted }}>Headline: </span><strong>{campaign.headline || '—'}</strong></div>
+          <div><span style={{ color: B.muted }}>CTA: </span><strong>{campaign.cta}</strong></div>
+        </div>
+      </div>
+
+      <div style={{ background: '#FFF8E6', border: '1px solid #C7780030', borderRadius: 6, padding: '9px 14px', marginBottom: 16, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#C77800' }}>
+        Campaigns launch in <strong>PAUSED</strong> state for review. Activate them from the Campaigns tab after confirming settings in each platform.
+      </div>
+
+      <button
+        onClick={onLaunch}
+        disabled={launching || !campaign.platforms.length || !campaign.name || !campaign.headline || !campaign.body}
+        style={{
+          background:  launching || !campaign.platforms.length || !campaign.name || !campaign.headline || !campaign.body ? B.gray2 : B.orange,
+          color:       B.white, border: 'none', borderRadius: 6,
+          padding:     '11px 28px', fontSize: 11,
+          fontFamily:  "'Lexend Zetta',sans-serif", letterSpacing: 0.5,
+          cursor:      launching ? 'default' : 'pointer',
+        }}
+      >
+        {launching ? 'LAUNCHING…' : `LAUNCH ON ${campaign.platforms.length} PLATFORM${campaign.platforms.length !== 1 ? 'S' : ''} →`}
+      </button>
+    </div>
+  )
+}
+
+function CreateTab({ userRole }) {
+  const [step,          setStep]          = useState(0)
+  const [campaign,      setCampaign]      = useState(EMPTY_CAMPAIGN)
+  const [launching,     setLaunching]     = useState(false)
+  const [launchResults, setLaunchResults] = useState({})
+  const [launched,      setLaunched]      = useState(false)
+
+  function update(key, value) {
+    setCampaign(c => ({ ...c, [key]: value }))
+  }
+
+  function canAdvance() {
+    if (step === 0) return campaign.name.trim().length > 0
+    if (step === 2) return campaign.headline.trim().length > 0 && campaign.body.trim().length > 0
+    if (step === 3) return campaign.dailyBudget > 0 && campaign.startDate
+    return true
+  }
+
+  async function launch() {
+    setLaunching(true)
+    const results = {}
+    await Promise.allSettled(
+      campaign.platforms.map(async pid => {
+        const p = PLATFORMS.find(x => x.id === pid)
+        try {
+          const r = await fetch(p.endpoint, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ action: 'create', campaign }),
+          })
+          const d = await r.json()
+          if (d.error) throw new Error(d.error)
+          results[pid] = { ok: true, data: d }
+        } catch (e) {
+          results[pid] = { err: e.message }
+        }
+      })
+    )
+    setLaunchResults(results)
+    setLaunching(false)
+    const anyOk = Object.values(results).some(r => r.ok)
+    if (anyOk) setLaunched(true)
+  }
+
+  function reset() {
+    setCampaign(EMPTY_CAMPAIGN); setStep(0)
+    setLaunchResults({}); setLaunched(false)
+  }
+
+  if (launched && Object.keys(launchResults).length) {
+    const ok  = Object.entries(launchResults).filter(([, r]) => r.ok)
+    const err = Object.entries(launchResults).filter(([, r]) => r.err)
+    return (
+      <Card>
+        <div style={{ textAlign: 'center', padding: '24px 0' }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>🚀</div>
+          <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 22, color: B.black, marginBottom: 6 }}>Campaign Launched!</div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted, marginBottom: 20 }}>
+            <strong style={{ color: B.text }}>{campaign.name}</strong> was sent to {ok.length} platform{ok.length !== 1 ? 's' : ''} in PAUSED state.
+          </div>
+          {ok.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: ok.length && err.length ? 12 : 24 }}>
+              {ok.map(([pid]) => <PlatformBadge key={pid} platform={pid} />)}
+            </div>
+          )}
+          {err.length > 0 && (
+            <div style={{ background: B.redBg, border: `1px solid ${B.red}30`, borderRadius: 6, padding: '9px 14px', marginBottom: 20, textAlign: 'left' }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.red, letterSpacing: 1.5, marginBottom: 6 }}>FAILED</div>
+              {err.map(([pid, r]) => (
+                <div key={pid} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.red }}>
+                  {PLATFORMS.find(p => p.id === pid)?.label}: {r.err}
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+            <button onClick={reset} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>CREATE ANOTHER</button>
+            <button onClick={() => { /* parent switches tab */ }} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '9px 16px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>View in Campaigns →</button>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
   return (
     <Card>
-      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.orange, letterSpacing: 2, marginBottom: 8 }}>CREATE CAMPAIGN</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {['1  Name + Objective', '2  Audience', '3  Creative', '4  Budget + Schedule', '5  Select Platforms + Launch'].map((step, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, opacity: i === 0 ? 1 : 0.45 }}>
-            <span style={{ width: 24, height: 24, borderRadius: '50%', background: i === 0 ? B.orange : B.border, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: i === 0 ? B.white : B.muted, flexShrink: 0 }}>{i + 1}</span>
-            <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: i === 0 ? B.text : B.muted }}>{step.replace(/^\d+\s+/, '')}</span>
-          </div>
-        ))}
+      <StepIndicator current={step} />
+
+      <div style={{ minHeight: 280 }}>
+        {step === 0 && <Step1 campaign={campaign} onChange={update} />}
+        {step === 1 && <Step2 campaign={campaign} onChange={update} />}
+        {step === 2 && <Step3 campaign={campaign} onChange={update} userRole={userRole} />}
+        {step === 3 && <Step4 campaign={campaign} onChange={update} />}
+        {step === 4 && (
+          <Step5
+            campaign={campaign}
+            onChange={update}
+            onLaunch={launch}
+            launching={launching}
+            launchResults={launchResults}
+          />
+        )}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 16, borderTop: `1px solid ${B.border}` }}>
         <button
-          disabled
-          style={{ background: B.gray2, color: B.white, border: 'none', borderRadius: 6, padding: '10px 22px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'not-allowed', alignSelf: 'flex-start', marginTop: 4 }}
+          onClick={() => setStep(s => s - 1)}
+          disabled={step === 0}
+          style={{ background: B.surface, color: step === 0 ? B.gray2 : B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 18px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: step === 0 ? 'default' : 'pointer' }}
         >
-          COMING IN NEXT BUILD
+          ← Back
         </button>
+        <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Step {step + 1} of {STEPS.length}</span>
+        {step < STEPS.length - 1 && (
+          <button
+            onClick={() => setStep(s => s + 1)}
+            disabled={!canAdvance()}
+            style={{ background: canAdvance() ? B.orange : B.gray2, color: B.white, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: canAdvance() ? 'pointer' : 'default' }}
+          >
+            NEXT →
+          </button>
+        )}
+        {step === STEPS.length - 1 && <div />}
       </div>
     </Card>
   )
@@ -891,7 +1378,7 @@ export default function AdHubModule({ userRole }) {
 
       {tab === 'dashboard' && <DashboardTab platforms={platforms} dateRange={dateRange} userRole={userRole} />}
       {tab === 'campaigns' && <CampaignsTab platforms={platforms} dateRange={dateRange} />}
-      {tab === 'create'    && <CreateTab />}
+      {tab === 'create'    && <CreateTab userRole={userRole} />}
     </div>
   )
 }
