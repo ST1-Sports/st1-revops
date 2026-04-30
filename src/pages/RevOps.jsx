@@ -1,6 +1,26 @@
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component } from "react";
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
+
+// ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
+const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
+const RFPToolPage    = lazy(() => import('./RFPTool.jsx'))
+const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
+const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
+const RedditPage     = lazy(() => import('./Reddit.jsx'))
+const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
+
+// ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
+function PanelLoader() {
+  return (
+    <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:48,flexDirection:"column",gap:12}}>
+      <div style={{width:28,height:28,background:"#F37321",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:"#fff",letterSpacing:-1}}>ST1</span>
+      </div>
+      <div style={{width:32,height:3,background:"#F37321",borderRadius:2,animation:"grow 1s ease-in-out infinite alternate"}}/>
+    </div>
+  )
+}
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrBound extends Component {
@@ -535,6 +555,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
 
   const dispatch = useCallback((action, payload) => {
     set(prev => {
@@ -659,24 +680,53 @@ export default function App() {
     {id:"social",      icon:"📱", label:"Social"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
+    {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"agent",       icon:"AI",label:"AI Agent"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
     {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
+    // ── AI TOOLS (expandable) ───────────────────────────────────────────
+    {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
+      {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
+      {id:"cc-social",      icon:"📱", label:"Social Media"},
+      {id:"cc-image",       icon:"🖼", label:"Image Generator"},
+      {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
+      {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
+      {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
+      {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
+      {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
+      {id:"cc-analytics",   icon:"📈", label:"Analytics"},
+      {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
+    ]},
+    // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
+    {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
+      {id:"rfp-tool",   icon:"📋", label:"RFP Automation"},
+      {id:"prices",     icon:"$",  label:"Price Manager"},
+      {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
+    ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",    icon:"≡", label:"Activity"},
     {id:"settings",    icon:"⚙", label:"Settings"},
-    {id:"integrations",icon:"⚡",label:"Integrations",   href:"/integrations"},
-    // ── STANDALONE TOOLS ───────────────────────────────────────────────
-    {id:"_div"},
-    {id:"rfp-tool",    icon:"📋", label:"RFP Automation", href:"/rfp"},
-    {id:"prices",      icon:"$",  label:"Price Manager",  href:"/prices"},
-    {id:"expansion",   icon:"◉",  label:"Expansion",      href:"/expansion"},
-    {id:"command-center", icon:"⌘", label:"Command Center", href:"/command-center"},
+    {id:"integrations",icon:"⚡", label:"Integrations"},
   ];
+
+  // Helper: find nav item label (including inside group children)
+  const navLabel = (id) => {
+    for (const n of NAV) {
+      if (n.id === id) return n.label;
+      if (n.children) { const c = n.children.find(ch=>ch.id===id); if(c) return c.label; }
+    }
+    return "";
+  };
+
+  const toggleGroup = (gid) => setExpandedGroups(prev => {
+    const next = new Set(prev);
+    if(next.has(gid)) next.delete(gid); else next.add(gid);
+    return next;
+  });
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -723,9 +773,31 @@ export default function App() {
               }
               // Divider
               if(n.id==="_div") return <div key="_div" style={{height:1,background:B.border,margin:"6px 8px"}}/>;
-              // External link (standalone tools)
+              // Expandable group
+              if(n.group) {
+                const isExp = expandedGroups.has(n.id);
+                const hasActive = (n.children||[]).some(c=>c.id===mod);
+                return (
+                  <div key={n.id}>
+                    <button onClick={()=>{ if(slim){setSlim(false);} toggleGroup(n.id); }} title={slim?n.label:undefined}
+                      style={{width:"100%",background:hasActive?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${hasActive?B.orange:"transparent"}`,color:hasActive?B.orange:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:hasActive?500:400,textAlign:"left"}}>
+                      <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
+                      {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1}}>{n.label}</span>}
+                      {!slim&&<span style={{fontSize:8,color:B.muted,flexShrink:0,marginLeft:2}}>{isExp?"▾":"▸"}</span>}
+                    </button>
+                    {isExp&&!slim&&(n.children||[]).map(ch=>(
+                      <button key={ch.id} onClick={()=>setMod(ch.id)}
+                        style={{width:"100%",background:mod===ch.id?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${mod===ch.id?B.orange:"transparent"}`,color:mod===ch.id?B.orange:B.muted,padding:"6px 11px 6px 26px",display:"flex",alignItems:"center",gap:7,fontSize:10,fontWeight:mod===ch.id?500:400,textAlign:"left"}}>
+                        <span style={{fontSize:11,width:14,textAlign:"center",flexShrink:0}}>{ch.icon}</span>
+                        <span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ch.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              }
+              // External link (Zoho Quotes opens in admin portal)
               if(n.href) return (
-                <a key={n.id} href={n.href} title={slim?n.label:undefined}
+                <a key={n.id} href={n.href} target="_blank" rel="noreferrer" title={slim?n.label:undefined}
                   style={{display:"flex",textDecoration:"none",width:"100%",background:"transparent",borderLeft:`3px solid transparent`,color:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:400}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
@@ -766,7 +838,7 @@ export default function App() {
         {/* MAIN */}
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <header style={{background:B.white,borderBottom:`1px solid ${B.border}`,height:46,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",flexShrink:0,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{NAV.find(n=>n.id===mod)?.label?.toUpperCase()}</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{navLabel(mod).toUpperCase()}</div>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
               {(()=>{
                 let st={};
@@ -815,7 +887,7 @@ export default function App() {
             </div>
           </header>
 
-          <main style={{flex:1,overflowY:"auto",background:B.pageBg}}>
+          <main style={{flex:1,overflowY:"auto",background:B.pageBg,display:"flex",flexDirection:"column"}}>
             <ErrBound key={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModBriefing/>}
@@ -835,6 +907,14 @@ export default function App() {
             {mod==="alerts"      && <ModAlerts/>}
             {mod==="activity"    && <ModActivity/>}
             {mod==="settings"    && <ModSettings/>}
+            {/* ── Inline tools (formerly separate pages) ── */}
+            {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
+            {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
+            {mod==="rfp-tool"    &&<Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>}
+            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage/></Suspense>}
+            {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
+            {/* ── AI Tools (Command Center modules embedded) ── */}
+            {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
             </ErrBound>
           </main>
         </div>
