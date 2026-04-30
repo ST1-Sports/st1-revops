@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
 import ToolManagerComponent from '../components/ToolManager.jsx'
+import AdHubModule from '../components/AdHubModule.jsx'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -86,6 +87,13 @@ const MODULES = [
     label: 'Financial Summaries',
     cap:  'finance',
     desc: 'Summarize revenue, AR, and deal data into concise executive-ready reports.',
+  },
+  {
+    id:   'ad-hub',
+    icon: '📊',
+    label: 'Ad Hub',
+    cap:  'workflow',
+    desc: 'Unified ad analytics, campaign management, and creative launch across all platforms.',
   },
   {
     id:        'tool-manager',
@@ -1123,6 +1131,7 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
+  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} />
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
