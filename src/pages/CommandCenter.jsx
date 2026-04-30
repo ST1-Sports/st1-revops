@@ -997,13 +997,132 @@ function ToolManagerModule() {
   )
 }
 
+// ─── PRICE LIST INTEL ────────────────────────────────────────────────────────
+const COMPETITOR_LIST = [
+  'BSN Sports', 'Varsity Brands', 'School Specialty', 'Epic Sports',
+  'Eastbay / Foot Locker', 'Amazon Business', 'Dick\'s Sporting Goods',
+]
+
+const REPORT_FORMATS = [
+  { id: 'battle-card',   label: 'Battle Card' },
+  { id: 'price-compare', label: 'Price Comparison Table' },
+  { id: 'swot',          label: 'SWOT Analysis' },
+  { id: 'objection',     label: 'Objection Handlers' },
+]
+
+function PriceIntelModule({ userRole }) {
+  const [competitor, setCompetitor] = useState(COMPETITOR_LIST[0])
+  const [product,    setProduct]    = useState('')
+  const [format,     setFormat]     = useState('battle-card')
+  const [extra,      setExtra]      = useState('')
+  const [output,     setOutput]     = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [err,        setErr]        = useState('')
+
+  async function handleRun() {
+    setLoading(true); setErr(''); setOutput('')
+    try {
+      const fmtLabel = REPORT_FORMATS.find(f => f.id === format)?.label || format
+      const task = [
+        `Generate a ${fmtLabel} comparing ST1 Sports against ${competitor}.`,
+        product ? `Focus on: ${product.trim()}.` : 'Cover athletic equipment broadly.',
+        'ST1 Sports carries Wilson, DeMarini, Louisville Slugger, EvoShield, Warstic, Diamond, All-Star, Molten, Gill Athletics, ATEC.',
+        'Primary customers are K-12 athletic directors and coaches at tax-exempt institutions.',
+        extra.trim() ? `Additional context: ${extra.trim()}` : '',
+        format === 'battle-card'
+          ? 'Include: key differentiators, ST1 advantages, competitor weaknesses, pricing positioning, and 3 talk tracks.'
+          : format === 'price-compare'
+          ? 'Research current pricing for common SKUs. Format as a clear comparison with ST1 positioning.'
+          : format === 'swot'
+          ? 'Produce a SWOT table for ST1 vs this competitor with actionable notes per quadrant.'
+          : 'List the top 5 objections this competitor triggers and a sharp ST1 response for each.',
+      ].filter(Boolean).join(' ')
+
+      const res = await routeTask({ task, input: '', userRole })
+      setOutput(res.output || '')
+    } catch (e) {
+      setErr(e.message || 'Intel request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const sections = output
+    ? output.split(/\n(?=#{1,3} |\*\*[A-Z])/m).filter(s => s.trim())
+    : []
+
+  return (
+    <div>
+      <ModHeader icon="$" label="Price List Intel" desc="AI-powered competitor analysis, battle cards, and pricing comparisons using live web data." />
+
+      <Card>
+        <Row2>
+          <Field label="COMPETITOR">
+            <Sel value={competitor} onChange={e => setCompetitor(e.target.value)}>
+              {COMPETITOR_LIST.map(c => <option key={c} value={c}>{c}</option>)}
+            </Sel>
+          </Field>
+          <Field label="REPORT FORMAT">
+            <Sel value={format} onChange={e => setFormat(e.target.value)}>
+              {REPORT_FORMATS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+            </Sel>
+          </Field>
+        </Row2>
+        <Field label="PRODUCT / CATEGORY (OPTIONAL)">
+          <Inp
+            value={product}
+            onChange={e => setProduct(e.target.value)}
+            placeholder="e.g. baseball helmets, team uniforms, track & field…"
+          />
+        </Field>
+        <Field label="ADDITIONAL CONTEXT (OPTIONAL)">
+          <Tarea
+            value={extra}
+            onChange={e => setExtra(e.target.value)}
+            rows={2}
+            placeholder="e.g. prospect just got a BSN quote for $12k, or we're pitching a Minnesota school district…"
+          />
+        </Field>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <GenBtn loading={loading} label="GENERATE INTEL" onClick={handleRun} />
+          {output && <CopyBtn text={output} />}
+        </div>
+        <ErrMsg msg={err} />
+      </Card>
+
+      {output && (
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2 }}>
+              {REPORT_FORMATS.find(f => f.id === format)?.label?.toUpperCase()} — {competitor.toUpperCase()}
+            </span>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <span style={{ background: B.orangeBg, color: B.orange, border: `1px solid ${B.orange}30`, borderRadius: 4, padding: '3px 8px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, letterSpacing: 0.5 }}>LIVE WEB DATA</span>
+            </div>
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>
+            {sections.length > 1
+              ? sections.map((s, i) => (
+                  <div key={i} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: i < sections.length - 1 ? `1px solid ${B.border}` : 'none' }}>
+                    {s.trim()}
+                  </div>
+                ))
+              : output}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
-  if (mod.id === 'sales-copy')  return <SalesCopyModule  userRole={userRole} />
-  if (mod.id === 'social')      return <SocialModule      userRole={userRole} />
-  if (mod.id === 'image')       return <ImageModule       userRole={userRole} />
-  if (mod.id === 'quote')       return <QuoteModule       userRole={userRole} />
-  if (mod.id === 'research')    return <ResearchModule    userRole={userRole} />
-  if (mod.id === 'finance')     return <FinancialModule   userRole={userRole} />
+  if (mod.id === 'sales-copy')   return <SalesCopyModule   userRole={userRole} />
+  if (mod.id === 'social')       return <SocialModule       userRole={userRole} />
+  if (mod.id === 'image')        return <ImageModule        userRole={userRole} />
+  if (mod.id === 'quote')        return <QuoteModule        userRole={userRole} />
+  if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
+  if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
+  if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
