@@ -570,7 +570,6 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState(new Set());
 
   const dispatch = useCallback((action, payload) => {
     set(prev => {
@@ -680,51 +679,47 @@ export default function App() {
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
-    {id:"briefing",    icon:"◈", label:"Briefing",        badge:urgentCount(s)},
-    {id:"analytics",   icon:"▣", label:"Performance"},
-    {id:"revenue",     icon:"↑", label:"Revenue"},
-    {id:"deals",       icon:"◫", label:"Deals"},
-    {id:"quotes",      icon:"▤", label:"Quotes",            href:"https://admin.st1sports.com"},
-    {id:"orders",      icon:"⊡", label:"Orders",          badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",   badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"Bids & RFPs",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
-    // ── GROWTH ─────────────────────────────────────────────────────────
-    {id:"_s_growth"},
-    {id:"prospecting", icon:"⊕", label:"Prospecting"},
-    {id:"emails",      icon:"✉", label:"Emails"},
-    {id:"social",      icon:"📱", label:"Social Posting",  href:"https://publer.com"},
-    {id:"marketing",   icon:"✦", label:"Campaigns"},
-    {id:"calendar",    icon:"▦", label:"Content Calendar"},
-    {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
-    // ── TOOLS ──────────────────────────────────────────────────────────
-    {id:"_s_tools"},
-    {id:"agent",       icon:"AI",label:"AI Assistant"},
-    {id:"reorder",     icon:"↺", label:"Reorder Engine",  badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
-    {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",          badge:(s.alerts||[]).filter(a=>!a.sent).length},
-    // ── AI TOOLS (expandable) ───────────────────────────────────────────
-    {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
-      {id:"cc-social",      icon:"📱", label:"Social Content"},
-      {id:"cc-image",       icon:"🖼", label:"Image Generator"},
-      {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
-      {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
-      {id:"cc-research",    icon:"⊕", label:"Market Research"},
-      {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-      {id:"cc-analytics",   icon:"📈", label:"Web Analytics"},
-      {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
-    ]},
-    // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
-    {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"rfp-tool",   icon:"📋", label:"RFP Generator"},
-      {id:"prices",     icon:"$",  label:"Price Manager"},
-      {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
-    ]},
+    {id:"briefing",      icon:"◈", label:"Briefing",          badge:urgentCount(s)},
+    {id:"agent",         icon:"AI",label:"AI Assistant"},
+    {id:"deals",         icon:"◫", label:"Deals"},
+    {id:"quotes",        icon:"▤", label:"Quotes",             href:"https://admin.st1sports.com"},
+    {id:"orders",        icon:"⊡", label:"Orders",            badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
+    {id:"rfp",           icon:"⊘", label:"Bids & RFPs",       badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"cc-sales-copy", icon:"✍", label:"Sales Copywriter"},
+    {id:"cc-quote",      icon:"▤", label:"Smart Quote Builder"},
+    {id:"rfp-tool",      icon:"📋",label:"RFP Generator"},
+    {id:"reorder",       icon:"↺", label:"Reorder Engine",    badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
+    // ── MARKETING & GROWTH ─────────────────────────────────────────────
+    {id:"_s_mktg", label:"MARKETING & GROWTH"},
+    {id:"prospecting",   icon:"⊕", label:"Prospecting"},
+    {id:"emails",        icon:"✉", label:"Emails"},
+    {id:"marketing",     icon:"✦", label:"Campaigns"},
+    {id:"calendar",      icon:"▦", label:"Content Calendar"},
+    {id:"social",        icon:"📱", label:"Social Posting",    href:"https://publer.com"},
+    {id:"cc-social",     icon:"📱", label:"Social Content"},
+    {id:"cc-image",      icon:"🖼", label:"Image Generator"},
+    {id:"cc-ad-hub",     icon:"📊", label:"Ad Hub"},
+    {id:"reddit",        icon:"💬", label:"Reddit Engagement"},
+    // ── DATA & ANALYSIS ────────────────────────────────────────────────
+    {id:"_s_data", label:"DATA & ANALYSIS"},
+    {id:"analytics",     icon:"▣", label:"Performance"},
+    {id:"compete",       icon:"⊗", label:"Competitors"},
+    {id:"cc-research",   icon:"⊕", label:"Market Research"},
+    {id:"prices",        icon:"$", label:"Price Manager"},
+    {id:"expansion",     icon:"◉", label:"Expansion Playbook"},
+    {id:"cc-analytics",  icon:"📈", label:"Web Analytics"},
+    // ── FINANCE ────────────────────────────────────────────────────────
+    {id:"_s_finance", label:"FINANCE"},
+    {id:"revenue",       icon:"↑", label:"Revenue"},
+    {id:"invoicing",     icon:"▲", label:"Invoices & AR",      badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
+    {id:"cc-finance",    icon:"↑", label:"Financial Summaries"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
-    {id:"activity",    icon:"≡", label:"Activity"},
-    {id:"settings",    icon:"⚙", label:"Settings"},
-    {id:"integrations",icon:"⚡", label:"Integrations"},
+    {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
+    {id:"activity",      icon:"≡", label:"Activity"},
+    {id:"settings",      icon:"⚙", label:"Settings"},
+    {id:"integrations",  icon:"⚡", label:"Integrations"},
+    {id:"cc-tools",      icon:"⚙", label:"Tool Manager"},
   ];
 
   // Helper: find nav item label (including inside group children)
@@ -736,11 +731,6 @@ export default function App() {
     return "";
   };
 
-  const toggleGroup = (gid) => setExpandedGroups(prev => {
-    const next = new Set(prev);
-    if(next.has(gid)) next.delete(gid); else next.add(gid);
-    return next;
-  });
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -780,36 +770,12 @@ export default function App() {
             {NAV.map(n=>{
               // Section header
               if(n.id.startsWith("_s_")) {
-                const label = n.id.replace("_s_","").toUpperCase();
+                const label = n.label || n.id.replace("_s_","").toUpperCase();
                 return !slim
                   ? <div key={n.id} style={{padding:"10px 13px 3px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:2,opacity:.7}}>{label}</div>
                   : <div key={n.id} style={{height:1,background:B.border,margin:"5px 8px"}}/>;
               }
-              // Divider
-              if(n.id==="_div") return <div key="_div" style={{height:1,background:B.border,margin:"6px 8px"}}/>;
-              // Expandable group
-              if(n.group) {
-                const isExp = expandedGroups.has(n.id);
-                const hasActive = (n.children||[]).some(c=>c.id===mod);
-                return (
-                  <div key={n.id}>
-                    <button onClick={()=>{ if(slim){setSlim(false);} toggleGroup(n.id); }} title={slim?n.label:undefined}
-                      style={{width:"100%",background:hasActive?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${hasActive?B.orange:"transparent"}`,color:hasActive?B.orange:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:hasActive?500:400,textAlign:"left"}}>
-                      <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
-                      {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1}}>{n.label}</span>}
-                      {!slim&&<span style={{fontSize:8,color:B.muted,flexShrink:0,marginLeft:2}}>{isExp?"▾":"▸"}</span>}
-                    </button>
-                    {isExp&&!slim&&(n.children||[]).map(ch=>(
-                      <button key={ch.id} onClick={()=>setMod(ch.id)}
-                        style={{width:"100%",background:mod===ch.id?`${B.orange}14`:"transparent",border:"none",borderLeft:`3px solid ${mod===ch.id?B.orange:"transparent"}`,color:mod===ch.id?B.orange:B.muted,padding:"6px 11px 6px 26px",display:"flex",alignItems:"center",gap:7,fontSize:10,fontWeight:mod===ch.id?500:400,textAlign:"left"}}>
-                        <span style={{fontSize:11,width:14,textAlign:"center",flexShrink:0}}>{ch.icon}</span>
-                        <span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ch.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                );
-              }
-              // External link (Zoho Quotes opens in admin portal)
+              // External link (opens in new tab)
               if(n.href) return (
                 <a key={n.id} href={n.href} target="_blank" rel="noreferrer" title={slim?n.label:undefined}
                   style={{display:"flex",textDecoration:"none",width:"100%",background:"transparent",borderLeft:`3px solid transparent`,color:B.muted,padding:slim?"9px 0":"7px 11px 7px 10px",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:400}}>
