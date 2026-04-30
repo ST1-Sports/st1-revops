@@ -1147,13 +1147,21 @@ function ActivePanel({ mod, userRole }) {
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function CommandCenter() {
+export default function CommandCenter({ initialModuleId = 'sales-copy', embedded = false }) {
   const userRole      = getStoredRole()
-  const [activeId, setActiveId] = useState('sales-copy')
+  const [activeId, setActiveId] = useState(initialModuleId)
   const [slim,     setSlim]     = useState(false)
 
   const visibleModules = MODULES.filter(m => !m.adminOnly || userRole === 'admin')
   const activeMod      = visibleModules.find(m => m.id === activeId) || visibleModules[0]
+
+  if (embedded) {
+    return (
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', background: B.pageBg, fontFamily: "'Lexend',sans-serif", color: B.text }}>
+        {activeMod && <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />}
+      </div>
+    )
+  }
 
   return (
     <div style={{
