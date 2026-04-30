@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
+import ToolManagerComponent from '../components/ToolManager.jsx'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -872,12 +873,138 @@ function ResearchModule({ userRole }) {
   )
 }
 
+// ─── MODULE 6: FINANCIAL SUMMARIES ───────────────────────────────────────────
+const REVOPS_STORE = 'st1_revops_v2'
+
+const REPORT_TYPES = [
+  { id: 'monthly-pl',     label: 'Monthly P&L Overview' },
+  { id: 'outstanding-ar', label: 'Outstanding Invoices (AR)' },
+  { id: 'top-customers',  label: 'Top Customers by Revenue' },
+  { id: 'open-quotes',    label: 'Open vs Closed Quotes' },
+]
+
+function buildFinanceContext(reportType) {
+  let store = {}
+  try { store = JSON.parse(localStorage.getItem(REVOPS_STORE) || '{}') } catch {}
+  const deals    = Array.isArray(store.deals)    ? store.deals    : []
+  const invoices = Array.isArray(store.invoices) ? store.invoices : []
+  const contacts = Array.isArray(store.contacts) ? store.contacts : []
+
+  if (reportType === 'monthly-pl') {
+    const byMonth = {}
+    for (const d of deals) {
+      if (!d.closeDate && !d.createdAt) continue
+      const key = (d.closeDate || d.createdAt || '').slice(0, 7)
+      if (!key) continue
+      byMonth[key] = (byMonth[key] || 0) + (parseFloat(d.amount) || 0)
+    }
+    const rows = Object.entries(byMonth).sort(([a], [b]) => a < b ? 1 : -1).slice(0, 12)
+    return `Monthly deal revenue (last 12 months):\n${rows.map(([m, v]) => `${m}: $${v.toLocaleString()}`).join('\n') || 'No data'}\nTotal deals: ${deals.length}`
+  }
+
+  if (reportType === 'outstanding-ar') {
+    const open = invoices.filter(i => i.status !== 'paid' && i.status !== 'void')
+    const total = open.reduce((s, i) => s + (parseFloat(i.amount) || 0), 0)
+    const overdue = open.filter(i => i.dueDate && new Date(i.dueDate) < new Date())
+    return `Outstanding AR:\nOpen invoices: ${open.length}\nTotal open: $${total.toLocaleString()}\nOverdue: ${overdue.length} invoices\n\nTop open invoices:\n${open.slice(0, 10).map(i => `- ${i.customerName || i.id}: $${parseFloat(i.amount || 0).toLocaleString()} due ${i.dueDate || 'unknown'}`).join('\n') || 'None'}`
+  }
+
+  if (reportType === 'top-customers') {
+    const rev = {}
+    for (const d of deals) {
+      const key = d.contactName || d.accountName || d.customerId || 'Unknown'
+      rev[key] = (rev[key] || 0) + (parseFloat(d.amount) || 0)
+    }
+    const top = Object.entries(rev).sort(([, a], [, b]) => b - a).slice(0, 15)
+    return `Top customers by deal revenue:\n${top.map(([name, val], i) => `${i + 1}. ${name}: $${val.toLocaleString()}`).join('\n') || 'No data'}\nTotal contacts: ${contacts.length}`
+  }
+
+  if (reportType === 'open-quotes') {
+    const open   = deals.filter(d => d.stage !== 'Closed Won' && d.stage !== 'Closed Lost')
+    const won    = deals.filter(d => d.stage === 'Closed Won')
+    const lost   = deals.filter(d => d.stage === 'Closed Lost')
+    const openVal = open.reduce((s, d) => s + (parseFloat(d.amount) || 0), 0)
+    const wonVal  = won.reduce((s, d)  => s + (parseFloat(d.amount) || 0), 0)
+    return `Quote pipeline:\nOpen quotes: ${open.length} ($${openVal.toLocaleString()})\nClosed Won: ${won.length} ($${wonVal.toLocaleString()})\nClosed Lost: ${lost.length}\n\nOpen by stage:\n${[...new Set(open.map(d => d.stage).filter(Boolean))].map(s => `- ${s}: ${open.filter(d => d.stage === s).length}`).join('\n') || 'No stage data'}`
+  }
+
+  return ''
+}
+
+function FinancialModule({ userRole }) {
+  const [reportType, setReportType] = useState('monthly-pl')
+  const [output,     setOutput]     = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [err,        setErr]        = useState('')
+
+  async function handleRun() {
+    setLoading(true); setErr(''); setOutput('')
+    try {
+      const ctx  = buildFinanceContext(reportType)
+      const label = REPORT_TYPES.find(r => r.id === reportType)?.label || reportType
+      const task = `Generate a ${label} financial summary for ST1 Sports. Here is the raw data:\n\n${ctx || 'No data available in the local store yet.'}\n\nProvide an executive-ready narrative summary with key insights, trends, and recommended actions. Format clearly with sections.`
+      const res  = await routeTask({ task, input: '', userRole })
+      setOutput(res.output || '')
+    } catch (e) {
+      setErr(e.message || 'Failed to generate summary')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const paragraphs = output ? output.split(/\n{2,}/) : []
+
+  return (
+    <div>
+      <ModHeader icon="↑" label="Financial Summaries" desc="AI-generated executive summaries from your live RevOps data." />
+
+      <Card>
+        <Field label="REPORT TYPE">
+          <Sel value={reportType} onChange={e => setReportType(e.target.value)}>
+            {REPORT_TYPES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+          </Sel>
+        </Field>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <GenBtn loading={loading} label="GENERATE SUMMARY" onClick={handleRun} />
+          {output && <CopyBtn text={output} />}
+        </div>
+        <ErrMsg msg={err} />
+      </Card>
+
+      {output && (
+        <Card style={{ marginTop: 12 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>
+            {REPORT_TYPES.find(r => r.id === reportType)?.label?.toUpperCase()}
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, lineHeight: 1.75 }}>
+            {paragraphs.map((p, i) => (
+              <p key={i} style={{ margin: '0 0 12px', whiteSpace: 'pre-wrap' }}>{p}</p>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// ─── MODULE 7: TOOL MANAGER (admin) ──────────────────────────────────────────
+function ToolManagerModule() {
+  return (
+    <div>
+      <ModHeader icon="⚙" label="Tool Manager" desc="Configure plugins, manage API keys, and control which tools each role can access." />
+      <ToolManagerComponent />
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
-  if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
-  if (mod.id === 'social')     return <SocialModule     userRole={userRole} />
-  if (mod.id === 'image')      return <ImageModule      userRole={userRole} />
-  if (mod.id === 'quote')      return <QuoteModule      userRole={userRole} />
-  if (mod.id === 'research')   return <ResearchModule   userRole={userRole} />
+  if (mod.id === 'sales-copy')  return <SalesCopyModule  userRole={userRole} />
+  if (mod.id === 'social')      return <SocialModule      userRole={userRole} />
+  if (mod.id === 'image')       return <ImageModule       userRole={userRole} />
+  if (mod.id === 'quote')       return <QuoteModule       userRole={userRole} />
+  if (mod.id === 'research')    return <ResearchModule    userRole={userRole} />
+  if (mod.id === 'finance')     return <FinancialModule   userRole={userRole} />
+  if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
 
