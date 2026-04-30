@@ -709,6 +709,7 @@ export default function App() {
       {id:"cc-image",       icon:"🖼", label:"Image Generator"},
       {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
+      {id:"cc-research",    icon:"⊕", label:"Market Research"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
       {id:"cc-analytics",   icon:"📈", label:"Web Analytics"},
       {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},

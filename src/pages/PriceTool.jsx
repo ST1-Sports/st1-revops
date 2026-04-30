@@ -565,8 +565,53 @@ Provide strategic pricing advice. Return JSON:
     {id:"alerts",     label:"Margin Alerts",badge:criticalAlerts.length},
     {id:"products",   label:"All Products"},
     {id:"suppliers",  label:"Suppliers"},
+    {id:"ask",        label:"Ask AI"},
     {id:"upload",     label:"Upload Price List"},
   ];
+
+  // ── Ask AI state ──────────────────────────────────────────────────────────
+  const [askQuery,   setAskQuery]   = useState("");
+  const [askLoading, setAskLoading] = useState(false);
+  const [askHistory, setAskHistory] = useState([]); // [{q, a}]
+
+  const buildPriceContext = () => {
+    const lines = ["ST1 Sports — Current Price Lists\n"];
+    suppliers.forEach(sup => {
+      lines.push(`\nSupplier: ${sup.name} (${sup.category}) — updated ${sup.lastUpdated}`);
+      sup.products.forEach(p => {
+        lines.push(`  SKU ${p.sku} | ${p.name} | Cost: $${p.cost.toFixed(2)} | Our Price: $${p.ourPrice.toFixed(2)}${p.map ? ` | MAP: $${p.map.toFixed(2)}` : ""} | Unit: ${p.unit}`);
+      });
+    });
+    return lines.join("\n");
+  };
+
+  const askAI = async () => {
+    const q = askQuery.trim();
+    if (!q || askLoading) return;
+    setAskLoading(true);
+    setAskQuery("");
+    const entry = { q, a: null, loading: true };
+    setAskHistory(h => [entry, ...h]);
+    try {
+      const ctx = buildPriceContext();
+      const res = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1024,
+          system: `You are a pricing assistant for ST1 Sports. Answer questions about products and prices using ONLY the price list data provided. Be concise and direct. Always include SKU, unit, and our sell price in your answers. If you cannot find the item, say so clearly.\n\n${ctx}`,
+          messages: [{ role: "user", content: q }],
+        }),
+      });
+      const d = await res.json();
+      const answer = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("") || d.error || "No response";
+      setAskHistory(h => h.map((item, i) => i === 0 ? { q, a: answer, loading: false } : item));
+    } catch (e) {
+      setAskHistory(h => h.map((item, i) => i === 0 ? { q, a: `Error: ${e.message}`, loading: false } : item));
+    }
+    setAskLoading(false);
+  };
 
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
@@ -1014,6 +1059,67 @@ Provide strategic pricing advice. Return JSON:
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* ── ASK AI ── */}
+        {tab==="ask"&&(
+          <div className="fu" style={{maxWidth:760}}>
+            <div style={{marginBottom:20}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3}}>ASK AI ABOUT PRICES</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Ask anything — "How much is a steel hurdle?", "What does a dozen Diamond game balls cost?", "Show me all Gill javelin options"</div>
+              <div style={{width:36,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
+            </div>
+
+            {/* Input */}
+            <div style={{display:"flex",gap:8,marginBottom:24}}>
+              <input
+                value={askQuery}
+                onChange={e=>setAskQuery(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey) askAI(); }}
+                placeholder={'e.g. How much is a steel hurdle 39"? What shot puts do we carry from Gill?'}
+                style={{flex:1,background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",fontSize:12,color:B.text,outline:"none"}}
+                disabled={askLoading}
+              />
+              <button onClick={askAI} disabled={!askQuery.trim()||askLoading}
+                style={{background:(!askQuery.trim()||askLoading)?B.gray2:B.orange,color:B.white,border:"none",borderRadius:6,padding:"10px 20px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,flexShrink:0}}>
+                {askLoading?"…":"ASK →"}
+              </button>
+            </div>
+
+            {/* Quick prompts */}
+            {askHistory.length===0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:20}}>
+                {["Show me all hurdle options","What are our volleyball prices?","List all throwing implements","Cheapest baseball option","Most expensive item in the catalog"].map(q=>(
+                  <button key={q} onClick={()=>{setAskQuery(q);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* History */}
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {askHistory.map((item,i)=>(
+                <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
+                  <div style={{background:B.surface,padding:"10px 14px",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>
+                    {item.q}
+                  </div>
+                  <div style={{padding:"12px 14px"}}>
+                    {item.loading
+                      ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Looking up prices…</div>
+                      : <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",margin:0}}>{item.a}</pre>
+                    }
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {askHistory.length>0&&(
+              <button onClick={()=>setAskHistory([])} style={{marginTop:12,background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>
+                CLEAR HISTORY
+              </button>
+            )}
           </div>
         )}
 
