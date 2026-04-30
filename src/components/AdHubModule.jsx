@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { routeTask } from '../lib/aiRouter.js'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -189,48 +190,310 @@ function ControlsBar({ platforms, onPlatforms, dateRange, onDateRange }) {
 }
 
 // ─── PLACEHOLDER TABS (stubs — replaced in subsequent builds) ─────────────────
-function DashboardTab({ platforms, dateRange }) {
+// ─── DATA FETCHING ────────────────────────────────────────────────────────────
+async function fetchPlatformInsights(pid, dateRange) {
+  const p   = PLATFORMS.find(x => x.id === pid)
+  const res = await fetch(`${p.endpoint}?action=insights&dateRange=${dateRange}&level=campaign`)
+  if (!res.ok) throw new Error(`${p.label} returned ${res.status}`)
+  const data = await res.json()
+  if (data.error) throw new Error(data.error)
+  return Array.isArray(data) ? data : []
+}
+
+async function fetchAllInsights(platforms, dateRange) {
+  const results = await Promise.allSettled(
+    platforms.map(pid => fetchPlatformInsights(pid, dateRange).then(rows => ({ pid, rows })))
+  )
+  const rows   = []
+  const errors = {}
+  for (const r of results) {
+    if (r.status === 'fulfilled') rows.push(...r.value.rows)
+    else {
+      const pid = platforms[results.indexOf(r)]
+      errors[pid] = r.reason?.message || 'Failed'
+    }
+  }
+  return { rows, errors }
+}
+
+function aggregate(rows) {
+  const spend       = rows.reduce((s, r) => s + (r.spend       || 0), 0)
+  const revenue     = rows.reduce((s, r) => s + (r.revenue     || 0), 0)
+  const impressions = rows.reduce((s, r) => s + (r.impressions || 0), 0)
+  const clicks      = rows.reduce((s, r) => s + (r.clicks      || 0), 0)
+  return {
+    spend,
+    revenue,
+    roas:        spend > 0 ? revenue / spend : 0,
+    impressions,
+    clicks,
+    ctr:         impressions > 0 ? (clicks / impressions) * 100 : 0,
+  }
+}
+
+function byPlatform(rows) {
+  const map = {}
+  for (const r of rows) {
+    if (!map[r.platform]) map[r.platform] = { spend: 0, revenue: 0, impressions: 0, clicks: 0 }
+    map[r.platform].spend       += r.spend       || 0
+    map[r.platform].revenue     += r.revenue     || 0
+    map[r.platform].impressions += r.impressions || 0
+    map[r.platform].clicks      += r.clicks      || 0
+  }
+  return map
+}
+
+// ─── FORMATTERS ───────────────────────────────────────────────────────────────
+const fmtUsd  = v => v >= 1000 ? `$${(v/1000).toFixed(1)}k` : `$${v.toFixed(0)}`
+const fmtNum  = v => v >= 1000000 ? `${(v/1000000).toFixed(1)}M` : v >= 1000 ? `${(v/1000).toFixed(1)}k` : String(Math.round(v))
+const fmtRoas = v => `${v.toFixed(2)}x`
+const fmtPct  = v => `${v.toFixed(2)}%`
+
+// ─── SORT HOOK ────────────────────────────────────────────────────────────────
+function useSortedRows(rows) {
+  const [sortKey, setSortKey] = useState('spend')
+  const [sortDir, setSortDir] = useState('desc')
+
+  function handleSort(key) {
+    if (key === sortKey) setSortDir(d => d === 'desc' ? 'asc' : 'desc')
+    else { setSortKey(key); setSortDir('desc') }
+  }
+
+  const sorted = [...rows].sort((a, b) => {
+    const av = a[sortKey] ?? 0
+    const bv = b[sortKey] ?? 0
+    const cmp = typeof av === 'string' ? av.localeCompare(bv) : av - bv
+    return sortDir === 'desc' ? -cmp : cmp
+  })
+
+  return { sorted, sortKey, sortDir, handleSort }
+}
+
+// ─── KPI CARD ─────────────────────────────────────────────────────────────────
+function KpiCard({ label, value, sub, highlight }) {
+  return (
+    <div style={{ background: highlight ? B.orangeBg : B.surface, borderRadius: 8, padding: '14px 12px', border: `1px solid ${highlight ? B.orange + '40' : B.border}` }}>
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: highlight ? B.orange : B.muted, letterSpacing: 1.5, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 20, color: highlight ? B.orange : B.text, lineHeight: 1 }}>{value}</div>
+      {sub && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, marginTop: 4 }}>{sub}</div>}
+    </div>
+  )
+}
+
+// ─── TABLE HEADER ─────────────────────────────────────────────────────────────
+function Th({ label, sortKey, active, dir, onSort, align = 'right' }) {
+  return (
+    <th
+      onClick={() => onSort(sortKey)}
+      style={{ padding: '8px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: active ? B.orange : B.muted, letterSpacing: 1.5, cursor: 'pointer', textAlign: align, whiteSpace: 'nowrap', userSelect: 'none' }}
+    >
+      {label} {active ? (dir === 'desc' ? '↓' : '↑') : ''}
+    </th>
+  )
+}
+
+// ─── PERFORMERS LIST ──────────────────────────────────────────────────────────
+function PerformersList({ rows, title, color }) {
   return (
     <div>
-      <Card style={{ marginBottom: 12 }}>
-        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 16 }}>KPI SUMMARY</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
-          {['Spend', 'Revenue', 'ROAS', 'Impressions', 'Clicks', 'CTR'].map(k => (
-            <div key={k} style={{ background: B.surface, borderRadius: 8, padding: '14px 12px', border: `1px solid ${B.border}` }}>
-              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5, marginBottom: 6 }}>{k}</div>
-              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 18, color: B.gray2 }}>—</div>
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>{title}</div>
+      {rows.length === 0
+        ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No data yet</div>
+        : rows.map((r, i) => (
+            <div key={r.id + i} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, padding: '8px 10px', background: B.surface, borderRadius: 6, border: `1px solid ${B.border}` }}>
+              <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: color, minWidth: 18 }}>{i + 1}</span>
+              <PlatformBadge platform={r.platform} size="sm" />
+              <span style={{ flex: 1, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+              <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: color, flexShrink: 0 }}>{fmtRoas(r.roas)}</span>
             </div>
-          ))}
+          ))
+      }
+    </div>
+  )
+}
+
+// ─── DASHBOARD TAB ────────────────────────────────────────────────────────────
+function DashboardTab({ platforms, dateRange, userRole }) {
+  const [rows,      setRows]      = useState([])
+  const [errors,    setErrors]    = useState({})
+  const [loading,   setLoading]   = useState(false)
+  const [aiOutput,  setAiOutput]  = useState('')
+  const [aiLoading, setAiLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!platforms.length) return
+    setLoading(true)
+    const { rows: r, errors: e } = await fetchAllInsights(platforms, dateRange)
+    setRows(r); setErrors(e); setLoading(false)
+  }, [platforms.join(','), dateRange])
+
+  useEffect(() => { load() }, [load])
+
+  const totals   = aggregate(rows)
+  const platMap  = byPlatform(rows)
+  const maxSpend = Math.max(...Object.values(platMap).map(p => p.spend), 1)
+
+  const withRoas = rows.filter(r => r.roas > 0)
+  const top5     = [...withRoas].sort((a, b) => b.roas - a.roas).slice(0, 5)
+  const bottom5  = [...withRoas].sort((a, b) => a.roas - b.roas).slice(0, 5)
+
+  const { sorted, sortKey, sortDir, handleSort } = useSortedRows(rows)
+
+  async function handleAiAnalyze() {
+    if (!rows.length) return
+    setAiLoading(true); setAiOutput('')
+    const summary = [
+      `Total spend: ${fmtUsd(totals.spend)}`,
+      `Total revenue: ${fmtUsd(totals.revenue)}`,
+      `Blended ROAS: ${fmtRoas(totals.roas)}`,
+      `Impressions: ${fmtNum(totals.impressions)}`,
+      `Clicks: ${fmtNum(totals.clicks)}, CTR: ${fmtPct(totals.ctr)}`,
+      `Date range: ${dateRange.replace(/_/g, ' ')}`,
+      '',
+      'Top 3 campaigns by ROAS:',
+      ...top5.slice(0, 3).map(r => `  - ${r.name} (${r.platform}): ROAS ${fmtRoas(r.roas)}, Spend ${fmtUsd(r.spend)}`),
+      '',
+      'Bottom 3 campaigns by ROAS:',
+      ...bottom5.slice(0, 3).map(r => `  - ${r.name} (${r.platform}): ROAS ${fmtRoas(r.roas)}, Spend ${fmtUsd(r.spend)}`),
+    ].join('\n')
+
+    try {
+      const res = await routeTask({
+        task: `Analyze this ad performance data for ST1 Sports and provide specific budget reallocation recommendations, flag underperformers to pause, and identify scaling opportunities:\n\n${summary}`,
+        input: '',
+        userRole,
+      })
+      setAiOutput(res.output || '')
+    } catch (e) {
+      setAiOutput(`Error: ${e.message}`)
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const errPlatforms = Object.keys(errors)
+
+  return (
+    <div>
+      {/* Error banner */}
+      {errPlatforms.length > 0 && (
+        <div style={{ marginBottom: 12, padding: '9px 14px', background: '#FFF8E6', border: '1px solid #C7780030', borderRadius: 6, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#C77800' }}>
+          Could not load: {errPlatforms.map(pid => `${PLATFORMS.find(p => p.id === pid)?.label} (${errors[pid]})`).join(' · ')}
+        </div>
+      )}
+
+      {/* KPI cards */}
+      <Card style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2 }}>KPI SUMMARY</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {loading && <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Loading…</span>}
+            <button onClick={load} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 5, padding: '3px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>↻ REFRESH</button>
+            <button
+              onClick={handleAiAnalyze}
+              disabled={!rows.length || aiLoading}
+              style={{ background: rows.length ? B.orange : B.gray2, color: B.white, border: 'none', borderRadius: 5, padding: '4px 12px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: rows.length ? 'pointer' : 'default' }}
+            >
+              {aiLoading ? 'ANALYZING…' : '✦ AI ANALYZE'}
+            </button>
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
+          <KpiCard label="TOTAL SPEND"   value={loading ? '…' : fmtUsd(totals.spend)}       />
+          <KpiCard label="REVENUE"       value={loading ? '…' : fmtUsd(totals.revenue)}     />
+          <KpiCard label="BLENDED ROAS"  value={loading ? '…' : fmtRoas(totals.roas)}       highlight={totals.roas >= 2} />
+          <KpiCard label="IMPRESSIONS"   value={loading ? '…' : fmtNum(totals.impressions)} />
+          <KpiCard label="CLICKS"        value={loading ? '…' : fmtNum(totals.clicks)}      />
+          <KpiCard label="CTR"           value={loading ? '…' : fmtPct(totals.ctr)}         />
         </div>
       </Card>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+      {/* AI output */}
+      {aiOutput && (
+        <Card style={{ marginBottom: 12, border: `1px solid ${B.orange}30`, background: B.orangeBg }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.orange, letterSpacing: 2, marginBottom: 10 }}>✦ AI RECOMMENDATIONS</div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{aiOutput}</div>
+        </Card>
+      )}
+
+      {/* Platform breakdown + top/bottom performers */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
         <Card>
-          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>PLATFORM BREAKDOWN</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {platforms.map(pid => {
-              const p = PLATFORMS.find(x => x.id === pid)
-              return (
-                <div key={pid} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <PlatformBadge platform={pid} size="sm" />
-                  <div style={{ flex: 1, height: 6, background: B.surface, borderRadius: 3, border: `1px solid ${B.border}` }}>
-                    <div style={{ width: '0%', height: '100%', background: p?.color, borderRadius: 3 }} />
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>PLATFORM BREAKDOWN</div>
+          {platforms.length === 0
+            ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No platforms selected</div>
+            : platforms.map(pid => {
+                const p    = PLATFORMS.find(x => x.id === pid)
+                const data = platMap[pid] || { spend: 0 }
+                const pct  = maxSpend > 0 ? (data.spend / maxSpend) * 100 : 0
+                return (
+                  <div key={pid} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <PlatformBadge platform={pid} size="sm" />
+                      <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: data.spend ? B.text : B.gray2 }}>
+                        {data.spend ? fmtUsd(data.spend) : '—'}
+                      </span>
+                    </div>
+                    <div style={{ height: 5, background: B.surface, borderRadius: 3, border: `1px solid ${B.border}` }}>
+                      <div style={{ width: `${pct}%`, height: '100%', background: p?.color, borderRadius: 3, transition: 'width .4s' }} />
+                    </div>
                   </div>
-                  <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2, minWidth: 40, textAlign: 'right' }}>—</span>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })
+          }
         </Card>
         <Card>
-          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>TOP PERFORMERS</div>
-          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>Connect platforms to see top performing campaigns by ROAS.</div>
+          <PerformersList rows={top5}    title="TOP 5 BY ROAS"    color={B.green} />
+        </Card>
+        <Card>
+          <PerformersList rows={bottom5} title="BOTTOM 5 BY ROAS" color={B.red}   />
         </Card>
       </div>
 
+      {/* Campaign performance table */}
       <Card>
-        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>CAMPAIGN PERFORMANCE TABLE</div>
-        <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>Platform data will populate here once API keys are added in Tool Manager.</div>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>CAMPAIGN PERFORMANCE</div>
+        {rows.length === 0
+          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2, padding: '10px 0' }}>
+              {loading ? 'Loading data…' : 'No campaign data. Add platform API keys in Tool Manager to populate this table.'}
+            </div>
+          : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${B.border}` }}>
+                    <Th label="CAMPAIGN"    sortKey="name"        active={sortKey==='name'}        dir={sortDir} onSort={handleSort} align="left" />
+                    <Th label="PLATFORM"   sortKey="platform"    active={sortKey==='platform'}    dir={sortDir} onSort={handleSort} align="left" />
+                    <Th label="SPEND"      sortKey="spend"       active={sortKey==='spend'}       dir={sortDir} onSort={handleSort} />
+                    <Th label="REVENUE"    sortKey="revenue"     active={sortKey==='revenue'}     dir={sortDir} onSort={handleSort} />
+                    <Th label="ROAS"       sortKey="roas"        active={sortKey==='roas'}        dir={sortDir} onSort={handleSort} />
+                    <Th label="IMPR"       sortKey="impressions" active={sortKey==='impressions'} dir={sortDir} onSort={handleSort} />
+                    <Th label="CLICKS"     sortKey="clicks"      active={sortKey==='clicks'}      dir={sortDir} onSort={handleSort} />
+                    <Th label="CTR"        sortKey="ctr"         active={sortKey==='ctr'}         dir={sortDir} onSort={handleSort} />
+                    <Th label="CPC"        sortKey="cpc"         active={sortKey==='cpc'}         dir={sortDir} onSort={handleSort} />
+                    <Th label="CPM"        sortKey="cpm"         active={sortKey==='cpm'}         dir={sortDir} onSort={handleSort} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {sorted.map((r, i) => (
+                    <tr key={r.id + i} style={{ borderBottom: `1px solid ${B.border}`, background: i % 2 === 0 ? B.white : B.surface }}>
+                      <td style={{ padding: '9px 10px', fontFamily: "'Lexend',sans-serif", color: B.text, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</td>
+                      <td style={{ padding: '9px 10px' }}><PlatformBadge platform={r.platform} size="sm" /></td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.text }}>{fmtUsd(r.spend)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.text }}>{fmtUsd(r.revenue)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10, color: r.roas >= 2 ? B.green : r.roas > 0 ? B.text : B.gray2 }}>{fmtRoas(r.roas)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtNum(r.impressions)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtNum(r.clicks)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtPct(r.ctr)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtUsd(r.cpc)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontFamily: "'Lexend',sans-serif", color: B.muted }}>{fmtUsd(r.cpm)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
       </Card>
     </div>
   )
@@ -336,7 +599,7 @@ export default function AdHubModule({ userRole }) {
         />
       )}
 
-      {tab === 'dashboard' && <DashboardTab platforms={platforms} dateRange={dateRange} />}
+      {tab === 'dashboard' && <DashboardTab platforms={platforms} dateRange={dateRange} userRole={userRole} />}
       {tab === 'campaigns' && <CampaignsTab platforms={platforms} />}
       {tab === 'create'    && <CreateTab />}
     </div>
