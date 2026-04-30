@@ -26,15 +26,30 @@ function PanelLoader() {
 class ErrBound extends Component {
   constructor(p){super(p);this.state={err:null};}
   static getDerivedStateFromError(e){return{err:e};}
+  componentDidCatch(err){
+    // Auto-reload on chunk load failures (stale browser cache after deploy)
+    if(err?.message?.includes("Failed to fetch dynamically imported module")){
+      window.location.reload();
+    }
+  }
   render(){
-    if(this.state.err) return(
-      <div style={{padding:32,fontFamily:"monospace",background:"#fff8f8",border:"1px solid #f99",borderRadius:8,margin:24}}>
-        <div style={{fontWeight:700,color:"#c00",marginBottom:8}}>Render error — please report this message:</div>
-        <pre style={{fontSize:12,color:"#333",whiteSpace:"pre-wrap"}}>{this.state.err?.message}</pre>
-        <pre style={{fontSize:10,color:"#999",marginTop:8,whiteSpace:"pre-wrap"}}>{this.state.err?.stack?.split("\n").slice(0,6).join("\n")}</pre>
-        <button onClick={()=>this.setState({err:null})} style={{marginTop:12,padding:"6px 14px",background:"#f37321",color:"#fff",border:"none",borderRadius:4,cursor:"pointer"}}>Retry</button>
-      </div>
-    );
+    if(this.state.err){
+      const isChunkErr = this.state.err?.message?.includes("Failed to fetch dynamically imported module");
+      if(isChunkErr) return(
+        <div style={{padding:32,fontFamily:"'Lexend',sans-serif",display:"flex",flexDirection:"column",alignItems:"center",gap:14,marginTop:40}}>
+          <div style={{fontSize:13,color:"#424242",fontWeight:500}}>New version deployed — reloading…</div>
+          <div style={{width:32,height:3,background:"#F37321",borderRadius:2,animation:"grow 1s ease-in-out infinite alternate"}}/>
+        </div>
+      );
+      return(
+        <div style={{padding:32,fontFamily:"monospace",background:"#fff8f8",border:"1px solid #f99",borderRadius:8,margin:24}}>
+          <div style={{fontWeight:700,color:"#c00",marginBottom:8}}>Render error — please report this message:</div>
+          <pre style={{fontSize:12,color:"#333",whiteSpace:"pre-wrap"}}>{this.state.err?.message}</pre>
+          <pre style={{fontSize:10,color:"#999",marginTop:8,whiteSpace:"pre-wrap"}}>{this.state.err?.stack?.split("\n").slice(0,6).join("\n")}</pre>
+          <button onClick={()=>this.setState({err:null})} style={{marginTop:12,padding:"6px 14px",background:"#f37321",color:"#fff",border:"none",borderRadius:4,cursor:"pointer"}}>Retry</button>
+        </div>
+      );
+    }
     return this.props.children;
   }
 }
@@ -665,44 +680,44 @@ export default function App() {
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
-    {id:"briefing",    icon:"◈", label:"Briefing",       badge:urgentCount(s)},
-    {id:"analytics",   icon:"▣", label:"Analytics"},
+    {id:"briefing",    icon:"◈", label:"Briefing",        badge:urgentCount(s)},
+    {id:"analytics",   icon:"▣", label:"Performance"},
     {id:"revenue",     icon:"↑", label:"Revenue"},
     {id:"deals",       icon:"◫", label:"Deals"},
-    {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
-    {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"quotes",      icon:"▤", label:"Quotes",            href:"https://admin.st1sports.com"},
+    {id:"orders",      icon:"⊡", label:"Orders",          badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
+    {id:"invoicing",   icon:"▲", label:"Invoices & AR",   badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
+    {id:"rfp",         icon:"⊘", label:"Bids & RFPs",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
     {id:"emails",      icon:"✉", label:"Emails"},
-    {id:"social",      icon:"📱", label:"Social"},
+    {id:"social",      icon:"📱", label:"Social Posting"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
     {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
-    {id:"agent",       icon:"AI",label:"AI Agent"},
-    {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
+    {id:"agent",       icon:"AI",label:"AI Assistant"},
+    {id:"reorder",     icon:"↺", label:"Reorder Engine",  badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
+    {id:"alerts",      icon:"◎", label:"Alerts",          badge:(s.alerts||[]).filter(a=>!a.sent).length},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
       {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
-      {id:"cc-social",      icon:"📱", label:"Social Media"},
+      {id:"cc-social",      icon:"📱", label:"Social Content"},
       {id:"cc-image",       icon:"🖼", label:"Image Generator"},
       {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
       {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
       {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-      {id:"cc-analytics",   icon:"📈", label:"Analytics"},
+      {id:"cc-analytics",   icon:"📈", label:"Web Analytics"},
       {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
     ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"rfp-tool",   icon:"📋", label:"RFP Automation"},
+      {id:"rfp-tool",   icon:"📋", label:"RFP Generator"},
       {id:"prices",     icon:"$",  label:"Price Manager"},
       {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
     ]},
