@@ -283,8 +283,134 @@ function PlaceholderPanel({ mod }) {
   )
 }
 
+// ─── SOCIAL MEDIA ────────────────────────────────────────────────────────────
+const PLATFORMS = ['Instagram','Facebook','LinkedIn']
+const TONES     = ['Hype','Professional','Educational']
+
+function parseSocial(text, platforms) {
+  try { const p = JSON.parse(text.trim()); if (p && typeof p === 'object') return p } catch {}
+  try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); if (typeof p === 'object') return p } } catch {}
+  // fallback: one block per platform
+  return Object.fromEntries(platforms.map(pl => [pl.toLowerCase(), { caption: text.trim(), hashtags: [] }]))
+}
+
+function SocialModule({ userRole }) {
+  const [selPlatforms, setSelPlatforms] = useState(['Instagram','LinkedIn'])
+  const [topic,        setTopic]        = useState('')
+  const [product,      setProduct]      = useState('')
+  const [tone,         setTone]         = useState('Professional')
+  const [loading,      setLoading]      = useState(false)
+  const [result,       setResult]       = useState(null)
+  const [error,        setError]        = useState(null)
+
+  function togglePlatform(pl) {
+    setSelPlatforms(prev =>
+      prev.includes(pl) ? prev.filter(p => p !== pl) : [...prev, pl]
+    )
+  }
+
+  async function generate() {
+    if (!topic.trim() || !selPlatforms.length) return
+    setLoading(true); setError(null); setResult(null)
+    const platformList = selPlatforms.join(', ')
+    const task = [
+      `Write optimized social media posts for ${platformList} about: ${topic.trim()}.`,
+      product.trim() ? `Product or brand featured: ${product.trim()}.` : '',
+      `Tone: ${tone}. ST1 Sports athletic equipment brand context.`,
+      'Include platform-appropriate hashtags (5–10 per platform).',
+      `Return JSON only: {${selPlatforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(',')}}`,
+    ].filter(Boolean).join(' ')
+    try {
+      const r = await routeTask({ task, input: { platforms: selPlatforms, topic, product, tone }, userRole })
+      setResult(parseSocial(r.output || '', selPlatforms))
+    } catch(e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const PLATFORM_COLORS = { Instagram:'#E4405F', Facebook:'#1877F2', LinkedIn:'#0A66C2' }
+
+  return (
+    <div style={{ padding:28, overflowY:'auto', flex:1 }}>
+      <ModHeader icon="📱" label="Social Media" desc="Platform-optimized posts with tailored hashtag sets for each channel." />
+
+      <Card>
+        {/* Platform selector */}
+        <Field label="PLATFORMS *">
+          <div style={{ display:'flex', gap:6 }}>
+            {PLATFORMS.map(pl => {
+              const active = selPlatforms.includes(pl)
+              return (
+                <button key={pl} onClick={() => togglePlatform(pl)} style={{ background: active ? PLATFORM_COLORS[pl] : B.surface, color: active ? B.white : B.muted, border: `1px solid ${active ? PLATFORM_COLORS[pl] : B.border}`, borderRadius:6, padding:'6px 14px', fontSize:11, fontFamily:"'Lexend',sans-serif", cursor:'pointer', fontWeight: active ? 600 : 400 }}>
+                  {pl}
+                </button>
+              )
+            })}
+          </div>
+        </Field>
+
+        <Row2>
+          <Field label="TOPIC *">
+            <Inp value={topic} onChange={e=>setTopic(e.target.value)} placeholder="New baseball season gear, track meet prep…" />
+          </Field>
+          <Field label="PRODUCT OR BRAND">
+            <Inp value={product} onChange={e=>setProduct(e.target.value)} placeholder="Wilson A2000, DeMarini CF, BWTF…" />
+          </Field>
+        </Row2>
+
+        {/* Tone selector */}
+        <Field label="TONE">
+          <div style={{ display:'flex', gap:6 }}>
+            {TONES.map(t => (
+              <button key={t} onClick={() => setTone(t)} style={{ background: tone===t ? B.orange : B.surface, color: tone===t ? B.white : B.muted, border: `1px solid ${tone===t ? B.orange : B.border}`, borderRadius:6, padding:'6px 14px', fontSize:11, fontFamily:"'Lexend',sans-serif", cursor:'pointer', fontWeight: tone===t ? 600 : 400 }}>
+                {t}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <div style={{ display:'flex', justifyContent:'flex-end', marginTop:4 }}>
+          <GenBtn onClick={generate} loading={loading} disabled={!topic.trim() || !selPlatforms.length} />
+        </div>
+      </Card>
+
+      <ErrMsg msg={error} />
+
+      {result && selPlatforms.map(pl => {
+        const key  = pl.toLowerCase()
+        const data = result[key]
+        if (!data) return null
+        const color = PLATFORM_COLORS[pl]
+        const tags  = Array.isArray(data.hashtags) ? data.hashtags : []
+        const full  = data.caption + (tags.length ? '\n\n' + tags.join(' ') : '')
+        return (
+          <Card key={pl}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10 }}>
+              <span style={{ fontFamily:"'Lexend Zetta',sans-serif", fontSize:8, color, letterSpacing:2 }}>{pl.toUpperCase()}</span>
+              <CopyBtn text={full} />
+            </div>
+            <div style={{ fontFamily:"'Lexend',sans-serif", fontSize:12, color:B.text, lineHeight:1.75, whiteSpace:'pre-wrap', marginBottom:10 }}>
+              {data.caption}
+            </div>
+            {tags.length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                {tags.map((tag,i) => (
+                  <span key={i} style={{ fontFamily:"'Lexend',sans-serif", fontSize:10, color, background:`${color}12`, border:`1px solid ${color}30`, borderRadius:4, padding:'2px 7px' }}>{tag}</span>
+                ))}
+              </div>
+            )}
+          </Card>
+        )
+      })}
+    </div>
+  )
+}
+
 function ActivePanel({ mod, userRole }) {
   if (mod.id === 'sales-copy') return <SalesCopyModule userRole={userRole} />
+  if (mod.id === 'social')     return <SocialModule     userRole={userRole} />
   return <PlaceholderPanel mod={mod} />
 }
 
