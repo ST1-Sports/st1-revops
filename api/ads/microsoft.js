@@ -48,20 +48,67 @@ async function msRequest(service, operation, body) {
   const r = await fetch(`${ADS_BASE}/${service}/${operation}`, {
     method:  'POST',
     headers: {
-      'Authorization':         `Bearer ${token}`,
-      'DeveloperToken':        c.devToken,
-      'CustomerId':            c.customerId || '',
-      'CustomerAccountId':     c.accountId,
-      'Content-Type':          'application/json',
+      'Authorization':     `Bearer ${token}`,
+      'DeveloperToken':    c.devToken,
+      'CustomerId':        c.customerId || '',
+      'CustomerAccountId': c.accountId,
+      'Content-Type':      'application/json',
     },
     body: JSON.stringify(body),
   });
   const d = await r.json();
-  if (d.TrackingId && !r.ok) throw new Error(`Microsoft Ads error: ${JSON.stringify(d)}`);
+  if (!r.ok) throw new Error(`Microsoft Ads error: ${JSON.stringify(d)}`);
   return d;
 }
 
-function msFmtDate(d) { return d.toISOString().slice(0, 10).replace(/-/g, ''); }
+// Poll the report job until Success/Error or timeout
+async function pollReport(reportId, maxWaitMs = 22000) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const d      = await msRequest('Reporting', 'PollGenerateReport', { ReportRequestId: reportId });
+    const status = d.ReportRequestStatus?.Status;
+    if (status === 'Success') return d.ReportRequestStatus.ReportDownloadUrl;
+    if (status === 'Error' || status === 'Failed') throw new Error(`Report job failed: ${status}`);
+    await new Promise(r => setTimeout(r, 2500));
+  }
+  return null; // timed out — caller returns empty
+}
+
+// Minimal quoted-CSV parser that handles Microsoft's format
+function parseCsvLine(line) {
+  const fields = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; } else inQ = !inQ;
+    } else if (ch === ',' && !inQ) {
+      fields.push(cur.trim()); cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  fields.push(cur.trim());
+  return fields;
+}
+
+function parseMsCsv(text) {
+  const lines    = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const hdrIdx   = lines.findIndex(l => /CampaignName|AdGroupName|AdId/i.test(l));
+  if (hdrIdx < 0) return [];
+  const headers  = parseCsvLine(lines[hdrIdx]);
+  const footerRe = /^©|^"©/;
+  const rows     = [];
+  for (let i = hdrIdx + 1; i < lines.length; i++) {
+    if (footerRe.test(lines[i])) break;
+    const vals = parseCsvLine(lines[i]);
+    if (!vals.length || vals.every(v => !v)) continue;
+    const row = {};
+    headers.forEach((h, j) => { row[h] = vals[j] ?? ''; });
+    rows.push(row);
+  }
+  return rows;
+}
 
 const DATE_RANGE_DAYS = { yesterday: 1, last_7_days: 7, last_30_days: 30, last_90_days: 90 };
 
@@ -71,13 +118,17 @@ async function getInsights(level = 'campaign', datePreset = 'last_30_days') {
   const start = new Date(Date.now() - days * 86400_000);
   const c     = creds();
 
-  const reportType = level === 'ad' ? 'AdPerformanceReport' : level === 'adset' ? 'AdGroupPerformanceReport' : 'CampaignPerformanceReport';
+  const reportType = level === 'ad'
+    ? 'AdPerformanceReport'
+    : level === 'adset'
+    ? 'AdGroupPerformanceReport'
+    : 'CampaignPerformanceReport';
 
-  const data = await msRequest('Reporting', 'SubmitGenerateReportRequest', {
+  const submit = await msRequest('Reporting', 'SubmitGenerateReportRequest', {
     ReportRequest: {
-      '__type':       `${reportType}Request:https://bingads.microsoft.com/Reporting/v13`,
-      Format:         'Csv',
-      ReportName:     `ST1_${reportType}`,
+      '__type': `${reportType}Request:https://bingads.microsoft.com/Reporting/v13`,
+      Format:   'Csv',
+      ReportName: `ST1_${reportType}`,
       ReturnOnlyCompleteData: false,
       Time: {
         CustomDateRangeStart: { Day: start.getDate(), Month: start.getMonth() + 1, Year: start.getFullYear() },
@@ -89,23 +140,40 @@ async function getInsights(level = 'campaign', datePreset = 'last_30_days') {
     },
   });
 
-  // Microsoft uses async report generation; return stub with report ID for polling
-  // In production you'd poll the report download URL
-  return [{
-    id:          'ms-report-pending',
-    name:        'Microsoft Ads Report',
-    status:      'pending',
-    reportId:    data.ReportRequestId,
-    note:        'Microsoft Ads uses async reporting. Poll /api/ads/microsoft?action=report&reportId=' + data.ReportRequestId,
-    platform:    'microsoft',
-    spend:       0, revenue: 0, roas: 0, impressions: 0, clicks: 0, ctr: 0, cpc: 0, cpm: 0,
-  }];
+  const reportId     = submit.ReportRequestId;
+  const downloadUrl  = await pollReport(reportId);
+
+  if (!downloadUrl) return []; // timed out — return empty, retry next refresh
+
+  const csvText = await (await fetch(downloadUrl)).text();
+  const rawRows = parseMsCsv(csvText);
+
+  return rawRows.map((r, i) => {
+    const name  = r['CampaignName'] || r['AdGroupName'] || r['AdId'] || `Row ${i + 1}`;
+    const spend = parseFloat(r['Spend']   || 0);
+    const rev   = parseFloat(r['Revenue'] || 0);
+    return {
+      id:          name.toLowerCase().replace(/\s+/g, '-') + `-${i}`,
+      name,
+      status:      'ACTIVE',
+      spend:       +spend.toFixed(2),
+      revenue:     +rev.toFixed(2),
+      roas:        spend > 0 ? +(rev / spend).toFixed(2) : 0,
+      impressions: parseInt(r['Impressions'] || 0),
+      clicks:      parseInt(r['Clicks']      || 0),
+      ctr:         parseFloat(r['Ctr']        || 0),
+      cpc:         parseFloat(r['AverageCpc'] || 0),
+      cpm:         parseFloat(r['AverageCpm'] || 0),
+      conversions: parseFloat(r['Conversions'] || 0),
+      platform:    'microsoft',
+    };
+  });
 }
 
 async function getCampaigns() {
   const c    = creds();
   const data = await msRequest('CampaignManagement', 'GetCampaignsByAccountId', {
-    AccountId: parseInt(c.accountId),
+    AccountId:    parseInt(c.accountId),
     CampaignType: 'Search Shopping DynamicSearchAds',
   });
   return (data.Campaigns?.Campaign || []).map(camp => ({
@@ -121,12 +189,11 @@ async function getCampaigns() {
 }
 
 async function updateCampaigns(ids, patch) {
-  const c    = creds();
-  const data = await msRequest('CampaignManagement', 'UpdateCampaigns', {
+  const c = creds();
+  await msRequest('CampaignManagement', 'UpdateCampaigns', {
     AccountId: parseInt(c.accountId),
     Campaigns: { Campaign: ids.map(id => ({ Id: parseInt(id), ...patch })) },
   });
-  if (data.PartialErrors) throw new Error(`Microsoft update partial error`);
   return { success: true };
 }
 
@@ -136,18 +203,17 @@ async function createCampaign(campaign) {
     AccountId: parseInt(c.accountId),
     Campaigns: {
       Campaign: [{
-        Name:                 campaign.name,
-        Status:               'Paused',
-        CampaignType:         'Search',
-        DailyBudget:          campaign.budget?.daily || 50,
-        DailyBudgetType:      'DailyBudgetStandard',
-        TimeZone:             'CentralStandardTime',
-        Languages:            { string: ['English'] },
+        Name:            campaign.name,
+        Status:          'Paused',
+        CampaignType:    'Search',
+        DailyBudget:     campaign.budget?.daily || 50,
+        DailyBudgetType: 'DailyBudgetStandard',
+        TimeZone:        'CentralStandardTime',
+        Languages:       { string: ['English'] },
       }],
     },
   });
-  const id = data.CampaignIds?.long?.[0];
-  return { success: true, campaignId: id, status: 'PAUSED' };
+  return { success: true, campaignId: data.CampaignIds?.long?.[0], status: 'PAUSED' };
 }
 
 export default async function handler(req, res) {

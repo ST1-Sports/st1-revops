@@ -23,8 +23,11 @@
     "api/ads/youtube.js":                          { "maxDuration": 30 },
     "api/ads/status.js":                           { "maxDuration": 30 },
     "api/ads/attribution.js":                      { "maxDuration": 30 },
+    "api/ads/alerts.js":                           { "maxDuration": 30 },
     "api/analytics/ga4.js":                        { "maxDuration": 30 },
-    "api/analytics/gtm.js":                        { "maxDuration": 30 }
+    "api/analytics/gtm.js":                        { "maxDuration": 30 },
+    "api/analytics/utm.js":                        { "maxDuration": 30 },
+    "api/webhooks/zoho.js":                        { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

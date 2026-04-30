@@ -87,6 +87,7 @@ const TABS = [
   { id: 'create',      label: 'Create Campaign' },
   { id: 'attribution', label: 'Attribution'     },
   { id: 'utm',         label: 'UTM Builder'     },
+  { id: 'alerts',      label: 'Alerts'          },
 ]
 
 function TabBar({ active, onChange }) {
@@ -1214,7 +1215,7 @@ function Step5({ campaign, onChange, onLaunch, launching, launchResults }) {
   )
 }
 
-function CreateTab({ userRole }) {
+function CreateTab({ userRole, onSwitchToTab }) {
   const [step,          setStep]          = useState(0)
   const [campaign,      setCampaign]      = useState(EMPTY_CAMPAIGN)
   const [launching,     setLaunching]     = useState(false)
@@ -1291,7 +1292,7 @@ function CreateTab({ userRole }) {
           )}
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
             <button onClick={reset} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>CREATE ANOTHER</button>
-            <button onClick={() => { /* parent switches tab */ }} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '9px 16px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>View in Campaigns →</button>
+            <button onClick={() => onSwitchToTab('campaigns')} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '9px 16px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>View in Campaigns →</button>
           </div>
         </div>
       </Card>
@@ -1438,8 +1439,8 @@ function AttributionTab() {
 }
 
 // ─── UTM BUILDER TAB ──────────────────────────────────────────────────────────
-const UTM_MEDIUMS  = ['cpc', 'email', 'social', 'display', 'video', 'referral']
-const UTM_SOURCES  = ['google', 'facebook', 'instagram', 'linkedin', 'tiktok', 'bing', 'youtube', 'newsletter']
+const UTM_MEDIUMS = ['cpc', 'email', 'social', 'display', 'video', 'referral']
+const UTM_SOURCES = ['google', 'facebook', 'instagram', 'linkedin', 'tiktok', 'bing', 'youtube', 'newsletter']
 
 function UTMBuilderTab() {
   const [url,      setUrl]      = useState('')
@@ -1450,6 +1451,14 @@ function UTMBuilderTab() {
   const [term,     setTerm]     = useState('')
   const [saved,    setSaved]    = useState([])
   const [copied,   setCopied]   = useState(false)
+  const [saving,   setSaving]   = useState(false)
+
+  useEffect(() => {
+    fetch('/api/analytics/utm')
+      .then(r => r.json())
+      .then(d => { if (d.links) setSaved(d.links) })
+      .catch(() => {})
+  }, [])
 
   const params = [
     ['utm_source', source],
@@ -1459,7 +1468,7 @@ function UTMBuilderTab() {
     ['utm_term', term],
   ].filter(([, v]) => v.trim())
 
-  const built = url.trim() && params.length
+  const built = url.trim() && source.trim() && medium.trim() && campaign.trim()
     ? `${url.trim().replace(/\/$/, '')}?${params.map(([k, v]) => `${k}=${encodeURIComponent(v.trim())}`).join('&')}`
     : ''
 
@@ -1471,15 +1480,28 @@ function UTMBuilderTab() {
     })
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!built) return
-    const entry = { id: Date.now(), url: built, label: campaign || source || url, created: new Date().toISOString() }
-    setSaved(s => [entry, ...s.slice(0, 19)])
+    setSaving(true)
+    try {
+      const r = await fetch('/api/analytics/utm', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ destination: url.trim(), utm_source: source, utm_medium: medium, utm_campaign: campaign, utm_content: content || undefined, utm_term: term || undefined }),
+      })
+      const d = await r.json()
+      if (d.link) setSaved(s => [d.link, ...s])
+    } catch {}
+    finally { setSaving(false) }
+  }
+
+  async function handleDelete(id) {
+    await fetch(`/api/analytics/utm?id=${id}`, { method: 'DELETE' }).catch(() => {})
+    setSaved(s => s.filter(x => x.id !== id))
   }
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 14 }}>
-      {/* Builder form */}
       <div>
         <Card style={{ marginBottom: 12 }}>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 14 }}>BUILD UTM LINK</div>
@@ -1515,46 +1537,194 @@ function UTMBuilderTab() {
           </div>
         </Card>
 
-        {/* Generated URL */}
         <Card>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>GENERATED URL</div>
-          {built
-            ? (
-              <>
-                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, wordBreak: 'break-all', marginBottom: 10, lineHeight: 1.6 }}>
-                  {built}
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={handleCopy} style={{ background: copied ? B.green : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '7px 16px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer', transition: 'background .2s' }}>
-                    {copied ? '✓ COPIED' : '↗ COPY'}
-                  </button>
-                  <button onClick={handleSave} style={{ background: B.surface, color: B.text, border: `1px solid ${B.border}`, borderRadius: 6, padding: '7px 14px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>
-                    + SAVE
-                  </button>
-                </div>
-              </>
-            )
-            : <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>Fill in URL, Source, Medium, and Campaign to generate a link.</div>
-          }
+          {built ? (
+            <>
+              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, wordBreak: 'break-all', marginBottom: 10, lineHeight: 1.6 }}>
+                {built}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={handleCopy} style={{ background: copied ? B.green : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '7px 16px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer', transition: 'background .2s' }}>
+                  {copied ? '✓ COPIED' : '↗ COPY'}
+                </button>
+                <button onClick={handleSave} disabled={saving} style={{ background: saving ? B.gray2 : B.surface, color: saving ? B.white : B.text, border: `1px solid ${B.border}`, borderRadius: 6, padding: '7px 14px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: saving ? 'default' : 'pointer' }}>
+                  {saving ? 'SAVING…' : '+ SAVE'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>Fill in URL, Source, Medium, and Campaign to generate a link.</div>
+          )}
         </Card>
       </div>
 
-      {/* Saved links */}
       <Card>
         <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>SAVED LINKS ({saved.length})</div>
         {saved.length === 0
-          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No saved links yet. Build and save a link to track it here.</div>
+          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No saved links yet. Build and save a link to store it here permanently.</div>
           : saved.map(s => (
             <div key={s.id} style={{ marginBottom: 10, padding: '9px 10px', background: B.surface, borderRadius: 7, border: `1px solid ${B.border}` }}>
               <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.text, letterSpacing: 0.3, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</div>
-              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 6 }}>{s.url}</div>
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 6 }}>{s.full_url || s.url}</div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => { navigator.clipboard.writeText(s.url) }} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>COPY</button>
-                <button onClick={() => setSaved(prev => prev.filter(x => x.id !== s.id))} style={{ background: 'none', color: B.gray2, border: `1px solid ${B.border}`, borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>✕</button>
+                <button onClick={() => navigator.clipboard.writeText(s.full_url || s.url)} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>COPY</button>
+                <button onClick={() => handleDelete(s.id)} style={{ background: 'none', color: B.gray2, border: `1px solid ${B.border}`, borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>✕</button>
               </div>
             </div>
           ))
         }
+      </Card>
+    </div>
+  )
+}
+
+// ─── ALERTS TAB ───────────────────────────────────────────────────────────────
+const ALERT_METRICS   = ['roas', 'spend', 'ctr', 'cpc', 'impressions', 'clicks']
+const ALERT_OPERATORS = [
+  { id: 'lt',  label: 'drops below'  },
+  { id: 'gt',  label: 'rises above'  },
+  { id: 'lte', label: '≤ at most'    },
+  { id: 'gte', label: '≥ at least'   },
+]
+const PLATFORM_OPTIONS = [{ id: '', label: 'All Platforms' }, ...PLATFORMS]
+
+function AlertsTab() {
+  const [rules,   setRules]   = useState([])
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [form,    setForm]    = useState({ name: '', platform: '', metric: 'roas', operator: 'lt', threshold: '' })
+  const [formErr, setFormErr] = useState('')
+
+  useEffect(() => {
+    fetch('/api/ads/alerts')
+      .then(r => r.json())
+      .then(d => { setRules(d.rules || []); setHistory(d.history || []) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function createRule() {
+    if (!form.name || !form.threshold) { setFormErr('Name and threshold are required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      const r = await fetch('/api/ads/alerts', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ...form, threshold: parseFloat(form.threshold) }),
+      })
+      const d = await r.json()
+      if (d.error) throw new Error(d.error)
+      setRules(prev => [d.rule, ...prev])
+      setForm({ name: '', platform: '', metric: 'roas', operator: 'lt', threshold: '' })
+    } catch (e) { setFormErr(e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function toggleRule(id, enabled) {
+    const r = await fetch(`/api/ads/alerts?id=${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    const d = await r.json()
+    if (d.rule) setRules(prev => prev.map(x => x.id === id ? d.rule : x))
+  }
+
+  async function deleteRule(id) {
+    await fetch(`/api/ads/alerts?id=${id}`, { method: 'DELETE' })
+    setRules(prev => prev.filter(x => x.id !== id))
+  }
+
+  function fmtOp(op) { return ALERT_OPERATORS.find(o => o.id === op)?.label || op }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      {/* Create rule form */}
+      <div>
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 14 }}>CREATE ALERT RULE</div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={LABEL}>RULE NAME *</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Low ROAS warning" style={INP} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div>
+              <label style={LABEL}>PLATFORM</label>
+              <select value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {PLATFORM_OPTIONS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={LABEL}>METRIC *</label>
+              <select value={form.metric} onChange={e => setForm(f => ({ ...f, metric: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {ALERT_METRICS.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+            <div>
+              <label style={LABEL}>CONDITION *</label>
+              <select value={form.operator} onChange={e => setForm(f => ({ ...f, operator: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {ALERT_OPERATORS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={LABEL}>THRESHOLD *</label>
+              <input type="number" step="0.01" value={form.threshold} onChange={e => setForm(f => ({ ...f, threshold: e.target.value }))} placeholder={form.metric === 'roas' ? '2.0' : form.metric === 'ctr' ? '1.5' : '0'} style={INP} />
+            </div>
+          </div>
+          {formErr && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.red, marginBottom: 10 }}>{formErr}</div>}
+          <button onClick={createRule} disabled={saving} style={{ background: saving ? B.gray2 : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: saving ? 'default' : 'pointer' }}>
+            {saving ? 'SAVING…' : '+ CREATE RULE'}
+          </button>
+        </Card>
+
+        {/* Recent alerts fired */}
+        <Card>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>RECENT ALERTS FIRED</div>
+          {history.length === 0
+            ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No alerts fired yet.</div>
+            : history.slice(0, 8).map((h, i) => (
+              <div key={h.id || i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, padding: '7px 10px', background: '#FFF8E6', border: '1px solid #C7780030', borderRadius: 6 }}>
+                <span style={{ fontSize: 12 }}>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }}>{h.campaign_name || h.platform} — {h.metric.toUpperCase()} {parseFloat(h.value).toFixed(2)}</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>{new Date(h.fired_at).toLocaleString()}</div>
+                </div>
+                <PlatformBadge platform={h.platform} size="sm" />
+              </div>
+            ))
+          }
+        </Card>
+      </div>
+
+      {/* Active rules list */}
+      <Card>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>ACTIVE RULES ({rules.length})</div>
+        {loading && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Loading…</div>}
+        {!loading && rules.length === 0 && (
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No alert rules yet. Create one to get notified when performance drops.</div>
+        )}
+        {rules.map(rule => (
+          <div key={rule.id} style={{ marginBottom: 10, padding: '10px 12px', background: rule.enabled ? B.surface : B.pageBg, border: `1px solid ${rule.enabled ? B.border : B.gray2 + '40'}`, borderRadius: 8, opacity: rule.enabled ? 1 : 0.6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+              <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: rule.enabled ? B.text : B.muted, letterSpacing: 0.3 }}>{rule.name}</span>
+              <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                <button
+                  onClick={() => toggleRule(rule.id, !rule.enabled)}
+                  style={{ background: rule.enabled ? B.orangeBg : B.surface, color: rule.enabled ? B.orange : B.muted, border: `1px solid ${rule.enabled ? B.orange + '30' : B.border}`, borderRadius: 4, padding: '2px 8px', fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}
+                >
+                  {rule.enabled ? 'ON' : 'OFF'}
+                </button>
+                <button onClick={() => deleteRule(rule.id)} style={{ background: 'none', color: B.gray2, border: `1px solid ${B.border}`, borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer' }}>✕</button>
+              </div>
+            </div>
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>
+              {rule.platform || 'All platforms'} · {rule.metric.toUpperCase()} {fmtOp(rule.operator)} <strong style={{ color: B.text }}>{parseFloat(rule.threshold).toFixed(2)}</strong>
+            </div>
+          </div>
+        ))}
       </Card>
     </div>
   )
@@ -1656,9 +1826,10 @@ export default function AdHubModule({ userRole }) {
 
       {tab === 'dashboard'   && <DashboardTab   platforms={platforms} dateRange={dateRange} userRole={userRole} />}
       {tab === 'campaigns'   && <CampaignsTab   platforms={platforms} dateRange={dateRange} />}
-      {tab === 'create'      && <CreateTab       userRole={userRole} />}
+      {tab === 'create'      && <CreateTab       userRole={userRole} onSwitchToTab={setTab} />}
       {tab === 'attribution' && <AttributionTab />}
       {tab === 'utm'         && <UTMBuilderTab />}
+      {tab === 'alerts'      && <AlertsTab />}
     </div>
   )
 }

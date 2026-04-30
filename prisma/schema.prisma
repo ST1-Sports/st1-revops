@@ -490,7 +490,7 @@ model RedditGuardrailLog {
 
 model EmailOpen {
   id        String   @id @default(cuid())
-  eid       String   // "{seqId}~{contactId}~{touchStep}"
+  eid       String
   seqId     String
   contactId String
   touchStep Int      @default(0)
@@ -498,4 +498,96 @@ model EmailOpen {
 
   @@index([seqId])
   @@index([contactId])
+}
+
+// ── AD HUB ────────────────────────────────────────────────────────────────────
+
+model ad_attribution {
+  id                   String   @id @default(uuid())
+  platform             String
+  platform_campaign_id String?
+  platform_ad_id       String?
+  zoho_deal_id         String?
+  zoho_contact_id      String?
+  contact_email        String?
+  attributed_revenue   Decimal  @default(0) @db.Decimal(12, 2)
+  attribution_type     String   @default("last_click")
+  converted_at         DateTime @default(now())
+  created_at           DateTime @default(now())
+
+  @@index([platform])
+  @@index([zoho_deal_id])
+  @@map("ad_attribution")
+}
+
+model ad_campaigns {
+  id           String    @id @default(uuid())
+  name         String
+  objective    String?
+  status       String    @default("PAUSED")
+  platforms    String[]
+  platform_ids Json?
+  creative     Json?
+  budget_daily Decimal?  @db.Decimal(12, 2)
+  start_date   DateTime?
+  end_date     DateTime?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+
+  @@map("ad_campaigns")
+}
+
+// ── ANALYTICS ─────────────────────────────────────────────────────────────────
+
+model utm_links {
+  id           String   @id @default(uuid())
+  label        String
+  destination  String
+  utm_source   String
+  utm_medium   String
+  utm_campaign String
+  utm_content  String?
+  utm_term     String?
+  full_url     String
+  clicks       Int      @default(0)
+  created_by   String?
+  created_at   DateTime @default(now())
+
+  @@index([utm_campaign])
+  @@map("utm_links")
+}
+
+model alert_rules {
+  id           String         @id @default(uuid())
+  name         String
+  platform     String?
+  campaign_id  String?
+  metric       String
+  operator     String
+  threshold    Decimal        @db.Decimal(12, 4)
+  enabled      Boolean        @default(true)
+  notify_slack Boolean        @default(false)
+  created_at   DateTime       @default(now())
+  updated_at   DateTime       @updatedAt
+  history      alert_history[]
+
+  @@index([enabled])
+  @@map("alert_rules")
+}
+
+model alert_history {
+  id            String      @id @default(uuid())
+  rule_id       String
+  platform      String
+  campaign_id   String?
+  campaign_name String?
+  metric        String
+  value         Decimal     @db.Decimal(12, 4)
+  threshold     Decimal     @db.Decimal(12, 4)
+  fired_at      DateTime    @default(now())
+  rule          alert_rules @relation(fields: [rule_id], references: [id], onDelete: Cascade)
+
+  @@index([rule_id])
+  @@index([fired_at(sort: Desc)])
+  @@map("alert_history")
 }
