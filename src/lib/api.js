@@ -23,7 +23,7 @@ const ENDPOINT = IS_DEV ? 'https://api.anthropic.com/v1/messages' : '/api/claude
  */
 export async function aiCall(prompt, opts = {}) {
   const body = {
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: opts.tokens || 900,
     messages: [{ role: 'user', content: prompt }],
   }
@@ -93,7 +93,7 @@ export async function slackSend(channelId, message) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-6',
       max_tokens: 300,
       mcp_servers: [{ type: 'url', url: 'https://mcp.slack.com/mcp', name: 'slack' }],
       messages: [{

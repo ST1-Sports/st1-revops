@@ -604,17 +604,32 @@ function QuoteModule({ userRole }) {
         : 'No catalog data available — estimate based on typical ST1 Sports pricing.'
     } catch { catalog = 'Catalog unavailable — estimate pricing.' }
 
-    const task = [
-      'You are a sports equipment quoting specialist for ST1 Sports.',
-      `Customer request: "${q}"`,
+    const systemPrompt = [
+      'You are a sports equipment quoting specialist for ST1 Sports, a nationwide B2B athletic equipment supplier.',
+      'Customers are K-12 athletic directors, coaches, and administrators at tax-exempt institutions.',
       catalog,
-      'Match products to the request. Return JSON only:',
-      '{"items":[{"vendor":"...","sku":"...","description":"...","unitPrice":0.00,"qty":1}],"notes":"..."}',
+      'Match products to the customer request. Return ONLY valid JSON in this exact format, no markdown, no explanation:',
+      '{"items":[{"vendor":"Brand Name","sku":"SKU-123","description":"Product description","unitPrice":0.00,"qty":1}],"notes":"Any notes or assumptions"}',
     ].join('\n')
 
     try {
-      const r = await routeTask({ task, input: { query: q }, userRole })
-      const parsed = parseQuote(r.output || '')
+      const res = await fetch('/api/claude', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: `Customer request: ${q}\n\nReturn JSON only.` }],
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.text().catch(() => '')
+        throw new Error(`AI error ${res.status}${err ? ': ' + err.slice(0, 120) : ''}`)
+      }
+      const d = await res.json()
+      const text = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+      const parsed = parseQuote(text)
       if (!parsed) throw new Error('Could not parse quote response — try rephrasing your request.')
       setItems((parsed.items || []).map(item => ({ ...item, unitPrice: +item.unitPrice||0, qty: +item.qty||1 })))
       setNotes(parsed.notes || '')
