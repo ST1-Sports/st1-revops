@@ -564,6 +564,7 @@ Provide strategic pricing advice. Return JSON:
     {id:"alerts",     label:"Margin Alerts",badge:criticalAlerts.length},
     {id:"products",   label:"All Products"},
     {id:"suppliers",  label:"Suppliers"},
+    {id:"market",     label:"Market Pricing"},
     {id:"ask",        label:"Ask AI"},
     {id:"upload",     label:"Upload Price List"},
   ];
@@ -574,6 +575,51 @@ Provide strategic pricing advice. Return JSON:
   const [askHistory, setAskHistory] = useState([]); // [{q, a}]
   const [uploadTargetIds, setUploadTargetIds] = useState([]); // pre-selected suppliers before upload
   const toggleUploadBrand = (id) => setUploadTargetIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
+
+  // ── Market Pricing state ──────────────────────────────────────────────────
+  const [scanSelected,  setScanSelected]  = useState(new Set());
+  const [scanResults,   setScanResults]   = useState({}); // productId → {marketLow, marketHigh, competitors, recommendation, note, scannedAt}
+  const [scanning,      setScanning]      = useState(false);
+  const [scanError,     setScanError]     = useState(null);
+  const [scanFilter,    setScanFilter]    = useState("all"); // all | flagged | scanned
+  const [mktSupplier,   setMktSupplier]   = useState("all");
+
+  const toggleScan = (id) => setScanSelected(s => { const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const selectAllVisible = (prods) => setScanSelected(new Set(prods.map(p=>p.id)));
+
+  const scanPrices = async () => {
+    const toScan = allProducts.filter(p => scanSelected.has(p.id)).slice(0,10);
+    if(!toScan.length) return;
+    setScanning(true); setScanError(null);
+    const list = toScan.map(p =>
+      `- SKU:${p.sku} | "${p.name}" | Brand:${p.supplierName} | OurCost:$${p.cost.toFixed(2)} | OurPrice:$${p.ourPrice.toFixed(2)}${p.map?` | MAP:$${p.map.toFixed(2)}`:""}${p.msrp?` | MSRP:$${p.msrp.toFixed(2)}`:""}`
+    ).join("\n");
+    try {
+      const res = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-6", max_tokens:4000,
+          system:`You are a competitive pricing analyst for ST1 Sports, a B2B athletic equipment distributor selling to K-12 schools. Search the web for current retail prices of the listed products on BSN Sports, Dick's Sporting Goods, Amazon, Varsity.com, School Specialty, Epic Sports, and the brand's own website. Return ONLY valid JSON, no markdown fences.`,
+          messages:[{role:"user",content:`Search for current retail prices for these products:\n\n${list}\n\nFor each SKU find real competitor prices. Return JSON:\n{"results":[{"sku":"SKU","marketLow":number,"marketHigh":number,"msrp":number_or_null,"competitors":[{"store":"Name","price":number}],"recommendation":"RAISE|COMPETITIVE|CAUTION|MAP_VIOLATION","note":"one sentence"}]}`}],
+          tools:[{type:"web_search_20250305",name:"web_search"}],
+        }),
+      });
+      const d = await res.json();
+      const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      let parsed; try{parsed=JSON.parse(text.trim())}catch{}
+      if(!parsed){try{const m=text.match(/\{[\s\S]*\}/);if(m)parsed=JSON.parse(m[0])}catch{}}
+      if(parsed?.results){
+        const upd={};
+        for(const r of parsed.results){
+          const prod=toScan.find(p=>p.sku===r.sku||p.name.toLowerCase().includes((r.sku||"").toLowerCase()));
+          if(prod) upd[prod.id]={...r,scannedAt:new Date().toISOString()};
+        }
+        setScanResults(prev=>({...prev,...upd}));
+        setScanSelected(new Set());
+      } else { setScanError("Could not parse response — try scanning fewer products"); }
+    } catch(e){ setScanError(e.message); }
+    setScanning(false);
+  };
 
   const buildPriceContext = () => {
     const lines = ["ST1 Sports — Current Price Lists\n"];
@@ -1062,6 +1108,132 @@ Provide strategic pricing advice. Return JSON:
             </div>
           </div>
         )}
+
+        {/* ── MARKET PRICING ── */}
+        {tab==="market"&&(()=>{
+          const REC_COLOR  = {RAISE:"#16a34a",COMPETITIVE:"#2563eb",CAUTION:"#d97706",MAP_VIOLATION:"#dc2626"};
+          const REC_LABEL  = {RAISE:"↑ RAISE",COMPETITIVE:"✓ OK",CAUTION:"⚠ CAUTION",MAP_VIOLATION:"✗ MAP VIOLATION"};
+          const mktProds = allProducts
+            .filter(p=>mktSupplier==="all"||p.supplierId===mktSupplier)
+            .filter(p=>scanFilter==="flagged"?["RAISE","CAUTION","MAP_VIOLATION"].includes(scanResults[p.id]?.recommendation):scanFilter==="scanned"?!!scanResults[p.id]:true);
+          const scannedCount=Object.keys(scanResults).length;
+          const flaggedCount=Object.values(scanResults).filter(r=>["RAISE","CAUTION","MAP_VIOLATION"].includes(r.recommendation)).length;
+          return(
+          <div className="fu">
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3}}>MARKET PRICING</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Live competitor price scan — BSN, Dick's, Amazon, Varsity, Epic Sports</div>
+                <div style={{width:36,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                {scanSelected.size>0&&(
+                  <button onClick={scanPrices} disabled={scanning}
+                    style={{background:scanning?"#ccc":B.orange,color:B.white,border:"none",borderRadius:6,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:scanning?"default":"pointer",whiteSpace:"nowrap"}}>
+                    {scanning?<span className="blink">● SCANNING…</span>:`⊕ SCAN ${scanSelected.size} PRODUCT${scanSelected.size>1?"S":""} →`}
+                  </button>
+                )}
+                {scanSelected.size===0&&!scanning&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Select products below to scan</div>
+                )}
+              </div>
+            </div>
+
+            {/* Summary pills */}
+            {scannedCount>0&&(
+              <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+                {[["all","All Products",mktProds.length,B.muted],["scanned",`Scanned`,scannedCount,B.blue],["flagged",`Flagged`,flaggedCount,B.red]].map(([v,l,n,c])=>(
+                  <button key={v} onClick={()=>setScanFilter(v)} style={{background:scanFilter===v?c:B.surface,color:scanFilter===v?B.white:B.muted,border:`1px solid ${scanFilter===v?c:B.border}`,borderRadius:20,padding:"4px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l} ({n})</button>
+                ))}
+              </div>
+            )}
+
+            {scanError&&<div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.red,marginBottom:14}}>{scanError}</div>}
+
+            {/* Filters */}
+            <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+              <select value={mktSupplier} onChange={e=>setMktSupplier(e.target.value)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+                <option value="all">All Brands</option>
+                {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <button onClick={()=>selectAllVisible(mktProds.filter(p=>!scanResults[p.id]))} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>SELECT UNSCANNED</button>
+              {scanSelected.size>0&&<button onClick={()=>setScanSelected(new Set())} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>clear</button>}
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:"auto"}}>{scanSelected.size} selected · max 10 per scan</div>
+            </div>
+
+            {/* Table */}
+            <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${B.border}`,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{background:B.surface}}>
+                  <th style={{width:32,padding:"7px 10px"}}/>
+                  {["Brand","SKU","Product","Our Cost","Our Price","Margin","MAP/MSRP","Market Low","Market High","Competitors","Action"].map(h=>(
+                    <th key={h} style={{padding:"7px 9px",textAlign:["Our Cost","Our Price","Margin","MAP/MSRP","Market Low","Market High"].includes(h)?"right":"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,borderBottom:`2px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {mktProds.map(p=>{
+                    const res=scanResults[p.id];
+                    const margin=marginPct(p.cost,p.ourPrice);
+                    const checked=scanSelected.has(p.id);
+                    const rowBg=res?.recommendation==="MAP_VIOLATION"?B.redBg:res?.recommendation==="CAUTION"?B.yellowBg:res?.recommendation==="RAISE"?"#f0fdf4":B.white;
+                    return(
+                      <tr key={p.id} style={{background:checked?"#fff8f3":rowBg,cursor:"pointer"}} onClick={()=>toggleScan(p.id)}>
+                        <td style={{padding:"8px 10px",textAlign:"center"}}>
+                          <input type="checkbox" checked={checked} onChange={()=>{}} onClick={e=>e.stopPropagation()}
+                            style={{accentColor:B.orange,width:13,height:13,cursor:"pointer"}}/>
+                        </td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>{p.supplierName}</td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.3}}>{p.sku}</td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{fmt$(p.cost)}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(p.ourPrice)}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right"}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:p.marginStatus.color,background:p.marginStatus.bg,padding:"2px 6px",borderRadius:3}}>{pct(margin)}</span>
+                        </td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{p.map?fmt$(p.map):res?.msrp?<span style={{color:B.blue}}>{fmt$(res.msrp)}<span style={{fontSize:8,color:B.muted}}> est</span></span>:"—"}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:res?B.green:B.border}}>{res?fmt$(res.marketLow):"—"}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:res?B.blue:B.border}}>{res?fmt$(res.marketHigh):"—"}</td>
+                        <td style={{padding:"8px 9px",maxWidth:200}}>
+                          {res?.competitors?.length>0?(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                              {res.competitors.slice(0,4).map((c,i)=>(
+                                <span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>{c.store} {fmt$(c.price)}</span>
+                              ))}
+                            </div>
+                          ):<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.border}}>not scanned</span>}
+                        </td>
+                        <td style={{padding:"8px 9px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+                          {res?.recommendation?(
+                            <div>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:REC_COLOR[res.recommendation]||B.muted,padding:"3px 7px",borderRadius:3,letterSpacing:.4,display:"inline-block",marginBottom:3}}>
+                                {REC_LABEL[res.recommendation]||res.recommendation}
+                              </span>
+                              {res.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.4,maxWidth:140}}>{res.note}</div>}
+                              {res.recommendation==="RAISE"&&<button onClick={()=>updateOurPrice(p.supplierId,p.id,res.marketLow*0.95)} style={{marginTop:4,background:B.green,color:B.white,border:"none",borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>APPLY ↑</button>}
+                            </div>
+                          ):<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.border}}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {mktProds.length===0&&<div style={{padding:"32px 0",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No products match the filter</div>}
+            </div>
+
+            {/* Legend */}
+            <div style={{display:"flex",gap:14,marginTop:12,flexWrap:"wrap"}}>
+              {[["RAISE","↑ RAISE","#16a34a","Market is higher — opportunity to increase price"],["COMPETITIVE","✓ OK","#2563eb","Priced competitively"],["CAUTION","⚠ CAUTION","#d97706","Price may be too high vs. market"],["MAP_VIOLATION","✗ MAP VIOLATION","#dc2626","Price is below minimum advertised price"]].map(([k,l,c,desc])=>(
+                <div key={k} style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:c,padding:"2px 7px",borderRadius:3}}>{l}</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          );
+        })()}
 
         {/* ── ASK AI ── */}
         {tab==="ask"&&(
