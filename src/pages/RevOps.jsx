@@ -703,7 +703,6 @@ export default function App() {
     {id:"emails",        icon:"✉", label:"Emails"},
     {id:"marketing",     icon:"✦", label:"Campaigns"},
     {id:"cc-social",     icon:"📱", label:"Social"},
-    {id:"cc-image",      icon:"🖼", label:"Image Generator"},
     {id:"cc-ad-hub",     icon:"📊", label:"Ad Hub"},
     {id:"reddit",        icon:"💬", label:"Reddit Engagement"},
     // ── DATA & ANALYSIS ────────────────────────────────────────────────
@@ -713,7 +712,6 @@ export default function App() {
     {id:"cc-research",   icon:"⊕", label:"Market Research"},
     {id:"prices",        icon:"$", label:"Price Manager"},
     {id:"expansion",     icon:"◉", label:"Market Expansion"},
-    {id:"cc-analytics",  icon:"📈", label:"Web Analytics"},
     // ── FINANCE ────────────────────────────────────────────────────────
     {id:"_s_finance", label:"FINANCE"},
     {id:"revenue",       icon:"↑", label:"Finance"},
