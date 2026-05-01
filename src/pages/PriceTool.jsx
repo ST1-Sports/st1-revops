@@ -303,7 +303,7 @@ export default function PriceListManager({ onMakeQuote } = {}) {
           content:[
             { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
             { type:"text", text:
-`This is a supplier price list PDF. Extract ALL products listed.
+`This is a supplier price list PDF.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""} Extract ALL products listed.
 Return JSON:
 {
   "supplierName": "name of the supplier/manufacturer",
@@ -337,8 +337,7 @@ Extract every product row. If a column is not present use null. cost should be t
         addLog(`Loaded ${rows.length} rows from sheet "${wb.SheetNames[0]}", asking Claude to parse...`);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`This is a supplier price list exported from Excel as CSV.\n\n${rows.join("\n")}\n\n` +
-`Extract ALL products. Return JSON:
+          content:`This is a supplier price list exported from Excel as CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
 {
   "supplierName": "supplier/manufacturer name",
   "supplierCategory": "sport category",
@@ -358,8 +357,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         const rows = text.split("\n").filter(l=>l.trim()).slice(0,150);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`Supplier price list CSV:\n\n${rows.join("\n")}\n\n` +
-`Extract ALL products. Return JSON:
+          content:`Supplier price list CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
 {
   "supplierName": "supplier/manufacturer name",
   "supplierCategory": "sport category",
@@ -394,7 +392,8 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         repName:          extracted.repName  || "",
         repEmail:         extracted.repEmail || "",
         products:         extracted.products,
-        targetSupplierId: uploadTargetId || existing?.id || null,
+        targetSupplierId: uploadTargetIds[0] || existing?.id || null,
+        suggestedSupplierIds: uploadTargetIds.length > 0 ? uploadTargetIds : (existing ? [existing.id] : []),
       };
       setImportPreview(preview);
       bgTasks.completeTask(IMPORT_TASK_ID, {
@@ -573,7 +572,8 @@ Provide strategic pricing advice. Return JSON:
   const [askQuery,   setAskQuery]   = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askHistory, setAskHistory] = useState([]); // [{q, a}]
-  const [uploadTargetId, setUploadTargetId] = useState(""); // pre-selected supplier before upload
+  const [uploadTargetIds, setUploadTargetIds] = useState([]); // pre-selected suppliers before upload
+  const toggleUploadBrand = (id) => setUploadTargetIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
 
   const buildPriceContext = () => {
     const lines = ["ST1 Sports — Current Price Lists\n"];
@@ -1139,15 +1139,28 @@ Provide strategic pricing advice. Return JSON:
             {/* Drop zone */}
             {!importPreview&&(
               <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
-                {/* Brand pre-selector */}
+                {/* Brand pre-selector — multi-select */}
                 <div style={{marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${B.border}`}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:8}}>WHICH BRAND IS THIS PRICE LIST FOR?</div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                    <button onClick={()=>setUploadTargetId("")} style={{background:uploadTargetId===""?B.orange:B.surface,color:uploadTargetId===""?B.white:B.muted,border:`1px solid ${uploadTargetId===""?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Brand</button>
-                    {suppliers.map(s=>(
-                      <button key={s.id} onClick={()=>setUploadTargetId(s.id)} style={{background:uploadTargetId===s.id?B.orange:B.surface,color:uploadTargetId===s.id?B.white:B.muted,border:`1px solid ${uploadTargetId===s.id?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{s.name}</button>
-                    ))}
+                  <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5}}>WHICH BRANDS DOES THIS FILE CONTAIN?</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>(select all that apply)</div>
+                    {uploadTargetIds.length>0&&<button onClick={()=>setUploadTargetIds([])} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",marginLeft:"auto",padding:0}}>clear</button>}
                   </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {suppliers.map(s=>{
+                      const on=uploadTargetIds.includes(s.id);
+                      return(
+                        <button key={s.id} onClick={()=>toggleUploadBrand(s.id)} style={{background:on?B.orange:B.surface,color:on?B.white:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                          {on&&<span style={{fontSize:9}}>✓</span>}{s.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {uploadTargetIds.length>0&&(
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:8}}>
+                      {uploadTargetIds.length} brand{uploadTargetIds.length>1?"s":""} selected — AI will look for products from {uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name).join(", ")}
+                    </div>
+                  )}
                 </div>
                 <div onClick={()=>!importing&&fileInputRef.current?.click()}
                   style={{border:`2px dashed ${B.borderD}`,borderRadius:6,padding:"40px 24px",textAlign:"center",
@@ -1210,11 +1223,24 @@ Provide strategic pricing advice. Return JSON:
                 {/* Supplier mapping selector */}
                 <div style={{marginBottom:14,padding:10,background:B.surface,borderRadius:5,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontWeight:500}}>Add to:</div>
+                  {/* Quick brand buttons if multiple were pre-selected */}
+                  {(importPreview.suggestedSupplierIds||[]).length>1&&(
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {(importPreview.suggestedSupplierIds||[]).map(id=>{
+                        const sup=suppliers.find(s=>s.id===id); if(!sup) return null;
+                        const on=importPreview.targetSupplierId===id;
+                        return <button key={id} onClick={()=>setImportPreview(p=>({...p,targetSupplierId:id}))} style={{background:on?B.orange:B.white,color:on?B.white:B.text,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sup.name}</button>;
+                      })}
+                    </div>
+                  )}
                   <select value={importPreview.targetSupplierId||"__new__"}
                     onChange={e=>setImportPreview(p=>({...p,targetSupplierId:e.target.value==="__new__"?null:e.target.value}))}
                     style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",color:B.text,background:B.white}}>
                     <option value="__new__">+ Create new supplier: {importPreview.supplierName}</option>
-                    {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    {(importPreview.suggestedSupplierIds||[]).length>0&&<optgroup label="— Pre-selected brands —">
+                      {(importPreview.suggestedSupplierIds||[]).map(id=>{const s=suppliers.find(x=>x.id===id);return s?<option key={id} value={id}>{s.name}</option>:null;})}
+                    </optgroup>}
+                    {suppliers.filter(s=>!(importPreview.suggestedSupplierIds||[]).includes(s.id)).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                   {!importPreview.targetSupplierId&&(
                     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
