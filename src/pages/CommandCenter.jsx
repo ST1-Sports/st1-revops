@@ -104,14 +104,6 @@ const MODULES = [
     desc:      'Google Analytics 4 real-time traffic and Google Tag Manager container status.',
     adminOnly: true,
   },
-  {
-    id:        'tool-manager',
-    icon:      '⚙',
-    label:     'Tool Manager',
-    cap:       'workflow',
-    desc:      'Configure plugins, manage API keys, and control which tools each role can access.',
-    adminOnly: true,
-  },
 ]
 
 // ─── SHARED ATOMS ────────────────────────────────────────────────────────────

@@ -11976,11 +11976,11 @@ function ModSettings() {
         </div>
       </div>
 
-      {/* Tool Manager */}
+      {/* AI Tools → Integrations tab */}
       <div className="card" style={{padding:16,marginTop:13,borderTop:`3px solid ${B.muted}`}}>
-        <Lbl s={{marginBottom:6}}>AI Tool Manager</Lbl>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:11,lineHeight:1.5}}>Configure API keys, enable or disable AI tools, and manage plugin access by role.</div>
-        <OBtn onClick={()=>setMod("cc-tools")}>OPEN TOOL MANAGER →</OBtn>
+        <Lbl s={{marginBottom:6}}>AI Tools & Connections</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:11,lineHeight:1.5}}>All API connections, AI plugin toggles, and integration settings live in one place.</div>
+        <OBtn onClick={()=>setMod("integrations")}>OPEN INTEGRATIONS →</OBtn>
       </div>
     </div>
   );
