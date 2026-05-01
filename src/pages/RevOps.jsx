@@ -3007,6 +3007,36 @@ function ModRFP() {
   const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
   const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
+  const [resultsUploading, setResultsUploading] = useState(null);
+  const uploadResults = async (rfpId, file) => {
+    setResultsUploading(rfpId);
+    try {
+      let msgContent;
+      const ext = file.name.toLowerCase().split(".").pop();
+      const extractPrompt = `Extract bid award/results information from this document. ST1 Sports was one of the vendors who submitted a bid.\n\nReturn ONLY valid JSON:\n{"awardedTo":"winning vendor name","awardedValue":number or null,"st1Submitted":null,"st1Won":true or false,"st1Position":finishing position number or null,"priceDelta":ST1 price minus winner price or null,"competitors":[{"name":"...","price":number or null,"position":number}],"notes":"key findings summary"}`;
+      if(ext==="pdf") {
+        const b64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+        msgContent=[{type:"text",text:extractPrompt},{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}}];
+      } else {
+        const txt = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(file);});
+        msgContent=extractPrompt+"\n\nDOCUMENT:\n"+txt.slice(0,8000);
+      }
+      const resp = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        model:"claude-sonnet-4-6",max_tokens:700,
+        messages:[{role:"user",content:msgContent}]
+      })});
+      const d = await resp.json();
+      const txt2=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      let results=null;
+      try{const m=txt2.match(/\{[\s\S]*\}/);results=m?JSON.parse(m[0]):null;}catch{}
+      if(results){
+        dispatch("UPDATE_RFP",{id:rfpId,results:{...results,uploadedAt:new Date().toISOString().slice(0,10),fileName:file.name}});
+        toast(results.st1Won?"🏆 Win recorded!":"Results recorded");
+      } else { toast("Could not parse results — try a different file"); }
+    } catch(e){ toast("Upload failed: "+e.message); }
+    finally{ setResultsUploading(null); }
+  };
+
   const tabBar=(
     <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
       {[["tracker","Active Bids"],["generate","Generate Response"]].map(([tid,tlabel])=>(
@@ -3049,6 +3079,13 @@ function ModRFP() {
                 <div style={{flex:1,height:3,background:B.border,borderRadius:2}}><div style={{width:`${dn/tn*100}%`,height:"100%",background:dn===tn?B.green:RSC[r.stage]||B.orange,borderRadius:2}}/></div>
                 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,flexShrink:0}}>{dn}/{tn}</span>
               </div>
+              {r.results&&(
+                <div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,background:r.results.st1Won?B.green:B.red,color:B.white,padding:"1px 5px",borderRadius:2,letterSpacing:.3}}>{r.results.st1Won?"WON":"LOST"}</span>
+                  {r.results.priceDelta!=null&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:r.results.priceDelta>0?B.red:B.green}}>{r.results.priceDelta>0?"+":""}{(r.results.priceDelta/1000).toFixed(1)}k vs winner</span>}
+                  {r.results.awardedTo&&!r.results.st1Won&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>→ {r.results.awardedTo}</span>}
+                </div>
+              )}
             </div>
           );})}
           {rfps.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"40px 0"}}>No RFPs yet</div>}
@@ -3073,6 +3110,50 @@ function ModRFP() {
               <OBtn sm onClick={()=>addItem(sel_r.id)}>+</OBtn>
             </div>
             {sel_r.notes&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic",lineHeight:1.6,borderTop:`1px solid ${B.border}`,paddingTop:9}}>{sel_r.notes}</div>}
+
+            {/* Bid Results */}
+            <div style={{marginTop:11,borderTop:`1px solid ${B.border}`,paddingTop:9}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                <Lbl>Bid Results</Lbl>
+                <label style={{cursor:resultsUploading?"not-allowed":"pointer",background:B.orange+"18",color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>
+                  {resultsUploading===sel_r.id?"UPLOADING...":"↑ UPLOAD AWARD"}
+                  <input type="file" accept=".pdf,.csv,.xlsx,.xls,.txt" style={{display:"none"}} disabled={!!resultsUploading}
+                    onChange={e=>{const f=e.target.files?.[0];if(f)uploadResults(sel_r.id,f);e.target.value="";}}/>
+                </label>
+              </div>
+              {sel_r.results?(
+                <div style={{background:sel_r.results.st1Won?B.greenBg:B.redBg,borderRadius:5,padding:"9px 11px",border:`1px solid ${sel_r.results.st1Won?B.green:B.red}30`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:sel_r.results.st1Won?B.green:B.red}}>
+                      {sel_r.results.st1Won?"🏆 WON":`⚑ LOST${sel_r.results.awardedTo?" → "+sel_r.results.awardedTo:""}`}
+                    </span>
+                    {sel_r.results.st1Position&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>#{sel_r.results.st1Position} PLACE</span>}
+                  </div>
+                  {sel_r.results.priceDelta!=null&&(
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:3}}>
+                      Price delta: <span style={{color:sel_r.results.priceDelta>0?B.red:B.green,fontWeight:600}}>
+                        {sel_r.results.priceDelta>0?"+" : ""}{fmt$(Math.abs(sel_r.results.priceDelta))} {sel_r.results.priceDelta>0?"over":"under"} winner
+                      </span>
+                    </div>
+                  )}
+                  {sel_r.results.competitors?.length>0&&(
+                    <div style={{marginTop:5}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:3}}>COMPETITORS</div>
+                      {sel_r.results.competitors.slice(0,4).map((c,ci)=>(
+                        <div key={ci} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,display:"flex",justifyContent:"space-between",padding:"2px 0"}}>
+                          <span>#{c.position!=null?c.position:ci+1} {c.name}</span>
+                          {c.price!=null&&<span style={{color:B.text}}>{fmt$(c.price)}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sel_r.results.notes&&<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",lineHeight:1.5}}>{sel_r.results.notes}</div>}
+                  <div style={{marginTop:6,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{sel_r.results.uploadedAt} · {sel_r.results.fileName}</div>
+                </div>
+              ):(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic"}}>No results uploaded yet · Upload the award notice to track outcome</div>
+              )}
+            </div>
           </div>
         )}
       </div>
