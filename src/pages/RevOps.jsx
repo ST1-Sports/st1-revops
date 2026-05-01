@@ -687,26 +687,24 @@ export default function App() {
     {id:"rfp",           icon:"⊘", label:"Bids & RFPs",       badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     {id:"cc-sales-copy", icon:"✍", label:"Sales Copywriter"},
     {id:"cc-quote",      icon:"▤", label:"Smart Quote Builder"},
-    {id:"rfp-tool",      icon:"📋",label:"RFP Generator"},
-    {id:"reorder",       icon:"↺", label:"Reorder Engine",    badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
+    {id:"reorder",       icon:"↺", label:"Reorder Alerts",    badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     // ── MARKETING & GROWTH ─────────────────────────────────────────────
     {id:"_s_mktg", label:"MARKETING & GROWTH"},
     {id:"prospecting",   icon:"⊕", label:"Prospecting"},
     {id:"emails",        icon:"✉", label:"Emails"},
     {id:"marketing",     icon:"✦", label:"Campaigns"},
     {id:"calendar",      icon:"▦", label:"Content Calendar"},
-    {id:"social",        icon:"📱", label:"Social Posting",    href:"https://publer.com"},
-    {id:"cc-social",     icon:"📱", label:"Social Content"},
+    {id:"cc-social",     icon:"📱", label:"Social"},
     {id:"cc-image",      icon:"🖼", label:"Image Generator"},
     {id:"cc-ad-hub",     icon:"📊", label:"Ad Hub"},
     {id:"reddit",        icon:"💬", label:"Reddit Engagement"},
     // ── DATA & ANALYSIS ────────────────────────────────────────────────
     {id:"_s_data", label:"DATA & ANALYSIS"},
-    {id:"analytics",     icon:"▣", label:"Performance"},
+    {id:"analytics",     icon:"▣", label:"Sales Performance"},
     {id:"compete",       icon:"⊗", label:"Competitors"},
     {id:"cc-research",   icon:"⊕", label:"Market Research"},
     {id:"prices",        icon:"$", label:"Price Manager"},
-    {id:"expansion",     icon:"◉", label:"Expansion Playbook"},
+    {id:"expansion",     icon:"◉", label:"Market Expansion"},
     {id:"cc-analytics",  icon:"📈", label:"Web Analytics"},
     // ── FINANCE ────────────────────────────────────────────────────────
     {id:"_s_finance", label:"FINANCE"},
@@ -719,7 +717,6 @@ export default function App() {
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
-    {id:"cc-tools",      icon:"⚙", label:"Tool Manager"},
   ];
 
   // Helper: find nav item label (including inside group children)
@@ -890,7 +887,6 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="rfp-tool"    &&<Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>}
             {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
@@ -2941,6 +2937,7 @@ function ModQuotes() {
 // ════════════════════════════════════════════════════════════════════════════
 function ModRFP() {
   const {s,dispatch,cu,toast}=useApp();
+  const [rfpTab,setRfpTab]=useState("tracker");
   const [sel,setSel]=useState(null);
   const [newItem,setNewItem]=useState("");
   const isOwner=cu?.role==="owner";
@@ -2949,8 +2946,25 @@ function ModRFP() {
   const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
   const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
+  const tabBar=(
+    <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+      {[["tracker","Active Bids"],["generate","Generate Response"]].map(([tid,tlabel])=>(
+        <button key={tid} onClick={()=>setRfpTab(tid)} style={{background:"none",border:"none",borderBottom:rfpTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:rfpTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:rfpTab===tid?700:400}}>{tlabel}</button>
+      ))}
+    </div>
+  );
+
+  if(rfpTab==="generate") return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {tabBar}
+      <Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>
+    </div>
+  );
+
   return (
-    <div style={{padding:"22px 26px"}}>
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {tabBar}
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1}}>
       <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"
         action={<a href="/rfp" style={{background:B.orange,color:B.white,borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,textDecoration:"none",display:"inline-block"}}>+ NEW RFP →</a>}/>
       <div style={{display:"grid",gridTemplateColumns:sel_r?"1fr 350px":"1fr",gap:13}}>
@@ -3001,6 +3015,7 @@ function ModRFP() {
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }
@@ -11809,6 +11824,13 @@ function ModSettings() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Tool Manager */}
+      <div className="card" style={{padding:16,marginTop:13,borderTop:`3px solid ${B.muted}`}}>
+        <Lbl s={{marginBottom:6}}>AI Tool Manager</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:11,lineHeight:1.5}}>Configure API keys, enable or disable AI tools, and manage plugin access by role.</div>
+        <OBtn onClick={()=>setMod("cc-tools")}>OPEN TOOL MANAGER →</OBtn>
       </div>
     </div>
   );

@@ -352,7 +352,10 @@ function SocialModule({ userRole }) {
 
   return (
     <div style={{ padding:28, overflowY:'auto', flex:1 }}>
-      <ModHeader icon="📱" label="Social Media" desc="Platform-optimized posts with tailored hashtag sets for each channel." />
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+        <ModHeader icon="📱" label="Social" desc="Platform-optimized posts with tailored hashtag sets for each channel." />
+        <a href="https://publer.com" target="_blank" rel="noreferrer" style={{ background:B.surface, border:`1px solid ${B.border}`, borderRadius:6, padding:'7px 14px', fontSize:10, fontFamily:"'Lexend Zetta',sans-serif", fontWeight:700, letterSpacing:.5, color:B.text, textDecoration:'none', flexShrink:0 }}>SCHEDULE IN PUBLER ↗</a>
+      </div>
 
       <Card>
         {/* Platform selector */}
