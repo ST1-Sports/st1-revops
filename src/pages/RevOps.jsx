@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
-import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
@@ -9,6 +8,16 @@ const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
+
+// Kick off background downloads for the most-used panels as soon as the app
+// shell renders, so they're already cached when the user clicks into them.
+function usePrefetchPanels() {
+  useEffect(() => {
+    import('./CommandCenter.jsx');
+    import('./PriceTool.jsx');
+    import('./RFPTool.jsx');
+  }, []);
+}
 
 // ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
 function PanelLoader() {
@@ -726,12 +735,12 @@ export default function App() {
     return "";
   };
 
+  usePrefetchPanels();
 
   return (
     <AppCtx.Provider value={ctx}>
       <div style={{display:"flex",height:"100vh",background:B.pageBg,overflow:"hidden",fontFamily:"'Lexend',sans-serif",color:B.text}}>
         <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
           *{box-sizing:border-box;margin:0;padding:0}
           ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
           button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}
@@ -3924,6 +3933,7 @@ function ModProspecting() {
     try {
       setImportProgress(20); setImportStatus("Reading file…");
       const buf=await toBuffer(fileObj);
+      const XLSX=await import("xlsx");
       const wb=XLSX.read(buf,{type:"array"});
       const ws=wb.Sheets[wb.SheetNames[0]];
       // Parse to row objects (header row becomes keys)

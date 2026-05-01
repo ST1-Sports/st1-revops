@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
 const IMPORT_TASK_ID = "price_import";
@@ -330,6 +329,7 @@ Extract every product row. If a column is not present use null. cost should be t
         // ── Excel: parse with SheetJS, convert first sheet to CSV text ──────
         addLog("Parsing Excel file...");
         const buf = await toBuffer(file);
+        const XLSX = await import("xlsx");
         const wb  = XLSX.read(buf, {type:"array"});
         const ws  = wb.Sheets[wb.SheetNames[0]];
         const csv = XLSX.utils.sheet_to_csv(ws);
@@ -663,7 +663,6 @@ Provide strategic pricing advice. Return JSON:
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
         button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}
