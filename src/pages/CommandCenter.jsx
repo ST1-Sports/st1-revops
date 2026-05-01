@@ -570,7 +570,7 @@ function parseQuote(text) {
 const fmt$ = n => '$' + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
 
 function QuoteModule({ userRole }) {
-  const [query,      setQuery]      = useState('')
+  const [query,      setQuery]      = useState(()=>{ const p=sessionStorage.getItem("st1_quote_prefill"); if(p){sessionStorage.removeItem("st1_quote_prefill");return p;} return ""; })
   const [loading,    setLoading]    = useState(false)
   const [items,      setItems]      = useState(null)   // [{vendor,sku,description,unitPrice,qty}]
   const [notes,      setNotes]      = useState('')

@@ -176,7 +176,7 @@ async function callClaudeMsg(messages, sys="", tokens=4000) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function PriceListManager() {
+export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
   const [tab,       setTab]       = useState("dashboard");
@@ -394,7 +394,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         repName:          extracted.repName  || "",
         repEmail:         extracted.repEmail || "",
         products:         extracted.products,
-        targetSupplierId: existing?.id || null,
+        targetSupplierId: uploadTargetId || existing?.id || null,
       };
       setImportPreview(preview);
       bgTasks.completeTask(IMPORT_TASK_ID, {
@@ -573,6 +573,7 @@ Provide strategic pricing advice. Return JSON:
   const [askQuery,   setAskQuery]   = useState("");
   const [askLoading, setAskLoading] = useState(false);
   const [askHistory, setAskHistory] = useState([]); // [{q, a}]
+  const [uploadTargetId, setUploadTargetId] = useState(""); // pre-selected supplier before upload
 
   const buildPriceContext = () => {
     const lines = ["ST1 Sports — Current Price Lists\n"];
@@ -1108,7 +1109,10 @@ Provide strategic pricing advice. Return JSON:
                   <div style={{padding:"12px 14px"}}>
                     {item.loading
                       ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Looking up prices…</div>
-                      : <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",margin:0}}>{item.a}</pre>
+                      : <>
+                          <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",margin:0,marginBottom:10}}>{item.a}</pre>
+                          {onMakeQuote&&<button onClick={()=>onMakeQuote(item.q)} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>▤ BUILD QUOTE →</button>}
+                        </>
                     }
                   </div>
                 </div>
@@ -1135,6 +1139,16 @@ Provide strategic pricing advice. Return JSON:
             {/* Drop zone */}
             {!importPreview&&(
               <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
+                {/* Brand pre-selector */}
+                <div style={{marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${B.border}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:8}}>WHICH BRAND IS THIS PRICE LIST FOR?</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    <button onClick={()=>setUploadTargetId("")} style={{background:uploadTargetId===""?B.orange:B.surface,color:uploadTargetId===""?B.white:B.muted,border:`1px solid ${uploadTargetId===""?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Brand</button>
+                    {suppliers.map(s=>(
+                      <button key={s.id} onClick={()=>setUploadTargetId(s.id)} style={{background:uploadTargetId===s.id?B.orange:B.surface,color:uploadTargetId===s.id?B.white:B.muted,border:`1px solid ${uploadTargetId===s.id?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{s.name}</button>
+                    ))}
+                  </div>
+                </div>
                 <div onClick={()=>!importing&&fileInputRef.current?.click()}
                   style={{border:`2px dashed ${B.borderD}`,borderRadius:6,padding:"40px 24px",textAlign:"center",
                     cursor:importing?"not-allowed":"pointer",background:B.surface,

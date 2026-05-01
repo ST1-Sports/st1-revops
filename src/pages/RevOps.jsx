@@ -679,7 +679,7 @@ export default function App() {
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
-    {id:"briefing",      icon:"◈", label:"Briefing",          badge:urgentCount(s)},
+    {id:"briefing",      icon:"◈", label:"Dashboard",          badge:urgentCount(s)},
     {id:"agent",         icon:"AI",label:"AI Assistant"},
     {id:"deals",         icon:"◫", label:"Deals"},
     {id:"quotes",        icon:"▤", label:"Quotes",             href:"https://admin.st1sports.com"},
@@ -693,7 +693,6 @@ export default function App() {
     {id:"prospecting",   icon:"⊕", label:"Prospecting"},
     {id:"emails",        icon:"✉", label:"Emails"},
     {id:"marketing",     icon:"✦", label:"Campaigns"},
-    {id:"calendar",      icon:"▦", label:"Content Calendar"},
     {id:"cc-social",     icon:"📱", label:"Social"},
     {id:"cc-image",      icon:"🖼", label:"Image Generator"},
     {id:"cc-ad-hub",     icon:"📊", label:"Ad Hub"},
@@ -708,9 +707,8 @@ export default function App() {
     {id:"cc-analytics",  icon:"📈", label:"Web Analytics"},
     // ── FINANCE ────────────────────────────────────────────────────────
     {id:"_s_finance", label:"FINANCE"},
-    {id:"revenue",       icon:"↑", label:"Revenue"},
+    {id:"revenue",       icon:"↑", label:"Finance"},
     {id:"invoicing",     icon:"▲", label:"Invoices & AR",      badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
-    {id:"cc-finance",    icon:"↑", label:"Financial Summaries"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
@@ -877,8 +875,6 @@ export default function App() {
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="emails"      && <ModEmails/>}
-            {mod==="social"      && <ModSocial/>}
-            {mod==="calendar"    && <ModCalendar/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -887,7 +883,7 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage/></Suspense>}
+            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("cc-quote");}}/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
@@ -1416,7 +1412,9 @@ function ModBriefing() {
   const [addingOrder,setAddingOrder]=useState(false);
   const [oForm,setOForm]=useState({name:"",contact:"",school:"",value:"",invoiceNumber:"",trackingNumber:"",estimatedShip:"",vendorNotes:"",dealId:"",source:"manual"});
   const [sending,setSending]=useState(false);
-  const [quickPrompt,setQuickPrompt]=useState("");
+  const [chatInput,setChatInput]=useState("");
+  const [chatMessages,setChatMessages]=useState([]);
+  const [chatLoading,setChatLoading]=useState(false);
 
   const isOwner=cu?.role==="owner";
   const myDeals=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
@@ -1544,6 +1542,27 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
     }
   },[]);
 
+  const askCoach=async(preset)=>{
+    const msg=(preset||chatInput).trim();
+    if(!msg||chatLoading) return;
+    setChatLoading(true);
+    if(!preset) setChatInput("");
+    const mId=Date.now();
+    setChatMessages(h=>[...h,{id:mId,q:msg,a:null}]);
+    try {
+      const openDeals=myDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+      const res=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        model:"claude-haiku-4-5-20251001",max_tokens:600,
+        system:`You are a sales activation coach for ${cu?.name||"the rep"} at ST1 Sports, a B2B athletic equipment supplier serving K-12 athletic directors and coaches. Be direct and specific — give names and numbers. Context: ${openDeals.length} open deals (${fmt$(pipeline)} pipeline), ${overdueDeals.length} overdue follow-ups, ${overdueInv.length} overdue invoices (${fmt$(ar)}), ${emailsDueToday} campaign emails due today. Top hot leads: ${hotLeads.map(c=>c.fullName||c.firstName||"").join(", ")||"none"}. Keep answer under 100 words, be actionable.`,
+        messages:[{role:"user",content:msg}]
+      })});
+      const d=await res.json();
+      const answer=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("")||"Unable to respond";
+      setChatMessages(h=>h.map(m=>m.id===mId?{...m,a:answer}:m));
+    } catch(e){ setChatMessages(h=>h.map(m=>m.id===mId?{...m,a:`Error: ${e.message}`}:m)); }
+    setChatLoading(false);
+  };
+
   const addOrder=()=>{
     if(!oForm.name) return;
     const o={...oForm,id:mkId(),stage:"Order Received",createdAt:today(),value:Number(oForm.value||0)};
@@ -1575,19 +1594,44 @@ Give 4-6 specific, actionable recommendations. For draft_email include to_name, 
 
   return (
     <div style={{padding:"22px 26px"}}>
-      <div style={{marginBottom:20}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:B.black,letterSpacing:.3}}>GOOD {new Date().getHours()<12?"MORNING":new Date().getHours()<17?"AFTERNOON":"EVENING"}, {(cu?.name||"").split(" ")[0].toUpperCase()}</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}</div>
-        <div style={{width:34,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:16,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2.5,marginBottom:4}}>GROWTH DASHBOARD</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>GOOD {new Date().getHours()<12?"MORNING":new Date().getHours()<17?"AFTERNOON":"EVENING"}, {(cu?.name||"").split(" ")[0].toUpperCase()}</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
+        </div>
       </div>
 
-      {/* AI quick prompt */}
-      <form onSubmit={e=>{e.preventDefault();const q=quickPrompt.trim();if(q){dispatch("SET_AGENT_DRAFT",q);setQuickPrompt("");setMod("agent");}}} style={{display:"flex",gap:8,marginBottom:16}}>
-        <input value={quickPrompt} onChange={e=>setQuickPrompt(e.target.value)}
-          placeholder="Ask AI anything — e.g. 'Draft a follow-up for overdue deals' or 'Write a cold email for track coaches'"
-          style={{flex:1,background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",fontSize:12,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none"}}/>
-        <button type="submit" disabled={!quickPrompt.trim()} style={{background:quickPrompt.trim()?B.orange:"#ccc",color:B.white,border:"none",borderRadius:6,padding:"10px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:quickPrompt.trim()?"pointer":"default",whiteSpace:"nowrap"}}>✦ ASK AI →</button>
-      </form>
+      {/* ── AI SALES COACH ───────────────────────────────────────────────── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:18}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:10}}>✦ AI SALES COACH</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:12}}>
+          {["What should I do first today?","Who's most likely to close this week?","Draft a follow-up for my overdue deals","How's my pipeline looking?"].map(q=>(
+            <button key={q} onClick={()=>askCoach(q)} disabled={chatLoading} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"5px 11px",fontSize:10,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif",transition:"all .1s"}}>{q}</button>
+          ))}
+        </div>
+        {chatMessages.length>0&&(
+          <div style={{maxHeight:220,overflowY:"auto",marginBottom:12,display:"flex",flexDirection:"column",gap:10}}>
+            {[...chatMessages].reverse().map(m=>(
+              <div key={m.id}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,marginBottom:4}}>{m.q}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid||B.text,lineHeight:1.65,padding:"9px 12px",background:B.surface,borderRadius:6,borderLeft:`3px solid ${B.orange}`}}>
+                  {m.a?m.a:<span className="blink" style={{color:B.orange}}>●</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{display:"flex",gap:8}}>
+          <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&askCoach()}
+            placeholder='Ask your coach anything — "who should I call?", "draft a follow-up for Lincoln High"…'
+            style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"9px 13px",fontSize:12,color:B.text,outline:"none",fontFamily:"'Lexend',sans-serif"}}/>
+          <button onClick={()=>askCoach()} disabled={!chatInput.trim()||chatLoading}
+            style={{background:chatInput.trim()&&!chatLoading?B.orange:"#ccc",color:B.white,border:"none",borderRadius:6,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:chatInput.trim()&&!chatLoading?"pointer":"default",whiteSpace:"nowrap"}}>
+            {chatLoading?"…":"✦ COACH →"}
+          </button>
+        </div>
+      </div>
 
       {/* KPI row */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
@@ -2207,6 +2251,7 @@ Under 80 words. Include subject line. Warm tone.`);
 // ════════════════════════════════════════════════════════════════════════════
 function ModRevenue() {
   const {s,setMod}=useApp();
+  const [finTab,setFinTab]=useState("revenue");
   const deals=s.deals||[];
   const won=deals.filter(d=>d.stage==="Closed Won");
   const open=deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
@@ -2243,9 +2288,25 @@ function ModRevenue() {
   const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
   const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
 
+  if(finTab==="summaries") return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
+          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
+        ))}
+      </div>
+      <Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId="finance" embedded key="finance"/></Suspense>
+    </div>
+  );
+
   return(
     <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-      <PH title="REVENUE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
+      <div style={{display:"flex",gap:4,marginBottom:16}}>
+        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
+          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
+        ))}
+      </div>
+      <PH title="FINANCE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
 
       {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
