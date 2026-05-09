@@ -1443,8 +1443,24 @@ function ModHome() {
   });
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(false);
+  const sessionIdRef=useRef(null);
   const endRef=useRef(null);
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+
+  // Start a DB session on mount, fire-and-forget
+  useEffect(()=>{
+    fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home"})})
+      .then(r=>r.json()).then(d=>{if(d.sessionId) sessionIdRef.current=d.sessionId;}).catch(()=>{});
+  },[]);
+
+  // Save a message to DB — fire-and-forget, never blocks the UI
+  const saveMsg=(role,content,actions)=>{
+    if(!sessionIdRef.current) return;
+    fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})})
+      .catch(()=>{});
+  };
 
   const buildCtx=()=>{
     const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
@@ -1524,6 +1540,7 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
     if(!q||loading) return;
     setInput("");
     setMsgs(m=>[...m,{id:mkId(),role:"user",text:q,ts:Date.now()}]);
+    saveMsg("user",q,null);
     setLoading(true);
     try{
       const hist=msgs.slice(-10).map(m=>({role:m.role,content:m.text}));
@@ -1533,7 +1550,10 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
       const raw=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
       let parsed;
       try{const m=raw.match(/\{[\s\S]*\}/s);parsed=m?JSON.parse(m[0]):null;}catch{}
-      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:parsed?.message||raw,actions:parsed?.actions||[],suggestions:parsed?.suggestions||[],ts:Date.now()}]);
+      const reply=parsed?.message||raw;
+      const actions=parsed?.actions||[];
+      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:reply,actions,suggestions:parsed?.suggestions||[],ts:Date.now()}]);
+      saveMsg("assistant",reply,actions.length?actions:null);
     }catch(e){
       setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:`Error: ${e.message}`,ts:Date.now()}]);
     }finally{setLoading(false);}
