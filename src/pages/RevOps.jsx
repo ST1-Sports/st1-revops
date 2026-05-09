@@ -1569,11 +1569,13 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
       const hist=msgs.slice(-10).map(m=>({role:m.role,content:m.text}));
       const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,system:buildCtx(),messages:[...hist,{role:"user",content:q}]})});
-      const d=await r.json();
+      let d;
+      try{ d=await r.json(); }catch{ throw new Error(`API returned HTTP ${r.status} (non-JSON)`); }
+      if(!r.ok) throw new Error(d?.error||d?.message||`API error ${r.status}`);
       const raw=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
       let parsed;
       try{const m=raw.match(/\{[\s\S]*\}/s);parsed=m?JSON.parse(m[0]):null;}catch{}
-      const reply=parsed?.message||raw;
+      const reply=parsed?.message||raw||"(no response)";
       const actions=parsed?.actions||[];
       setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:reply,actions,suggestions:parsed?.suggestions||[],ts:Date.now()}]);
       saveMsg("assistant",reply,actions.length?actions:null);
