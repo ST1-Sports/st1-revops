@@ -581,6 +581,8 @@ export default function App() {
   const [s, set, lastSynced, syncing, pullFromServer] = useStore();
   const [mod, setMod]   = useState("briefing");
   const [slim, setSlim] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState(new Set());
+  const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
