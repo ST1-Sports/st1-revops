@@ -301,6 +301,11 @@ async function pushActivityToZoho(contact, activityNote) {
   } catch {}
 }
 
+// ── ZOHO CRM WRITE HELPERS (fire-and-forget) ────────────────────────────────
+const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
+const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
+const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
+
 // Sport → best outreach window (months before season for procurement decisions)
 const SPORT_WINDOWS = {
   "Track & Field":    "Nov–Jan",
@@ -1504,7 +1509,7 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
     if(action.type==="create_deal"){
       const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:""};
       dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school})});}catch{}
+      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:_zid});}).catch(()=>{});
       return;
     }
     if(action.type==="draft_email"){
@@ -1530,7 +1535,7 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
     if(action.type==="add_contact"){
       const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",source:"home-ai",importedAt:Date.now()};
       dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});}catch{}
+      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Title:c.title,Company:c.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:_zid});}).catch(()=>{});
       return;
     }
   };
@@ -1794,6 +1799,7 @@ function ModDeals() {
     if(!note.trim()||!sel_d) return;
     dispatch("UPDATE_DEAL",{id:sel_d.id,touchHistory:[...(sel_d.touchHistory||[]),{id:mkId(),type:"note",date:today(),note,author:cu?.id}],followUpDate:new Date(Date.now()+86400000*7).toISOString().slice(0,10)});
     dispatch("LOG",{msg:`${cu?.name} logged touch on ${sel_d.name}: ${note}`});
+    crmAddNote("Deals",sel_d.zohoId,note);
     setNote("");toast("Touch logged","success");
   };
   const draftEmail=async()=>{
@@ -1880,7 +1886,7 @@ Under 80 words. Include subject line. Warm tone.`);
                 </div>
                 <div style={{flexShrink:0,marginLeft:9,textAlign:"right"}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>VALUE ($)</div>
-                  <input type="number" defaultValue={sel_d.value||0} onBlur={e=>dispatch("UPDATE_DEAL",{id:sel_d.id,value:Number(e.target.value||0)})}
+                  <input type="number" defaultValue={sel_d.value||0} onBlur={e=>{const _v=Number(e.target.value||0);dispatch("UPDATE_DEAL",{id:sel_d.id,value:_v});crmUpdate("Deals",sel_d.zohoId,{Amount:_v});}}
                     style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
                 </div>
               </div>
@@ -1898,7 +1904,7 @@ Under 80 words. Include subject line. Warm tone.`);
                 </select>
               </div>
               <div style={{display:"flex",gap:6,marginBottom:9}}>
-                <input type="date" value={sel_d.followUpDate||""} onChange={e=>dispatch("UPDATE_DEAL",{id:sel_d.id,followUpDate:e.target.value})} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
+                <input type="date" value={sel_d.followUpDate||""} onChange={e=>{dispatch("UPDATE_DEAL",{id:sel_d.id,followUpDate:e.target.value});crmUpdate("Deals",sel_d.zohoId,{Closing_Date:e.target.value});}} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
                 <GBtn onClick={()=>dispatch("UPDATE_DEAL",{id:sel_d.id,followUpDate:new Date(Date.now()+86400000*7).toISOString().slice(0,10)})} style={{fontSize:10,padding:"5px 8px"}}>+7d</GBtn>
               </div>
               <OBtn onClick={draftEmail} disabled={drafting} style={{width:"100%"}}>{drafting?"WRITING...":"✦ DRAFT FOLLOW-UP"}</OBtn>
@@ -1926,7 +1932,7 @@ Under 80 words. Include subject line. Warm tone.`);
               <Lbl s={{marginBottom:7}}>Notes ({(sel_d.notes_list||[]).length})</Lbl>
               <div style={{display:"flex",gap:6,marginBottom:8}}>
                 <textarea value={dealNoteText} onChange={e=>setDealNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                <OBtn sm col={B.orange} onClick={()=>{if(!dealNoteText.trim())return;dispatch("UPDATE_DEAL",{id:sel_d.id,notes_list:[...(sel_d.notes_list||[]),{id:mkId(),text:dealNoteText.trim(),ts:Date.now(),author:cu?.name||"Matt"}]});setDealNoteText("");toast("Note added","success");}}>ADD</OBtn>
+                <OBtn sm col={B.orange} onClick={()=>{if(!dealNoteText.trim())return;const _nt=dealNoteText.trim();dispatch("UPDATE_DEAL",{id:sel_d.id,notes_list:[...(sel_d.notes_list||[]),{id:mkId(),text:_nt,ts:Date.now(),author:cu?.name||"Matt"}]});crmAddNote("Deals",sel_d.zohoId,_nt);setDealNoteText("");toast("Note added","success");}}>ADD</OBtn>
               </div>
               <div style={{maxHeight:150,overflowY:"auto"}}>
                 {[...(sel_d.notes_list||[])].sort((a,b)=>b.ts-a.ts).map(n=>(
@@ -4138,6 +4144,7 @@ function ModProspecting() {
                                 {[["not_interested","Not Interested"],["wrong_contact","Wrong Contact"],["junk","Junk / Spam"]].map(([val,label])=>(
                                   <button key={val} onClick={()=>{
                                     dispatch("UPDATE_CONTACT",{id:c.id,deadStatus:val});
+                                    crmUpdate("Leads",c.zohoId,{Lead_Status:"Dead"});
                                     setFlaggingContact(null);
                                     toast(`${c.fullName||c.firstName||c.lastName} flagged as ${label}`,"info");
                                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,cursor:"pointer",borderRadius:3}}>{label}</button>
@@ -4145,6 +4152,7 @@ function ModProspecting() {
                                 {c.deadStatus&&(
                                   <button onClick={()=>{
                                     dispatch("UPDATE_CONTACT",{id:c.id,deadStatus:null});
+                                    crmUpdate("Leads",c.zohoId,{Lead_Status:"Contacted"});
                                     setFlaggingContact(null);
                                     toast(`${c.fullName||c.firstName||c.lastName} restored`,"success");
                                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,cursor:"pointer",borderRadius:3}}>↩ Restore</button>
@@ -4154,12 +4162,14 @@ function ModProspecting() {
                                 {!c.emailBounced?(
                                   <button onClick={()=>{
                                     dispatch("UPDATE_CONTACT",{id:c.id,emailBounced:true});
+                                    crmUpdate("Leads",c.zohoId,{Email_Opt_Out:true});
                                     setFlaggingContact(null);
                                     toast(`Email marked as bounced for ${c.fullName||c.firstName||c.lastName}`,"warn");
                                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,cursor:"pointer",borderRadius:3}}>✉✗ Bad Email / Bounced</button>
                                 ):(
                                   <button onClick={()=>{
                                     dispatch("UPDATE_CONTACT",{id:c.id,emailBounced:false});
+                                    crmUpdate("Leads",c.zohoId,{Email_Opt_Out:false});
                                     setFlaggingContact(null);
                                     toast(`Email restored for ${c.fullName||c.firstName||c.lastName}`,"success");
                                   }} style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,cursor:"pointer",borderRadius:3}}>✉ Mark Email OK</button>
@@ -4217,7 +4227,7 @@ function ModProspecting() {
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>NOTES</div>
                           <div style={{display:"flex",gap:6,marginBottom:8}}>
                             <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-                            <button onClick={()=>{if(!noteText.trim())return;dispatch("UPDATE_CONTACT",{id:c.id,notes:[...(c.notes||[]),{id:mkId(),text:noteText.trim(),ts:Date.now(),author:"Matt"}]});setNoteText("");toast("Note added","success");}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",alignSelf:"flex-end",flexShrink:0}}>ADD NOTE</button>
+                            <button onClick={()=>{if(!noteText.trim())return;const _nt=noteText.trim();dispatch("UPDATE_CONTACT",{id:c.id,notes:[...(c.notes||[]),{id:mkId(),text:_nt,ts:Date.now(),author:"Matt"}]});crmAddNote("Leads",c.zohoId,_nt);setNoteText("");toast("Note added","success");}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",alignSelf:"flex-end",flexShrink:0}}>ADD NOTE</button>
                           </div>
                           {[...(c.notes||[])].sort((a,b)=>b.ts-a.ts).map(n=>(
                             <div key={n.id} style={{display:"flex",gap:7,alignItems:"flex-start",padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -7376,7 +7386,9 @@ function ModMarketing() {
                                   <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:`${B.red}15`,padding:"3px 8px",borderRadius:4}}>✗ CLOSED LOST</span>
                                   <button onClick={()=>{
                                     const dealId=mkId();
-                                    dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:`${selCamp.product||"Equipment"} — ${school||name}`,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today()});
+                                    const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
+                                    dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today()});
+                                    fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:_dn,Stage:"Qualified Lead",Account_Name:school||name,Description:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:dealId,zohoId:_zid});}).catch(()=>{});
                                     toast(`New deal created for ${name}`,"success");
                                   }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
                                     ↺ RE-OPEN DEAL
@@ -7385,7 +7397,9 @@ function ModMarketing() {
                               ):(
                                 <button onClick={()=>{
                                   const dealId=mkId();
-                                  dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:`${selCamp.product||"Equipment"} — ${school||name}`,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today()});
+                                  const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
+                                  dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today()});
+                                  fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:_dn,Stage:"Qualified Lead",Account_Name:school||name,Description:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:dealId,zohoId:_zid});}).catch(()=>{});
                                   toast(`Deal created for ${name}`,"success");
                                 }} style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
                                   + CREATE DEAL
