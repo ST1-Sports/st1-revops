@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -214,6 +214,18 @@ function lsSaveRfp(record) {
     localStorage.setItem(REVOPS_STORE,JSON.stringify({...store,rfps}));
   } catch(e) { console.warn("lsSaveRfp",e); }
 }
+function lsReadCatalog() {
+  try {
+    const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}");
+    const products=[];
+    (p.suppliers||[]).forEach(sup=>{
+      (sup.products||[]).forEach(prod=>{
+        products.push({sku:prod.sku,brand:sup.name,name:prod.name,category:prod.category,cost:prod.cost,ourPrice:prod.ourPrice,map:prod.map});
+      });
+    });
+    return products;
+  } catch { return []; }
+}
 
 const RFP_STATUS_LABELS=[["New",B.blue],["In Process",B.orange],["Bid",B.green],["No Bid",B.muted]];
 
@@ -247,6 +259,7 @@ export default function RFPAutomation() {
   const [editCell,   setEditCell]   = useState(null); // {itemId, field}
   const [approved,   setApproved]   = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [altOpen,    setAltOpen]    = useState(new Set()); // item IDs with alternatives expanded
 
   const pdfInputRef = useRef();
   const xlsxInputRef = useRef();
@@ -505,16 +518,79 @@ IMPORTANT: Extract from the PRODUCT LISTING section of the document. There may b
     "Return ONLY valid JSON array.", true, null, itemsText);
 
     const itemList = Array.isArray(rawItems) ? rawItems : [];
-    const withState = itemList.map((item,i) => ({
+    let withState = itemList.map((item,i) => ({
       ...item, id:uid(), idx:i+1,
       dealerCost:null, ourPrice:null, freight:null, finalPrice:null,
       margin:20, totalLine:null,
       confidence:null, priceNotes:"", approved:false, declined:false,
       substituteDesc:"",
+      catalogMatch:null, catalogMatchName:null, catalogMatchPrice:null,
+      matchScore:null, alternatives:[],
     }));
     setItems(withState);
     setProgress(58);
     addLog(`✓ ${withState.length} line items extracted (${withState.filter(i=>i.canBid!==false).length} biddable)`,"success");
+
+    // ── STEP 4.5: Match against ST1 catalog ──────────────────────────────
+    const catalog = lsReadCatalog();
+    if(catalog.length>0 && !abortRef.current) {
+      const biddableForMatch = withState.filter(i=>i.canBid!==false);
+      addLog(`Step 4.5/5 — Matching ${biddableForMatch.length} items against ${catalog.length}-product catalog...`);
+      const catalogSummary = JSON.stringify(
+        catalog.slice(0,300).map(p=>({sku:p.sku,brand:p.brand,name:p.name,cat:p.category,price:p.ourPrice})),
+        null,1
+      );
+      let matchUpdated = [...withState];
+      const matchBatch = 12;
+      for(let i=0; i<biddableForMatch.length; i+=matchBatch) {
+        if(abortRef.current) break;
+        const batch = biddableForMatch.slice(i, i+matchBatch);
+        const matchRes = await claudeText(
+`Match these RFP line items to the ST1 Sports product catalog. Find exact matches and acceptable substitutes.
+
+ST1 CATALOG (${catalog.length} products, first 300 shown):
+${catalogSummary}
+
+RFP ITEMS TO MATCH:
+${JSON.stringify(batch.map(({lineNum,description,brand,category,partNumber,st1Brand,substituteAllowed})=>({lineNum,description,brand,category,partNumber,st1Brand,substituteAllowed})),null,1)}
+
+Return JSON array — one entry per RFP item in input order:
+[{
+  "lineNum": "same as input",
+  "matchedSku": "best matching catalog SKU or null",
+  "matchedName": "matched product name or null",
+  "matchedOurPrice": our price from catalog as number or null,
+  "matchScore": "exact|close|substitute|none",
+  "alternatives": [{"sku":"...","brand":"...","name":"...","ourPrice":number,"reason":"brief reason"}]
+}]
+Rules: exact=same brand+model, close=same brand diff model/spec, substitute=diff brand but equivalent quality/function.
+Only include alternatives when substituteAllowed=true or matchScore is not "exact". Max 3 alternatives. Return [] otherwise.`,
+          "", true, CLAUDE_FAST_MODEL);
+        if(Array.isArray(matchRes)) {
+          matchRes.forEach(m=>{
+            const idx=matchUpdated.findIndex(x=>String(x.lineNum)===String(m.lineNum));
+            if(idx>=0) {
+              matchUpdated[idx]={
+                ...matchUpdated[idx],
+                catalogMatch:m.matchedSku||null,
+                catalogMatchName:m.matchedName||null,
+                catalogMatchPrice:m.matchedOurPrice||null,
+                matchScore:m.matchScore||"none",
+                alternatives:m.alternatives||[],
+              };
+              if((m.matchScore==="substitute"||m.matchScore==="close")&&m.matchedName&&!matchUpdated[idx].substituteDesc)
+                matchUpdated[idx].substituteDesc=m.matchedName;
+            }
+          });
+          setItems([...matchUpdated]);
+        }
+        setProgress(58+Math.round(((i+matchBatch)/biddableForMatch.length)*7));
+        await sleep(150);
+      }
+      withState=matchUpdated;
+      const matched=matchUpdated.filter(i=>i.matchScore&&i.matchScore!=="none").length;
+      addLog(`✓ Catalog matching — ${matched} of ${biddableForMatch.length} biddable items matched`,"success");
+    }
 
     // ── STEP 5: Auto-price all biddable items ────────────────────────────
     addLog("Step 5/5 — Auto-pricing biddable items...");
@@ -719,7 +795,6 @@ ${ST1}
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px} ::-webkit-scrollbar-track{background:${B.surface}}
         button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}
@@ -1063,7 +1138,8 @@ ${ST1}
                       const noBid = item.canBid===false||item.declined;
                       const rowBg = item.approved?B.greenBg:noBid?B.redBg:B.white;
                       return (
-                        <tr key={item.id} style={{background:rowBg,opacity:noBid?.6:1}}>
+                        <React.Fragment key={item.id}>
+                        <tr style={{background:rowBg,opacity:noBid?.6:1}}>
                           <td style={{textAlign:"center"}}>
                             {item.canBid!==false&&(
                               <input type="checkbox" checked={!!item.approved} onChange={()=>toggleApprove(item.id)}
@@ -1076,9 +1152,25 @@ ${ST1}
                             {item.substituteDesc&&<div style={{fontSize:10,color:B.orange,marginTop:1}}>↳ {item.substituteDesc}</div>}
                             {item.canBid===false&&<div style={{fontSize:10,color:B.red,marginTop:1}}>No stock: {item.noBidReason?.slice(0,40)||"not carried"}</div>}
                           </td>
-                          <td style={{color:B.muted}}>
+                          <td style={{color:B.muted,minWidth:120}}>
                             <div>{item.brand||"—"}</div>
                             {item.st1Brand&&<div style={{fontSize:10,color:B.orange}}>{item.st1Brand}</div>}
+                            {item.catalogMatch&&(
+                              <div style={{fontSize:10,marginTop:2}}>
+                                <span style={{
+                                  background:{exact:B.greenBg,close:B.blueBg,substitute:B.yellowBg}[item.matchScore]||B.surface,
+                                  color:{exact:B.green,close:B.blue,substitute:B.yellow}[item.matchScore]||B.muted,
+                                  padding:"1px 4px",borderRadius:2,fontSize:8,letterSpacing:.3,fontFamily:"'Lexend Zetta',sans-serif"
+                                }}>{(item.matchScore||"").toUpperCase()}</span>
+                                {" "}<span style={{color:B.text}}>{item.catalogMatch}</span>
+                              </div>
+                            )}
+                            {item.alternatives?.length>0&&(
+                              <button onClick={()=>setAltOpen(s=>{const n=new Set(s);n.has(item.id)?n.delete(item.id):n.add(item.id);return n;})}
+                                style={{background:"none",border:"none",color:B.blue,fontSize:9,padding:0,cursor:"pointer",fontFamily:"'Lexend',sans-serif",marginTop:2}}>
+                                {altOpen.has(item.id)?"▲ hide alts":`▼ ${item.alternatives.length} alt${item.alternatives.length>1?"s":""}`}
+                              </button>
+                            )}
                           </td>
                           <td style={{color:B.muted}}>{item.unit||"each"}</td>
                           <td style={{textAlign:"right"}}>
@@ -1119,6 +1211,30 @@ ${ST1}
                             }
                           </td>
                         </tr>
+                        {altOpen.has(item.id)&&item.alternatives?.length>0&&(
+                          <tr style={{background:B.blueBg}}>
+                            <td/>
+                            <td colSpan={13} style={{padding:"6px 10px"}}>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:5}}>CATALOG ALTERNATIVES</div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {item.alternatives.map((alt,ai)=>(
+                                  <div key={ai} style={{background:B.white,border:`1px solid ${B.blue}40`,borderRadius:4,padding:"5px 9px",fontSize:11,color:B.text}}>
+                                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue}}>{alt.sku}</span>
+                                    <span style={{color:B.muted,margin:"0 5px"}}>·</span>
+                                    <span>{alt.brand} {alt.name}</span>
+                                    {alt.ourPrice&&<span style={{color:B.orange,fontWeight:600,marginLeft:8}}>${Number(alt.ourPrice).toFixed(2)}</span>}
+                                    {alt.reason&&<span style={{color:B.muted,fontSize:10,marginLeft:8,fontStyle:"italic"}}>{alt.reason}</span>}
+                                    <button onClick={()=>{
+                                      setItems(prev=>prev.map(it=>it.id===item.id?{...it,substituteDesc:`${alt.brand} ${alt.name} (${alt.sku})`,catalogMatch:alt.sku,catalogMatchName:alt.name,catalogMatchPrice:alt.ourPrice}:it));
+                                      setAltOpen(s=>{const n=new Set(s);n.delete(item.id);return n;});
+                                    }} style={{marginLeft:8,background:B.blue,color:B.white,border:"none",borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>USE</button>
+                                  </div>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>

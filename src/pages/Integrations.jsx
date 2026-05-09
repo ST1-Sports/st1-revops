@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import ToolManager from "../components/ToolManager.jsx";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -804,7 +805,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["email","Email Scanner"],["woo","WooCommerce"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["email","Email Scanner"],["woo","WooCommerce"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -1611,6 +1612,18 @@ Channel: ${slackChannelName}`);
                   ))}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── AI TOOLS ── */}
+          {tab==="tools"&&(
+            <div className="fu">
+              <div style={{marginBottom:18}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>AI TOOL MANAGER</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>Enable or disable built-in AI plugins and register custom tools</div>
+                <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
+              </div>
+              <ToolManager/>
             </div>
           )}
 

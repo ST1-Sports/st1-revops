@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from "react";
-import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
 const IMPORT_TASK_ID = "price_import";
@@ -176,7 +175,7 @@ async function callClaudeMsg(messages, sys="", tokens=4000) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function PriceListManager() {
+export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
   const [tab,       setTab]       = useState("dashboard");
@@ -303,7 +302,7 @@ export default function PriceListManager() {
           content:[
             { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
             { type:"text", text:
-`This is a supplier price list PDF. Extract ALL products listed.
+`This is a supplier price list PDF.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""} Extract ALL products listed.
 Return JSON:
 {
   "supplierName": "name of the supplier/manufacturer",
@@ -330,6 +329,7 @@ Extract every product row. If a column is not present use null. cost should be t
         // ── Excel: parse with SheetJS, convert first sheet to CSV text ──────
         addLog("Parsing Excel file...");
         const buf = await toBuffer(file);
+        const XLSX = await import("xlsx");
         const wb  = XLSX.read(buf, {type:"array"});
         const ws  = wb.Sheets[wb.SheetNames[0]];
         const csv = XLSX.utils.sheet_to_csv(ws);
@@ -337,8 +337,7 @@ Extract every product row. If a column is not present use null. cost should be t
         addLog(`Loaded ${rows.length} rows from sheet "${wb.SheetNames[0]}", asking Claude to parse...`);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`This is a supplier price list exported from Excel as CSV.\n\n${rows.join("\n")}\n\n` +
-`Extract ALL products. Return JSON:
+          content:`This is a supplier price list exported from Excel as CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
 {
   "supplierName": "supplier/manufacturer name",
   "supplierCategory": "sport category",
@@ -358,8 +357,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         const rows = text.split("\n").filter(l=>l.trim()).slice(0,150);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`Supplier price list CSV:\n\n${rows.join("\n")}\n\n` +
-`Extract ALL products. Return JSON:
+          content:`Supplier price list CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
 {
   "supplierName": "supplier/manufacturer name",
   "supplierCategory": "sport category",
@@ -394,7 +392,8 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         repName:          extracted.repName  || "",
         repEmail:         extracted.repEmail || "",
         products:         extracted.products,
-        targetSupplierId: existing?.id || null,
+        targetSupplierId: uploadTargetIds[0] || existing?.id || null,
+        suggestedSupplierIds: uploadTargetIds.length > 0 ? uploadTargetIds : (existing ? [existing.id] : []),
       };
       setImportPreview(preview);
       bgTasks.completeTask(IMPORT_TASK_ID, {
@@ -565,13 +564,105 @@ Provide strategic pricing advice. Return JSON:
     {id:"alerts",     label:"Margin Alerts",badge:criticalAlerts.length},
     {id:"products",   label:"All Products"},
     {id:"suppliers",  label:"Suppliers"},
+    {id:"market",     label:"Market Pricing"},
+    {id:"ask",        label:"Ask AI"},
     {id:"upload",     label:"Upload Price List"},
   ];
+
+  // ── Ask AI state ──────────────────────────────────────────────────────────
+  const [askQuery,   setAskQuery]   = useState("");
+  const [askLoading, setAskLoading] = useState(false);
+  const [askHistory, setAskHistory] = useState([]); // [{q, a}]
+  const [uploadTargetIds, setUploadTargetIds] = useState([]); // pre-selected suppliers before upload
+  const toggleUploadBrand = (id) => setUploadTargetIds(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
+
+  // ── Market Pricing state ──────────────────────────────────────────────────
+  const [scanSelected,  setScanSelected]  = useState(new Set());
+  const [scanResults,   setScanResults]   = useState({}); // productId → {marketLow, marketHigh, competitors, recommendation, note, scannedAt}
+  const [scanning,      setScanning]      = useState(false);
+  const [scanError,     setScanError]     = useState(null);
+  const [scanFilter,    setScanFilter]    = useState("all"); // all | flagged | scanned
+  const [mktSupplier,   setMktSupplier]   = useState("all");
+
+  const toggleScan = (id) => setScanSelected(s => { const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const selectAllVisible = (prods) => setScanSelected(new Set(prods.map(p=>p.id)));
+
+  const scanPrices = async () => {
+    const toScan = allProducts.filter(p => scanSelected.has(p.id)).slice(0,10);
+    if(!toScan.length) return;
+    setScanning(true); setScanError(null);
+    const list = toScan.map(p =>
+      `- SKU:${p.sku} | "${p.name}" | Brand:${p.supplierName} | OurCost:$${p.cost.toFixed(2)} | OurPrice:$${p.ourPrice.toFixed(2)}${p.map?` | MAP:$${p.map.toFixed(2)}`:""}${p.msrp?` | MSRP:$${p.msrp.toFixed(2)}`:""}`
+    ).join("\n");
+    try {
+      const res = await fetch("/api/claude", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          model:"claude-sonnet-4-6", max_tokens:4000,
+          system:`You are a competitive pricing analyst for ST1 Sports, a B2B athletic equipment distributor selling to K-12 schools. Search the web for current retail prices of the listed products on BSN Sports, Dick's Sporting Goods, Amazon, Varsity.com, School Specialty, Epic Sports, and the brand's own website. Return ONLY valid JSON, no markdown fences.`,
+          messages:[{role:"user",content:`Search for current retail prices for these products:\n\n${list}\n\nFor each SKU find real competitor prices. Return JSON:\n{"results":[{"sku":"SKU","marketLow":number,"marketHigh":number,"msrp":number_or_null,"competitors":[{"store":"Name","price":number}],"recommendation":"RAISE|COMPETITIVE|CAUTION|MAP_VIOLATION","note":"one sentence"}]}`}],
+          tools:[{type:"web_search_20250305",name:"web_search"}],
+        }),
+      });
+      const d = await res.json();
+      const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      let parsed; try{parsed=JSON.parse(text.trim())}catch{}
+      if(!parsed){try{const m=text.match(/\{[\s\S]*\}/);if(m)parsed=JSON.parse(m[0])}catch{}}
+      if(parsed?.results){
+        const upd={};
+        for(const r of parsed.results){
+          const prod=toScan.find(p=>p.sku===r.sku||p.name.toLowerCase().includes((r.sku||"").toLowerCase()));
+          if(prod) upd[prod.id]={...r,scannedAt:new Date().toISOString()};
+        }
+        setScanResults(prev=>({...prev,...upd}));
+        setScanSelected(new Set());
+      } else { setScanError("Could not parse response — try scanning fewer products"); }
+    } catch(e){ setScanError(e.message); }
+    setScanning(false);
+  };
+
+  const buildPriceContext = () => {
+    const lines = ["ST1 Sports — Current Price Lists\n"];
+    suppliers.forEach(sup => {
+      lines.push(`\nSupplier: ${sup.name} (${sup.category}) — updated ${sup.lastUpdated}`);
+      sup.products.forEach(p => {
+        lines.push(`  SKU ${p.sku} | ${p.name} | Cost: $${p.cost.toFixed(2)} | Our Price: $${p.ourPrice.toFixed(2)}${p.map ? ` | MAP: $${p.map.toFixed(2)}` : ""} | Unit: ${p.unit}`);
+      });
+    });
+    return lines.join("\n");
+  };
+
+  const askAI = async () => {
+    const q = askQuery.trim();
+    if (!q || askLoading) return;
+    setAskLoading(true);
+    setAskQuery("");
+    const entry = { q, a: null, loading: true };
+    setAskHistory(h => [entry, ...h]);
+    try {
+      const ctx = buildPriceContext();
+      const res = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 1024,
+          system: `You are a pricing assistant for ST1 Sports. Answer questions about products and prices using ONLY the price list data provided. Be concise and direct. Always include SKU, unit, and our sell price in your answers. If you cannot find the item, say so clearly.\n\n${ctx}`,
+          messages: [{ role: "user", content: q }],
+        }),
+      });
+      const d = await res.json();
+      const answer = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("") || d.error || "No response";
+      setAskHistory(h => h.map((item, i) => i === 0 ? { q, a: answer, loading: false } : item));
+    } catch (e) {
+      setAskHistory(h => h.map((item, i) => i === 0 ? { q, a: `Error: ${e.message}`, loading: false } : item));
+    }
+    setAskLoading(false);
+  };
 
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
         button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}
@@ -1017,6 +1108,196 @@ Provide strategic pricing advice. Return JSON:
           </div>
         )}
 
+        {/* ── MARKET PRICING ── */}
+        {tab==="market"&&(()=>{
+          const REC_COLOR  = {RAISE:"#16a34a",COMPETITIVE:"#2563eb",CAUTION:"#d97706",MAP_VIOLATION:"#dc2626"};
+          const REC_LABEL  = {RAISE:"↑ RAISE",COMPETITIVE:"✓ OK",CAUTION:"⚠ CAUTION",MAP_VIOLATION:"✗ MAP VIOLATION"};
+          const mktProds = allProducts
+            .filter(p=>mktSupplier==="all"||p.supplierId===mktSupplier)
+            .filter(p=>scanFilter==="flagged"?["RAISE","CAUTION","MAP_VIOLATION"].includes(scanResults[p.id]?.recommendation):scanFilter==="scanned"?!!scanResults[p.id]:true);
+          const scannedCount=Object.keys(scanResults).length;
+          const flaggedCount=Object.values(scanResults).filter(r=>["RAISE","CAUTION","MAP_VIOLATION"].includes(r.recommendation)).length;
+          return(
+          <div className="fu">
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:10}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3}}>MARKET PRICING</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Live competitor price scan — BSN, Dick's, Amazon, Varsity, Epic Sports</div>
+                <div style={{width:36,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                {scanSelected.size>0&&(
+                  <button onClick={scanPrices} disabled={scanning}
+                    style={{background:scanning?"#ccc":B.orange,color:B.white,border:"none",borderRadius:6,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:scanning?"default":"pointer",whiteSpace:"nowrap"}}>
+                    {scanning?<span className="blink">● SCANNING…</span>:`⊕ SCAN ${scanSelected.size} PRODUCT${scanSelected.size>1?"S":""} →`}
+                  </button>
+                )}
+                {scanSelected.size===0&&!scanning&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Select products below to scan</div>
+                )}
+              </div>
+            </div>
+
+            {/* Summary pills */}
+            {scannedCount>0&&(
+              <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+                {[["all","All Products",mktProds.length,B.muted],["scanned",`Scanned`,scannedCount,B.blue],["flagged",`Flagged`,flaggedCount,B.red]].map(([v,l,n,c])=>(
+                  <button key={v} onClick={()=>setScanFilter(v)} style={{background:scanFilter===v?c:B.surface,color:scanFilter===v?B.white:B.muted,border:`1px solid ${scanFilter===v?c:B.border}`,borderRadius:20,padding:"4px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l} ({n})</button>
+                ))}
+              </div>
+            )}
+
+            {scanError&&<div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.red,marginBottom:14}}>{scanError}</div>}
+
+            {/* Filters */}
+            <div style={{display:"flex",gap:8,marginBottom:12,alignItems:"center",flexWrap:"wrap"}}>
+              <select value={mktSupplier} onChange={e=>setMktSupplier(e.target.value)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+                <option value="all">All Brands</option>
+                {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <button onClick={()=>selectAllVisible(mktProds.filter(p=>!scanResults[p.id]))} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>SELECT UNSCANNED</button>
+              {scanSelected.size>0&&<button onClick={()=>setScanSelected(new Set())} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>clear</button>}
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:"auto"}}>{scanSelected.size} selected · max 10 per scan</div>
+            </div>
+
+            {/* Table */}
+            <div style={{overflowX:"auto",borderRadius:8,border:`1px solid ${B.border}`,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead><tr style={{background:B.surface}}>
+                  <th style={{width:32,padding:"7px 10px"}}/>
+                  {["Brand","SKU","Product","Our Cost","Our Price","Margin","MAP/MSRP","Market Low","Market High","Competitors","Action"].map(h=>(
+                    <th key={h} style={{padding:"7px 9px",textAlign:["Our Cost","Our Price","Margin","MAP/MSRP","Market Low","Market High"].includes(h)?"right":"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,borderBottom:`2px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {mktProds.map(p=>{
+                    const res=scanResults[p.id];
+                    const margin=marginPct(p.cost,p.ourPrice);
+                    const checked=scanSelected.has(p.id);
+                    const rowBg=res?.recommendation==="MAP_VIOLATION"?B.redBg:res?.recommendation==="CAUTION"?B.yellowBg:res?.recommendation==="RAISE"?"#f0fdf4":B.white;
+                    return(
+                      <tr key={p.id} style={{background:checked?"#fff8f3":rowBg,cursor:"pointer"}} onClick={()=>toggleScan(p.id)}>
+                        <td style={{padding:"8px 10px",textAlign:"center"}}>
+                          <input type="checkbox" checked={checked} onChange={()=>{}} onClick={e=>e.stopPropagation()}
+                            style={{accentColor:B.orange,width:13,height:13,cursor:"pointer"}}/>
+                        </td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>{p.supplierName}</td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.3}}>{p.sku}</td>
+                        <td style={{padding:"8px 9px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,maxWidth:220,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{fmt$(p.cost)}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(p.ourPrice)}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right"}}>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:p.marginStatus.color,background:p.marginStatus.bg,padding:"2px 6px",borderRadius:3}}>{pct(margin)}</span>
+                        </td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{p.map?fmt$(p.map):res?.msrp?<span style={{color:B.blue}}>{fmt$(res.msrp)}<span style={{fontSize:8,color:B.muted}}> est</span></span>:"—"}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:res?B.green:B.border}}>{res?fmt$(res.marketLow):"—"}</td>
+                        <td style={{padding:"8px 9px",textAlign:"right",fontFamily:"'Russo One',sans-serif",fontSize:13,color:res?B.blue:B.border}}>{res?fmt$(res.marketHigh):"—"}</td>
+                        <td style={{padding:"8px 9px",maxWidth:200}}>
+                          {res?.competitors?.length>0?(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                              {res.competitors.slice(0,4).map((c,i)=>(
+                                <span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 5px",whiteSpace:"nowrap"}}>{c.store} {fmt$(c.price)}</span>
+                              ))}
+                            </div>
+                          ):<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.border}}>not scanned</span>}
+                        </td>
+                        <td style={{padding:"8px 9px",whiteSpace:"nowrap"}} onClick={e=>e.stopPropagation()}>
+                          {res?.recommendation?(
+                            <div>
+                              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:REC_COLOR[res.recommendation]||B.muted,padding:"3px 7px",borderRadius:3,letterSpacing:.4,display:"inline-block",marginBottom:3}}>
+                                {REC_LABEL[res.recommendation]||res.recommendation}
+                              </span>
+                              {res.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.4,maxWidth:140}}>{res.note}</div>}
+                              {res.recommendation==="RAISE"&&<button onClick={()=>updateOurPrice(p.supplierId,p.id,res.marketLow*0.95)} style={{marginTop:4,background:B.green,color:B.white,border:"none",borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>APPLY ↑</button>}
+                            </div>
+                          ):<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.border}}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {mktProds.length===0&&<div style={{padding:"32px 0",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No products match the filter</div>}
+            </div>
+
+            {/* Legend */}
+            <div style={{display:"flex",gap:14,marginTop:12,flexWrap:"wrap"}}>
+              {[["RAISE","↑ RAISE","#16a34a","Market is higher — opportunity to increase price"],["COMPETITIVE","✓ OK","#2563eb","Priced competitively"],["CAUTION","⚠ CAUTION","#d97706","Price may be too high vs. market"],["MAP_VIOLATION","✗ MAP VIOLATION","#dc2626","Price is below minimum advertised price"]].map(([k,l,c,desc])=>(
+                <div key={k} style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:c,padding:"2px 7px",borderRadius:3}}>{l}</span>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{desc}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* ── ASK AI ── */}
+        {tab==="ask"&&(
+          <div className="fu" style={{maxWidth:760}}>
+            <div style={{marginBottom:20}}>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,letterSpacing:.3}}>ASK AI ABOUT PRICES</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginTop:3}}>Ask anything — "How much is a steel hurdle?", "What does a dozen Diamond game balls cost?", "Show me all Gill javelin options"</div>
+              <div style={{width:36,height:3,background:B.orange,marginTop:8,borderRadius:2}}/>
+            </div>
+
+            {/* Input */}
+            <div style={{display:"flex",gap:8,marginBottom:24}}>
+              <input
+                value={askQuery}
+                onChange={e=>setAskQuery(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter"&&!e.shiftKey) askAI(); }}
+                placeholder={'e.g. How much is a steel hurdle 39"? What shot puts do we carry from Gill?'}
+                style={{flex:1,background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",fontSize:12,color:B.text,outline:"none"}}
+                disabled={askLoading}
+              />
+              <button onClick={askAI} disabled={!askQuery.trim()||askLoading}
+                style={{background:(!askQuery.trim()||askLoading)?B.gray2:B.orange,color:B.white,border:"none",borderRadius:6,padding:"10px 20px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,flexShrink:0}}>
+                {askLoading?"…":"ASK →"}
+              </button>
+            </div>
+
+            {/* Quick prompts */}
+            {askHistory.length===0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:20}}>
+                {["Show me all hurdle options","What are our volleyball prices?","List all throwing implements","Cheapest baseball option","Most expensive item in the catalog"].map(q=>(
+                  <button key={q} onClick={()=>{setAskQuery(q);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 12px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* History */}
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {askHistory.map((item,i)=>(
+                <div key={i} className="card" style={{padding:0,overflow:"hidden"}}>
+                  <div style={{background:B.surface,padding:"10px 14px",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>
+                    {item.q}
+                  </div>
+                  <div style={{padding:"12px 14px"}}>
+                    {item.loading
+                      ? <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Looking up prices…</div>
+                      : <>
+                          <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap",margin:0,marginBottom:10}}>{item.a}</pre>
+                          {onMakeQuote&&<button onClick={()=>onMakeQuote(item.q)} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>▤ BUILD QUOTE →</button>}
+                        </>
+                    }
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {askHistory.length>0&&(
+              <button onClick={()=>setAskHistory([])} style={{marginTop:12,background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>
+                CLEAR HISTORY
+              </button>
+            )}
+          </div>
+        )}
+
         {/* ── UPLOAD ── */}
         {tab==="upload"&&(
           <div className="fu" style={{maxWidth:780}}>
@@ -1029,6 +1310,29 @@ Provide strategic pricing advice. Return JSON:
             {/* Drop zone */}
             {!importPreview&&(
               <div className="card" style={{marginBottom:16,borderTop:`3px solid ${B.orange}`}}>
+                {/* Brand pre-selector — multi-select */}
+                <div style={{marginBottom:16,paddingBottom:14,borderBottom:`1px solid ${B.border}`}}>
+                  <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5}}>WHICH BRANDS DOES THIS FILE CONTAIN?</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>(select all that apply)</div>
+                    {uploadTargetIds.length>0&&<button onClick={()=>setUploadTargetIds([])} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",marginLeft:"auto",padding:0}}>clear</button>}
+                  </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {suppliers.map(s=>{
+                      const on=uploadTargetIds.includes(s.id);
+                      return(
+                        <button key={s.id} onClick={()=>toggleUploadBrand(s.id)} style={{background:on?B.orange:B.surface,color:on?B.white:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:5,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
+                          {on&&<span style={{fontSize:9}}>✓</span>}{s.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {uploadTargetIds.length>0&&(
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:8}}>
+                      {uploadTargetIds.length} brand{uploadTargetIds.length>1?"s":""} selected — AI will look for products from {uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name).join(", ")}
+                    </div>
+                  )}
+                </div>
                 <div onClick={()=>!importing&&fileInputRef.current?.click()}
                   style={{border:`2px dashed ${B.borderD}`,borderRadius:6,padding:"40px 24px",textAlign:"center",
                     cursor:importing?"not-allowed":"pointer",background:B.surface,
@@ -1090,11 +1394,24 @@ Provide strategic pricing advice. Return JSON:
                 {/* Supplier mapping selector */}
                 <div style={{marginBottom:14,padding:10,background:B.surface,borderRadius:5,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontWeight:500}}>Add to:</div>
+                  {/* Quick brand buttons if multiple were pre-selected */}
+                  {(importPreview.suggestedSupplierIds||[]).length>1&&(
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {(importPreview.suggestedSupplierIds||[]).map(id=>{
+                        const sup=suppliers.find(s=>s.id===id); if(!sup) return null;
+                        const on=importPreview.targetSupplierId===id;
+                        return <button key={id} onClick={()=>setImportPreview(p=>({...p,targetSupplierId:id}))} style={{background:on?B.orange:B.white,color:on?B.white:B.text,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sup.name}</button>;
+                      })}
+                    </div>
+                  )}
                   <select value={importPreview.targetSupplierId||"__new__"}
                     onChange={e=>setImportPreview(p=>({...p,targetSupplierId:e.target.value==="__new__"?null:e.target.value}))}
                     style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",color:B.text,background:B.white}}>
                     <option value="__new__">+ Create new supplier: {importPreview.supplierName}</option>
-                    {suppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                    {(importPreview.suggestedSupplierIds||[]).length>0&&<optgroup label="— Pre-selected brands —">
+                      {(importPreview.suggestedSupplierIds||[]).map(id=>{const s=suppliers.find(x=>x.id===id);return s?<option key={id} value={id}>{s.name}</option>:null;})}
+                    </optgroup>}
+                    {suppliers.filter(s=>!(importPreview.suggestedSupplierIds||[]).includes(s.id)).map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                   {!importPreview.targetSupplierId&&(
                     <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>

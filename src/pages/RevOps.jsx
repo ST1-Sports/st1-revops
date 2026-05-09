@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
-import * as XLSX from "xlsx";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
@@ -9,6 +8,16 @@ const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
+
+// Kick off background downloads for the most-used panels as soon as the app
+// shell renders, so they're already cached when the user clicks into them.
+function usePrefetchPanels() {
+  useEffect(() => {
+    import('./CommandCenter.jsx');
+    import('./PriceTool.jsx');
+    import('./RFPTool.jsx');
+  }, []);
+}
 
 // ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
 function PanelLoader() {
@@ -26,15 +35,30 @@ function PanelLoader() {
 class ErrBound extends Component {
   constructor(p){super(p);this.state={err:null};}
   static getDerivedStateFromError(e){return{err:e};}
+  componentDidCatch(err){
+    // Auto-reload on chunk load failures (stale browser cache after deploy)
+    if(err?.message?.includes("Failed to fetch dynamically imported module")){
+      window.location.reload();
+    }
+  }
   render(){
-    if(this.state.err) return(
-      <div style={{padding:32,fontFamily:"monospace",background:"#fff8f8",border:"1px solid #f99",borderRadius:8,margin:24}}>
-        <div style={{fontWeight:700,color:"#c00",marginBottom:8}}>Render error — please report this message:</div>
-        <pre style={{fontSize:12,color:"#333",whiteSpace:"pre-wrap"}}>{this.state.err?.message}</pre>
-        <pre style={{fontSize:10,color:"#999",marginTop:8,whiteSpace:"pre-wrap"}}>{this.state.err?.stack?.split("\n").slice(0,6).join("\n")}</pre>
-        <button onClick={()=>this.setState({err:null})} style={{marginTop:12,padding:"6px 14px",background:"#f37321",color:"#fff",border:"none",borderRadius:4,cursor:"pointer"}}>Retry</button>
-      </div>
-    );
+    if(this.state.err){
+      const isChunkErr = this.state.err?.message?.includes("Failed to fetch dynamically imported module");
+      if(isChunkErr) return(
+        <div style={{padding:32,fontFamily:"'Lexend',sans-serif",display:"flex",flexDirection:"column",alignItems:"center",gap:14,marginTop:40}}>
+          <div style={{fontSize:13,color:"#424242",fontWeight:500}}>New version deployed — reloading…</div>
+          <div style={{width:32,height:3,background:"#F37321",borderRadius:2,animation:"grow 1s ease-in-out infinite alternate"}}/>
+        </div>
+      );
+      return(
+        <div style={{padding:32,fontFamily:"monospace",background:"#fff8f8",border:"1px solid #f99",borderRadius:8,margin:24}}>
+          <div style={{fontWeight:700,color:"#c00",marginBottom:8}}>Render error — please report this message:</div>
+          <pre style={{fontSize:12,color:"#333",whiteSpace:"pre-wrap"}}>{this.state.err?.message}</pre>
+          <pre style={{fontSize:10,color:"#999",marginTop:8,whiteSpace:"pre-wrap"}}>{this.state.err?.stack?.split("\n").slice(0,6).join("\n")}</pre>
+          <button onClick={()=>this.setState({err:null})} style={{marginTop:12,padding:"6px 14px",background:"#f37321",color:"#fff",border:"none",borderRadius:4,cursor:"pointer"}}>Retry</button>
+        </div>
+      );
+    }
     return this.props.children;
   }
 }
@@ -560,7 +584,6 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState(new Set());
 
   const dispatch = useCallback((action, payload) => {
     set(prev => {
@@ -713,9 +736,10 @@ export default function App() {
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
-    {id:"activity",    icon:"≡", label:"Activity"},
-    {id:"settings",    icon:"⚙", label:"Settings"},
-    {id:"integrations",icon:"⚡", label:"Integrations"},
+    {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
+    {id:"activity",      icon:"≡", label:"Activity"},
+    {id:"settings",      icon:"⚙", label:"Settings"},
+    {id:"integrations",  icon:"⚡", label:"Integrations"},
   ];
 
   // Helper: find nav item label (including inside group children)
@@ -727,17 +751,12 @@ export default function App() {
     return "";
   };
 
-  const toggleGroup = (gid) => setExpandedGroups(prev => {
-    const next = new Set(prev);
-    if(next.has(gid)) next.delete(gid); else next.add(gid);
-    return next;
-  });
+  usePrefetchPanels();
 
   return (
     <AppCtx.Provider value={ctx}>
       <div style={{display:"flex",height:"100vh",background:B.pageBg,overflow:"hidden",fontFamily:"'Lexend',sans-serif",color:B.text}}>
         <style>{`
-          @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
           *{box-sizing:border-box;margin:0;padding:0}
           ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
           button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}
@@ -771,7 +790,7 @@ export default function App() {
             {NAV.map(n=>{
               // Section header
               if(n.id.startsWith("_s_")) {
-                const label = n.id.replace("_s_","").toUpperCase();
+                const label = n.label || n.id.replace("_s_","").toUpperCase();
                 return !slim
                   ? <div key={n.id} style={{padding:"10px 13px 3px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"rgba(255,255,255,0.3)",letterSpacing:2}}>{label}</div>
                   : <div key={n.id} style={{height:1,background:"rgba(255,255,255,0.07)",margin:"5px 8px"}}/>;
@@ -905,8 +924,6 @@ export default function App() {
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="emails"      && <ModEmails/>}
-            {mod==="social"      && <ModSocial/>}
-            {mod==="calendar"    && <ModCalendar/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -915,8 +932,7 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="rfp-tool"    &&<Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage/></Suspense>}
+            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("cc-quote");}}/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
@@ -1959,6 +1975,7 @@ Under 80 words. Include subject line. Warm tone.`);
 // ════════════════════════════════════════════════════════════════════════════
 function ModRevenue() {
   const {s,setMod}=useApp();
+  const [finTab,setFinTab]=useState("revenue");
   const deals=s.deals||[];
   const won=deals.filter(d=>d.stage==="Closed Won");
   const open=deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
@@ -1995,9 +2012,25 @@ function ModRevenue() {
   const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
   const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
 
+  if(finTab==="summaries") return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
+          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
+        ))}
+      </div>
+      <Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId="finance" embedded key="finance"/></Suspense>
+    </div>
+  );
+
   return(
     <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-      <PH title="REVENUE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
+      <div style={{display:"flex",gap:4,marginBottom:16}}>
+        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
+          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
+        ))}
+      </div>
+      <PH title="FINANCE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
 
       {/* KPIs */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
@@ -2689,6 +2722,7 @@ function ModQuotes() {
 // ════════════════════════════════════════════════════════════════════════════
 function ModRFP() {
   const {s,dispatch,cu,toast}=useApp();
+  const [rfpTab,setRfpTab]=useState("tracker");
   const [sel,setSel]=useState(null);
   const [newItem,setNewItem]=useState("");
   const isOwner=cu?.role==="owner";
@@ -2697,8 +2731,55 @@ function ModRFP() {
   const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
   const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
+  const [resultsUploading, setResultsUploading] = useState(null);
+  const uploadResults = async (rfpId, file) => {
+    setResultsUploading(rfpId);
+    try {
+      let msgContent;
+      const ext = file.name.toLowerCase().split(".").pop();
+      const extractPrompt = `Extract bid award/results information from this document. ST1 Sports was one of the vendors who submitted a bid.\n\nReturn ONLY valid JSON:\n{"awardedTo":"winning vendor name","awardedValue":number or null,"st1Submitted":null,"st1Won":true or false,"st1Position":finishing position number or null,"priceDelta":ST1 price minus winner price or null,"competitors":[{"name":"...","price":number or null,"position":number}],"notes":"key findings summary"}`;
+      if(ext==="pdf") {
+        const b64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
+        msgContent=[{type:"text",text:extractPrompt},{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}}];
+      } else {
+        const txt = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(file);});
+        msgContent=extractPrompt+"\n\nDOCUMENT:\n"+txt.slice(0,8000);
+      }
+      const resp = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        model:"claude-sonnet-4-6",max_tokens:700,
+        messages:[{role:"user",content:msgContent}]
+      })});
+      const d = await resp.json();
+      const txt2=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+      let results=null;
+      try{const m=txt2.match(/\{[\s\S]*\}/);results=m?JSON.parse(m[0]):null;}catch{}
+      if(results){
+        dispatch("UPDATE_RFP",{id:rfpId,results:{...results,uploadedAt:new Date().toISOString().slice(0,10),fileName:file.name}});
+        toast(results.st1Won?"🏆 Win recorded!":"Results recorded");
+      } else { toast("Could not parse results — try a different file"); }
+    } catch(e){ toast("Upload failed: "+e.message); }
+    finally{ setResultsUploading(null); }
+  };
+
+  const tabBar=(
+    <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+      {[["tracker","Active Bids"],["generate","Generate Response"]].map(([tid,tlabel])=>(
+        <button key={tid} onClick={()=>setRfpTab(tid)} style={{background:"none",border:"none",borderBottom:rfpTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:rfpTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:rfpTab===tid?700:400}}>{tlabel}</button>
+      ))}
+    </div>
+  );
+
+  if(rfpTab==="generate") return (
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {tabBar}
+      <Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>
+    </div>
+  );
+
   return (
-    <div style={{padding:"22px 26px"}}>
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {tabBar}
+    <div style={{padding:"22px 26px",overflowY:"auto",flex:1}}>
       <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"
         action={<a href="/rfp" style={{background:B.orange,color:B.white,borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,textDecoration:"none",display:"inline-block"}}>+ NEW RFP →</a>}/>
       <div style={{display:"grid",gridTemplateColumns:sel_r?"1fr 350px":"1fr",gap:13}}>
@@ -2722,6 +2803,13 @@ function ModRFP() {
                 <div style={{flex:1,height:3,background:B.border,borderRadius:2}}><div style={{width:`${dn/tn*100}%`,height:"100%",background:dn===tn?B.green:RSC[r.stage]||B.orange,borderRadius:2}}/></div>
                 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,flexShrink:0}}>{dn}/{tn}</span>
               </div>
+              {r.results&&(
+                <div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,background:r.results.st1Won?B.green:B.red,color:B.white,padding:"1px 5px",borderRadius:2,letterSpacing:.3}}>{r.results.st1Won?"WON":"LOST"}</span>
+                  {r.results.priceDelta!=null&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:r.results.priceDelta>0?B.red:B.green}}>{r.results.priceDelta>0?"+":""}{(r.results.priceDelta/1000).toFixed(1)}k vs winner</span>}
+                  {r.results.awardedTo&&!r.results.st1Won&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>→ {r.results.awardedTo}</span>}
+                </div>
+              )}
             </div>
           );})}
           {rfps.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"40px 0"}}>No RFPs yet</div>}
@@ -2746,9 +2834,54 @@ function ModRFP() {
               <OBtn sm onClick={()=>addItem(sel_r.id)}>+</OBtn>
             </div>
             {sel_r.notes&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic",lineHeight:1.6,borderTop:`1px solid ${B.border}`,paddingTop:9}}>{sel_r.notes}</div>}
+
+            {/* Bid Results */}
+            <div style={{marginTop:11,borderTop:`1px solid ${B.border}`,paddingTop:9}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                <Lbl>Bid Results</Lbl>
+                <label style={{cursor:resultsUploading?"not-allowed":"pointer",background:B.orange+"18",color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>
+                  {resultsUploading===sel_r.id?"UPLOADING...":"↑ UPLOAD AWARD"}
+                  <input type="file" accept=".pdf,.csv,.xlsx,.xls,.txt" style={{display:"none"}} disabled={!!resultsUploading}
+                    onChange={e=>{const f=e.target.files?.[0];if(f)uploadResults(sel_r.id,f);e.target.value="";}}/>
+                </label>
+              </div>
+              {sel_r.results?(
+                <div style={{background:sel_r.results.st1Won?B.greenBg:B.redBg,borderRadius:5,padding:"9px 11px",border:`1px solid ${sel_r.results.st1Won?B.green:B.red}30`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:sel_r.results.st1Won?B.green:B.red}}>
+                      {sel_r.results.st1Won?"🏆 WON":`⚑ LOST${sel_r.results.awardedTo?" → "+sel_r.results.awardedTo:""}`}
+                    </span>
+                    {sel_r.results.st1Position&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>#{sel_r.results.st1Position} PLACE</span>}
+                  </div>
+                  {sel_r.results.priceDelta!=null&&(
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:3}}>
+                      Price delta: <span style={{color:sel_r.results.priceDelta>0?B.red:B.green,fontWeight:600}}>
+                        {sel_r.results.priceDelta>0?"+" : ""}{fmt$(Math.abs(sel_r.results.priceDelta))} {sel_r.results.priceDelta>0?"over":"under"} winner
+                      </span>
+                    </div>
+                  )}
+                  {sel_r.results.competitors?.length>0&&(
+                    <div style={{marginTop:5}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:3}}>COMPETITORS</div>
+                      {sel_r.results.competitors.slice(0,4).map((c,ci)=>(
+                        <div key={ci} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,display:"flex",justifyContent:"space-between",padding:"2px 0"}}>
+                          <span>#{c.position!=null?c.position:ci+1} {c.name}</span>
+                          {c.price!=null&&<span style={{color:B.text}}>{fmt$(c.price)}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sel_r.results.notes&&<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",lineHeight:1.5}}>{sel_r.results.notes}</div>}
+                  <div style={{marginTop:6,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{sel_r.results.uploadedAt} · {sel_r.results.fileName}</div>
+                </div>
+              ):(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic"}}>No results uploaded yet · Upload the award notice to track outcome</div>
+              )}
+            </div>
           </div>
         )}
       </div>
+    </div>
     </div>
   );
 }
@@ -3515,6 +3648,7 @@ function ModProspecting() {
     try {
       setImportProgress(20); setImportStatus("Reading file…");
       const buf=await toBuffer(fileObj);
+      const XLSX=await import("xlsx");
       const wb=XLSX.read(buf,{type:"array"});
       const ws=wb.Sheets[wb.SheetNames[0]];
       // Parse to row objects (header row becomes keys)
@@ -11565,6 +11699,13 @@ function ModSettings() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* AI Tools → Integrations tab */}
+      <div className="card" style={{padding:16,marginTop:13,borderTop:`3px solid ${B.muted}`}}>
+        <Lbl s={{marginBottom:6}}>AI Tools & Connections</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:11,lineHeight:1.5}}>All API connections, AI plugin toggles, and integration settings live in one place.</div>
+        <OBtn onClick={()=>setMod("integrations")}>OPEN INTEGRATIONS →</OBtn>
       </div>
     </div>
   );
