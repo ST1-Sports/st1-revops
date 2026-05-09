@@ -1,5 +1,7 @@
 {
+  "buildCommand": "npx prisma generate && vite build",
   "functions": {
+    "api/chat.js":                                { "maxDuration": 15 },
     "api/claude.js":                              { "maxDuration": 120 },
     "api/adengine/generate-images.js":            { "maxDuration": 60 },
     "api/adengine/worker.js":                     { "maxDuration": 60 },
@@ -19,7 +21,15 @@
     "api/ads/google.js":                           { "maxDuration": 30 },
     "api/ads/linkedin.js":                         { "maxDuration": 30 },
     "api/ads/tiktok.js":                           { "maxDuration": 30 },
-    "api/ads/microsoft.js":                        { "maxDuration": 30 }
+    "api/ads/microsoft.js":                        { "maxDuration": 30 },
+    "api/ads/youtube.js":                          { "maxDuration": 30 },
+    "api/ads/status.js":                           { "maxDuration": 30 },
+    "api/ads/attribution.js":                      { "maxDuration": 30 },
+    "api/ads/alerts.js":                           { "maxDuration": 30 },
+    "api/analytics/ga4.js":                        { "maxDuration": 30 },
+    "api/analytics/gtm.js":                        { "maxDuration": 30 },
+    "api/analytics/utm.js":                        { "maxDuration": 30 },
+    "api/webhooks/zoho.js":                        { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

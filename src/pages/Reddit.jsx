@@ -1,689 +1,269 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState } from 'react'
 
-// ─── palette + base styles (matches RevOps.jsx conventions) ──────────────────
 const C = {
-  bg:      '#F2F2F0',
-  surface: '#FFFFFF',
-  border:  '#E5E5E3',
-  orange:  '#F37321',
-  dark:    '#1A1A1A',
-  mid:     '#555',
-  muted:   '#888',
-  green:   '#16a34a',
-  red:     '#dc2626',
-  yellow:  '#d97706',
+  bg: '#F2F2F0', surface: '#FFFFFF', border: '#E5E5E3',
+  orange: '#F37321', dark: '#1A1A1A', mid: '#555', muted: '#888',
+  green: '#16a34a', red: '#dc2626', yellow: '#d97706',
+  redBg: '#fef2f2', greenBg: '#f0fdf4',
+  reddit: '#FF4500',
 }
 
 const card = {
-  background: C.surface,
-  border: `1px solid ${C.border}`,
-  borderRadius: 10,
-  padding: '20px 24px',
-  marginBottom: 16,
+  background: C.surface, border: `1px solid ${C.border}`,
+  borderRadius: 10, padding: '18px 22px', marginBottom: 14,
 }
 
-const pill = (color) => ({
-  display: 'inline-block',
-  padding: '2px 10px',
-  borderRadius: 99,
-  fontSize: 11,
-  fontWeight: 700,
-  fontFamily: "'Lexend Zetta', sans-serif",
-  letterSpacing: .5,
-  background: color + '18',
-  color,
-  border: `1px solid ${color}33`,
-})
-
-const btn = (primary) => ({
-  padding: '8px 18px',
-  borderRadius: 6,
-  border: 'none',
-  cursor: 'pointer',
-  fontSize: 13,
-  fontFamily: "'Lexend', sans-serif",
-  fontWeight: 600,
-  background: primary ? C.orange : C.surface,
-  color:      primary ? '#fff'   : C.dark,
-  border:     primary ? 'none'   : `1px solid ${C.border}`,
-})
-
-// ─── status helpers ──────────────────────────────────────────────────────────
-
-const STATUS_COLOR = {
-  PENDING:   C.muted,
-  EVALUATED: C.yellow,
-  NOTIFIED:  '#7c3aed',
-  APPROVED:  C.green,
-  REJECTED:  C.red,
-  POSTED:    C.green,
-  SKIPPED:   C.muted,
+const IS = {
+  width: '100%', background: C.bg, border: `1px solid ${C.border}`,
+  borderRadius: 6, padding: '9px 12px', fontSize: 13,
+  fontFamily: "'Lexend', sans-serif", color: C.dark, outline: 'none',
 }
 
-function StatusPill({ status }) {
-  return <span style={pill(STATUS_COLOR[status] || C.muted)}>{status}</span>
-}
+const ST1 = `ST1 Sports (st1sports.com) supplies athletic equipment to K-12 schools: track & field (Blazer, Gill Athletics), baseball (Diamond), balls/bats (Wilson, Molten, DeMarini, Louisville Slugger), timing systems (FinishLynx), protective gear (All-Star, EvoShield). Based in Iowa, serving Iowa/Colorado/Minnesota/North Dakota.`
 
-function FitScore({ score }) {
-  const color = score >= 7 ? C.green : score >= 4 ? C.yellow : C.red
-  return (
-    <span style={{ ...pill(color), minWidth: 32, textAlign: 'center' }}>
-      {score}/10
-    </span>
-  )
-}
-
-// ─── main component ──────────────────────────────────────────────────────────
+const QUICK_SEARCHES = [
+  'track hurdles equipment', 'baseball helmets school', 'athletic equipment budget',
+  'volleyball school program', 'timing system track meet', 'equipment bid RFP',
+]
 
 export default function Reddit() {
-  const [flags,     setFlags]    = useState(null)
-  const [threads,   setThreads]  = useState([])
-  const [loading,   setLoading]  = useState(false)
-  const [error,     setError]    = useState(null)
-  const [filter,    setFilter]   = useState('all')
-  const [action,    setAction]   = useState(null)  // { type, threadId, replyId }
-  const [view,      setView]     = useState('threads')  // 'threads' | 'stats'
-  const [report,    setReport]   = useState(null)
-  const [reportLoading, setReportLoading] = useState(false)
+  const [keywords,  setKeywords]  = useState('')
+  const [searching, setSearching] = useState(false)
+  const [threads,   setThreads]   = useState([])
+  const [error,     setError]     = useState(null)
+  const [replyMap,  setReplyMap]  = useState({})  // id → {loading, reply, editing}
+  const [copied,    setCopied]    = useState(null)
 
-  // Load status + flags on mount
-  useEffect(() => {
-    fetch('/api/reddit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'status' }),
-    })
-      .then(r => r.json())
-      .then(d => { if (d.ok) setFlags(d.flags) })
-      .catch(() => setError('Could not reach /api/reddit'))
-  }, [])
-
-  const loadThreads = useCallback(async (statusFilter) => {
-    setLoading(true)
-    setError(null)
+  async function searchThreads() {
+    const q = keywords.trim()
+    if (!q) return
+    setSearching(true); setError(null); setThreads([]); setReplyMap({})
     try {
-      const r = await fetch('/api/reddit', {
+      const r = await fetch('/api/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'threads',
-          status: statusFilter === 'all' ? undefined : statusFilter,
-          limit:  100,
+          model: 'claude-sonnet-4-6',
+          max_tokens: 2000,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{
+            role: 'user',
+            content: `Search Reddit for recent posts about: "${q}" in subreddits relevant to school athletic programs, coaches, ADs, or sports equipment purchasing (e.g. r/trackandfield, r/baseball, r/Volleyball, r/HighSchoolSports, r/Coaches, r/athletictraining).
+
+Find 5-8 active threads where an athletic equipment company could add genuine value.
+
+Return ONLY a valid JSON array, no other text:
+[{
+  "id": "short unique id",
+  "title": "thread title",
+  "subreddit": "subreddit without r/",
+  "url": "full reddit.com url",
+  "upvotes": number or null,
+  "commentCount": number or null,
+  "body": "2-3 sentence summary of the post/question",
+  "relevance": "one sentence: why an equipment supplier could help here",
+  "score": relevance score 1-10
+}]`,
+          }],
         }),
       })
       const d = await r.json()
-      if (d.ok) setThreads(d.threads || [])
-      else setError(d.error)
+      const text = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+      const m = text.match(/\[[\s\S]*\]/)
+      if (m) {
+        const parsed = JSON.parse(m[0])
+        setThreads(parsed.sort((a, b) => (b.score || 0) - (a.score || 0)))
+      } else {
+        setError('No threads found — try different keywords or be more specific')
+      }
     } catch (e) {
-      setError(e.message)
+      setError('Search failed: ' + e.message)
     } finally {
-      setLoading(false)
+      setSearching(false)
     }
-  }, [])
-
-  useEffect(() => {
-    if (flags?.enabled) loadThreads(filter)
-  }, [flags, filter, loadThreads])
-
-  const handleApprove = async (threadId, replyId) => {
-    setAction({ type: 'approving', threadId, replyId })
-    const r = await fetch('/api/reddit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'approve', threadId, replyId, decidedBy: 'reviewer' }),
-    }).then(r => r.json())
-    setAction(null)
-    if (r.ok) loadThreads(filter)
-    else setError(r.error)
   }
 
-  const handleReject = async (threadId, reason) => {
-    setAction({ type: 'rejecting', threadId })
-    const r = await fetch('/api/reddit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'reject', threadId, decidedBy: 'reviewer', reason }),
-    }).then(r => r.json())
-    setAction(null)
-    if (r.ok) loadThreads(filter)
-    else setError(r.error)
-  }
-
-  const handlePost = async (replyId) => {
-    if (!flags?.postingEnabled) {
-      setError('Posting is disabled (REDDIT_POSTING_ENABLED=false). Enable it in Vercel env vars to post.')
-      return
-    }
-    if (!window.confirm('Post this reply to Reddit? This cannot be undone.')) return
-    setAction({ type: 'posting', replyId })
-    const r = await fetch('/api/reddit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'post', replyId }),
-    }).then(r => r.json())
-    setAction(null)
-    if (r.ok) loadThreads(filter)
-    else setError(r.error)
-  }
-
-  const loadReport = useCallback(async (days = 90) => {
-    setReportLoading(true)
-    setError(null)
+  async function generateReply(thread) {
+    setReplyMap(m => ({ ...m, [thread.id]: { loading: true } }))
     try {
-      const r = await fetch('/api/reddit', {
+      const r = await fetch('/api/claude', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'report', days }),
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 500,
+          system: `You are helping Matt Stone at ST1 Sports engage authentically on Reddit.
+Rules: be genuinely helpful first — promotional only if naturally relevant. Match Reddit's casual, direct tone. Provide real expertise on athletic equipment, school programs, specifications. Only mention ST1 Sports if it fits naturally. Max 120 words. No emojis. No corporate language. Sound like a knowledgeable industry person, not marketing.`,
+          messages: [{
+            role: 'user',
+            content: `Write a single helpful Reddit reply to this thread.
+
+Thread title: "${thread.title}"
+Subreddit: r/${thread.subreddit}
+Context: ${thread.body}
+
+Why ST1 can add value: ${thread.relevance}
+
+ST1 context (use only if naturally relevant): ${ST1}
+
+Write the reply directly — no preamble, just the reply text.`,
+          }],
+        }),
       })
       const d = await r.json()
-      if (d.ok) setReport(d.report)
-      else setError(d.error)
+      const reply = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim()
+      setReplyMap(m => ({ ...m, [thread.id]: { loading: false, reply } }))
     } catch (e) {
-      setError(e.message)
-    } finally {
-      setReportLoading(false)
+      setReplyMap(m => ({ ...m, [thread.id]: { loading: false, error: e.message } }))
     }
-  }, [])
+  }
 
-  useEffect(() => {
-    if (view === 'stats' && flags?.enabled && !report) loadReport()
-  }, [view, flags, report, loadReport])
+  function updateReply(id, text) {
+    setReplyMap(m => ({ ...m, [id]: { ...m[id], reply: text } }))
+  }
 
-  // ── render ────────────────────────────────────────────────────────────────
+  function copy(text, id) {
+    navigator.clipboard?.writeText(text).catch(() => {})
+    setCopied(id)
+    setTimeout(() => setCopied(null), 2000)
+  }
+
+  const scoreColor = s => s >= 7 ? C.green : s >= 4 ? C.yellow : C.red
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, padding: '28px 32px', fontFamily: "'Lexend', sans-serif" }}>
 
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 28 }}>
-        <div style={{
-          width: 40, height: 40, background: '#FF4500', borderRadius: 8,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#fff', fontWeight: 900, fontSize: 18,
-        }}>r/</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 24 }}>
+        <div style={{ width: 40, height: 40, background: C.reddit, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: 18 }}>r/</div>
         <div>
           <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: C.dark }}>Reddit Engagement</h1>
-          <p style={{ margin: 0, fontSize: 13, color: C.muted }}>Approval-first workflow — no reply posts without human review</p>
+          <p style={{ margin: 0, fontSize: 13, color: C.muted }}>Find relevant threads · Generate genuine replies · Build community presence</p>
         </div>
       </div>
 
-      {/* Feature flag warning */}
-      {flags && !flags.enabled && (
-        <div style={{ ...card, background: '#fef3c7', borderColor: C.yellow, marginBottom: 24 }}>
-          <strong style={{ color: C.yellow }}>Module disabled</strong>
-          <p style={{ margin: '4px 0 0', fontSize: 13, color: C.mid }}>
-            Set <code>REDDIT_ENABLED=true</code> in your Vercel environment variables to activate ingestion and evaluation.
-            Posting remains separately gated by <code>REDDIT_POSTING_ENABLED</code>.
-          </p>
-        </div>
-      )}
-
-      {/* Flags summary bar */}
-      {flags && (
-        <div style={{ display: 'flex', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
-          <FlagChip label="Module" active={flags.enabled} />
-          <FlagChip label="Posting" active={flags.postingEnabled} />
-          <span style={{ fontSize: 12, color: C.muted, alignSelf: 'center' }}>
-            Max {flags.maxPostsPerDay} posts/day · Min score {flags.minThreadScore}
-          </span>
-        </div>
-      )}
-
-      {/* Error banner */}
-      {error && (
-        <div style={{ ...card, background: '#fef2f2', borderColor: C.red, marginBottom: 20 }}>
-          <span style={{ color: C.red, fontSize: 13 }}>{error}</span>
-          <button onClick={() => setError(null)} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: C.muted }}>×</button>
-        </div>
-      )}
-
-      {/* View + filter tabs */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button
-          onClick={() => setView('threads')}
-          style={{
-            padding: '6px 14px', borderRadius: 6, border: `1px solid ${view === 'threads' ? C.dark : C.border}`,
-            background: view === 'threads' ? C.dark : C.surface,
-            color: view === 'threads' ? '#fff' : C.mid,
-            fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            fontFamily: "'Lexend Zetta', sans-serif",
-          }}
-        >
-          Threads
-        </button>
-        <button
-          onClick={() => setView('stats')}
-          style={{
-            padding: '6px 14px', borderRadius: 6, border: `1px solid ${view === 'stats' ? C.dark : C.border}`,
-            background: view === 'stats' ? C.dark : C.surface,
-            color: view === 'stats' ? '#fff' : C.mid,
-            fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            fontFamily: "'Lexend Zetta', sans-serif",
-          }}
-        >
-          Stats
-        </button>
-
-        {view === 'threads' && (
-          <>
-            <div style={{ width: 1, height: 20, background: C.border, margin: '0 4px' }} />
-            {['all', 'PENDING', 'EVALUATED', 'NOTIFIED', 'APPROVED', 'POSTED', 'REJECTED', 'SKIPPED'].map(f => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                style={{
-                  padding: '6px 14px', borderRadius: 6, border: `1px solid ${filter === f ? C.orange : C.border}`,
-                  background: filter === f ? C.orange : C.surface,
-                  color: filter === f ? '#fff' : C.mid,
-                  fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  fontFamily: "'Lexend Zetta', sans-serif",
-                }}
-              >
-                {f}
-              </button>
-            ))}
-          </>
-        )}
-      </div>
-
-      {/* Stats view */}
-      {view === 'stats' && (
-        <StatsView report={report} loading={reportLoading} onRefresh={() => loadReport()} />
-      )}
-
-      {/* Thread list */}
-      {view === 'threads' && (
-        !flags?.enabled ? (
-          <EmptyState message="Enable the Reddit module to start ingesting threads." />
-        ) : loading ? (
-          <LoadingState />
-        ) : threads.length === 0 ? (
-          <EmptyState message={`No threads with status "${filter}". Run an ingestion to populate.`} />
-        ) : (
-          threads.map(thread => (
-            <ThreadCard
-              key={thread.id}
-              thread={thread}
-              flags={flags}
-              pendingAction={action}
-              onApprove={handleApprove}
-              onReject={handleReject}
-              onPost={handlePost}
-            />
-          ))
-        )
-      )}
-    </div>
-  )
-}
-
-// ─── sub-components ───────────────────────────────────────────────────────────
-
-function FlagChip({ label, active }) {
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 6,
-      padding: '4px 12px', borderRadius: 99,
-      fontSize: 12, fontWeight: 600,
-      background: active ? '#dcfce7' : '#f3f4f6',
-      color: active ? C.green : C.muted,
-      border: `1px solid ${active ? '#86efac' : C.border}`,
-    }}>
-      <span style={{ width: 7, height: 7, borderRadius: '50%', background: active ? C.green : C.muted, display: 'inline-block' }} />
-      {label}: {active ? 'ON' : 'OFF'}
-    </span>
-  )
-}
-
-function ThreadCard({ thread, flags, pendingAction, onApprove, onReject, onPost }) {
-  const [expanded, setExpanded] = useState(false)
-  const evaluation = thread.evaluation || {}
-  const isBusy = pendingAction?.threadId === thread.id || thread.replies?.some(r => pendingAction?.replyId === r.id)
-
-  return (
-    <div style={card}>
-      {/* Thread header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <StatusPill status={thread.status} />
-            {evaluation.fitScore != null && <FitScore score={evaluation.fitScore} />}
-            <span style={{ fontSize: 12, color: C.muted }}>r/{thread.subreddit}</span>
-            <span style={{ fontSize: 12, color: C.muted }}>↑{thread.score}</span>
-          </div>
-          <a
-            href={thread.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ fontSize: 14, fontWeight: 600, color: C.dark, textDecoration: 'none' }}
+      {/* Search box */}
+      <div style={{ ...card, marginBottom: 20 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8 }}>FIND THREADS</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            style={{ ...IS, flex: 1 }}
+            value={keywords}
+            onChange={e => setKeywords(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && searchThreads()}
+            placeholder="e.g. track hurdles, baseball helmets, school athletic budget…"
+          />
+          <button
+            onClick={searchThreads}
+            disabled={searching || !keywords.trim()}
+            style={{ background: (searching || !keywords.trim()) ? C.muted : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 22px', fontSize: 11, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, cursor: (searching || !keywords.trim()) ? 'default' : 'pointer', flexShrink: 0 }}
           >
-            {thread.title}
-          </a>
+            {searching ? 'SEARCHING…' : 'SEARCH REDDIT →'}
+          </button>
         </div>
-        <button
-          onClick={() => setExpanded(e => !e)}
-          style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '4px 10px', cursor: 'pointer', fontSize: 12, color: C.mid }}
-        >
-          {expanded ? 'Hide' : 'Show'}
-        </button>
+        <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {QUICK_SEARCHES.map(q => (
+            <button key={q} onClick={() => setKeywords(q)}
+              style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 99, padding: '3px 11px', fontSize: 11, color: C.muted, cursor: 'pointer', fontFamily: "'Lexend', sans-serif" }}>
+              {q}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {expanded && (
-        <div style={{ marginTop: 16 }}>
-          {/* Thread body */}
-          {thread.body && (
-            <div style={{ fontSize: 13, color: C.mid, background: C.bg, borderRadius: 6, padding: '10px 14px', marginBottom: 14, maxHeight: 120, overflow: 'auto', lineHeight: 1.5 }}>
-              {thread.body}
-            </div>
-          )}
+      {/* Error */}
+      {error && (
+        <div style={{ ...card, background: C.redBg, borderColor: C.red, marginBottom: 16 }}>
+          <span style={{ color: C.red, fontSize: 13 }}>{error}</span>
+          <button onClick={() => setError(null)} style={{ float: 'right', background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 16, lineHeight: 1 }}>×</button>
+        </div>
+      )}
 
-          {/* Evaluation */}
-          {evaluation.reasoning && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 4 }}>EVALUATION</div>
-              <div style={{ fontSize: 13, color: C.mid }}>{evaluation.reasoning}</div>
-              {evaluation.topics?.length > 0 && (
-                <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {evaluation.topics.map(t => (
-                    <span key={t} style={{ ...pill(C.muted), fontSize: 11 }}>{t}</span>
-                  ))}
+      {/* Results */}
+      {threads.map(t => {
+        const rg = replyMap[t.id] || {}
+        const sc = scoreColor(t.score)
+        return (
+          <div key={t.id} style={card}>
+            {/* Thread header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5, flexWrap: 'wrap' }}>
+                  <span style={{ background: `${sc}18`, color: sc, border: `1px solid ${sc}33`, borderRadius: 99, padding: '2px 10px', fontSize: 11, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif" }}>{t.score}/10</span>
+                  <span style={{ fontSize: 12, color: C.muted }}>r/{t.subreddit}</span>
+                  {t.upvotes != null && <span style={{ fontSize: 12, color: C.muted }}>↑ {t.upvotes}</span>}
+                  {t.commentCount != null && <span style={{ fontSize: 12, color: C.muted }}>💬 {t.commentCount}</span>}
+                </div>
+                <a href={t.url} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: 14, fontWeight: 600, color: C.dark, textDecoration: 'none', lineHeight: 1.4, display: 'block', marginBottom: 5 }}>
+                  {t.title}
+                </a>
+                {t.body && <div style={{ fontSize: 13, color: C.mid, lineHeight: 1.55, marginBottom: 5 }}>{t.body}</div>}
+                <div style={{ fontSize: 12, color: C.orange, fontStyle: 'italic' }}>{t.relevance}</div>
+              </div>
+              <a href={t.url} target="_blank" rel="noopener noreferrer"
+                style={{ background: C.reddit, color: '#fff', borderRadius: 6, padding: '7px 14px', fontSize: 11, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .3 }}>
+                OPEN ↗
+              </a>
+            </div>
+
+            {/* Reply section */}
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
+              {!rg.reply && !rg.loading && (
+                <button onClick={() => generateReply(t)}
+                  style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 14px', fontSize: 12, color: C.mid, cursor: 'pointer', fontFamily: "'Lexend', sans-serif" }}>
+                  ✦ Generate reply
+                </button>
+              )}
+              {rg.loading && (
+                <div style={{ fontSize: 13, color: C.muted, fontStyle: 'italic' }}>Drafting reply…</div>
+              )}
+              {rg.error && (
+                <div style={{ fontSize: 12, color: C.red }}>{rg.error}</div>
+              )}
+              {rg.reply && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5 }}>SUGGESTED REPLY</span>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button onClick={() => setReplyMap(m => ({ ...m, [t.id]: {} }))}
+                        style={{ background: 'none', border: `1px solid ${C.border}`, borderRadius: 4, padding: '3px 10px', fontSize: 11, cursor: 'pointer', color: C.muted }}>
+                        ↺ Redo
+                      </button>
+                      <button onClick={() => copy(rg.reply, t.id)}
+                        style={{ background: copied === t.id ? C.green : C.orange, color: '#fff', border: 'none', borderRadius: 4, padding: '3px 14px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif" }}>
+                        {copied === t.id ? '✓ COPIED' : 'COPY'}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    value={rg.reply}
+                    onChange={e => updateReply(t.id, e.target.value)}
+                    rows={5}
+                    style={{ ...IS, resize: 'vertical', lineHeight: 1.6 }}
+                  />
+                  <div style={{ marginTop: 6, display: 'flex', gap: 8 }}>
+                    <a href={t.url} target="_blank" rel="noopener noreferrer"
+                      style={{ fontSize: 12, color: C.reddit, textDecoration: 'none', fontWeight: 600 }}>
+                      Post on Reddit ↗
+                    </a>
+                    <span style={{ fontSize: 12, color: C.muted }}>· Copy reply first, then open thread to paste</span>
+                  </div>
                 </div>
               )}
             </div>
-          )}
+          </div>
+        )
+      })}
 
-          {/* Reply variants */}
-          {thread.replies?.length > 0 && (
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8 }}>REPLY VARIANTS</div>
-              {thread.replies.map(reply => (
-                <ReplyCard
-                  key={reply.id}
-                  reply={reply}
-                  thread={thread}
-                  flags={flags}
-                  isBusy={isBusy}
-                  onApprove={onApprove}
-                  onPost={onPost}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Reject */}
-          {['NOTIFIED', 'EVALUATED', 'APPROVED'].includes(thread.status) && (
-            <button
-              onClick={() => onReject(thread.id, 'Manually rejected via review UI')}
-              disabled={isBusy}
-              style={{ ...btn(false), color: C.red, borderColor: C.red + '44', fontSize: 12 }}
-            >
-              Reject all variants
-            </button>
-          )}
-
-          {/* Posted metrics */}
-          {thread.status === 'POSTED' && thread.replies?.some(r => r.postedAt) && (
-            <PostedMetrics reply={thread.replies.find(r => r.postedAt)} />
-          )}
+      {/* Empty state */}
+      {threads.length === 0 && !searching && !error && (
+        <div style={{ textAlign: 'center', padding: '60px 0', color: C.muted }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🔍</div>
+          <div style={{ fontSize: 14, marginBottom: 6 }}>Search for a topic to find relevant threads</div>
+          <div style={{ fontSize: 12 }}>Focus on questions your customers actually ask about equipment, buying, programs</div>
         </div>
       )}
-    </div>
-  )
-}
-
-function ReplyCard({ reply, thread, flags, isBusy, onApprove, onPost }) {
-  const isApproved = Boolean(reply.approvedAt)
-  const isPosted   = Boolean(reply.postedAt)
-
-  return (
-    <div style={{
-      border: `1px solid ${isApproved ? C.green + '55' : C.border}`,
-      borderRadius: 8, padding: '12px 16px', marginBottom: 10,
-      background: isApproved ? '#f0fdf4' : C.surface,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: C.muted }}>
-          {reply.variant === 1 ? 'PRIMARY' : 'SAFER'}
-        </span>
-        {isPosted && (
-          <span style={pill(C.green)}>POSTED</span>
-        )}
-        {isApproved && !isPosted && (
-          <span style={pill(C.green)}>APPROVED</span>
-        )}
-      </div>
-
-      <p style={{ margin: '0 0 12px', fontSize: 14, color: C.dark, lineHeight: 1.5 }}>
-        {reply.content}
-      </p>
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        {!isApproved && !isPosted && thread.status !== 'REJECTED' && (
-          <button
-            onClick={() => onApprove(thread.id, reply.id)}
-            disabled={isBusy}
-            style={{ ...btn(true), fontSize: 12 }}
-          >
-            {isBusy ? 'Approving…' : 'Approve'}
-          </button>
-        )}
-        {isApproved && !isPosted && (
-          <button
-            onClick={() => onPost(reply.id)}
-            disabled={isBusy || !flags?.postingEnabled}
-            title={!flags?.postingEnabled ? 'Posting disabled — set REDDIT_POSTING_ENABLED=true' : ''}
-            style={{ ...btn(true), fontSize: 12, background: flags?.postingEnabled ? C.green : C.muted }}
-          >
-            {isBusy ? 'Posting…' : 'Post to Reddit'}
-          </button>
-        )}
-        {isPosted && reply.redditCommentId && (
-          <a
-            href={`https://reddit.com/r/${thread.subreddit}/comments/${thread.redditId?.replace('t3_', '')}/_/${reply.redditCommentId?.replace('t1_', '')}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ ...btn(false), fontSize: 12, textDecoration: 'none', display: 'inline-block' }}
-          >
-            View on Reddit →
-          </a>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function PostedMetrics({ reply }) {
-  if (!reply) return null
-  return (
-    <div style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
-      Posted {reply.postedAt ? new Date(reply.postedAt).toLocaleDateString() : ''}
-      {reply.upvotes != null && ` · ${reply.upvotes} upvotes`}
-      {reply.redditCommentId && ` · ID: ${reply.redditCommentId}`}
-    </div>
-  )
-}
-
-function StatsView({ report, loading, onRefresh }) {
-  if (loading) return <LoadingState />
-  if (!report) return (
-    <div style={{ ...card, textAlign: 'center', padding: '48px 24px', color: C.muted }}>
-      <div style={{ fontSize: 14, marginBottom: 16 }}>No report data yet.</div>
-      <button onClick={onRefresh} style={btn(true)}>Load Report</button>
-    </div>
-  )
-
-  const { period, funnel, subreddits, replyVariants, skipByIntent, skipByAudience, guardrailSummary, gateBlocks, postingSuccess } = report
-
-  return (
-    <div>
-      {/* Period + refresh */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <span style={{ fontSize: 13, color: C.muted }}>
-          {period.from} → {period.to} ({period.days} days)
-        </span>
-        <button onClick={onRefresh} style={{ ...btn(false), fontSize: 12 }}>Refresh</button>
-      </div>
-
-      {/* Funnel */}
-      <div style={card}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>PIPELINE FUNNEL</div>
-        <div style={{ display: 'flex', gap: 0, flexWrap: 'wrap' }}>
-          {[
-            { label: 'Ingested',    value: funnel.ingested },
-            { label: 'Evaluated',   value: funnel.evaluated },
-            { label: 'Replies Gen', value: funnel.repliesGenerated },
-            { label: 'Notified',    value: funnel.slackNotified },
-            { label: 'Approved',    value: funnel.approved },
-            { label: 'Posted',      value: funnel.posted, color: C.green },
-            { label: 'Rejected',    value: funnel.rejected, color: C.red },
-            { label: 'Skipped',     value: funnel.skipped, color: C.muted },
-          ].map(({ label, value, color }) => (
-            <div key={label} style={{ minWidth: 90, padding: '0 16px 0 0', marginBottom: 8 }}>
-              <div style={{ fontSize: 24, fontWeight: 700, color: color || C.dark }}>{value}</div>
-              <div style={{ fontSize: 11, color: C.muted }}>{label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Reply variant approval rates */}
-      <div style={card}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>REPLY VARIANT PERFORMANCE</div>
-        <div style={{ display: 'flex', gap: 24 }}>
-          {[
-            { label: 'Primary', data: replyVariants.primary },
-            { label: 'Safer',   data: replyVariants.safer },
-          ].map(({ label, data }) => (
-            <div key={label} style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 6 }}>{label}</div>
-              <div style={{ fontSize: 12, color: C.mid }}>Generated: {data.generated}</div>
-              <div style={{ fontSize: 12, color: C.mid }}>Approved: {data.approved}</div>
-              <div style={{ marginTop: 8 }}>
-                <ApprovalBar rate={data.approvalRate} />
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                  {(data.approvalRate * 100).toFixed(0)}% approval rate
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Subreddit table */}
-      {subreddits.length > 0 && (
-        <div style={card}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SUBREDDIT PERFORMANCE</div>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {['Subreddit', 'Ingested', 'Approved', 'Posted', 'Post Rate', 'Avg Fit', 'Avg Upvotes'].map(h => (
-                  <th key={h} style={{ textAlign: 'left', padding: '4px 10px 8px', color: C.muted, fontWeight: 600, fontSize: 11 }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {subreddits.map(s => (
-                <tr key={s.subreddit} style={{ borderBottom: `1px solid ${C.border}` }}>
-                  <td style={{ padding: '8px 10px', fontWeight: 600 }}>r/{s.subreddit}</td>
-                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.ingested}</td>
-                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.approved}</td>
-                  <td style={{ padding: '8px 10px', color: C.green, fontWeight: 600 }}>{s.posted}</td>
-                  <td style={{ padding: '8px 10px' }}>
-                    <span style={{ ...pill(s.postRate >= 0.3 ? C.green : s.postRate >= 0.1 ? C.yellow : C.muted) }}>
-                      {(s.postRate * 100).toFixed(0)}%
-                    </span>
-                  </td>
-                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.avgFitScore ?? '—'}</td>
-                  <td style={{ padding: '8px 10px', color: C.mid }}>{s.avgUpvotes ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Skip reasons */}
-      {(skipByIntent.length > 0 || skipByAudience.length > 0) && (
-        <div style={{ display: 'flex', gap: 16 }}>
-          <div style={{ ...card, flex: 1 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SKIPPED BY INTENT</div>
-            {skipByIntent.slice(0, 8).map(({ intent, count }) => (
-              <div key={intent} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ color: C.mid }}>{intent}</span>
-                <span style={{ fontWeight: 600 }}>{count}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ ...card, flex: 1 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>SKIPPED BY AUDIENCE</div>
-            {skipByAudience.slice(0, 8).map(({ audience, count }) => (
-              <div key={audience} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ color: C.mid }}>{audience}</span>
-                <span style={{ fontWeight: 600 }}>{count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Guardrail + gate blocks */}
-      <div style={{ display: 'flex', gap: 16 }}>
-        <div style={{ ...card, flex: 1 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>CONTENT GUARDRAIL</div>
-          <div style={{ fontSize: 13, color: C.mid, marginBottom: 4 }}>Total checks: <strong style={{ color: C.dark }}>{guardrailSummary.total}</strong></div>
-          <div style={{ fontSize: 13, color: C.mid, marginBottom: 4 }}>Avg risk score: <strong style={{ color: C.dark }}>{guardrailSummary.avgRiskScore ?? '—'}/10</strong></div>
-          <div style={{ marginTop: 8 }}>
-            <div style={{ fontSize: 12, color: C.muted }}>Approved for post</div>
-            <ApprovalBar rate={guardrailSummary.total > 0 ? guardrailSummary.approvedForPost / guardrailSummary.total : 0} />
-            <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-              {guardrailSummary.approvedForPost} / {guardrailSummary.total}
-            </div>
-          </div>
-        </div>
-
-        {gateBlocks.length > 0 && (
-          <div style={{ ...card, flex: 1 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 12 }}>POSTING GATE BLOCKS</div>
-            {gateBlocks.slice(0, 8).map(({ gate, label, count }) => (
-              <div key={gate} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 13, borderBottom: `1px solid ${C.border}` }}>
-                <span style={{ color: C.mid }}>{label}</span>
-                <span style={{ fontWeight: 600 }}>{count}</span>
-              </div>
-            ))}
-            {postingSuccess && (
-              <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
-                {postingSuccess.succeeded}/{postingSuccess.totalAttempts} attempts succeeded
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function ApprovalBar({ rate }) {
-  const pct = Math.round((rate || 0) * 100)
-  return (
-    <div style={{ height: 6, background: C.border, borderRadius: 3, overflow: 'hidden', marginTop: 6 }}>
-      <div style={{ height: '100%', width: `${pct}%`, background: pct >= 50 ? C.green : C.yellow, borderRadius: 3 }} />
-    </div>
-  )
-}
-
-function EmptyState({ message }) {
-  return (
-    <div style={{ ...card, textAlign: 'center', padding: '48px 24px', color: C.muted }}>
-      <div style={{ fontSize: 32, marginBottom: 12 }}>📋</div>
-      <div style={{ fontSize: 14 }}>{message}</div>
-    </div>
-  )
-}
-
-function LoadingState() {
-  return (
-    <div style={{ ...card, textAlign: 'center', padding: '48px 24px', color: C.muted }}>
-      <div style={{ fontSize: 14 }}>Loading threads…</div>
     </div>
   )
 }

@@ -26,6 +26,7 @@ export const PLATFORMS = [
   { id: 'linkedin',  label: 'LinkedIn',  color: '#0A66C2', bg: '#E8F0FA', endpoint: '/api/ads/linkedin'  },
   { id: 'tiktok',    label: 'TikTok',    color: '#010101', bg: '#F0F0F0', endpoint: '/api/ads/tiktok'    },
   { id: 'microsoft', label: 'Microsoft', color: '#00A4EF', bg: '#E5F5FD', endpoint: '/api/ads/microsoft' },
+  { id: 'youtube',   label: 'YouTube',   color: '#FF0000', bg: '#FFF0F0', endpoint: '/api/ads/youtube'   },
 ]
 
 export const DATE_RANGES = [
@@ -81,9 +82,12 @@ function ConnectionStatus({ connected, label }) {
 
 // ─── TAB BAR ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'dashboard', label: 'Dashboard'       },
-  { id: 'campaigns', label: 'Campaigns'       },
-  { id: 'create',    label: 'Create Campaign' },
+  { id: 'dashboard',   label: 'Dashboard'       },
+  { id: 'campaigns',   label: 'Campaigns'       },
+  { id: 'create',      label: 'Create Campaign' },
+  { id: 'attribution', label: 'Attribution'     },
+  { id: 'utm',         label: 'UTM Builder'     },
+  { id: 'alerts',      label: 'Alerts'          },
 ]
 
 function TabBar({ active, onChange }) {
@@ -312,6 +316,23 @@ function PerformersList({ rows, title, color }) {
   )
 }
 
+// ─── CSV EXPORT ───────────────────────────────────────────────────────────────
+function exportCsv(rows, filename) {
+  if (!rows.length) return
+  const keys = ['name', 'platform', 'status', 'spend', 'revenue', 'roas', 'impressions', 'clicks', 'ctr', 'cpc', 'cpm']
+  const header = keys.join(',')
+  const lines  = rows.map(r => keys.map(k => {
+    const v = r[k] ?? ''
+    return typeof v === 'string' && v.includes(',') ? `"${v}"` : v
+  }).join(','))
+  const csv  = [header, ...lines].join('\n')
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href = url; a.download = filename; a.click()
+  URL.revokeObjectURL(url)
+}
+
 // ─── DASHBOARD TAB ────────────────────────────────────────────────────────────
 function DashboardTab({ platforms, dateRange, userRole }) {
   const [rows,      setRows]      = useState([])
@@ -389,6 +410,13 @@ function DashboardTab({ platforms, dateRange, userRole }) {
           <div style={{ display: 'flex', gap: 8 }}>
             {loading && <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Loading…</span>}
             <button onClick={load} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 5, padding: '3px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>↻ REFRESH</button>
+            <button
+              onClick={() => exportCsv(rows, `ad-performance-${dateRange}.csv`)}
+              disabled={!rows.length}
+              style={{ background: rows.length ? B.surface : B.surface, color: rows.length ? B.text : B.gray2, border: `1px solid ${B.border}`, borderRadius: 5, padding: '3px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: rows.length ? 'pointer' : 'default' }}
+            >
+              ↓ CSV
+            </button>
             <button
               onClick={handleAiAnalyze}
               disabled={!rows.length || aiLoading}
@@ -1187,7 +1215,7 @@ function Step5({ campaign, onChange, onLaunch, launching, launchResults }) {
   )
 }
 
-function CreateTab({ userRole }) {
+function CreateTab({ userRole, onSwitchToTab }) {
   const [step,          setStep]          = useState(0)
   const [campaign,      setCampaign]      = useState(EMPTY_CAMPAIGN)
   const [launching,     setLaunching]     = useState(false)
@@ -1264,7 +1292,7 @@ function CreateTab({ userRole }) {
           )}
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
             <button onClick={reset} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer' }}>CREATE ANOTHER</button>
-            <button onClick={() => { /* parent switches tab */ }} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '9px 16px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>View in Campaigns →</button>
+            <button onClick={() => onSwitchToTab('campaigns')} style={{ background: B.surface, color: B.muted, border: `1px solid ${B.border}`, borderRadius: 6, padding: '9px 16px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>View in Campaigns →</button>
           </div>
         </div>
       </Card>
@@ -1315,21 +1343,441 @@ function CreateTab({ userRole }) {
   )
 }
 
+// ─── ATTRIBUTION TAB ──────────────────────────────────────────────────────────
+function AttributionTab() {
+  const [data,    setData]    = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [range,   setRange]   = useState('30')
+
+  useEffect(() => {
+    setLoading(true)
+    fetch(`/api/ads/attribution?dateRange=${range}&limit=100`)
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(() => setData({ records: [], totalRevenue: 0, byPlatform: {}, count: 0 }))
+      .finally(() => setLoading(false))
+  }, [range])
+
+  const platEntries = data ? Object.entries(data.byPlatform || {}).sort((a, b) => b[1].revenue - a[1].revenue) : []
+
+  return (
+    <div>
+      <Card style={{ marginBottom: 12, padding: '10px 14px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1.5 }}>DATE RANGE</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[['7','7 Days'],['30','30 Days'],['90','90 Days']].map(([v, label]) => (
+              <button key={v} onClick={() => setRange(v)} style={{ background: range === v ? B.orange : B.surface, color: range === v ? B.white : B.muted, border: range === v ? 'none' : `1px solid ${B.border}`, borderRadius: 5, padding: '4px 12px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.3, cursor: 'pointer' }}>{label}</button>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Summary KPIs */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
+        <KpiCard label="TOTAL ATTRIBUTED REVENUE" value={loading ? '…' : `$${(data?.totalRevenue || 0).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0})}`} highlight />
+        <KpiCard label="ATTRIBUTED DEALS" value={loading ? '…' : String(data?.count || 0)} />
+        <KpiCard label="AVG DEAL SIZE" value={loading ? '…' : data?.count > 0 ? `$${((data?.totalRevenue || 0) / data.count).toFixed(0)}` : '—'} />
+      </div>
+
+      {/* By platform */}
+      {platEntries.length > 0 && (
+        <Card style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>BY PLATFORM</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10 }}>
+            {platEntries.map(([pid, p]) => {
+              const plat = PLATFORMS.find(x => x.id === pid)
+              return (
+                <div key={pid} style={{ background: plat?.bg || B.surface, border: `1px solid ${plat?.color || B.border}30`, borderRadius: 8, padding: '10px 12px' }}>
+                  <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: plat?.color || B.muted, letterSpacing: 0.5, marginBottom: 4 }}>{plat?.label || pid}</div>
+                  <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 17, color: B.text }}>${(p.revenue || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>{p.count} deal{p.count !== 1 ? 's' : ''}</div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Records table */}
+      <Card>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>ATTRIBUTION RECORDS</div>
+        {loading
+          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Loading…</div>
+          : !data?.records?.length
+          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>
+              {data?.note || 'No attribution records yet. Attribution records are created when deals are linked to ad campaigns.'}
+            </div>
+          : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${B.border}` }}>
+                    {['Platform','Contact','Revenue','Type','Converted'].map(h => (
+                      <th key={h} style={{ padding: '7px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1, textAlign: h === 'Revenue' ? 'right' : 'left' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.records.map((r, i) => (
+                    <tr key={r.id + i} style={{ borderBottom: `1px solid ${B.border}`, background: i % 2 === 0 ? B.white : B.surface }}>
+                      <td style={{ padding: '8px 10px' }}><PlatformBadge platform={r.platform} size="sm" /></td>
+                      <td style={{ padding: '8px 10px', fontFamily: "'Lexend',sans-serif", color: B.text }}>{r.contact_email || r.zoho_contact_id || '—'}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10, color: B.green }}>${parseFloat(r.attributed_revenue || 0).toFixed(0)}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: "'Lexend',sans-serif", color: B.muted, fontSize: 10 }}>{r.attribution_type}</td>
+                      <td style={{ padding: '8px 10px', fontFamily: "'Lexend',sans-serif", color: B.muted, fontSize: 10 }}>{r.converted_at ? new Date(r.converted_at).toLocaleDateString() : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </Card>
+    </div>
+  )
+}
+
+// ─── UTM BUILDER TAB ──────────────────────────────────────────────────────────
+const UTM_MEDIUMS = ['cpc', 'email', 'social', 'display', 'video', 'referral']
+const UTM_SOURCES = ['google', 'facebook', 'instagram', 'linkedin', 'tiktok', 'bing', 'youtube', 'newsletter']
+
+function UTMBuilderTab() {
+  const [url,      setUrl]      = useState('')
+  const [source,   setSource]   = useState('')
+  const [medium,   setMedium]   = useState('')
+  const [campaign, setCampaign] = useState('')
+  const [content,  setContent]  = useState('')
+  const [term,     setTerm]     = useState('')
+  const [saved,    setSaved]    = useState([])
+  const [copied,   setCopied]   = useState(false)
+  const [saving,   setSaving]   = useState(false)
+
+  useEffect(() => {
+    fetch('/api/analytics/utm')
+      .then(r => r.json())
+      .then(d => { if (d.links) setSaved(d.links) })
+      .catch(() => {})
+  }, [])
+
+  const params = [
+    ['utm_source', source],
+    ['utm_medium', medium],
+    ['utm_campaign', campaign],
+    ['utm_content', content],
+    ['utm_term', term],
+  ].filter(([, v]) => v.trim())
+
+  const built = url.trim() && source.trim() && medium.trim() && campaign.trim()
+    ? `${url.trim().replace(/\/$/, '')}?${params.map(([k, v]) => `${k}=${encodeURIComponent(v.trim())}`).join('&')}`
+    : ''
+
+  function handleCopy() {
+    if (!built) return
+    navigator.clipboard.writeText(built).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  async function handleSave() {
+    if (!built) return
+    setSaving(true)
+    try {
+      const r = await fetch('/api/analytics/utm', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ destination: url.trim(), utm_source: source, utm_medium: medium, utm_campaign: campaign, utm_content: content || undefined, utm_term: term || undefined }),
+      })
+      const d = await r.json()
+      if (d.link) setSaved(s => [d.link, ...s])
+    } catch {}
+    finally { setSaving(false) }
+  }
+
+  async function handleDelete(id) {
+    await fetch(`/api/analytics/utm?id=${id}`, { method: 'DELETE' }).catch(() => {})
+    setSaved(s => s.filter(x => x.id !== id))
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 14 }}>
+      <div>
+        <Card style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 14 }}>BUILD UTM LINK</div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={LABEL}>DESTINATION URL *</label>
+            <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://st1sports.com/baseball" style={INP} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div>
+              <label style={LABEL}>SOURCE *</label>
+              <input value={source} onChange={e => setSource(e.target.value)} list="utm-sources" placeholder="google, facebook…" style={INP} />
+              <datalist id="utm-sources">{UTM_SOURCES.map(s => <option key={s} value={s} />)}</datalist>
+            </div>
+            <div>
+              <label style={LABEL}>MEDIUM *</label>
+              <input value={medium} onChange={e => setMedium(e.target.value)} list="utm-mediums" placeholder="cpc, email, social…" style={INP} />
+              <datalist id="utm-mediums">{UTM_MEDIUMS.map(s => <option key={s} value={s} />)}</datalist>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+            <div>
+              <label style={LABEL}>CAMPAIGN *</label>
+              <input value={campaign} onChange={e => setCampaign(e.target.value)} placeholder="fall-2025-baseball" style={INP} />
+            </div>
+            <div>
+              <label style={LABEL}>CONTENT</label>
+              <input value={content} onChange={e => setContent(e.target.value)} placeholder="banner-v1" style={INP} />
+            </div>
+            <div>
+              <label style={LABEL}>TERM</label>
+              <input value={term} onChange={e => setTerm(e.target.value)} placeholder="baseball+equipment" style={INP} />
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 10 }}>GENERATED URL</div>
+          {built ? (
+            <>
+              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, wordBreak: 'break-all', marginBottom: 10, lineHeight: 1.6 }}>
+                {built}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={handleCopy} style={{ background: copied ? B.green : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '7px 16px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: 'pointer', transition: 'background .2s' }}>
+                  {copied ? '✓ COPIED' : '↗ COPY'}
+                </button>
+                <button onClick={handleSave} disabled={saving} style={{ background: saving ? B.gray2 : B.surface, color: saving ? B.white : B.text, border: `1px solid ${B.border}`, borderRadius: 6, padding: '7px 14px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: saving ? 'default' : 'pointer' }}>
+                  {saving ? 'SAVING…' : '+ SAVE'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>Fill in URL, Source, Medium, and Campaign to generate a link.</div>
+          )}
+        </Card>
+      </div>
+
+      <Card>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>SAVED LINKS ({saved.length})</div>
+        {saved.length === 0
+          ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No saved links yet. Build and save a link to store it here permanently.</div>
+          : saved.map(s => (
+            <div key={s.id} style={{ marginBottom: 10, padding: '9px 10px', background: B.surface, borderRadius: 7, border: `1px solid ${B.border}` }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.text, letterSpacing: 0.3, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.label}</div>
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 6 }}>{s.full_url || s.url}</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={() => navigator.clipboard.writeText(s.full_url || s.url)} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>COPY</button>
+                <button onClick={() => handleDelete(s.id)} style={{ background: 'none', color: B.gray2, border: `1px solid ${B.border}`, borderRadius: 4, padding: '3px 8px', fontSize: 8, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>✕</button>
+              </div>
+            </div>
+          ))
+        }
+      </Card>
+    </div>
+  )
+}
+
+// ─── ALERTS TAB ───────────────────────────────────────────────────────────────
+const ALERT_METRICS   = ['roas', 'spend', 'ctr', 'cpc', 'impressions', 'clicks']
+const ALERT_OPERATORS = [
+  { id: 'lt',  label: 'drops below'  },
+  { id: 'gt',  label: 'rises above'  },
+  { id: 'lte', label: '≤ at most'    },
+  { id: 'gte', label: '≥ at least'   },
+]
+const PLATFORM_OPTIONS = [{ id: '', label: 'All Platforms' }, ...PLATFORMS]
+
+function AlertsTab() {
+  const [rules,   setRules]   = useState([])
+  const [history, setHistory] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [form,    setForm]    = useState({ name: '', platform: '', metric: 'roas', operator: 'lt', threshold: '' })
+  const [formErr, setFormErr] = useState('')
+
+  useEffect(() => {
+    fetch('/api/ads/alerts')
+      .then(r => r.json())
+      .then(d => { setRules(d.rules || []); setHistory(d.history || []) })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function createRule() {
+    if (!form.name || !form.threshold) { setFormErr('Name and threshold are required'); return }
+    setSaving(true); setFormErr('')
+    try {
+      const r = await fetch('/api/ads/alerts', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ ...form, threshold: parseFloat(form.threshold) }),
+      })
+      const d = await r.json()
+      if (d.error) throw new Error(d.error)
+      setRules(prev => [d.rule, ...prev])
+      setForm({ name: '', platform: '', metric: 'roas', operator: 'lt', threshold: '' })
+    } catch (e) { setFormErr(e.message) }
+    finally { setSaving(false) }
+  }
+
+  async function toggleRule(id, enabled) {
+    const r = await fetch(`/api/ads/alerts?id=${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+    const d = await r.json()
+    if (d.rule) setRules(prev => prev.map(x => x.id === id ? d.rule : x))
+  }
+
+  async function deleteRule(id) {
+    await fetch(`/api/ads/alerts?id=${id}`, { method: 'DELETE' })
+    setRules(prev => prev.filter(x => x.id !== id))
+  }
+
+  function fmtOp(op) { return ALERT_OPERATORS.find(o => o.id === op)?.label || op }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      {/* Create rule form */}
+      <div>
+        <Card style={{ marginBottom: 14 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 14 }}>CREATE ALERT RULE</div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={LABEL}>RULE NAME *</label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Low ROAS warning" style={INP} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+            <div>
+              <label style={LABEL}>PLATFORM</label>
+              <select value={form.platform} onChange={e => setForm(f => ({ ...f, platform: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {PLATFORM_OPTIONS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={LABEL}>METRIC *</label>
+              <select value={form.metric} onChange={e => setForm(f => ({ ...f, metric: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {ALERT_METRICS.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+            <div>
+              <label style={LABEL}>CONDITION *</label>
+              <select value={form.operator} onChange={e => setForm(f => ({ ...f, operator: e.target.value }))} style={{ ...INP, cursor: 'pointer' }}>
+                {ALERT_OPERATORS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={LABEL}>THRESHOLD *</label>
+              <input type="number" step="0.01" value={form.threshold} onChange={e => setForm(f => ({ ...f, threshold: e.target.value }))} placeholder={form.metric === 'roas' ? '2.0' : form.metric === 'ctr' ? '1.5' : '0'} style={INP} />
+            </div>
+          </div>
+          {formErr && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.red, marginBottom: 10 }}>{formErr}</div>}
+          <button onClick={createRule} disabled={saving} style={{ background: saving ? B.gray2 : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 18px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: 0.5, cursor: saving ? 'default' : 'pointer' }}>
+            {saving ? 'SAVING…' : '+ CREATE RULE'}
+          </button>
+        </Card>
+
+        {/* Recent alerts fired */}
+        <Card>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>RECENT ALERTS FIRED</div>
+          {history.length === 0
+            ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No alerts fired yet.</div>
+            : history.slice(0, 8).map((h, i) => (
+              <div key={h.id || i} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8, padding: '7px 10px', background: '#FFF8E6', border: '1px solid #C7780030', borderRadius: 6 }}>
+                <span style={{ fontSize: 12 }}>⚠</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }}>{h.campaign_name || h.platform} — {h.metric.toUpperCase()} {parseFloat(h.value).toFixed(2)}</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>{new Date(h.fired_at).toLocaleString()}</div>
+                </div>
+                <PlatformBadge platform={h.platform} size="sm" />
+              </div>
+            ))
+          }
+        </Card>
+      </div>
+
+      {/* Active rules list */}
+      <Card>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 2, marginBottom: 12 }}>ACTIVE RULES ({rules.length})</div>
+        {loading && <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>Loading…</div>}
+        {!loading && rules.length === 0 && (
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray2 }}>No alert rules yet. Create one to get notified when performance drops.</div>
+        )}
+        {rules.map(rule => (
+          <div key={rule.id} style={{ marginBottom: 10, padding: '10px 12px', background: rule.enabled ? B.surface : B.pageBg, border: `1px solid ${rule.enabled ? B.border : B.gray2 + '40'}`, borderRadius: 8, opacity: rule.enabled ? 1 : 0.6 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+              <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: rule.enabled ? B.text : B.muted, letterSpacing: 0.3 }}>{rule.name}</span>
+              <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+                <button
+                  onClick={() => toggleRule(rule.id, !rule.enabled)}
+                  style={{ background: rule.enabled ? B.orangeBg : B.surface, color: rule.enabled ? B.orange : B.muted, border: `1px solid ${rule.enabled ? B.orange + '30' : B.border}`, borderRadius: 4, padding: '2px 8px', fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}
+                >
+                  {rule.enabled ? 'ON' : 'OFF'}
+                </button>
+                <button onClick={() => deleteRule(rule.id)} style={{ background: 'none', color: B.gray2, border: `1px solid ${B.border}`, borderRadius: 4, padding: '2px 7px', fontSize: 9, cursor: 'pointer' }}>✕</button>
+              </div>
+            </div>
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>
+              {rule.platform || 'All platforms'} · {rule.metric.toUpperCase()} {fmtOp(rule.operator)} <strong style={{ color: B.text }}>{parseFloat(rule.threshold).toFixed(2)}</strong>
+            </div>
+          </div>
+        ))}
+      </Card>
+    </div>
+  )
+}
+
 // ─── CONNECTION CHECKER ───────────────────────────────────────────────────────
 function ConnectionPanel({ onClose }) {
+  const [status,  setStatus]  = useState({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/ads/status')
+      .then(r => r.json())
+      .then(d => setStatus(d))
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [])
+
+  const allPlatforms = [...PLATFORMS, { id: 'ga4', label: 'Google Analytics 4' }]
+
   return (
     <Card style={{ marginBottom: 16, border: `1px solid ${B.orange}30`, background: B.orangeBg }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div>
+        <div style={{ flex: 1 }}>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange, letterSpacing: 2, marginBottom: 10 }}>PLATFORM CONNECTIONS</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {PLATFORMS.map(p => <ConnectionStatus key={p.id} label={p.label} connected={false} />)}
-          </div>
+          {loading
+            ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Checking connections…</div>
+            : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 6 }}>
+                {allPlatforms.map(p => {
+                  const s = status[p.id] || {}
+                  const connected = s.status === 'connected'
+                  const missing   = s.status === 'missing_key'
+                  return (
+                    <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: connected ? B.green : missing ? B.gray2 : B.red, display: 'inline-block', flexShrink: 0 }} />
+                      <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: connected ? B.text : B.muted }}>
+                        {s.name || p.label}
+                      </span>
+                      <span style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: connected ? B.green : missing ? B.gray2 : B.red }}>
+                        {connected ? '✓' : missing ? 'needs key' : s.message ? `— ${s.message.slice(0, 30)}` : 'error'}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          }
           <div style={{ marginTop: 12, fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>
             Add API keys in <strong style={{ color: B.orange }}>Tool Manager → Settings</strong> to connect each platform.
           </div>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 16, cursor: 'pointer', padding: 0, lineHeight: 1 }}>×</button>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 16, cursor: 'pointer', padding: 0, lineHeight: 1, marginLeft: 12 }}>×</button>
       </div>
     </Card>
   )
@@ -1358,7 +1806,7 @@ export default function AdHubModule({ userRole }) {
             </button>
           </div>
           <p style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted, margin: '3px 0 0', lineHeight: 1.5 }}>
-            Unified ad analytics, campaign management, and creative launch across Meta, Google, LinkedIn, TikTok, and Microsoft.
+            Unified ad analytics, campaign management, and creative launch across Meta, Google, YouTube, LinkedIn, TikTok, and Microsoft.
           </p>
         </div>
       </div>
@@ -1367,7 +1815,7 @@ export default function AdHubModule({ userRole }) {
 
       <TabBar active={tab} onChange={setTab} />
 
-      {tab !== 'create' && (
+      {(tab === 'dashboard' || tab === 'campaigns') && (
         <ControlsBar
           platforms={platforms}
           onPlatforms={setPlatforms}
@@ -1376,9 +1824,12 @@ export default function AdHubModule({ userRole }) {
         />
       )}
 
-      {tab === 'dashboard' && <DashboardTab platforms={platforms} dateRange={dateRange} userRole={userRole} />}
-      {tab === 'campaigns' && <CampaignsTab platforms={platforms} dateRange={dateRange} />}
-      {tab === 'create'    && <CreateTab userRole={userRole} />}
+      {tab === 'dashboard'   && <DashboardTab   platforms={platforms} dateRange={dateRange} userRole={userRole} />}
+      {tab === 'campaigns'   && <CampaignsTab   platforms={platforms} dateRange={dateRange} />}
+      {tab === 'create'      && <CreateTab       userRole={userRole} onSwitchToTab={setTab} />}
+      {tab === 'attribution' && <AttributionTab />}
+      {tab === 'utm'         && <UTMBuilderTab />}
+      {tab === 'alerts'      && <AlertsTab />}
     </div>
   )
 }
