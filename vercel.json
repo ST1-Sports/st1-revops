@@ -1,4 +1,5 @@
 {
+  "buildCommand": "npx prisma generate && vite build",
   "functions": {
     "api/claude.js":                              { "maxDuration": 120 },
     "api/adengine/generate-images.js":            { "maxDuration": 60 },
