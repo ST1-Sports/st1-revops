@@ -515,6 +515,93 @@ model RedditGuardrailLog {
   @@index([createdAt])
 }
 
+// ── TALK TRACK ────────────────────────────────────────────────────────────────
+
+enum TalkTrackPhase {
+  RAPPORT
+  INTRO
+  DISCOVERY
+  PAIN
+  SOLUTION
+}
+
+enum TalkTrackInputType {
+  TEXT
+  TEXTAREA
+  SELECT
+  BOOLEAN
+  NUMBER
+}
+
+enum CrmModule {
+  Contact
+  Lead
+}
+
+enum TalkTrackSessionStatus {
+  IN_PROGRESS
+  COMPLETE
+}
+
+model TalkTrackQuestion {
+  id            Int                @id @default(autoincrement())
+  phase         TalkTrackPhase
+  order         Int
+  questionText  String
+  helpText      String?
+  inputType     TalkTrackInputType
+  selectOptions Json?
+  isActive      Boolean            @default(true)
+  isRequired    Boolean            @default(false)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@unique([phase, order])
+  @@index([phase])
+}
+
+model TalkTrackSession {
+  id                       String                 @id @default(cuid())
+  crmContactId             String?
+  crmLeadId                String?
+  crmModule                CrmModule?
+  repId                    String
+  schoolClass              String?
+  numSports                Int?
+  numAthletes              Int?
+  hasOnlineStore           Boolean?
+  hasBoosterClub           Boolean?
+  estimatedCurrentSpend    Float?
+  answers                  Json                   @default("{}")
+  confirmedPains           Json                   @default("[]")
+  sponsorshipGuaranteedMin Float?
+  sponsorshipUpsideMax     Float?
+  draftEmailSubject        String?
+  draftEmailBody           String?                @db.Text
+  status                   TalkTrackSessionStatus @default(IN_PROGRESS)
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([repId])
+  @@index([crmContactId])
+  @@index([crmLeadId])
+  @@index([status])
+}
+
+model SponsorshipConfig {
+  id                         Int      @id
+  avgOrderValuePerAthlete    Float
+  avgEquipmentOrderPerSport  Float
+  netMarginPct               Float
+  givebackPct                Float
+  schoolClassConfidence      Json
+  teamStoreRevenuePerAthlete Float
+  purchaseFrequencyPerYear   Float
+  boosterMultiplier          Float
+  lastUpdatedBy              String?
+  updatedAt                  DateTime @updatedAt
+}
+
 // ── EMAIL CAMPAIGN TRACKING ───────────────────────────────────────────────────
 
 model EmailOpen {
