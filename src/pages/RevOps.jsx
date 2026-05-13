@@ -1996,6 +1996,130 @@ function CrmLinker({linked,onLink,onUnlink}){
   );
 }
 
+function SponsorshipCalculator({inputs,onInputChange,result,loading}){
+  const [showBreakdown,setShowBreakdown]=useState(false);
+  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
+  const hasRequired=!!(inputs.schoolClass&&Number(inputs.numSports)>0&&Number(inputs.numAthletes)>0);
+  const bd=result?.breakdown;
+  const netPct=bd&&bd.projectedRevenue>0?Math.round(bd.netProfit/bd.projectedRevenue*100):0;
+  const givePct=bd&&bd.netProfit>0?Math.round(bd.givebackPool/bd.netProfit*100):0;
+  const confPct=bd?Math.round(bd.confidence*100):0;
+  const lastUpd=result?.configLastUpdated?new Date(result.configLastUpdated).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
+  const additional=result?(result.upsideMax||0)-(result.guaranteedMin||0):0;
+
+  const YNBtn=(field,opt)=>{
+    const active=opt==="Yes"?inputs[field]===true:inputs[field]===false;
+    return(
+      <button onClick={()=>onInputChange(field,opt==="Yes")} style={{flex:1,background:active?B.green:B.surface,color:active?B.white:B.muted,border:`1px solid ${active?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>
+    );
+  };
+
+  return(
+    <div style={{marginTop:22,paddingTop:18,borderTop:`1px solid ${B.border}`}}>
+      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:2,marginBottom:12}}>SPONSORSHIP CALCULATOR</div>
+
+      {/* Inputs */}
+      <div className="card" style={{padding:14,marginBottom:12}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          <div>
+            <Lbl s={{marginBottom:3}}>School classification</Lbl>
+            <select value={inputs.schoolClass} onChange={e=>onInputChange("schoolClass",e.target.value)} style={inp()}>
+              <option value="">— Select —</option>
+              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
+            </select>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Number of sports</Lbl>
+            <input type="number" min={1} max={40} value={inputs.numSports} onChange={e=>onInputChange("numSports",e.target.value)} placeholder="e.g. 12" style={inp()}/>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Number of athletes</Lbl>
+            <input type="number" min={1} max={5000} value={inputs.numAthletes} onChange={e=>onInputChange("numAthletes",e.target.value)} placeholder="e.g. 320" style={inp()}/>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Their est. current spend (optional)</Lbl>
+            <div style={{position:"relative"}}>
+              <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:B.muted,pointerEvents:"none"}}>$</span>
+              <input type="number" min={0} value={inputs.estimatedCurrentSpend} onChange={e=>onInputChange("estimatedCurrentSpend",e.target.value)} placeholder="0" style={inp({paddingLeft:20})}/>
+            </div>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Online store today?</Lbl>
+            <div style={{display:"flex",gap:5}}>{YNBtn("hasOnlineStore","Yes")}{YNBtn("hasOnlineStore","No")}</div>
+          </div>
+          <div>
+            <Lbl s={{marginBottom:3}}>Booster club active?</Lbl>
+            <div style={{display:"flex",gap:5}}>{YNBtn("hasBoosterClub","Yes")}{YNBtn("hasBoosterClub","No")}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Placeholder */}
+      {!hasRequired&&!loading&&!result&&(
+        <div style={{background:B.surface,borderRadius:6,border:`1px dashed ${B.border}`,padding:"14px 16px",textAlign:"center"}}>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Enter school classification, number of sports, and number of athletes to see the sponsorship offer</div>
+        </div>
+      )}
+
+      {/* Output card */}
+      {(loading||result)&&(
+        <div className="card" style={{padding:16,borderTop:`3px solid ${B.orange}`,opacity:loading?0.65:1,transition:"opacity .25s"}}>
+          {loading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Calculating…</div>}
+          {result&&!loading&&(
+            <>
+              <div style={{marginBottom:12}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP OFFER</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(result.guaranteedMin||0)}<span style={{fontSize:14,color:B.orange,marginLeft:6}}>guaranteed</span></div>
+                {additional>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:5}}>Up to {fmt$(additional)} additional based on actual sales</div>}
+              </div>
+
+              {bd&&(
+                <>
+                  <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",color:B.blue,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer",padding:"0 0 6px",display:"block"}}>
+                    {showBreakdown?"Hide breakdown ▲":"Show breakdown ▼"}
+                  </button>
+                  {showBreakdown&&(
+                    <div style={{borderTop:`1px solid ${B.border}`,paddingTop:10,display:"flex",flexDirection:"column",gap:6}}>
+                      {[
+                        [`Projected first-year revenue`,bd.projectedRevenue],
+                        [`Net profit (${netPct}%)`,bd.netProfit],
+                        [`Giveback pool (${givePct}%)`,bd.givebackPool],
+                      ].map(([lbl,val])=>(
+                        <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                          <span>{lbl}</span>
+                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(val||0))}</span>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10}}>
+                        <span style={{color:B.muted}}>School confidence factor ({confPct}%)</span>
+                        <span style={{color:B.orange,fontWeight:500}}>{fmt$(result.guaranteedMin||0)} min</span>
+                      </div>
+                      {inputs.hasOnlineStore===true&&bd.storeRevenue>0&&(
+                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                          <span>Store revenue contribution</span>
+                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(bd.storeRevenue||0))}</span>
+                        </div>
+                      )}
+                      {inputs.hasBoosterClub===true&&(
+                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                          <span>Booster club multiplier</span>
+                          <span style={{color:B.green,fontWeight:500}}>✓ Applied</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {lastUpd&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:10,borderTop:`1px solid ${B.border}`,paddingTop:8}}>Based on current ST1 metrics — last updated {lastUpd}</div>}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TalkTrack({onClose,linkedContact}){
   const {cu,toast}=useApp();
   const [sessionId,setSessionId]=useState(null);
@@ -2004,14 +2128,30 @@ function TalkTrack({onClose,linkedContact}){
   const [answers,setAnswers]=useState({});
   const [pains,setPains]=useState([]);
   const [linked,setLinked]=useState(linkedContact||null);
-  const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null});
+  const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null,estimatedCurrentSpend:""});
   const [calcResult,setCalcResult]=useState(null);
   const [calcLoading,setCalcLoading]=useState(false);
   const [draftEmail,setDraftEmail]=useState("");
   const [drafting,setDrafting]=useState(false);
   const [saving,setSaving]=useState(false);
   const saveTimer=useRef(null);
+  const calcTimer=useRef(null);
   const sessRef=useRef(null);
+
+  const canCalc=(ci)=>!!(ci.schoolClass&&Number(ci.numSports)>0&&Number(ci.numAthletes)>0);
+
+  const runCalc=(ci)=>{
+    if(!canCalc(ci))return;
+    setCalcLoading(true);
+    fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      schoolClass:ci.schoolClass,numSports:Number(ci.numSports||0),numAthletes:Number(ci.numAthletes||0),
+      hasOnlineStore:ci.hasOnlineStore===true,hasBoosterClub:ci.hasBoosterClub===true,
+    })})
+    .then(r=>r.json()).then(d=>{
+      setCalcResult(d);setCalcLoading(false);
+      if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax})}).catch(()=>{});
+    }).catch(()=>setCalcLoading(false));
+  };
 
   useEffect(()=>{
     fetch("/api/admin/questions")
@@ -2027,7 +2167,20 @@ function TalkTrack({onClose,linkedContact}){
             setSessionId(sess.id);sessRef.current=sess.id;
             setAnswers(sess.answers||{});
             setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
-            if(sess.sponsorshipGuaranteedMin!=null) setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax});
+            const restored={
+              schoolClass:sess.schoolClass||"",
+              numSports:sess.numSports!=null?String(sess.numSports):"",
+              numAthletes:sess.numAthletes!=null?String(sess.numAthletes):"",
+              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:null,
+              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:null,
+              estimatedCurrentSpend:sess.estimatedCurrentSpend!=null?String(sess.estimatedCurrentSpend):"",
+            };
+            setCalcInputs(restored);
+            if(canCalc(restored)){
+              runCalc(restored);
+            } else if(sess.sponsorshipGuaranteedMin!=null){
+              setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax,breakdown:null,configLastUpdated:null});
+            }
             if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
               setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
             }
@@ -2079,20 +2232,23 @@ function TalkTrack({onClose,linkedContact}){
     scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});
   };
 
-  const doCalc=()=>{
-    const {schoolClass,numSports,numAthletes,hasOnlineStore,hasBoosterClub}=calcInputs;
-    if(!numAthletes&&!numSports)return;
-    setCalcLoading(true);
-    fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
-      hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true,
-    })})
-    .then(r=>r.json()).then(d=>{
-      setCalcResult(d);setCalcLoading(false);
-      scheduleSave({sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax,
-        schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
-        hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true});
-    }).catch(()=>setCalcLoading(false));
+  const handleCalcInput=(field,value)=>{
+    const next={...calcInputs,[field]:value};
+    setCalcInputs(next);
+    // Immediate fire-and-forget session field save
+    if(sessRef.current){
+      const v=(field==="hasOnlineStore"||field==="hasBoosterClub")?value
+        :["numSports","numAthletes","estimatedCurrentSpend"].includes(field)&&value!==""?Number(value)
+        :value||null;
+      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",[field]:v})}).catch(()=>{});
+    }
+    // Debounced calc
+    clearTimeout(calcTimer.current);
+    if(canCalc(next)){
+      calcTimer.current=setTimeout(()=>runCalc(next),600);
+    } else {
+      setCalcResult(null);
+    }
   };
 
   const doDraftEmail=async()=>{
@@ -2159,59 +2315,16 @@ function TalkTrack({onClose,linkedContact}){
         {/* Pain cards */}
         {currentPhase.id==="PAIN"&&<PainCards selected={pains} onToggle={togglePain}/>}
 
-        {/* Sponsorship calculator */}
+        {/* Solution phase — offer summary + email drafter */}
         {currentPhase.id==="SOLUTION"&&(
           <div style={{marginBottom:16}}>
-            <div className="card" style={{padding:14,marginBottom:10}}>
-              <Lbl s={{marginBottom:10}}>Sponsorship Value Calculator</Lbl>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-                <div>
-                  <Lbl s={{marginBottom:3}}>School Class</Lbl>
-                  <select value={calcInputs.schoolClass} onChange={e=>setCalcInputs(c=>({...c,schoolClass:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-                    <option value="">— Select —</option>
-                    {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:3}}># Sports</Lbl>
-                  <input type="number" value={calcInputs.numSports} onChange={e=>setCalcInputs(c=>({...c,numSports:e.target.value}))} placeholder="0" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:3}}># Athletes</Lbl>
-                  <input type="number" value={calcInputs.numAthletes} onChange={e=>setCalcInputs(c=>({...c,numAthletes:e.target.value}))} placeholder="0" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:3}}>Team Store?</Lbl>
-                  <div style={{display:"flex",gap:5}}>
-                    {["Yes","No"].map(opt=>(
-                      <button key={opt} onClick={()=>setCalcInputs(c=>({...c,hasOnlineStore:opt==="Yes"}))} style={{flex:1,background:(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.green:B.surface,color:(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <Lbl s={{marginBottom:3}}>Booster Club?</Lbl>
-                  <div style={{display:"flex",gap:5}}>
-                    {["Yes","No"].map(opt=>(
-                      <button key={opt} onClick={()=>setCalcInputs(c=>({...c,hasBoosterClub:opt==="Yes"}))} style={{flex:1,background:(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.green:B.surface,color:(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <OBtn onClick={doCalc} disabled={calcLoading} style={{width:"100%"}}>{calcLoading?"CALCULATING…":"✦ CALCULATE SPONSORSHIP VALUE"}</OBtn>
-            </div>
             {calcResult&&(
-              <div className="card" style={{padding:14,marginBottom:10,borderTop:`3px solid ${B.orange}`}}>
-                <Lbl s={{marginBottom:8}}>Sponsorship Potential</Lbl>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:6}}>
-                  <div style={{background:`${B.green}10`,borderRadius:6,padding:"12px 14px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>GUARANTEED MIN</div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green}}>{fmt$(calcResult.guaranteedMin||0)}</div>
-                  </div>
-                  <div style={{background:`${B.orange}10`,borderRadius:6,padding:"12px 14px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:4}}>UPSIDE MAX</div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(calcResult.upsideMax||0)}</div>
-                  </div>
-                </div>
+              <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6,padding:"12px 16px",marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1.5,marginBottom:4}}>SPONSORSHIP OFFER</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange,lineHeight:1.1}}>{fmt$(calcResult.guaranteedMin||0)}<span style={{fontSize:13,marginLeft:5}}>guaranteed</span></div>
+                {(calcResult.upsideMax||0)>(calcResult.guaranteedMin||0)&&(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3}}>Up to {fmt$((calcResult.upsideMax||0)-(calcResult.guaranteedMin||0))} additional based on actual sales</div>
+                )}
               </div>
             )}
             <OBtn onClick={doDraftEmail} disabled={drafting} style={{width:"100%",marginBottom:8}}>{drafting?"WRITING…":"✦ DRAFT FOLLOW-UP EMAIL"}</OBtn>
@@ -2231,6 +2344,16 @@ function TalkTrack({onClose,linkedContact}){
               <QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>
             ))}
           </div>
+        )}
+
+        {/* Sponsorship Calculator — embedded at bottom of Discovery phase */}
+        {currentPhase.id==="DISCOVERY"&&(
+          <SponsorshipCalculator
+            inputs={calcInputs}
+            onInputChange={handleCalcInput}
+            result={calcResult}
+            loading={calcLoading}
+          />
         )}
 
         {/* Phase navigation */}
