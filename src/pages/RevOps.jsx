@@ -2070,11 +2070,11 @@ function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,que
         body:JSON.stringify({repId:cu?.id||"unknown",draftEmailSubject:subject,draftEmailBody:body,status:"COMPLETE"})
       }).catch(()=>{});
     }
-    // Log to CRM note
     if(linked?.id){
       const{title,content}=buildNote();
       setNoteCopy(content);
       const crmModule=linked.module==="Contact"?"Contacts":"Leads";
+      // Log CRM note
       try{
         const r=await fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
           body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:title,noteContent:content})});
@@ -2083,6 +2083,22 @@ function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,que
       }catch(e){
         setLogErr(e.message);
       }
+      // Create Zoho Deal
+      const closing=new Date();
+      closing.setDate(closing.getDate()+30);
+      const dealName=`ST1 — ${linked.school||linked.name||"School"} — ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`;
+      const dealFields={
+        Deal_Name:dealName,
+        Stage:"Qualification",
+        Closing_Date:closing.toISOString().split("T")[0],
+        Account_Name:linked.school||linked.name||"",
+        Description:content,
+      };
+      if(calcResult?.guaranteedMin) dealFields.Amount=calcResult.guaranteedMin;
+      if(linked.module==="Contact") dealFields.Contact_Name={id:linked.id};
+      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
+      }).catch(()=>{});
     }
     setLogging(false);setLogDone(true);
   };
@@ -2097,7 +2113,7 @@ function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,que
     return(
       <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:8,padding:"20px 18px",textAlign:"center",marginTop:16}}>
         <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green,marginBottom:6}}>✓</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>Call logged to CRM. Session complete.</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>Session complete. Note + deal logged to CRM.</div>
         {logErr&&(
           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>
             Note: CRM logging failed ({logErr}). Copy note text to log manually.
@@ -2512,16 +2528,7 @@ function TalkTrack({onClose,linkedContact}){
           </div>
         )}
 
-        {/* Phase questions */}
-        {phaseQs.length>0&&(
-          <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:8}}>
-            {phaseQs.map(q=>(
-              <QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>
-            ))}
-          </div>
-        )}
-
-        {/* Sponsorship Calculator — embedded at bottom of Discovery phase */}
+        {/* Sponsorship Calculator — top of Discovery phase */}
         {currentPhase.id==="DISCOVERY"&&(
           <SponsorshipCalculator
             inputs={calcInputs}
@@ -2529,6 +2536,15 @@ function TalkTrack({onClose,linkedContact}){
             result={calcResult}
             loading={calcLoading}
           />
+        )}
+
+        {/* Phase questions */}
+        {phaseQs.length>0&&(
+          <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:8,marginTop:currentPhase.id==="DISCOVERY"?16:0}}>
+            {phaseQs.map(q=>(
+              <QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>
+            ))}
+          </div>
         )}
 
         {/* Phase navigation */}
