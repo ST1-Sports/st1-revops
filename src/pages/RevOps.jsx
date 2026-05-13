@@ -697,7 +697,6 @@ export default function App() {
     {id:"_s_sales"},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
-    {id:"revenue",     icon:"↑", label:"Revenue"},
     {id:"deals",       icon:"◫", label:"Deals"},
     {id:"quotes",      icon:"▤", label:"Quotes",           href:"https://admin.st1sports.com"},
     {id:"orders",      icon:"⊡", label:"Orders",         badge:(s.orders||[]).filter(o=>o.stage!=="Invoiced").length||null},
@@ -917,7 +916,6 @@ export default function App() {
             <ErrBound key={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
-            {mod==="revenue"     && <ModRevenue/>}
             {mod==="deals"       && <ModDeals/>}
             {mod==="orders"      && <ModOrders/>}
             {mod==="rfp"         && <ModRFP/>}
@@ -1107,14 +1105,33 @@ function ModAnalytics() {
 
   const closedStages=["Closed Won","Closed Lost","PO Received"];
   const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
+  const won=deals.filter(d=>d.stage==="Closed Won");
+  const lost=deals.filter(d=>d.stage==="Closed Lost");
   const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
   const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
+  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
+  const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
   const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
   const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
+  const totalClosed=won.length+lost.length;
+  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
+  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+
+  // Won by month (last 6)
+  const now=new Date();
+  const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
+  const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
+  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
+
+  // Pipeline by stage (for Revenue tab)
+  const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
+
+  // Top products (won + open)
+  const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
 
   const fmt$K=(n)=>{if(n>=1000)return "$"+(n/1000).toFixed(1)+"K";return "$"+Math.round(n).toLocaleString();}
 
-  const TABS=[["overview","Overview"],["campaigns","Campaigns"],["pipeline","Pipeline"],["hotleads","Hot Leads"],["emails","Emails"]];
+  const TABS=[["overview","Overview"],["revenue","Revenue"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
 
   return (
     <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
@@ -1127,11 +1144,13 @@ function ModAnalytics() {
 
       {tab==="overview"&&(
         <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
-            <KCard l="Total Revenue" v={"$"+totalRevenue.toLocaleString()} c={B.green} sub="from paid invoices"/>
-            <KCard l="Open Pipeline" v={fmt$K(openPipeline)} c={B.orange} sub={`${openDeals.length} active deals`}/>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
+            <KCard l="Total Won" v={fmt$K(wonTotal)} c={B.green} sub="closed won"/>
+            <KCard l="Open Pipeline" v={fmt$K(openPipeline)} c={B.orange} sub={`${openDeals.length} deals`}/>
+            <KCard l="AR Outstanding" v={fmt$K(arTotal)} c={B.red}/>
+            <KCard l="Win Rate" v={`${convRate}%`} c={B.blue}/>
             <KCard l="Active Campaigns" v={activeCampaigns} c={B.purple}/>
-            <KCard l="Hot Leads" v={hotLeads} c={B.red} sub="score >= 40"/>
+            <KCard l="Hot Leads" v={hotLeads} c={B.teal} sub="score ≥ 40"/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
             <div className="card" style={{padding:14}}>
@@ -1234,6 +1253,91 @@ function ModAnalytics() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {tab==="revenue"&&(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
+            <KCard l="Open Pipeline" v={fmt$(openPipeline)} c={B.orange}/>
+            <KCard l="Total Won" v={fmt$(wonTotal)} c={B.green}/>
+            <KCard l="AR Outstanding" v={fmt$(arTotal)} c={B.red}/>
+            <KCard l="Win Rate" v={`${convRate}%`} c={B.blue}/>
+            <KCard l="Avg Deal Size" v={fmt$(avgDeal)} c={B.purple}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+            <div className="card" style={{padding:16}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>WON REVENUE — LAST 6 MONTHS</div>
+              <div style={{display:"flex",alignItems:"flex-end",gap:8,height:120,marginBottom:8}}>
+                {wonByMonth.map(m=>(
+                  <div key={m.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center"}}>{m.value>0?fmt$(m.value):""}</div>
+                    <div style={{width:"100%",background:m.value>0?B.orange:B.border,borderRadius:"3px 3px 0 0",height:m.value>0?`${Math.max(6,Math.round((m.value/maxMonthVal)*80))}px`:"4px"}}/>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center",whiteSpace:"nowrap"}}>{m.label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{won.length} won deals · avg {fmt$(avgDeal)}</div>
+            </div>
+            <div className="card" style={{padding:16}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>PIPELINE BY STAGE</div>
+              {stageSummary.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>No open deals</div>}
+              {stageSummary.map(({stage,count,value})=>{
+                const pct=openPipeline>0?Math.round((value/openPipeline)*100):0;
+                const col=DSC[stage]||B.muted;
+                return(
+                  <div key={stage} style={{marginBottom:10}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage} <span style={{color:B.muted}}>({count})</span></span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(value)}</span>
+                    </div>
+                    <div style={{background:B.border,borderRadius:4,height:6,overflow:"hidden"}}>
+                      <div style={{width:`${pct}%`,height:"100%",background:col,borderRadius:4}}/>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+            <div className="card" style={{padding:16}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>TOP PRODUCTS BY VALUE</div>
+              {topProducts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>Tag deals with product categories to see data</div>}
+              {topProducts.map(([prod,val],i)=>(
+                <div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+                  <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.muted,minWidth:16}}>{i+1}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{prod}</span>
+                  </div>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.green}}>{fmt$(val)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="card" style={{padding:16}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>ORDERS & AR SNAPSHOT</div>
+              {ORDER_STAGES.map(stage=>{
+                const cnt=(s.orders||[]).filter(o=>o.stage===stage).length;
+                const val=(s.orders||[]).filter(o=>o.stage===stage).reduce((a,o)=>a+(o.value||0),0);
+                const col={"Order Received":B.blue,"Order Placed":B.purple,"Invoiced":B.green}[stage]||B.muted;
+                return(
+                  <div key={stage} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}} onClick={()=>setMod("orders")}>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:col}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{stage}</span>
+                    </div>
+                    <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{cnt} orders</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(val)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>Total AR Outstanding</span>
+                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.red}}>{fmt$(arTotal)}</span>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1974,165 +2078,6 @@ Under 80 words. Include subject line. Warm tone.`);
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  REVENUE DASHBOARD
-// ════════════════════════════════════════════════════════════════════════════
-function ModRevenue() {
-  const {s,setMod}=useApp();
-  const [finTab,setFinTab]=useState("revenue");
-  const deals=s.deals||[];
-  const won=deals.filter(d=>d.stage==="Closed Won");
-  const open=deals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const lost=deals.filter(d=>d.stage==="Closed Lost");
-
-  const pipeline=open.reduce((a,d)=>a+(d.value||0),0);
-  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-  const arTotal=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-
-  // Won by month (last 12 months)
-  const now=new Date();
-  const months=Array.from({length:6},(_,i)=>{
-    const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);
-    return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};
-  });
-  const wonByMonth=months.map(m=>{
-    const mWon=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));
-    return{...m,count:mWon.length,value:mWon.reduce((a,d)=>a+(d.value||0),0)};
-  });
-  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
-
-  // Pipeline by stage
-  const stageGroups={};
-  open.forEach(d=>{stageGroups[d.stage]=(stageGroups[d.stage]||[]).concat(d);});
-  const stageSummary=Object.entries(stageGroups).map(([stage,ds])=>({stage,count:ds.length,value:ds.reduce((a,d)=>a+(d.value||0),0)})).sort((a,b)=>b.value-a.value);
-
-  // Top products
-  const prodMap={};
-  [...won,...open].forEach(d=>{if(d.product){prodMap[d.product]=(prodMap[d.product]||0)+(d.value||0);}});
-  const topProducts=Object.entries(prodMap).sort((a,b)=>b[1]-a[1]).slice(0,6);
-
-  // Conversion rate
-  const totalClosed=won.length+lost.length;
-  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
-
-  if(finTab==="summaries") return(
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
-        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
-          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
-        ))}
-      </div>
-      <Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId="finance" embedded key="finance"/></Suspense>
-    </div>
-  );
-
-  return(
-    <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-      <div style={{display:"flex",gap:4,marginBottom:16}}>
-        {[["revenue","Revenue"],["summaries","AI Summaries"]].map(([tid,tl])=>(
-          <button key={tid} onClick={()=>setFinTab(tid)} style={{background:"none",border:"none",borderBottom:finTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:finTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:finTab===tid?700:400}}>{tl.toUpperCase()}</button>
-        ))}
-      </div>
-      <PH title="FINANCE" sub="Pipeline health, won deals, conversion rates, and product performance"/>
-
-      {/* KPIs */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
-        <KCard l="Open Pipeline"   v={fmt$(pipeline)} c={B.orange}/>
-        <KCard l="Total Won"       v={fmt$(wonTotal)}  c={B.green}/>
-        <KCard l="AR Outstanding"  v={fmt$(arTotal)}   c={B.red}/>
-        <KCard l="Win Rate"        v={`${convRate}%`}  c={B.blue}/>
-        <KCard l="Avg Deal Size"   v={fmt$(avgDeal)}   c={B.purple}/>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
-        {/* Won by Month chart */}
-        <div className="card" style={{padding:16}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>WON REVENUE — LAST 6 MONTHS</div>
-          <div style={{display:"flex",alignItems:"flex-end",gap:8,height:120,marginBottom:8}}>
-            {wonByMonth.map(m=>(
-              <div key={m.key} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center"}}>{m.value>0?fmt$(m.value).replace("$","$"):""}</div>
-                <div style={{width:"100%",background:m.value>0?B.orange:B.border,borderRadius:"3px 3px 0 0",height:m.value>0?`${Math.max(6,Math.round((m.value/maxMonthVal)*80))}px`:"4px",transition:"height .3s"}}/>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,textAlign:"center",whiteSpace:"nowrap"}}>{m.label}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>
-            {won.length} won deals · avg {fmt$(avgDeal)}
-          </div>
-        </div>
-
-        {/* Pipeline by stage */}
-        <div className="card" style={{padding:16}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>PIPELINE BY STAGE</div>
-          {stageSummary.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>No open deals</div>}
-          {stageSummary.map(({stage,count,value})=>{
-            const pct=pipeline>0?Math.round((value/pipeline)*100):0;
-            const sc={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal};
-            const col=sc[stage]||B.muted;
-            return(
-              <div key={stage} style={{marginBottom:10}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage} <span style={{color:B.muted}}>({count})</span></span>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(value)}</span>
-                </div>
-                <div style={{background:B.border,borderRadius:4,height:6,overflow:"hidden"}}>
-                  <div style={{width:`${pct}%`,height:"100%",background:col,borderRadius:4,transition:"width .4s"}}/>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-        {/* Top products */}
-        <div className="card" style={{padding:16}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>TOP PRODUCTS BY PIPELINE VALUE</div>
-          {topProducts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0"}}>Tag deals with product categories to see data</div>}
-          {topProducts.map(([prod,val],i)=>(
-            <div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
-              <div style={{display:"flex",gap:9,alignItems:"center"}}>
-                <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.muted,minWidth:16}}>{i+1}</span>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{prod}</span>
-              </div>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.green}}>{fmt$(val)}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Orders in flight + AR */}
-        <div className="card" style={{padding:16}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.5,marginBottom:14}}>ORDERS & AR SNAPSHOT</div>
-          {ORDER_STAGES.map(stage=>{
-            const cnt=(s.orders||[]).filter(o=>o.stage===stage).length;
-            const val=(s.orders||[]).filter(o=>o.stage===stage).reduce((a,o)=>a+(o.value||0),0);
-            const col={"Order Received":B.blue,"Order Placed":B.purple,"Invoiced":B.green}[stage]||B.muted;
-            return(
-              <div key={stage} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}} onClick={()=>setMod("orders")}>
-                <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:col}}/>
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>{stage}</span>
-                </div>
-                <div style={{display:"flex",gap:12,alignItems:"center"}}>
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{cnt} orders</span>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:col}}>{fmt$(val)}</span>
-                </div>
-              </div>
-            );
-          })}
-          <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>Total AR Outstanding</span>
-            <span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.red}}>{fmt$(arTotal)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  ORDER MANAGER
 // ════════════════════════════════════════════════════════════════════════════
 function ModOrders() {
