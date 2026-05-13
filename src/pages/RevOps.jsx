@@ -1929,7 +1929,7 @@ function CrmLinker({linked,onLink,onUnlink}){
     searchTimer.current=setTimeout(()=>{
       setLoading(true);
       fetch(`/api/crm/search?q=${encodeURIComponent(val)}`)
-        .then(r=>r.json()).then(d=>{setResults(d.results||[]);setLoading(false);})
+        .then(r=>r.json()).then(d=>{setResults(Array.isArray(d)?d:[]);setLoading(false);})
         .catch(()=>setLoading(false));
     },400);
   };
@@ -1940,7 +1940,7 @@ function CrmLinker({linked,onLink,onUnlink}){
     fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)})
       .then(r=>r.json()).then(d=>{
         setCreating(false);
-        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),module:"Lead"});
+        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),school:form.school||"",email:form.email||"",module:"Lead"});
         setShowCreate(false);
       }).catch(()=>setCreating(false));
   };
@@ -1969,9 +1969,9 @@ function CrmLinker({linked,onLink,onUnlink}){
             {results.length>0&&(
               <div style={{position:"absolute",top:"calc(100% + 2px)",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",zIndex:20,maxHeight:160,overflowY:"auto"}}>
                 {results.map(r=>(
-                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.name,module:r.module});setResults([]);setQ(r.name);}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.name}</span>
-                    {r.company&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.company}</span>}
+                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.fullName||r.name||"",school:r.school||"",email:r.email||"",module:r.module});setResults([]);setQ(r.fullName||r.name||"");}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.fullName||r.name}</span>
+                    {r.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.school}</span>}
                     <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,flexShrink:0}}>{(r.module||"").toUpperCase()}</span>
                   </button>
                 ))}
@@ -1992,6 +1992,177 @@ function CrmLinker({linked,onLink,onUnlink}){
           <div style={{display:"flex",gap:6}}><OBtn onClick={createLead} disabled={creating||!form.lastName}>{creating?"CREATING…":"CREATE LEAD"}</OBtn><GBtn onClick={()=>setShowCreate(false)}>Cancel</GBtn></div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,questionMap,nextStep,initialSubject,initialBody,onComplete}){
+  const [subject,setSubject]=useState(initialSubject||"");
+  const [body,setBody]=useState(initialBody||"");
+  const [drafting,setDrafting]=useState(false);
+  const [draftErr,setDraftErr]=useState(null);
+  const [schedDate,setSchedDate]=useState("");
+  const [schedTime,setSchedTime]=useState("");
+  const [logging,setLogging]=useState(false);
+  const [logDone,setLogDone]=useState(false);
+  const [logErr,setLogErr]=useState(null);
+  const [noteCopy,setNoteCopy]=useState("");
+
+  const hasDraft=!!(subject&&body);
+
+  const doDraft=async()=>{
+    setDrafting(true);setDraftErr(null);
+    try{
+      const confirmedPainTitles=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title);
+      const r=await fetch("/api/ai/email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        sessionId:sessRef.current,
+        contactName:linked?.name||"",
+        schoolName:linked?.school||"",
+        schoolClass:calcInputs.schoolClass,
+        numAthletes:Number(calcInputs.numAthletes||0),
+        numSports:Number(calcInputs.numSports||0),
+        confirmedPains:confirmedPainTitles,
+        answers,questionMap,
+        sponsorshipGuaranteedMin:calcResult?.guaranteedMin??null,
+        sponsorshipUpsideMax:calcResult?.upsideMax??null,
+        nextStep,
+      })});
+      const d=await r.json();
+      if(d.error)throw new Error(d.error);
+      setSubject(d.subject||"");setBody(d.body||"");
+    }catch(e){setDraftErr(e.message);}
+    finally{setDrafting(false);}
+  };
+
+  const buildNote=()=>{
+    const today=new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+    const repName=cu?.name||cu?.id||"Rep";
+    const painList=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>`- ${c.title}`).join("\n")||"None confirmed";
+    const lines=[
+      `School: ${linked?.school||"(not provided)"}${calcInputs.schoolClass?` (${calcInputs.schoolClass})`:""}`,
+      `Athletes: ${calcInputs.numAthletes||"—"} | Sports: ${calcInputs.numSports||"—"}`,
+      `Online store: ${calcInputs.hasOnlineStore===true?"Yes":calcInputs.hasOnlineStore===false?"No":"Not answered"} | Booster club: ${calcInputs.hasBoosterClub===true?"Yes":calcInputs.hasBoosterClub===false?"No":"Not answered"}`,
+      "",
+      "Pain points confirmed:",
+      painList,
+      "",
+      calcResult
+        ?`Sponsorship offer presented:\nGuaranteed minimum: $${(calcResult.guaranteedMin||0).toLocaleString()}\nUpside potential: up to $${(calcResult.upsideMax||0).toLocaleString()}`
+        :"Sponsorship offer: Not calculated",
+      "",
+      `Next step: ${nextStep||"(none recorded)"}`,
+      subject?`\nDraft email subject: ${subject}`:"",
+      schedDate?`Scheduled follow-up: ${schedDate}${schedTime?` at ${schedTime}`:""}` :"",
+      "",
+      `Call conducted by: ${repName} on ${today}`,
+    ];
+    return{
+      title:`ST1 Discovery Call — ${today}`,
+      content:lines.filter(l=>l!==undefined).join("\n"),
+    };
+  };
+
+  const doComplete=async()=>{
+    setLogging(true);setLogErr(null);
+    // Save email + status to session
+    if(sessRef.current){
+      await fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({repId:cu?.id||"unknown",draftEmailSubject:subject,draftEmailBody:body,status:"COMPLETE"})
+      }).catch(()=>{});
+    }
+    // Log to CRM note
+    if(linked?.id){
+      const{title,content}=buildNote();
+      setNoteCopy(content);
+      const crmModule=linked.module==="Contact"?"Contacts":"Leads";
+      try{
+        const r=await fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:title,noteContent:content})});
+        const d=await r.json();
+        if(d.error)throw new Error(d.error);
+      }catch(e){
+        setLogErr(e.message);
+      }
+    }
+    setLogging(false);setLogDone(true);
+  };
+
+  const copyFull=()=>navigator.clipboard?.writeText(`Subject: ${subject}\n\n${body}`).catch(()=>{});
+  const mailtoHref=()=>`mailto:${linked?.email||""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
+
+  // ── Success state ─────────────────────────────────────────────────────────
+  if(logDone){
+    return(
+      <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:8,padding:"20px 18px",textAlign:"center",marginTop:16}}>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green,marginBottom:6}}>✓</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>Call logged to CRM. Session complete.</div>
+        {logErr&&(
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>
+            Note: CRM logging failed ({logErr}). Copy note text to log manually.
+            {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",margin:"6px auto 0",background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
+          </div>
+        )}
+        <OBtn col={B.orange} onClick={()=>{sessionStorage.removeItem("ttSessionId");onComplete();}}>→ START NEW CALL</OBtn>
+      </div>
+    );
+  }
+
+  // ── No draft yet ──────────────────────────────────────────────────────────
+  if(!hasDraft){
+    return(
+      <div style={{marginTop:16}}>
+        <OBtn onClick={doDraft} disabled={drafting} style={{width:"100%"}}>
+          {drafting?"Writing your email…":"✦ DRAFT FOLLOW-UP EMAIL"}
+        </OBtn>
+        {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:6,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
+      </div>
+    );
+  }
+
+  // ── Draft ready ───────────────────────────────────────────────────────────
+  return(
+    <div className="card" style={{padding:16,marginTop:16}}>
+      {/* Subject */}
+      <div style={{marginBottom:10}}>
+        <Lbl s={{marginBottom:3}}>Subject</Lbl>
+        <input value={subject} onChange={e=>setSubject(e.target.value)} style={inp()}/>
+      </div>
+      {/* Body */}
+      <div style={{marginBottom:12}}>
+        <Lbl s={{marginBottom:3}}>Email body</Lbl>
+        <textarea value={body} onChange={e=>setBody(e.target.value)} rows={8} style={inp({resize:"vertical",lineHeight:1.7})}/>
+      </div>
+      {/* Regenerate */}
+      <GBtn onClick={doDraft} disabled={drafting} style={{width:"100%",marginBottom:14,textAlign:"center"}}>
+        {drafting?"Rewriting…":"↻ REGENERATE"}
+      </GBtn>
+      {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:8,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
+      {/* Quick actions */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+        <GBtn sm onClick={copyFull}>Copy to clipboard</GBtn>
+        <a href={mailtoHref()} style={{display:"inline-flex",alignItems:"center",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"4px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,textDecoration:"none",cursor:"pointer",fontWeight:700}}>OPEN IN MAIL ↗</a>
+      </div>
+      {/* Schedule reminder */}
+      <div style={{background:B.surface,borderRadius:5,padding:"10px 12px",marginBottom:14}}>
+        <Lbl s={{marginBottom:6}}>Schedule follow-up reminder</Lbl>
+        <div style={{display:"flex",gap:8}}>
+          <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp({flex:1})}/>
+          <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp({width:120})}/>
+        </div>
+      </div>
+      {/* Error from previous attempt */}
+      {logErr&&(
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10,padding:"8px 12px",background:`${B.red}10`,borderRadius:4}}>
+          CRM logging failed: {logErr}. You can still complete — copy the note text manually if needed.
+          {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
+        </div>
+      )}
+      {/* Primary action */}
+      <OBtn onClick={doComplete} disabled={logging} style={{width:"100%"}}>
+        {logging?"LOGGING…":"✓ MARK COMPLETE + LOG TO CRM"}
+      </OBtn>
     </div>
   );
 }
@@ -2131,8 +2302,8 @@ function TalkTrack({onClose,linkedContact}){
   const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null,estimatedCurrentSpend:""});
   const [calcResult,setCalcResult]=useState(null);
   const [calcLoading,setCalcLoading]=useState(false);
-  const [draftEmail,setDraftEmail]=useState("");
-  const [drafting,setDrafting]=useState(false);
+  const [emailSubject,setEmailSubject]=useState("");
+  const [emailBody,setEmailBody]=useState("");
   const [saving,setSaving]=useState(false);
   const saveTimer=useRef(null);
   const calcTimer=useRef(null);
@@ -2181,6 +2352,8 @@ function TalkTrack({onClose,linkedContact}){
             } else if(sess.sponsorshipGuaranteedMin!=null){
               setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax,breakdown:null,configLastUpdated:null});
             }
+            if(sess.draftEmailSubject) setEmailSubject(sess.draftEmailSubject);
+            if(sess.draftEmailBody)    setEmailBody(sess.draftEmailBody);
             if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
               setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
             }
@@ -2251,22 +2424,11 @@ function TalkTrack({onClose,linkedContact}){
     }
   };
 
-  const doDraftEmail=async()=>{
-    setDrafting(true);
-    const activePains=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title).join(", ");
-    const prompt=`Write a follow-up sales email from Matt Stone at ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Conversational, not salesy.`;
-    const t=await aiCall(prompt);
-    setDraftEmail(t||"");setDrafting(false);
-    if(t&&sessRef.current){
-      const lines=t.split("\n");
-      const subj=lines.find(l=>l.toLowerCase().startsWith("subject:"))?.replace(/^subject:\s*/i,"")||"";
-      const body=lines.filter(l=>!l.toLowerCase().startsWith("subject:")).join("\n").trim();
-      scheduleSave({draftEmailSubject:subj,draftEmailBody:body,status:"COMPLETE"});
-    }
-  };
-
   const currentPhase=TT_PHASES[phaseIdx];
   const phaseQs=questions.filter(q=>q.phase===currentPhase.id).sort((a,b)=>a.order-b.order);
+  const questionMap=Object.fromEntries(questions.map(q=>[q.id,q.questionText]));
+  const nextStepQ=questions.find(q=>q.phase==="SOLUTION"&&q.order===2);
+  const nextStep=nextStepQ?(answers[nextStepQ.id]||""):"";
 
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -2327,11 +2489,24 @@ function TalkTrack({onClose,linkedContact}){
                 )}
               </div>
             )}
-            <OBtn onClick={doDraftEmail} disabled={drafting} style={{width:"100%",marginBottom:8}}>{drafting?"WRITING…":"✦ DRAFT FOLLOW-UP EMAIL"}</OBtn>
-            {draftEmail&&(
-              <div style={{background:B.surface,borderRadius:4,padding:10}}>
-                <textarea value={draftEmail} onChange={e=>setDraftEmail(e.target.value)} rows={8} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",fontFamily:"'Lexend',sans-serif"}}/>
-                <GBtn onClick={()=>navigator.clipboard?.writeText(draftEmail)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
+            {nextStep?(
+              <EmailDrafter
+                sessRef={sessRef}
+                cu={cu}
+                linked={linked}
+                calcInputs={calcInputs}
+                calcResult={calcResult}
+                pains={pains}
+                answers={answers}
+                questionMap={questionMap}
+                nextStep={nextStep}
+                initialSubject={emailSubject}
+                initialBody={emailBody}
+                onComplete={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}
+              />
+            ):(
+              <div style={{background:B.surface,borderRadius:5,border:`1px dashed ${B.border}`,padding:"12px 14px",textAlign:"center"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Answer the "Next step" question above to unlock email drafting.</div>
               </div>
             )}
           </div>
@@ -2515,7 +2690,7 @@ function ModCRM() {
                   {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
                 </div>
               </div>
-              <OBtn sm onClick={()=>{setTtContact({id:sel.id,name:cName(sel),module:"Contact"});setTtView(true);}}>⤳ TALK TRACK</OBtn>
+              <OBtn sm onClick={()=>{setTtContact({id:sel.id,name:cName(sel),school:sel.school||"",email:sel.email||"",module:"Contact"});setTtView(true);}}>⤳ TALK TRACK</OBtn>
             </div>
             {/* Phase timeline */}
             <div style={{display:"flex",alignItems:"center"}}>
