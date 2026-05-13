@@ -29,7 +29,10 @@
     "api/analytics/ga4.js":                        { "maxDuration": 30 },
     "api/analytics/gtm.js":                        { "maxDuration": 30 },
     "api/analytics/utm.js":                        { "maxDuration": 30 },
-    "api/webhooks/zoho.js":                        { "maxDuration": 15 }
+    "api/webhooks/zoho.js":                        { "maxDuration": 15 },
+    "api/crm/search.js":                           { "maxDuration": 30 },
+    "api/crm/lead.js":                             { "maxDuration": 30 },
+    "api/crm/note.js":                             { "maxDuration": 30 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
