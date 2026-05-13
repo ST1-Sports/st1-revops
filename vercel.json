@@ -35,7 +35,11 @@
     "api/crm/note.js":                             { "maxDuration": 30 },
     "api/sponsorship/calculate.js":                { "maxDuration": 15 },
     "api/sessions/index.js":                       { "maxDuration": 15 },
-    "api/sessions/[id].js":                        { "maxDuration": 15 }
+    "api/sessions/[id].js":                        { "maxDuration": 15 },
+    "api/admin/questions.js":                      { "maxDuration": 15 },
+    "api/admin/questions/reorder.js":              { "maxDuration": 15 },
+    "api/admin/questions/[id].js":                 { "maxDuration": 15 },
+    "api/admin/sponsorship-config.js":             { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

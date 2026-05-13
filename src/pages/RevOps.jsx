@@ -626,7 +626,8 @@ export default function App() {
     const rep = (s.reps||[]).find(r=>r.id===s.currentUserId);
     if (!rep) return null;
     const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-    return { ...rep, initials, color: B.blue, role: rep.title || "rep" };
+    const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
+    return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
   })();
   const crmSyncRef = useRef(null);
   const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer};
@@ -746,6 +747,7 @@ export default function App() {
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
+    ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
   ];
 
   // Helper: find nav item label (including inside group children)
@@ -936,6 +938,7 @@ export default function App() {
             {mod==="alerts"      && <ModAlerts/>}
             {mod==="activity"    && <ModActivity/>}
             {mod==="settings"    && <ModSettings/>}
+            {mod==="admin"       && <ModAdmin/>}
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
@@ -11701,6 +11704,315 @@ function BrandAssetAddForm({dispatch,toast,s}) {
   );
 }
 
+// ════ ADMIN ══════════════════════════════════════════════════════════════════
+
+const PHASE_OPTS = ["RAPPORT","INTRO","DISCOVERY","PAIN","SOLUTION"];
+const INPUT_OPTS = ["TEXT","TEXTAREA","SELECT","BOOLEAN","NUMBER"];
+const INPUT_COLORS = {TEXT:B.blue,TEXTAREA:B.teal,SELECT:B.purple,BOOLEAN:B.green,NUMBER:B.orange};
+
+function AdminQuestions() {
+  const {toast}=useApp();
+  const [questions,setQuestions]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [phase,setPhase]=useState("ALL");
+  const [showAdd,setShowAdd]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [dragId,setDragId]=useState(null);
+  const blankForm={phase:"RAPPORT",order:1,questionText:"",helpText:"",inputType:"TEXT",selectOptions:"",isRequired:false};
+  const [form,setForm]=useState(blankForm);
+
+  const load=async()=>{
+    try{const r=await fetch("/api/admin/questions");const d=await r.json();setQuestions(d.questions||[]);}
+    catch(e){toast("Failed to load questions: "+e.message,"error");}
+    setLoading(false);
+  };
+  useEffect(()=>{load();},[]);
+
+  const filtered = phase==="ALL" ? questions : questions.filter(q=>q.phase===phase);
+
+  const handleToggleActive=async(q)=>{
+    try{
+      const r=await fetch(`/api/admin/questions/${q.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({isActive:!q.isActive})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error);
+      setQuestions(prev=>prev.map(x=>x.id===q.id?d.question:x));
+      toast(q.isActive?"Question deactivated":"Question activated","success");
+    }catch(e){toast("Error: "+e.message,"error");}
+  };
+
+  const resetForm=()=>{setShowAdd(false);setEditId(null);setForm(blankForm);};
+
+  const handleSave=async()=>{
+    if(!form.questionText.trim()){toast("Question text is required","error");return;}
+    const body={...form,helpText:form.helpText||null,
+      selectOptions:form.inputType==="SELECT"&&form.selectOptions?form.selectOptions.split(",").map(s=>s.trim()).filter(Boolean):null};
+    try{
+      let r,d;
+      if(editId){
+        r=await fetch(`/api/admin/questions/${editId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        d=await r.json();if(!r.ok) throw new Error(d.error);
+        setQuestions(prev=>prev.map(x=>x.id===editId?d.question:x));
+        toast("Question updated","success");
+      }else{
+        r=await fetch("/api/admin/questions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        d=await r.json();if(!r.ok) throw new Error(d.error);
+        setQuestions(prev=>[...prev,d.question]);
+        toast("Question added","success");
+      }
+      resetForm();
+    }catch(e){toast("Error: "+e.message,"error");}
+  };
+
+  const handleDragStart=(e,id)=>{setDragId(id);e.dataTransfer.effectAllowed="move";};
+  const handleDragOver=(e)=>{e.preventDefault();e.dataTransfer.dropEffect="move";};
+  const handleDrop=async(e,targetId)=>{
+    e.preventDefault();
+    if(!dragId||dragId===targetId){setDragId(null);return;}
+    const ids=filtered.map(q=>q.id);
+    const from=ids.indexOf(dragId),to=ids.indexOf(targetId);
+    if(from<0||to<0){setDragId(null);return;}
+    const reordered=[...ids];reordered.splice(from,1);reordered.splice(to,0,dragId);
+    const updates=reordered.map((id,idx)=>({id,order:idx+1}));
+    const orderMap={};updates.forEach(u=>{orderMap[u.id]=u.order;});
+    setQuestions(prev=>prev.map(q=>orderMap[q.id]!=null?{...q,order:orderMap[q.id]}:q).sort((a,b)=>a.order-b.order));
+    try{
+      const r=await fetch("/api/admin/questions/reorder",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({updates})});
+      if(!r.ok){const d=await r.json();throw new Error(d.error);}
+    }catch(e){toast("Reorder failed: "+e.message,"error");load();}
+    setDragId(null);
+  };
+
+  const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"};
+
+  return (
+    <div>
+      {/* Phase filter + add button */}
+      <div style={{display:"flex",gap:5,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        {["ALL",...PHASE_OPTS].map(p=>(
+          <button key={p} onClick={()=>setPhase(p)} style={{background:phase===p?B.orange:B.surface,color:phase===p?B.white:B.textMid,border:`1px solid ${phase===p?B.orange:B.border}`,borderRadius:5,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{p}</button>
+        ))}
+        <button onClick={()=>{setShowAdd(true);setEditId(null);setForm(blankForm);}} style={{marginLeft:"auto",background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:5,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>+ ADD QUESTION</button>
+      </div>
+
+      {/* Add / Edit form */}
+      {(showAdd||editId)&&(
+        <div className="card" style={{padding:16,marginBottom:14,borderTop:`3px solid ${B.orange}`}}>
+          <Lbl c={B.orange} s={{marginBottom:10}}>{editId?"EDIT QUESTION":"ADD QUESTION"}</Lbl>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:9}}>
+            <div><Lbl s={{marginBottom:3}}>PHASE</Lbl>
+              <select value={form.phase} onChange={e=>setForm(f=>({...f,phase:e.target.value}))} style={inp}>
+                {PHASE_OPTS.map(p=><option key={p}>{p}</option>)}
+              </select>
+            </div>
+            <div><Lbl s={{marginBottom:3}}>ORDER</Lbl>
+              <input type="number" value={form.order} min={1} onChange={e=>setForm(f=>({...f,order:parseInt(e.target.value)||1}))} style={inp}/>
+            </div>
+            <div><Lbl s={{marginBottom:3}}>INPUT TYPE</Lbl>
+              <select value={form.inputType} onChange={e=>setForm(f=>({...f,inputType:e.target.value}))} style={inp}>
+                {INPUT_OPTS.map(t=><option key={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{marginBottom:9}}><Lbl s={{marginBottom:3}}>QUESTION TEXT</Lbl>
+            <textarea value={form.questionText} onChange={e=>setForm(f=>({...f,questionText:e.target.value}))} rows={2} style={{...inp,resize:"vertical"}}/>
+          </div>
+          <div style={{marginBottom:9}}><Lbl s={{marginBottom:3}}>HELP TEXT (OPTIONAL)</Lbl>
+            <input value={form.helpText||""} onChange={e=>setForm(f=>({...f,helpText:e.target.value}))} style={inp}/>
+          </div>
+          {form.inputType==="SELECT"&&(
+            <div style={{marginBottom:9}}><Lbl s={{marginBottom:3}}>OPTIONS (COMMA-SEPARATED)</Lbl>
+              <input value={form.selectOptions||""} onChange={e=>setForm(f=>({...f,selectOptions:e.target.value}))} placeholder="Option 1, Option 2, Option 3" style={inp}/>
+            </div>
+          )}
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <input type="checkbox" id="adm-req" checked={!!form.isRequired} onChange={e=>setForm(f=>({...f,isRequired:e.target.checked}))}/>
+            <label htmlFor="adm-req" style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>Required</label>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <OBtn sm onClick={handleSave}>{editId?"SAVE CHANGES":"ADD QUESTION"}</OBtn>
+            <button onClick={resetForm} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 12px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CANCEL</button>
+          </div>
+        </div>
+      )}
+
+      {/* Question list */}
+      {loading ? (
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"20px 0",textAlign:"center"}}>Loading questions…</div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          {filtered.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 0"}}>No questions in this phase.</div>}
+          {filtered.map(q=>(
+            <div key={q.id} draggable onDragStart={e=>handleDragStart(e,q.id)} onDragOver={handleDragOver} onDrop={e=>handleDrop(e,q.id)}
+              style={{display:"flex",alignItems:"center",gap:9,padding:"9px 12px",background:q.isActive?B.white:B.surface,border:`1px solid ${dragId===q.id?B.orange:B.border}`,borderRadius:6,opacity:q.isActive?1:0.5,cursor:"grab",userSelect:"none"}}>
+              <span style={{color:B.muted,fontSize:13,flexShrink:0}}>⋮⋮</span>
+              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,width:20,flexShrink:0,textAlign:"right"}}>{q.order}</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.questionText}</div>
+                {q.helpText&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{q.helpText}</div>}
+              </div>
+              <span style={{background:`${INPUT_COLORS[q.inputType]||B.blue}15`,color:INPUT_COLORS[q.inputType]||B.blue,border:`1px solid ${INPUT_COLORS[q.inputType]||B.blue}30`,borderRadius:3,padding:"1px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,flexShrink:0}}>{q.inputType}</span>
+              <button onClick={()=>handleToggleActive(q)} style={{background:q.isActive?B.greenBg:"none",color:q.isActive?B.green:B.muted,border:`1px solid ${q.isActive?`${B.green}40`:B.border}`,borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",flexShrink:0,cursor:"pointer"}}>{q.isActive?"ACTIVE":"INACTIVE"}</button>
+              <button onClick={()=>{setEditId(q.id);setShowAdd(false);setForm({phase:q.phase,order:q.order,questionText:q.questionText,helpText:q.helpText||"",inputType:q.inputType,selectOptions:Array.isArray(q.selectOptions)?q.selectOptions.join(", "):q.selectOptions||"",isRequired:q.isRequired});}}
+                style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer",flexShrink:0}}>EDIT</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminSponsorshipConfig() {
+  const {cu,toast}=useApp();
+  const [cfg,setCfg]=useState(null);
+  const [loading,setLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [preview,setPreview]=useState(null);
+  const debounceRef=useRef(null);
+
+  useEffect(()=>{
+    fetch("/api/admin/sponsorship-config").then(r=>r.json())
+      .then(d=>{setCfg(d.config||null);setLoading(false);})
+      .catch(e=>{toast("Failed to load config: "+e.message,"error");setLoading(false);});
+  },[]);
+
+  useEffect(()=>{
+    if(!cfg) return;
+    if(debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current=setTimeout(async()=>{
+      try{
+        const r=await fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({schoolClass:"4A",numSports:12,numAthletes:300,hasOnlineStore:true,hasBoosterClub:true})});
+        const d=await r.json();
+        if(r.ok) setPreview(d);
+      }catch{}
+    },800);
+    return()=>clearTimeout(debounceRef.current);
+  },[cfg]);
+
+  const save=async()=>{
+    setSaving(true);
+    try{
+      const r=await fetch("/api/admin/sponsorship-config",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({...cfg,updatedBy:cu?.name||cu?.email||"admin"})});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error);
+      setCfg(d.config);toast("Config saved","success");
+    }catch(e){toast("Save failed: "+e.message,"error");}
+    setSaving(false);
+  };
+
+  if(loading) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"20px 0",textAlign:"center"}}>Loading config…</div>;
+  if(!cfg) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.red,padding:12}}>Config not found — run: <code>npx prisma db seed</code></div>;
+
+  const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"};
+  const FNum=({k,label,prefix="$",step=1})=>(
+    <div><Lbl s={{marginBottom:3}}>{label}</Lbl>
+      <div style={{display:"flex",alignItems:"center",gap:4}}>
+        {prefix&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,flexShrink:0}}>{prefix}</span>}
+        <input type="number" value={cfg[k]??0} step={step} min={0} onChange={e=>setCfg(c=>({...c,[k]:parseFloat(e.target.value)||0}))} style={inp}/>
+      </div>
+    </div>
+  );
+  const FPct=({k,label})=>(
+    <div><Lbl s={{marginBottom:3}}>{label}</Lbl>
+      <div style={{display:"flex",alignItems:"center",gap:4}}>
+        <input type="number" value={Math.round((cfg[k]||0)*10000)/100} step={0.1} min={0} max={100} onChange={e=>setCfg(c=>({...c,[k]:(parseFloat(e.target.value)||0)/100}))} style={inp}/>
+        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,flexShrink:0}}>%</span>
+      </div>
+    </div>
+  );
+  const SC=cfg.schoolClassConfidence||{};
+
+  return (
+    <div>
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
+        <Lbl c={B.orange} s={{marginBottom:12}}>REVENUE ASSUMPTIONS</Lbl>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:9}}>
+          <FNum k="avgOrderValuePerAthlete" label="AVG ORDER VALUE / ATHLETE"/>
+          <FNum k="avgEquipmentOrderPerSport" label="AVG EQUIPMENT ORDER / SPORT"/>
+          <FNum k="teamStoreRevenuePerAthlete" label="TEAM STORE REVENUE / ATHLETE"/>
+          <FNum k="purchaseFrequencyPerYear" label="PURCHASE FREQUENCY / YEAR" prefix="" step={0.1}/>
+          <FNum k="boosterMultiplier" label="BOOSTER CLUB MULTIPLIER" prefix="" step={0.01}/>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+          <FPct k="netMarginPct" label="ST1 NET MARGIN"/>
+          <FPct k="givebackPct" label="GIVEBACK % OF NET PROFIT"/>
+        </div>
+      </div>
+
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
+        <Lbl c={B.blue} s={{marginBottom:6}}>SCHOOL CLASS CONFIDENCE</Lbl>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12,lineHeight:1.5}}>How confident are we that a school of this size becomes a full customer? Scales the guaranteed minimum.</div>
+        {["1A","2A","3A","4A","5A","6A"].map(cls=>{
+          const val=SC[cls]??0;const pct=Math.round(val*100);
+          return(
+            <div key={cls} style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.text,width:24,flexShrink:0}}>{cls}</span>
+              <input type="range" min={0} max={100} step={1} value={pct} onChange={e=>setCfg(c=>({...c,schoolClassConfidence:{...SC,[cls]:parseInt(e.target.value)/100}}))} style={{flex:1,accentColor:B.orange}}/>
+              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,width:38,textAlign:"right",flexShrink:0}}>{pct}%</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
+        <Lbl c={B.green} s={{marginBottom:8}}>LIVE PREVIEW — 4A school · 300 athletes · 12 sports · store + booster</Lbl>
+        {preview ? (
+          <div style={{display:"flex",gap:28,alignItems:"flex-end"}}>
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>GUARANTEED MIN</div>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:24,color:B.green}}>${(preview.guaranteedMin||0).toLocaleString()}</div>
+            </div>
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>UPSIDE MAX</div>
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:24,color:B.orange}}>${(preview.upsideMax||0).toLocaleString()}</div>
+            </div>
+            {preview.breakdown&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.7}}>
+              Projected revenue: ${Math.round(preview.breakdown.projectedRevenue).toLocaleString()}<br/>
+              Net profit: ${Math.round(preview.breakdown.netProfit).toLocaleString()}<br/>
+              Giveback pool: ${Math.round(preview.breakdown.givebackPool).toLocaleString()}
+            </div>}
+          </div>
+        ) : (
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Calculating preview…</div>
+        )}
+      </div>
+
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <OBtn onClick={save} disabled={saving}>{saving?"SAVING…":"SAVE CONFIGURATION"}</OBtn>
+        {cfg.lastUpdatedBy&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Last updated by {cfg.lastUpdatedBy} on {new Date(cfg.updatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</span>}
+      </div>
+    </div>
+  );
+}
+
+function ModAdmin() {
+  const {cu}=useApp();
+  const [tab,setTab]=useState("questions");
+  const TABS=[{id:"questions",label:"Talk Track Questions"},{id:"config",label:"Sponsorship Config"}];
+
+  if(!cu?.isAdmin) return(
+    <div style={{padding:48,textAlign:"center",fontFamily:"'Lexend',sans-serif",color:B.muted,fontSize:13}}>
+      Admin access required.<br/>
+      <span style={{fontSize:11}}>Ask an existing admin to toggle the ◐ MAKE ADMIN button in Settings → Sales Reps.</span>
+    </div>
+  );
+
+  return(
+    <div style={{padding:"22px 26px",maxWidth:920}}>
+      <PH title="ADMIN PANEL" sub="Talk Track question bank and sponsorship calculation config"/>
+      <div style={{display:"flex",gap:0,marginBottom:22,borderBottom:`1px solid ${B.border}`}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{background:"none",border:"none",borderBottom:tab===t.id?`2px solid ${B.orange}`:"2px solid transparent",padding:"9px 20px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontWeight:tab===t.id?600:400,color:tab===t.id?B.orange:B.muted,cursor:"pointer",marginBottom:-1}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab==="questions"&&<AdminQuestions/>}
+      {tab==="config"&&<AdminSponsorshipConfig/>}
+    </div>
+  );
+}
+
 function ModSettings() {
   const {s,dispatch,toast,setMod}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
@@ -11727,7 +12039,8 @@ function ModSettings() {
 
   const savePin=()=>{
     if(pinVal.length!==4||!/^\d{4}$/.test(pinVal)){toast("PIN must be exactly 4 digits","error");return;}
-    dispatch("SET_APP_USER",{repId:pinForm,pin:pinVal});
+    const existingAu=(s.appUsers||[]).find(u=>u.repId===pinForm)||{};
+    dispatch("SET_APP_USER",{...existingAu,repId:pinForm,pin:pinVal});
     toast("PIN saved — rep can now log in","success");
     setPinForm(null);setPinVal("");
   };
@@ -12096,6 +12409,13 @@ function ModSettings() {
         <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {(s.reps||[]).map(rep=>{
             const hasAccess = (s.appUsers||[]).some(u=>u.repId===rep.id);
+            const repAu = (s.appUsers||[]).find(u=>u.repId===rep.id);
+            const isRepAdmin = repAu?.isAdmin||false;
+            const toggleRepAdmin=()=>{
+              if(!repAu){toast("Set a PIN first before granting admin access","error");return;}
+              dispatch("SET_APP_USER",{...repAu,isAdmin:!isRepAdmin});
+              toast(!isRepAdmin?`${rep.name} granted admin access`:`${rep.name} admin access removed`,"success");
+            };
             const hasOwnGmail = !!rep.gmailEnvKey;
             return(
             <div key={rep.id} style={{border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
@@ -12117,6 +12437,7 @@ function ModSettings() {
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title={hasOwnGmail?`Send test from ${rep.gmailEnvKey}'s Gmail`:"Send test from shared Gmail"}>✉ TEST</button>
                   <button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
+                  {hasAccess&&<button onClick={toggleRepAdmin} style={{background:isRepAdmin?B.purpleBg:"none",border:`1px solid ${isRepAdmin?`${B.purple}40`:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:isRepAdmin?B.purple:B.muted,cursor:"pointer"}} title={isRepAdmin?"Remove admin access":"Grant admin access to this rep"}>◐ {isRepAdmin?"ADMIN":"MAKE ADMIN"}</button>}
                   <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
                   <button onClick={()=>{if(window.confirm(`Remove ${rep.name}?`))dispatch("DEL_REP",rep.id);}} style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.red,cursor:"pointer"}}>DEL</button>
                 </div>
