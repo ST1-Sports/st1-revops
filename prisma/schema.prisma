@@ -576,6 +576,9 @@ model TalkTrackSession {
   confirmedPains           Json                   @default("[]")
   sponsorshipGuaranteedMin Float?
   sponsorshipUpsideMax     Float?
+  orgType                  String?
+  sportsMode               String?
+  selectedSports           Json?                  @default("[]")
   draftEmailSubject        String?
   draftEmailBody           String?                @db.Text
   status                   TalkTrackSessionStatus @default(IN_PROGRESS)
