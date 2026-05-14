@@ -1933,7 +1933,7 @@ function SportsPicker({selected,onChange,single=false}){
   );
 }
 
-function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onChange,onCalcInput}){
+function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,schoolClass,onChange,onCalcInput}){
   const [expanded,setExpanded]=useState(!orgType);
   const isComplete=!!(orgType&&(
     orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0))
@@ -1954,6 +1954,7 @@ function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onC
       <div onClick={()=>setExpanded(true)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",marginBottom:14,background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:6,cursor:"pointer"}}>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
           <span style={{fontWeight:600}}>{orgType==="school"?"School":"Organization"}</span>
+          {orgType==="school"&&schoolClass&&<span style={{color:B.orange,fontWeight:600}}> · {schoolClass}</span>}
           {orgType==="school"&&numAthletes&&<span style={{color:B.muted}}> · {numAthletes} athletes</span>}
           <span style={{color:B.muted}}> · {sportSummary}</span>
         </div>
@@ -1973,12 +1974,19 @@ function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onC
       {orgType==="school"&&(<>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
           <div>
-            {sub("# SPORTS")}
-            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
+            {sub("SCHOOL CLASS")}
+            <select value={schoolClass||""} onChange={e=>onCalcInput("schoolClass",e.target.value)} style={numInp({marginTop:0})}>
+              <option value="">— Select —</option>
+              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
+            </select>
           </div>
           <div>
             {sub("# ATHLETES")}
             <input type="number" min="1" value={numAthletes} onChange={e=>onCalcInput("numAthletes",e.target.value)} placeholder="e.g. 300" style={numInp({marginTop:0})}/>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            {sub("# SPORTS")}
+            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
           </div>
         </div>
         {sub("SERVICING")}
@@ -2323,25 +2331,10 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
     <div style={{marginTop:22,paddingTop:18,borderTop:`1px solid ${B.border}`}}>
       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:2,marginBottom:12}}>SPONSORSHIP CALCULATOR</div>
 
-      {/* Inputs */}
+      {/* Inputs — schoolClass/numSports/numAthletes are captured in OrgProfile above */}
       <div className="card" style={{padding:14,marginBottom:12}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <div>
-            <Lbl s={{marginBottom:3}}>School classification</Lbl>
-            <select value={inputs.schoolClass} onChange={e=>onInputChange("schoolClass",e.target.value)} style={inp()}>
-              <option value="">— Select —</option>
-              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of sports</Lbl>
-            <input type="number" min={1} max={40} value={inputs.numSports} onChange={e=>onInputChange("numSports",e.target.value)} placeholder="e.g. 12" style={inp()}/>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of athletes</Lbl>
-            <input type="number" min={1} max={5000} value={inputs.numAthletes} onChange={e=>onInputChange("numAthletes",e.target.value)} placeholder="e.g. 320" style={inp()}/>
-          </div>
-          <div>
+          <div style={{gridColumn:"1/-1"}}>
             <Lbl s={{marginBottom:3}}>Their est. current spend (optional)</Lbl>
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:B.muted,pointerEvents:"none"}}>$</span>
@@ -2362,7 +2355,7 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
       {/* Placeholder */}
       {!hasRequired&&!loading&&!result&&(
         <div style={{background:B.surface,borderRadius:6,border:`1px dashed ${B.border}`,padding:"14px 16px",textAlign:"center"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Enter school classification, number of sports, and number of athletes to see the sponsorship offer</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Fill in School Class, # Sports, and # Athletes above to unlock the sponsorship estimate</div>
         </div>
       )}
 
@@ -2426,7 +2419,7 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
 }
 
 function TalkTrack({onClose,linkedContact}){
-  const {cu,toast}=useApp();
+  const {cu,toast,dispatch,s}=useApp();
   const [sessionId,setSessionId]=useState(null);
   const [questions,setQuestions]=useState([]);
   const [phaseIdx,setPhaseIdx]=useState(0);
@@ -2631,6 +2624,7 @@ function TalkTrack({onClose,linkedContact}){
           selectedSports={selectedSports}
           numSports={calcInputs.numSports}
           numAthletes={calcInputs.numAthletes}
+          schoolClass={calcInputs.schoolClass}
           onChange={handleOrgChange}
           onCalcInput={handleCalcInput}
         />
@@ -2762,6 +2756,20 @@ function TalkTrack({onClose,linkedContact}){
                   fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
                     body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
                   }).catch(()=>{});
+
+                  // Update local CRM contact with profile + sponsorship data
+                  const allContacts=s?.contacts||[];
+                  const localC=allContacts.find(c=>c.zohoId===linked.id||c.id===linked.id);
+                  if(localC){
+                    dispatch("UPDATE_CONTACT",{
+                      id:localC.id,
+                      orgType,sportsMode,selectedSports,
+                      ...(calcInputs.schoolClass?{schoolClass:calcInputs.schoolClass}:{}),
+                      ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
+                      ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
+                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null}:{}),
+                    });
+                  }
                 }
 
                 sessionStorage.removeItem("ttSessionId");
@@ -2800,6 +2808,8 @@ function ModCRM() {
   const [ttContact,setTtContact]=useState(null);
   const [showAddContact,setShowAddContact]=useState(false);
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+  const [leftMode,setLeftMode]=useState("contacts");
+  const [selSchool,setSelSchool]=useState(null);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
@@ -2867,15 +2877,21 @@ function ModCRM() {
       <div style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>ACCOUNTS</div>
+            <div style={{display:"flex",gap:3}}>
+              {[["contacts","CONTACTS"],["accounts","ACCOUNTS"]].map(([v,l])=>(
+                <button key={v} onClick={()=>{setLeftMode(v);setSelId(null);setSelSchool(null);}} style={{padding:"4px 10px",background:leftMode===v?B.orange:B.surface,color:leftMode===v?B.white:B.muted,border:`1px solid ${leftMode===v?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
             <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
-          <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
-            {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
-            ))}
-          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+          {leftMode==="contacts"&&(
+            <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
+              {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          )}
         </div>
         {showAddContact&&(
           <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
@@ -2904,31 +2920,67 @@ function ModCRM() {
           </div>
         )}
         <div style={{flex:1,overflowY:"auto"}}>
-          {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
-          {filtered.map(c=>{
-            const {cd,phase}=getCD(c);
-            const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
-            const pc=PCOL[phase];
-            return(
-              <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+          {leftMode==="contacts"&&(<>
+            {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
+            {filtered.map(c=>{
+              const {cd,phase}=getCD(c);
+              const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+              const pc=PCOL[phase];
+              return(
+                <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
+                      {c.ownerId && c.ownerId !== cu?.id && (()=>{
+                        const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
+                        const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+                        return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
+                      })()}
+                    </div>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
-                    {c.ownerId && c.ownerId !== cu?.id && (()=>{
-                      const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
-                      const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-                      return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
-                    })()}
+                  {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                </button>
+              );
+            })}
+          </>)}
+          {leftMode==="accounts"&&(()=>{
+            const sq=search.toLowerCase();
+            const groups={};
+            contacts.filter(c=>!c.deadStatus).forEach(c=>{
+              const school=c.school||"(No School)";
+              if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
+              if(!groups[school]) groups[school]={contacts:[],deals:[],value:0};
+              groups[school].contacts.push(c);
+              const cd=getCD(c);
+              cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[school].deals.push(d);groups[school].value+=(d.value||0);}});
+            });
+            const schoolList=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));
+            if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
+            return schoolList.map(([school,g])=>{
+              const isActive=selSchool===school;
+              const phases=g.contacts.map(c=>getCD(c).phase);
+              const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
+              const pc=PCOL[topPhase];
+              return(
+                <button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{school}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
+                    </div>
+                    <div style={{flexShrink:0,textAlign:"right"}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{topPhase}</span>
+                      {g.value>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,marginTop:2}}>{fmt$K(g.value)}</div>}
+                    </div>
                   </div>
-                </div>
-                {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
-              </button>
-            );
-          })}
+                </button>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -2938,7 +2990,93 @@ function ModCRM() {
           onClose={()=>{setTtView(false);setTtContact(null);}}
           linkedContact={ttContact}
         />
-      ):!sel?(
+      ):leftMode==="accounts"&&selSchool?(()=>{
+        const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
+        const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
+        const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const schoolOrgType=schoolContacts[0]?.orgType||"";
+        const schoolClass=schoolContacts[0]?.schoolClass||"";
+        const numAthletes=schoolContacts[0]?.numAthletes||"";
+        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
+        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        return(
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            {/* School header */}
+            <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+                    {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
+                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                  </div>
+                </div>
+                {sponsorshipMin&&(
+                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
+                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+              {/* Action bar */}
+              <div style={{display:"flex",gap:8,marginBottom:18}}>
+                <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
+                <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+              </div>
+
+              {/* Contacts (coaches) list */}
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+                {schoolContacts.map(c=>{
+                  const {cd,phase}=getCD(c);
+                  const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+                  const pc=PCOL[phase];
+                  return(
+                    <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3}}>{phase}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Open deals for this school */}
+              {openDeals.length>0&&(<>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {openDeals.map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+            </div>
+          </div>
+        );
+      })():!sel?(
         <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
           {(()=>{
             const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
