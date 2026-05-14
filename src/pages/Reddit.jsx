@@ -1,358 +1,257 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 
 const C = {
-  bg: '#F2F2F0', surface: '#FFFFFF', border: '#E5E5E3',
-  orange: '#F37321', dark: '#1A1A1A', mid: '#555', muted: '#888',
-  green: '#16a34a', red: '#dc2626', yellow: '#d97706', blue: '#1A5FA8',
-  redBg: '#fef2f2', greenBg: '#f0fdf4', orangeBg: '#FEF3EC', blueBg: '#E8F0FA',
-  reddit: '#FF4500',
+  bg:       '#F2F2F0',
+  surface:  '#FFFFFF',
+  border:   '#E5E5E3',
+  orange:   '#F37321',
+  dark:     '#1A1A1A',
+  mid:      '#444',
+  muted:    '#888',
+  green:    '#16a34a',
+  red:      '#dc2626',
+  blue:     '#1A5FA8',
+  reddit:   '#FF4500',
+  orangeBg: '#FEF3EC',
+  greenBg:  '#f0fdf4',
 }
 
-const card = { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: '18px 22px', marginBottom: 14 }
+// ─── tiny helpers ────────────────────────────────────────────────────────────
 
-const STATUS_COLOR = { PENDING: C.yellow, EVALUATED: C.blue, APPROVED: C.green, REJECTED: C.muted, POSTED: C.green, SKIPPED: C.muted }
-const STATUS_BG    = { PENDING: '#fef9ec', EVALUATED: C.blueBg, APPROVED: C.greenBg, REJECTED: '#f9f9f9', POSTED: C.greenBg, SKIPPED: '#f9f9f9' }
-
-function Pill({ label, color, bg }) {
-  return (
-    <span style={{ background: bg || `${color}18`, color, border: `1px solid ${color}30`, borderRadius: 99, padding: '2px 10px', fontSize: 10, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .3 }}>
-      {label}
-    </span>
-  )
+function fmtDate(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
-function Btn({ children, onClick, disabled, color = C.orange, outline }) {
-  const bg = disabled ? '#e5e5e3' : outline ? C.surface : color
-  const fc = disabled ? C.muted : outline ? color : '#fff'
-  const bc = disabled ? '#e5e5e3' : color
+function CopyBtn({ text, label = '⎘ COPY REPLY', successLabel = '✓ COPIED' }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard?.writeText(text).catch(() => {})
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2200)
+  }
   return (
-    <button onClick={onClick} disabled={disabled}
-      style={{ background: bg, color: fc, border: `1px solid ${bc}`, borderRadius: 6, padding: '7px 16px', fontSize: 11, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, cursor: disabled ? 'default' : 'pointer', flexShrink: 0 }}>
-      {children}
+    <button onClick={copy}
+      style={{ background: copied ? C.green : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, transition: 'background .2s' }}>
+      {copied ? successLabel : label}
     </button>
   )
 }
 
-async function api(action, body = {}) {
-  const r = await fetch('/api/reddit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...body }) })
-  return r.json()
-}
+// ─── main component ───────────────────────────────────────────────────────────
 
 export default function Reddit() {
-  const [status,   setStatus]   = useState(null)   // {flags, env}
-  const [threads,  setThreads]  = useState([])
-  const [tab,      setTab]      = useState('PENDING')
-  const [scanning, setScanning] = useState(false)
-  const [scanInfo, setScanInfo] = useState(null)   // {ingested, skipped}
-  const [error,    setError]    = useState(null)
-  const [working,  setWorking]  = useState({})     // threadId → action string
-  const [replyMap, setReplyMap] = useState({})     // threadId → {variants, selected, editing}
-  const [lastScan, setLastScan] = useState(null)
+  const [feed,    setFeed]    = useState({ threads: [], lastRunDate: null, runDescription: '', loading: true, error: null })
+  const [sel,     setSel]     = useState(null)    // selected thread from feed
+  const [detail,  setDetail]  = useState(null)    // { body, topComments, loading, fetchError }
+  const [reply,   setReply]   = useState('')      // editable reply text
+  const replyRef              = useRef(null)
 
-  const loadThreads = useCallback(async () => {
-    const d = await api('threads', { limit: 100 })
-    if (d.threads) setThreads(d.threads)
-  }, [])
-
-  const loadStatus = useCallback(async () => {
-    const d = await api('status')
-    if (d.flags !== undefined) setStatus(d)
-  }, [])
-
+  // Load Slack feed on mount
   useEffect(() => {
-    loadStatus()
-    loadThreads()
+    fetch('/api/reddit/slack-feed')
+      .then(r => r.json())
+      .then(d => setFeed({ ...d, loading: false, error: d.error || null }))
+      .catch(e => setFeed(f => ({ ...f, loading: false, error: e.message })))
   }, [])
 
-  const scan = async () => {
-    setScanning(true); setError(null); setScanInfo(null)
-    try {
-      const d = await api('ingest')
-      if (d.error) { setError(d.error); }
-      else { setScanInfo({ ingested: d.ingested ?? 0, skipped: d.skipped ?? 0 }); setLastScan(new Date()); }
-      await loadThreads()
-    } catch (e) { setError('Scan failed: ' + e.message) }
-    setScanning(false)
-  }
+  // When thread changes, pre-fill reply and fetch Reddit thread detail
+  useEffect(() => {
+    if (!sel) return
+    setReply(sel.suggestedReply)
+    setDetail({ loading: true })
+    fetch(`/api/reddit/thread-detail?url=${encodeURIComponent(sel.url)}`)
+      .then(r => r.json())
+      .then(d => setDetail({ ...d, loading: false }))
+      .catch(e => setDetail({ loading: false, fetchError: e.message, body: '', topComments: [] }))
+  }, [sel?.id])
 
-  const evaluate = async (t) => {
-    setWorking(w => ({ ...w, [t.id]: 'Evaluating…' }))
-    try {
-      const d = await api('evaluate', { threadId: t.id })
-      if (d.error) { setError(d.error); }
-      else { await loadThreads(); setTab('EVALUATED') }
-    } catch (e) { setError(e.message) }
-    setWorking(w => { const n = { ...w }; delete n[t.id]; return n })
+  const openAndPaste = (url) => {
+    // Copy reply first so user can immediately Ctrl+V in the Reddit comment box
+    navigator.clipboard?.writeText(reply).catch(() => {})
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
-
-  const generate = async (t) => {
-    setWorking(w => ({ ...w, [t.id]: 'Writing reply…' }))
-    try {
-      const d = await api('generate', { threadId: t.id })
-      if (d.error) { setError(d.error); }
-      else if (d.skip) { setError('AI skipped this thread — no credible value-add'); await loadThreads(); }
-      else if (d.replySet?.variants) {
-        setReplyMap(m => ({ ...m, [t.id]: { variants: d.replySet.variants, selected: 0, text: d.replySet.variants[0]?.body || '' } }))
-        await loadThreads()
-      }
-    } catch (e) { setError(e.message) }
-    setWorking(w => { const n = { ...w }; delete n[t.id]; return n })
-  }
-
-  const approve = async (t, replyId) => {
-    setWorking(w => ({ ...w, [t.id]: 'Approving…' }))
-    try {
-      const d = await api('approve', { threadId: t.id, replyId, decidedBy: 'Matt Stone' })
-      if (d.error) setError(d.error)
-      else { await loadThreads(); setTab('APPROVED') }
-    } catch (e) { setError(e.message) }
-    setWorking(w => { const n = { ...w }; delete n[t.id]; return n })
-  }
-
-  const reject = async (t) => {
-    if (!window.confirm('Skip this thread?')) return
-    setWorking(w => ({ ...w, [t.id]: 'Skipping…' }))
-    try {
-      await api('reject', { threadId: t.id, decidedBy: 'Matt Stone', reason: 'Not relevant' })
-      await loadThreads()
-    } catch (e) { setError(e.message) }
-    setWorking(w => { const n = { ...w }; delete n[t.id]; return n })
-  }
-
-  const post = async (t) => {
-    const rm = replyMap[t.id]
-    const approvedReply = (t.replies || []).find(r => r.approvedAt && !r.rejectedAt)
-    const replyId = approvedReply?.id
-    if (!replyId) { setError('No approved reply found — approve a variant first'); return }
-    if (!window.confirm('Post this reply to Reddit now?')) return
-    setWorking(w => ({ ...w, [t.id]: 'Posting…' }))
-    try {
-      const d = await api('post', { replyId, decidedBy: 'Matt Stone' })
-      if (d.error) setError(d.error)
-      else { await loadThreads(); setTab('POSTED') }
-    } catch (e) { setError(e.message) }
-    setWorking(w => { const n = { ...w }; delete n[t.id]; return n })
-  }
-
-  const isConnected  = status?.env?.hasClientId && status?.env?.hasClientSecret
-  const canPost      = status?.flags?.postingEnabled
-  const tabCounts    = { PENDING: 0, EVALUATED: 0, APPROVED: 0, POSTED: 0 }
-  threads.forEach(t => { if (tabCounts[t.status] !== undefined) tabCounts[t.status]++ })
-  const visible = threads.filter(t => t.status === tab)
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, padding: '28px 32px', fontFamily: "'Lexend', sans-serif" }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: "'Lexend', sans-serif", background: C.bg }}>
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 20, gap: 16, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <div style={{ width: 40, height: 40, background: C.reddit, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: 18, flexShrink: 0 }}>r/</div>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: C.dark }}>Reddit Engagement</h1>
-            <p style={{ margin: 0, fontSize: 13, color: C.muted }}>Auto-monitor subreddits · AI-drafted replies · One-click post</p>
+      {/* ── Left sidebar: thread list ─────────────────────────────────────── */}
+      <div style={{ width: 360, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
+
+        {/* Sidebar header */}
+        <div style={{ padding: '16px 18px 12px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ width: 34, height: 34, background: C.reddit, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>r/</div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.dark }}>Reddit Engagement</div>
+              <div style={{ fontSize: 10, color: C.muted }}>via Perplexity Monitor → Slack #reddit</div>
+            </div>
           </div>
+
+          {feed.lastRunDate && (
+            <div style={{ fontSize: 11, color: C.muted, background: '#f5f5f4', borderRadius: 6, padding: '5px 10px', lineHeight: 1.5 }}>
+              <strong style={{ color: C.mid }}>{fmtDate(feed.lastRunDate)}</strong>
+              {' · '}
+              <strong style={{ color: C.reddit }}>{feed.threads.length}</strong> threads
+              {feed.runDescription && <span> · {feed.runDescription}</span>}
+            </div>
+          )}
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          {lastScan && <span style={{ fontSize: 11, color: C.muted }}>Last scan: {lastScan.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
-          <Btn onClick={scan} disabled={scanning || !isConnected} color={C.reddit}>
-            {scanning ? '⟳ SCANNING…' : '⟳ SCAN REDDIT'}
-          </Btn>
+
+        {/* Thread list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px' }}>
+          {feed.loading && (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: C.muted, fontSize: 13 }}>Loading…</div>
+          )}
+          {feed.error && !feed.loading && (
+            <div style={{ padding: 16, color: C.red, fontSize: 12, lineHeight: 1.5 }}>
+              <strong>Could not load feed</strong><br />{feed.error}<br />
+              <span style={{ color: C.muted }}>Check SLACK_BOT_TOKEN env var.</span>
+            </div>
+          )}
+          {!feed.loading && !feed.error && feed.threads.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
+              No threads found in #reddit.<br />The Perplexity monitor posts each morning.
+            </div>
+          )}
+
+          {feed.threads.map(t => {
+            const active = sel?.id === t.id
+            return (
+              <button key={t.id} onClick={() => setSel(t)}
+                style={{ width: '100%', textAlign: 'left', display: 'block', background: active ? C.orangeBg : 'transparent', border: `1px solid ${active ? C.orange : C.border}`, borderRadius: 8, padding: '11px 13px', marginBottom: 7, cursor: 'pointer', transition: 'border-color .15s, background .15s' }}>
+                <div style={{ fontSize: 9, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 4 }}>
+                  {t.subreddit}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, lineHeight: 1.35, marginBottom: 5 }}>
+                  {t.title}
+                </div>
+                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                  {t.suggestedReply.slice(0, 100)}…
+                </div>
+              </button>
+            )
+          })}
         </div>
       </div>
 
-      {/* Connection status */}
-      {status && (
-        <div style={{ ...card, padding: '12px 18px', marginBottom: 16, borderLeft: `3px solid ${isConnected ? C.green : C.red}` }}>
-          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: isConnected ? C.green : C.red, fontWeight: 600 }}>
-              {isConnected ? '● Connected' : '○ Not connected'}
-            </span>
-            {isConnected && (
-              <>
-                <span style={{ fontSize: 11, color: C.muted }}>
-                  {status.env.hasRefreshToken ? '✓ OAuth token present' : '⚠ Using client credentials only (read-only)'}
-                </span>
-                {status.env.targetSubreddits?.length > 0 && (
-                  <span style={{ fontSize: 11, color: C.mid }}>
-                    Watching: {status.env.targetSubreddits.map(s => `r/${s}`).join(', ')}
-                  </span>
-                )}
-                {status.env.brandKeywords?.length > 0 && (
-                  <span style={{ fontSize: 11, color: C.mid }}>
-                    Keywords: {status.env.brandKeywords.join(', ')}
-                  </span>
-                )}
-              </>
-            )}
-            {!isConnected && (
-              <span style={{ fontSize: 11, color: C.muted }}>Set REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_REFRESH_TOKEN in Vercel env vars</span>
-            )}
-            {isConnected && !status.flags.enabled && (
-              <span style={{ fontSize: 11, color: C.yellow }}>⚠ Set REDDIT_AUTOMATION_ENABLED=true to enable scanning</span>
-            )}
-            {isConnected && !canPost && (
-              <span style={{ fontSize: 11, color: C.yellow }}>⚠ Set REDDIT_POSTING_ENABLED=true to allow posting</span>
-            )}
-          </div>
+      {/* ── Right panel: thread detail + reply ───────────────────────────── */}
+      {!sel ? (
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: C.muted }}>
+          <div style={{ fontSize: 36 }}>💬</div>
+          <div style={{ fontSize: 14, color: C.mid }}>Select a thread to review and reply</div>
+          <div style={{ fontSize: 12, color: C.muted }}>Your Perplexity-drafted reply will be pre-loaded and editable</div>
         </div>
-      )}
+      ) : (
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
-      {/* Scan result */}
-      {scanInfo && (
-        <div style={{ ...card, padding: '10px 18px', marginBottom: 14, background: C.greenBg, borderColor: C.green }}>
-          <span style={{ fontSize: 13, color: C.green, fontWeight: 600 }}>
-            ✓ Scan complete — {scanInfo.ingested} new threads ingested, {scanInfo.skipped} skipped
-          </span>
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div style={{ ...card, background: C.redBg, borderColor: C.red, marginBottom: 14, padding: '10px 18px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: C.red, fontSize: 13 }}>{error}</span>
-            <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.muted, fontSize: 18, lineHeight: 1 }}>×</button>
-          </div>
-        </div>
-      )}
-
-      {/* Summary bar */}
-      {threads.length > 0 && (
-        <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
-          {[['PENDING', 'Pending Review'], ['EVALUATED', 'Evaluated'], ['APPROVED', 'Approved'], ['POSTED', 'Posted']].map(([s, l]) => (
-            <button key={s} onClick={() => setTab(s)}
-              style={{ background: tab === s ? STATUS_COLOR[s] : C.surface, color: tab === s ? '#fff' : STATUS_COLOR[s], border: `1px solid ${tab === s ? STATUS_COLOR[s] : C.border}`, borderRadius: 6, padding: '7px 16px', fontSize: 10, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", cursor: 'pointer', letterSpacing: .3 }}>
-              {l} {tabCounts[s] > 0 ? `(${tabCounts[s]})` : ''}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Empty state */}
-      {threads.length === 0 && !scanning && (
-        <div style={{ ...card, textAlign: 'center', padding: '48px 32px' }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>💬</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: C.dark, marginBottom: 8 }}>No threads yet</div>
-          <div style={{ fontSize: 13, color: C.muted, marginBottom: 20, lineHeight: 1.6 }}>
-            {isConnected
-              ? 'Click "Scan Reddit" to pull the latest posts from your target subreddits.'
-              : 'Connect your Reddit account first — add REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, and REDDIT_REFRESH_TOKEN to your Vercel environment variables, then set REDDIT_TARGET_SUBREDDITS and REDDIT_BRAND_KEYWORDS.'}
-          </div>
-          {isConnected && <Btn onClick={scan} disabled={scanning} color={C.reddit}>⟳ SCAN REDDIT NOW</Btn>}
-        </div>
-      )}
-
-      {/* Thread list */}
-      {visible.length === 0 && threads.length > 0 && (
-        <div style={{ ...card, textAlign: 'center', padding: '32px', color: C.muted, fontSize: 13 }}>
-          No {tab.toLowerCase()} threads. {tab === 'PENDING' ? 'Run a scan to pull new threads.' : 'Check other tabs.'}
-        </div>
-      )}
-
-      {visible.map(t => {
-        const rm = replyMap[t.id]
-        const approvedReply = (t.replies || []).find(r => r.approvedAt && !r.rejectedAt)
-        const w = working[t.id]
-        const sc = STATUS_COLOR[t.status] || C.muted
-
-        return (
-          <div key={t.id} style={card}>
-            {/* Thread header */}
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          {/* Thread title bar */}
+          <div style={{ padding: '16px 24px 12px', borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, justifyContent: 'space-between' }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 7, flexWrap: 'wrap' }}>
-                  <Pill label={t.status} color={sc} bg={STATUS_BG[t.status]} />
-                  <span style={{ fontSize: 12, color: C.muted }}>r/{t.subreddit}</span>
-                  {t.score > 0 && <span style={{ fontSize: 12, color: C.muted }}>↑ {t.score}</span>}
-                  {t.commentCount > 0 && <span style={{ fontSize: 12, color: C.muted }}>💬 {t.commentCount}</span>}
-                  <span style={{ fontSize: 11, color: C.muted }}>by u/{t.author}</span>
+                <div style={{ fontSize: 10, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 5 }}>
+                  {sel.subreddit}
                 </div>
-                <a href={t.url} target="_blank" rel="noopener noreferrer"
-                  style={{ fontSize: 14, fontWeight: 600, color: C.dark, textDecoration: 'none', lineHeight: 1.4, display: 'block', marginBottom: 6 }}>
-                  {t.title}
-                </a>
-                {t.body && <div style={{ fontSize: 13, color: C.mid, lineHeight: 1.55, marginBottom: 6, maxHeight: 80, overflow: 'hidden' }}>{t.body.slice(0, 280)}{t.body.length > 280 ? '…' : ''}</div>}
+                <div style={{ fontSize: 17, fontWeight: 700, color: C.dark, lineHeight: 1.3 }}>
+                  {sel.title}
+                </div>
               </div>
-              <a href={t.url} target="_blank" rel="noopener noreferrer"
-                style={{ background: C.reddit, color: '#fff', borderRadius: 6, padding: '7px 14px', fontSize: 11, fontWeight: 700, textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0, fontFamily: "'Lexend Zetta', sans-serif" }}>
-                OPEN ↗
+              <button
+                onClick={() => openAndPaste(sel.url)}
+                style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                OPEN & PASTE ↗
+              </button>
+            </div>
+            <div style={{ marginTop: 8, fontSize: 11, color: C.blue }}>
+              <a href={sel.url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, textDecoration: 'none' }}>
+                {sel.url}
               </a>
             </div>
+          </div>
 
-            {/* Evaluation result */}
-            {t.replies?.length > 0 && t.replies[0]?.body && (
-              <div style={{ background: '#f8f8f6', border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 14px', marginBottom: 10 }}>
-                <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 6 }}>
-                  {t.replies.length} REPLY VARIANT{t.replies.length > 1 ? 'S' : ''} GENERATED
-                </div>
-                {(t.replies || []).map((reply, ri) => (
-                  <div key={reply.id} style={{ marginBottom: ri < t.replies.length - 1 ? 10 : 0, padding: '8px 10px', background: reply.approvedAt ? C.greenBg : C.surface, border: `1px solid ${reply.approvedAt ? C.green : C.border}`, borderRadius: 5 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-                      <div style={{ fontSize: 12, color: C.dark, lineHeight: 1.5, flex: 1 }}>{reply.body}</div>
-                      {!reply.approvedAt && !reply.rejectedAt && t.status === 'EVALUATED' && (
-                        <Btn onClick={() => approve(t, reply.id)} disabled={!!w} color={C.green} outline>✓ Approve</Btn>
-                      )}
-                      {reply.approvedAt && <Pill label="Approved" color={C.green} />}
+          {/* Scrollable body */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+            {/* ── Reddit thread content ── */}
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
+                THREAD CONTEXT
+              </div>
+
+              {detail?.loading && (
+                <div style={{ fontSize: 13, color: C.muted, padding: '14px 0' }}>Loading thread…</div>
+              )}
+
+              {detail && !detail.loading && (
+                <>
+                  {/* OP body */}
+                  {detail.body ? (
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px', marginBottom: 12, borderLeft: `3px solid ${C.reddit}` }}>
+                      <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .5, marginBottom: 8 }}>ORIGINAL POST</div>
+                      <div style={{ fontSize: 13, color: C.dark, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{detail.body}</div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  ) : (
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 16px', marginBottom: 12, fontSize: 12, color: C.muted }}>
+                      {detail.fetchError
+                        ? `Could not load thread content — ${detail.fetchError}`
+                        : 'No post body (link post or removed). Click "Open & Paste" to view on Reddit.'}
+                    </div>
+                  )}
 
-            {/* Live reply editor (from in-session generate) */}
-            {rm && !t.replies?.length && (
-              <div style={{ marginBottom: 10 }}>
-                {rm.variants?.length > 1 && (
-                  <div style={{ display: 'flex', gap: 5, marginBottom: 8 }}>
-                    {rm.variants.map((v, i) => (
-                      <button key={i} onClick={() => setReplyMap(m => ({ ...m, [t.id]: { ...m[t.id], selected: i, text: v.body } }))}
-                        style={{ background: rm.selected === i ? C.orange : C.surface, color: rm.selected === i ? '#fff' : C.muted, border: `1px solid ${rm.selected === i ? C.orange : C.border}`, borderRadius: 4, padding: '4px 10px', fontSize: 10, cursor: 'pointer' }}>
-                        Variant {i + 1}
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <textarea value={rm.text} onChange={e => setReplyMap(m => ({ ...m, [t.id]: { ...m[t.id], text: e.target.value } }))}
-                  rows={4} style={{ width: '100%', background: '#f8f8f6', border: `1px solid ${C.border}`, borderRadius: 6, padding: '9px 12px', fontSize: 13, fontFamily: "'Lexend', sans-serif", color: C.dark, resize: 'vertical', boxSizing: 'border-box' }} />
-              </div>
-            )}
-
-            {/* Actions */}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', paddingTop: 10, borderTop: `1px solid ${C.border}` }}>
-              {w && <span style={{ fontSize: 12, color: C.muted, alignSelf: 'center', fontStyle: 'italic' }}>{w}</span>}
-              {!w && t.status === 'PENDING' && (
-                <>
-                  <Btn onClick={() => evaluate(t)} color={C.blue}>✦ EVALUATE</Btn>
-                  <Btn onClick={() => reject(t)} outline color={C.muted}>Skip</Btn>
+                  {/* Top comments */}
+                  {detail.topComments?.length > 0 && (
+                    <>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>TOP COMMENTS</div>
+                      {detail.topComments.map((c, i) => (
+                        <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '10px 14px', marginBottom: 8 }}>
+                          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
+                            <span style={{ fontSize: 11, fontWeight: 600, color: C.dark }}>u/{c.author}</span>
+                            <span style={{ fontSize: 11, color: C.muted }}>↑ {c.score}</span>
+                          </div>
+                          <div style={{ fontSize: 12, color: C.mid, lineHeight: 1.6 }}>
+                            {c.body.length > 500 ? c.body.slice(0, 500) + '…' : c.body}
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
                 </>
-              )}
-              {!w && t.status === 'EVALUATED' && !t.replies?.length && (
-                <>
-                  <Btn onClick={() => generate(t)} color={C.orange}>✦ GENERATE REPLY</Btn>
-                  <Btn onClick={() => reject(t)} outline color={C.muted}>Skip</Btn>
-                </>
-              )}
-              {!w && t.status === 'EVALUATED' && t.replies?.length > 0 && !approvedReply && (
-                <span style={{ fontSize: 12, color: C.muted, alignSelf: 'center' }}>Approve a variant above to proceed</span>
-              )}
-              {!w && t.status === 'APPROVED' && approvedReply && (
-                <>
-                  {canPost
-                    ? <Btn onClick={() => post(t)} color={C.reddit}>⬆ POST TO REDDIT</Btn>
-                    : <span style={{ fontSize: 11, color: C.muted, alignSelf: 'center' }}>Set REDDIT_POSTING_ENABLED=true to post</span>}
-                  <a href={t.url} target="_blank" rel="noopener noreferrer"
-                    style={{ background: C.surface, color: C.mid, border: `1px solid ${C.border}`, borderRadius: 6, padding: '7px 16px', fontSize: 11, fontWeight: 700, textDecoration: 'none', fontFamily: "'Lexend Zetta', sans-serif" }}>
-                    POST MANUALLY ↗
-                  </a>
-                </>
-              )}
-              {!w && t.status === 'POSTED' && (
-                <span style={{ fontSize: 12, color: C.green, fontWeight: 600, alignSelf: 'center' }}>✓ Posted to Reddit</span>
               )}
             </div>
+
+            {/* ── Reply editor ── */}
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
+                YOUR REPLY
+              </div>
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px' }}>
+                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
+                  Drafted by Perplexity — edit freely before posting.
+                </div>
+                <textarea
+                  ref={replyRef}
+                  value={reply}
+                  onChange={e => setReply(e.target.value)}
+                  rows={8}
+                  style={{ width: '100%', background: '#f9f9f7', border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 13px', fontSize: 13, fontFamily: "'Lexend', sans-serif", color: C.dark, resize: 'vertical', lineHeight: 1.65, boxSizing: 'border-box' }}
+                />
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <CopyBtn text={reply} />
+                  <button
+                    onClick={() => openAndPaste(sel.url)}
+                    style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4 }}>
+                    OPEN & PASTE ↗
+                  </button>
+                  <span style={{ fontSize: 11, color: C.muted, flex: 1, minWidth: 200 }}>
+                    "Open & Paste" copies your reply then opens Reddit — just Ctrl+V in the comment box.
+                  </span>
+                </div>
+              </div>
+            </div>
+
           </div>
-        )
-      })}
+        </div>
+      )}
     </div>
   )
 }
