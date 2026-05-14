@@ -1917,30 +1917,37 @@ function PainCards({selected,onToggle}){
 function CrmLinker({linked,onLink,onUnlink}){
   const [q,setQ]=useState("");
   const [results,setResults]=useState([]);
+  const [searched,setSearched]=useState(false);
   const [loading,setLoading]=useState(false);
+  const [searchErr,setSearchErr]=useState(null);
   const [showCreate,setShowCreate]=useState(false);
-  const [form,setForm]=useState({firstName:"",lastName:"",school:"",phone:"",email:""});
+  const [form,setForm]=useState({firstName:"",lastName:"",organization:"",phone:"",email:""});
   const [creating,setCreating]=useState(false);
   const searchTimer=useRef(null);
 
   const doSearch=(val)=>{
     clearTimeout(searchTimer.current);
-    if(!val.trim()){setResults([]);return;}
+    setSearchErr(null);
+    if(val.trim().length<2){setResults([]);setSearched(false);setLoading(false);return;}
+    setLoading(true);
     searchTimer.current=setTimeout(()=>{
-      setLoading(true);
-      fetch(`/api/crm/search?q=${encodeURIComponent(val)}`)
-        .then(r=>r.json()).then(d=>{setResults(Array.isArray(d)?d:[]);setLoading(false);})
-        .catch(()=>setLoading(false));
+      fetch(`/api/crm/search?q=${encodeURIComponent(val.trim())}`)
+        .then(r=>r.json()).then(d=>{
+          setResults(Array.isArray(d)?d:[]);
+          setSearched(true);
+          setLoading(false);
+        })
+        .catch(e=>{setSearchErr("Search failed — check Zoho connection");setLoading(false);setSearched(true);});
     },400);
   };
 
   const createLead=()=>{
     if(!form.lastName)return;
     setCreating(true);
-    fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)})
+    fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,school:form.organization})})
       .then(r=>r.json()).then(d=>{
         setCreating(false);
-        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),school:form.school||"",email:form.email||"",module:"Lead"});
+        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),school:form.organization||"",email:form.email||"",module:"Lead"});
         setShowCreate(false);
       }).catch(()=>setCreating(false));
   };
@@ -1951,6 +1958,7 @@ function CrmLinker({linked,onLink,onUnlink}){
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:10}}>🔗</span>
           <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{linked.name||linked.id}</span>
+          {linked.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{linked.school}</span>}
           <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>{(linked.module||"").toUpperCase()}</span>
         </div>
         <button onClick={onUnlink} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>unlink</button>
@@ -1963,13 +1971,20 @@ function CrmLinker({linked,onLink,onUnlink}){
       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:6}}>LINK TO CRM CONTACT</div>
       {!showCreate?(
         <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
-          <div style={{flex:1,position:"relative"}}>
-            <input value={q} onChange={e=>{setQ(e.target.value);doSearch(e.target.value);}} placeholder="Search by name, school, or email…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,boxSizing:"border-box"}}/>
-            {loading&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:9,color:B.muted}}>…</span>}
-            {results.length>0&&(
-              <div style={{position:"absolute",top:"calc(100% + 2px)",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",zIndex:20,maxHeight:160,overflowY:"auto"}}>
-                {results.map(r=>(
-                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.fullName||r.name||"",school:r.school||"",email:r.email||"",module:r.module});setResults([]);setQ(r.fullName||r.name||"");}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+          <div style={{flex:1}}>
+            <div style={{position:"relative"}}>
+              <input value={q} onChange={e=>{setQ(e.target.value);doSearch(e.target.value);}} placeholder="Search by name, organization, or email…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,boxSizing:"border-box"}}/>
+              {loading&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:9,color:B.muted}}>searching…</span>}
+            </div>
+            {/* Dropdown — rendered outside the relative container to avoid clipping */}
+            {(results.length>0||searchErr||(searched&&!loading&&q.trim().length>=2))&&(
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",marginTop:2,maxHeight:160,overflowY:"auto"}}>
+                {searchErr?(
+                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red}}>{searchErr}</div>
+                ):results.length===0?(
+                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No results for "{q}" — try a different name or create a new lead.</div>
+                ):results.map(r=>(
+                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.fullName||r.name||"",school:r.school||"",email:r.email||"",module:r.module});setResults([]);setQ(r.fullName||r.name||"");setSearched(false);}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
                     <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.fullName||r.name}</span>
                     {r.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.school}</span>}
                     <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,flexShrink:0}}>{(r.module||"").toUpperCase()}</span>
@@ -1978,14 +1993,14 @@ function CrmLinker({linked,onLink,onUnlink}){
               </div>
             )}
           </div>
-          <GBtn sm onClick={()=>setShowCreate(true)}>+ NEW LEAD</GBtn>
+          <GBtn sm onClick={()=>{setShowCreate(true);setResults([]);setSearched(false);}}>+ NEW LEAD</GBtn>
         </div>
       ):(
         <div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
             <input value={form.firstName} onChange={e=>setForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
             <input value={form.lastName} onChange={e=>setForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.school} onChange={e=>setForm(f=>({...f,school:e.target.value}))} placeholder="School" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
+            <input value={form.organization} onChange={e=>setForm(f=>({...f,organization:e.target.value}))} placeholder="Organization" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
             <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
             <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,gridColumn:"1/-1"}}/>
           </div>
@@ -2548,17 +2563,24 @@ function TalkTrack({onClose,linkedContact}){
         )}
 
         {/* Phase navigation */}
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
-          <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
-          {phaseIdx<TT_PHASES.length-1
-            ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)}>NEXT →</OBtn>
-            :<OBtn col={B.green} onClick={()=>{
-              if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
-              sessionStorage.removeItem("ttSessionId");
-              toast("Talk Track complete!","success");
-              onClose();
-            }}>✓ COMPLETE</OBtn>
-          }
+        <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+          {!linked&&(
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,textAlign:"center",marginBottom:10,padding:"6px 10px",background:`${B.orange}10`,borderRadius:4}}>
+              Link or create a contact above before proceeding
+            </div>
+          )}
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
+            {phaseIdx<TT_PHASES.length-1
+              ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!linked}>NEXT →</OBtn>
+              :<OBtn col={B.green} disabled={!linked} onClick={()=>{
+                if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
+                sessionStorage.removeItem("ttSessionId");
+                toast("Talk Track complete!","success");
+                onClose();
+              }}>✓ COMPLETE</OBtn>
+            }
+          </div>
         </div>
       </div>
     </div>
