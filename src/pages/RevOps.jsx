@@ -3,7 +3,6 @@ import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
-const RFPToolPage    = lazy(() => import('./RFPTool.jsx'))
 const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
@@ -15,7 +14,6 @@ function usePrefetchPanels() {
   useEffect(() => {
     import('./CommandCenter.jsx');
     import('./PriceTool.jsx');
-    import('./RFPTool.jsx');
   }, []);
 }
 
@@ -80,8 +78,6 @@ const B = {
 
 const STORE = "st1_revops_v2";
 
-const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
-
 const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -115,7 +111,6 @@ const SEED = {
   templates: [],
   reps: [],
   strategies: [],
-  workflowTemplates: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -165,7 +160,6 @@ function mergeServerState(base, server) {
     socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
     savedAds:     mergeById(base.savedAds,     server.savedAds),
     templates:    mergeById(base.templates,    server.templates),
-    workflowTemplates: mergeById(base.workflowTemplates, server.workflowTemplates),
     reps:         mergeById(base.reps,         server.reps),
     orders:       mergeById(base.orders,       server.orders),
     alerts:       mergeById(base.alerts,       server.alerts),
@@ -205,7 +199,6 @@ function useStore() {
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
           strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
-          workflowTemplates: Array.isArray(p.workflowTemplates) ? p.workflowTemplates : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -484,9 +477,6 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "ADD_WORKFLOW_TEMPLATE":    return {...prev, workflowTemplates:[payload,...(prev.workflowTemplates||[])]};
-    case "UPDATE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
-    case "DELETE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).filter(t=>t.id!==payload)};
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
@@ -552,15 +542,13 @@ const mergeTags=(text,c)=>(text||"")
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
-const RFP_STAGES  = ["New", "In Process", "Bid", "No Bid"];
-const DSC = {Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
+const DSC ={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
 const RSC = {
   "New":B.blue,"In Process":B.orange,"Bid":B.green,"No Bid":B.muted,
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{c:B.purple,bg:B.purpleBg},partial:{c:B.yellow,bg:B.yellowBg},paid:{c:B.green,bg:B.greenBg},overdue:{c:B.red,bg:B.redBg}};
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
@@ -576,9 +564,7 @@ const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleybal
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
 function urgentCount(s) {
-  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
-    + (s.invoices||[]).filter(i=>i.status==="overdue").length
-    + (s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
+  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -705,12 +691,11 @@ export default function App() {
     {id:"_s_sales"},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
-    {id:"crm",         icon:"◈", label:"CRM"},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"crm",           icon:"◈", label:"CRM"},
+    {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
-    {id:"emails",      icon:"✉", label:"Emails"},
     {id:"social",      icon:"📱", label:"Social"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
@@ -736,7 +721,6 @@ export default function App() {
     ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"rfp-tool",   icon:"📋", label:"RFP Automation"},
       {id:"prices",     icon:"$",  label:"Price Manager"},
       {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
     ]},
@@ -922,14 +906,14 @@ export default function App() {
             <ErrBound key={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
-            {mod==="crm"         && <ModCRM/>}
-            {mod==="deals"       && <ModDeals/>}
+            {mod==="crm"          && <ModCRM/>}
+            {mod==="sponsorships" && <ModSponsorships/>}
+            {mod==="deals"        && <ModDeals/>}
             {mod==="orders"      && <ModOrders/>}
-            {mod==="rfp"         && <ModRFP/>}
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
+            {mod==="social"      && <ModSocial/>}
             {mod==="marketing"   && <ModMarketing/>}
-            {mod==="emails"      && <ModEmails/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -1089,7 +1073,7 @@ function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',s
 function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;}
 function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;}
 function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;}
-function UCh({uid}){const u=USERS.find(x=>x.id===uid);if(!u)return null;return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{u.initials}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
+function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
 function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;}
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
@@ -1217,7 +1201,7 @@ function ModAnalytics() {
                 const replied=enrs.filter(e=>e.status==="replied").length;
                 const done=enrs.filter(e=>e.status==="done").length;
                 const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
-                const rep=USERS.find(u=>u.id===camp.repId);
+                const rep=reps.find(r=>r.id===camp.repId);
                 const campDeals=deals.filter(d=>d.campaignId===camp.id);
                 const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
                 return(
@@ -1406,7 +1390,7 @@ function ModAnalytics() {
                 const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
                 if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
                 return entries.map(([rid,{count,value}])=>{
-                  const u=USERS.find(u=>u.id===rid)||reps.find(r=>r.id===rid);
+                  const u=reps.find(r=>r.id===rid);
                   const avg=count>0?Math.round(value/count):0;
                   return(
                     <div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -1494,7 +1478,6 @@ function ModAnalytics() {
                               {lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
                             </div>
                             <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
-                              <OBtn sm col={B.blue} onClick={()=>setMod("emails")}>EMAIL →</OBtn>
                               <OBtn sm col={B.green} onClick={()=>setMod("deals")}>DEAL +</OBtn>
                             </div>
                           </div>
@@ -1698,8 +1681,7 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
   const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
   const odDeals=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
   const hotDeals=open.filter(d=>d.priority==="hot").slice(0,3);
-  const urgRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=5);
-  const urgentN=odDeals.length+urgRfps.length;
+  const urgentN=odDeals.length;
   const ACT_LABELS={create_deal:"+ Create Deal",draft_email:"✉ Copy Email Draft",flag_deal:"🔥 Flag Hot",schedule_followup:"📅 Set Follow-up",log_note:"📝 Log Note",add_contact:"+ Add Contact",navigate:"→ Go There"};
 
   const panelCard=(children,onClick,bg,border)=>(
@@ -1786,11 +1768,6 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
               <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>{Math.abs(dUntil(d.followUpDate))}d overdue · {fmt$(d.value)}</div></>,
               ()=>setMod("deals"),B.redBg,`${B.red}25`
             ))}
-            {urgRfps.slice(0,2).map(r=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
-              <div style={{fontSize:11,color:B.yellow,fontFamily:"'Lexend',sans-serif"}}>RFP due in {dUntil(r.dueDate)}d</div></>,
-              ()=>setMod("rfp"),B.yellowBg,`${B.yellow}40`
-            ))}
           </div>
         )}
 
@@ -1816,7 +1793,6 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
           {[
             ["Open Deals",open.length,()=>setMod("deals")],
             ["Pipeline Value",fmt$(open.reduce((a,d)=>a+d.value,0)),()=>setMod("deals")],
-            ["Open RFPs",(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).length,()=>setMod("rfp")],
           ].map(([lbl,val,fn])=>(
             <div key={lbl} onClick={fn} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
               <span style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{lbl}</span>
@@ -1825,7 +1801,6 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
           ))}
           <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>
             <button onClick={()=>setMod("deals")} style={{background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
-            <button onClick={()=>setMod("rfp")} style={{background:"none",border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"7px 12px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>New RFP</button>
           </div>
         </div>
       </div>
@@ -2746,17 +2721,25 @@ function TalkTrack({onClose,linkedContact}){
                     body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
                   }).catch(()=>{});
 
-                  // Update local CRM contact with profile + sponsorship data
+                  // Update local CRM contact with profile + sponsorship data + call notes
                   const allContacts=s?.contacts||[];
                   const localC=allContacts.find(c=>c.zohoId===linked.id||c.id===linked.id);
                   if(localC){
+                    const answersSummary=Object.entries(answers)
+                      .filter(([,v])=>v!=null&&v!=="")
+                      .map(([id,v])=>{const q=questions.find(q=>q.id==id);return q?{question:q.questionText,answer:v===true?"Yes":v===false?"No":String(v)}:null;})
+                      .filter(Boolean);
+                    const painsSummary=pains.map(pid=>{const pc=PAIN_CARDS.find(c=>c.id===pid);return pc?pc.title:null;}).filter(Boolean);
                     dispatch("UPDATE_CONTACT",{
                       id:localC.id,
                       orgType,sportsMode,selectedSports,
                       ...(calcInputs.schoolClass?{schoolClass:calcInputs.schoolClass}:{}),
                       ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
                       ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
-                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null}:{}),
+                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null,sponsorshipStatus:"proposed",sponsorshipProposedAt:new Date().toISOString()}:{}),
+                      ttAnswers:answersSummary,
+                      ttPains:painsSummary,
+                      ttCompletedAt:new Date().toISOString(),
                     });
                   }
                 }
@@ -3199,8 +3182,11 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
-              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
+            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
+                {label}
+                {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
+              </button>
             ))}
           </div>
           {/* Tab content */}
@@ -3243,6 +3229,104 @@ function ModCRM() {
                         ))}
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {crmTab==="discovery"&&(
+              <div>
+                {!sel.ttCompletedAt?(
+                  <div style={{textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:28,marginBottom:10}}>⤳</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No Talk Track completed yet for this contact.</div>
+                    <OBtn onClick={()=>{setTtContact(sel);setTtView(true);}}>START TALK TRACK</OBtn>
+                  </div>
+                ):(
+                  <>
+                    {/* Sponsorship estimate */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:8,padding:"14px 18px",marginBottom:16}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP ESTIMATE</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(sel.sponsorshipMin)}<span style={{fontSize:13,marginLeft:6}}>guaranteed</span></div>
+                        {sel.sponsorshipMax&&sel.sponsorshipMax>sel.sponsorshipMin&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:4}}>Up to {fmt$(sel.sponsorshipMax - sel.sponsorshipMin)} additional based on actual sales</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Org profile */}
+                    <div className="card" style={{padding:14,marginBottom:14}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        {[
+                          ["Type", sel.orgType==="school"?"School / District":sel.orgType==="org"?"Organization / Club":"—"],
+                          ["School Class", sel.schoolClass||"—"],
+                          ["# Athletes", sel.numAthletes||"—"],
+                          ["# Sports", sel.numSports||"—"],
+                          ["Servicing", sel.sportsMode==="all"?"All sports":sel.sportsMode==="some"?"Selected sports":sel.sportsMode==="single"?"Single sport":sel.sportsMode==="multi"?"Multi-sport":"—"],
+                        ].map(([l,v])=>(
+                          <div key={l}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:2}}>{l}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {Array.isArray(sel.selectedSports)&&sel.selectedSports.length>0&&(
+                        <div style={{marginTop:10}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Sports</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                            {sel.selectedSports.map(sp=>(
+                              <span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}12`,border:`1px solid ${B.blue}25`,borderRadius:4,padding:"2px 8px"}}>{sp}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Confirmed pain points */}
+                    {Array.isArray(sel.ttPains)&&sel.ttPains.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONFIRMED PAIN POINTS</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                          {sel.ttPains.map(p=>(
+                            <div key={p} style={{display:"flex",alignItems:"center",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                              <span style={{color:B.orange,fontWeight:700}}>✓</span>{p}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Call Q&A */}
+                    {Array.isArray(sel.ttAnswers)&&sel.ttAnswers.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CALL NOTES</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                          {sel.ttAnswers.map((qa,i)=>(
+                            <div key={i}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{qa.question}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{qa.answer}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sponsorship actions */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{display:"flex",gap:8,marginTop:6,marginBottom:8}}>
+                        {sel.sponsorshipStatus==="confirmed"?(
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,border:`1px solid ${B.green}30`,borderRadius:4,padding:"4px 10px"}}>★ SPONSORSHIP CONFIRMED — {fmt$(sel.sponsorshipConfirmedAmount||sel.sponsorshipMin)}</span>
+                        ):(
+                          <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_CONTACT",{id:sel.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:sel.sponsorshipMin,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});toast("Sponsorship confirmed!","success");}}>★ CONFIRM SPONSORSHIP</OBtn>
+                        )}
+                        <GBtn sm onClick={()=>setMod("sponsorships")}>View all sponsorships →</GBtn>
+                      </div>
+                    )}
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"right"}}>
+                      Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                    </div>
                   </>
                 )}
               </div>
@@ -3410,6 +3494,177 @@ function ModCRM() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  SPONSORSHIPS
+// ════════════════════════════════════════════════════════════════════════════
+function ModSponsorships(){
+  const {s,dispatch,toast,setMod}=useApp();
+  const [tab,setTab]=useState("proposed");
+  const [confirmId,setConfirmId]=useState(null);
+  const [confirmAmt,setConfirmAmt]=useState("");
+  const [payFilter,setPayFilter]=useState("all");
+
+  const contacts=s.contacts||[];
+  const proposed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="proposed");
+  const confirmed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="confirmed");
+
+  const totalCommitted=confirmed.reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalPaid=confirmed.filter(c=>c.sponsorshipPaid).reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalOwed=totalCommitted-totalPaid;
+
+  const confirmSponsor=(c)=>{
+    const amt=parseFloat(confirmAmt)||c.sponsorshipMin||0;
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:amt,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});
+    toast(`${c.fullName||c.school||"Contact"} confirmed — ${fmt$(amt)}`,"success");
+    setConfirmId(null);setConfirmAmt("");
+  };
+
+  const markPaid=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipPaid:true,sponsorshipPaidAt:new Date().toISOString()});
+    toast("Marked as paid","success");
+  };
+
+  const revertToProposed=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"proposed",sponsorshipConfirmedAmount:null,sponsorshipConfirmedAt:null,sponsorshipPaid:false,sponsorshipPaidAt:null});
+    toast("Moved back to proposed","info");
+  };
+
+  const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const inp={background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,width:"100%",boxSizing:"border-box"};
+
+  const SCard=({c,showConfirmForm})=>{
+    const amt=c.sponsorshipConfirmedAmount||c.sponsorshipMin||0;
+    const upside=c.sponsorshipMax||0;
+    const isConfirming=confirmId===c.id;
+    return(
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"14px 18px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||cName(c)}</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{cName(c)}{c.title?` · ${c.title}`:""}</div>
+            <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+              {c.schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{c.schoolClass}</span>}
+              {c.numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numAthletes} athletes</span>}
+              {c.numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numSports} sports</span>}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>0&&(
+                c.selectedSports.slice(0,3).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}10`,padding:"2px 6px",borderRadius:3}}>{sp}</span>)
+              )}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>3&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>+{c.selectedSports.length-3} more</span>}
+            </div>
+            {Array.isArray(c.ttPains)&&c.ttPains.length>0&&(
+              <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                Pain: {c.ttPains.slice(0,2).join(" · ")}{c.ttPains.length>2?` +${c.ttPains.length-2} more`:""}
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            {showConfirmForm?(
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.orange}}>{fmt$(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0)}</div>
+            ):(
+              <>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(c.sponsorshipMin||0)}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>guaranteed</div>
+                {upside>c.sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(upside)}</div>}
+              </>
+            )}
+            <button onClick={()=>setMod("crm")} style={{marginTop:6,background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer",padding:0}}>View profile →</button>
+          </div>
+        </div>
+
+        {/* Confirm form */}
+        {showConfirmForm&&isConfirming&&(
+          <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${B.border}`,display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:4}}>CONFIRMED AMOUNT ($)</div>
+              <input type="number" value={confirmAmt} onChange={e=>setConfirmAmt(e.target.value)} placeholder={String(c.sponsorshipMin||0)} style={inp}/>
+            </div>
+            <OBtn col={B.green} onClick={()=>confirmSponsor(c)}>✓ CONFIRM</OBtn>
+            <GBtn onClick={()=>{setConfirmId(null);setConfirmAmt("");}}>Cancel</GBtn>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"flex-end"}}>
+          {showConfirmForm?(
+            !isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipConfirmedAmount||c.sponsorshipMin||""));}}>✎ Edit Amount</OBtn>
+          ):(
+            <>
+              {!isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipMin||""));}}>✓ CONFIRM SPONSORSHIP</OBtn>}
+              {!isConfirming&&<GBtn sm onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:null,sponsorshipMin:null,sponsorshipMax:null});toast("Removed from pipeline","info");}}>✕ Remove</GBtn>}
+            </>
+          )}
+          {showConfirmForm&&!c.sponsorshipPaid&&<OBtn sm col={B.blue} onClick={()=>markPaid(c)}>Mark Paid</OBtn>}
+          {showConfirmForm&&c.sponsorshipPaid&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4}}>✓ PAID</span>}
+          {showConfirmForm&&<GBtn sm onClick={()=>revertToProposed(c)}>↩ Move to Proposed</GBtn>}
+        </div>
+      </div>
+    );
+  };
+
+  return(
+    <div style={{padding:"22px 28px",maxWidth:900,margin:"0 auto"}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:4}}>SPONSORSHIPS</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.black}}>Sponsorship Pipeline</div>
+        </div>
+        <OBtn onClick={()=>setMod("crm")}>← Back to CRM</OBtn>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
+        <KCard l="Proposed" v={proposed.length} c={B.orange} sub={fmt$K(proposed.reduce((a,c)=>a+(c.sponsorshipMin||0),0))+" potential"}/>
+        <KCard l="Confirmed" v={confirmed.length} c={B.green} sub={fmt$K(totalCommitted)+" committed"}/>
+        <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.green} sub="owed to schools"/>
+        <KCard l="Paid Out" v={fmt$K(totalPaid)} c={B.blue} sub={`${confirmed.filter(c=>c.sponsorshipPaid).length} of ${confirmed.length} paid`}/>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,marginBottom:18}}>
+        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"8px 18px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
+
+      {/* Proposed tab */}
+      {tab==="proposed"&&(
+        proposed.length===0?(
+          <div style={{textAlign:"center",padding:"60px 0"}}>
+            <div style={{fontSize:32,marginBottom:12}}>★</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:16}}>No sponsorships proposed yet.<br/>Complete a Talk Track with a school to generate an estimate.</div>
+            <OBtn onClick={()=>setMod("crm")}>Go to CRM →</OBtn>
+          </div>
+        ):(
+          proposed.map(c=><SCard key={c.id} c={c} showConfirmForm={false}/>)
+        )
+      )}
+
+      {/* Confirmed tab */}
+      {tab==="confirmed"&&(
+        <>
+          {confirmed.length>0&&(
+            <div style={{display:"flex",gap:6,marginBottom:14}}>
+              {[["all","All"],["unpaid","Unpaid"],["paid","Paid"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setPayFilter(v)} style={{background:payFilter===v?B.orange:"none",color:payFilter===v?B.white:B.muted,border:`1px solid ${payFilter===v?B.orange:B.border}`,borderRadius:99,padding:"3px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          )}
+          {confirmed.length===0?(
+            <div style={{textAlign:"center",padding:"60px 0"}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No confirmed sponsorships yet — confirm a proposed one above.</div>
+            </div>
+          ):(
+            confirmed
+              .filter(c=>payFilter==="all"?true:payFilter==="paid"?c.sponsorshipPaid:!c.sponsorshipPaid)
+              .map(c=><SCard key={c.id} c={c} showConfirmForm={true}/>)
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  DEALS
 // ════════════════════════════════════════════════════════════════════════════
 function ModDeals() {
@@ -3541,9 +3796,10 @@ Under 80 words. Include subject line. Warm tone.`);
             {[["Deal Name","name"],["Contact","contact"],["School","school"],["Value ($)","value"],["Quote Date","quoteDate"],["Follow-Up Date","followUpDate"],["Notes","notes"]].map(([l,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={k.includes("Date")?"date":"text"} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
             ))}
-            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
+            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"]].map(([l,opts,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><select value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{opts.map(o=><option key={o}>{o}</option>)}</select></div>
             ))}
+            <div><Lbl s={{marginBottom:3}}>Assignee</Lbl><select value={form.assignee||""} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— Unassigned —</option>{(s.reps||[]).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
             <div><Lbl s={{marginBottom:3}}>Source Campaign</Lbl><select value={form.campaignId} onChange={e=>setForm(f=>({...f,campaignId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— None —</option>{(s.campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           <div style={{display:"flex",gap:7,marginTop:10}}><OBtn onClick={addDeal}>SAVE</OBtn><GBtn onClick={()=>setAdding(false)}>CANCEL</GBtn></div>
@@ -3623,7 +3879,7 @@ Under 80 words. Include subject line. Warm tone.`);
                 {[...(sel_d.touchHistory||[])].reverse().map(t=>(
                   <div key={t.id} style={{display:"flex",gap:7,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{width:6,height:6,borderRadius:"50%",background:{email:B.blue,call:B.green,note:B.yellow,po:B.teal,quote:B.orange}[t.type]||B.muted,marginTop:3,flexShrink:0}}/>
-                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {USERS.find(u=>u.id===t.author)?.name||t.author}</div></div>
+                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {(s.reps||[]).find(r=>r.id===t.author)?.name||t.author}</div></div>
                   </div>
                 ))}
               </div>
@@ -4242,174 +4498,6 @@ function ModQuotes() {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  RFP
-// ════════════════════════════════════════════════════════════════════════════
-function ModRFP() {
-  const {s,dispatch,cu,toast}=useApp();
-  const [rfpTab,setRfpTab]=useState("tracker");
-  const [sel,setSel]=useState(null);
-  const [newItem,setNewItem]=useState("");
-  const isOwner=cu?.role==="owner";
-  const rfps=isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
-  const sel_r=sel?(s.rfps||[]).find(r=>r.id===sel):null;
-  const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
-  const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
-
-  const [resultsUploading, setResultsUploading] = useState(null);
-  const uploadResults = async (rfpId, file) => {
-    setResultsUploading(rfpId);
-    try {
-      let msgContent;
-      const ext = file.name.toLowerCase().split(".").pop();
-      const extractPrompt = `Extract bid award/results information from this document. ST1 Sports was one of the vendors who submitted a bid.\n\nReturn ONLY valid JSON:\n{"awardedTo":"winning vendor name","awardedValue":number or null,"st1Submitted":null,"st1Won":true or false,"st1Position":finishing position number or null,"priceDelta":ST1 price minus winner price or null,"competitors":[{"name":"...","price":number or null,"position":number}],"notes":"key findings summary"}`;
-      if(ext==="pdf") {
-        const b64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
-        msgContent=[{type:"text",text:extractPrompt},{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}}];
-      } else {
-        const txt = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(file);});
-        msgContent=extractPrompt+"\n\nDOCUMENT:\n"+txt.slice(0,8000);
-      }
-      const resp = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-6",max_tokens:700,
-        messages:[{role:"user",content:msgContent}]
-      })});
-      const d = await resp.json();
-      const txt2=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-      let results=null;
-      try{const m=txt2.match(/\{[\s\S]*\}/);results=m?JSON.parse(m[0]):null;}catch{}
-      if(results){
-        dispatch("UPDATE_RFP",{id:rfpId,results:{...results,uploadedAt:new Date().toISOString().slice(0,10),fileName:file.name}});
-        toast(results.st1Won?"🏆 Win recorded!":"Results recorded");
-      } else { toast("Could not parse results — try a different file"); }
-    } catch(e){ toast("Upload failed: "+e.message); }
-    finally{ setResultsUploading(null); }
-  };
-
-  const tabBar=(
-    <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
-      {[["tracker","Active Bids"],["generate","Generate Response"]].map(([tid,tlabel])=>(
-        <button key={tid} onClick={()=>setRfpTab(tid)} style={{background:"none",border:"none",borderBottom:rfpTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:rfpTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:rfpTab===tid?700:400}}>{tlabel}</button>
-      ))}
-    </div>
-  );
-
-  if(rfpTab==="generate") return (
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      {tabBar}
-      <Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>
-    </div>
-  );
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      {tabBar}
-    <div style={{padding:"22px 26px",overflowY:"auto",flex:1}}>
-      <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"
-        action={<a href="/rfp" style={{background:B.orange,color:B.white,borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,textDecoration:"none",display:"inline-block"}}>+ NEW RFP →</a>}/>
-      <div style={{display:"grid",gridTemplateColumns:sel_r?"1fr 350px":"1fr",gap:13}}>
-        <div>
-          {rfps.map(r=>{const d=dUntil(r.dueDate);const dn=r.checklist?.filter(c=>c.done).length||0;const tn=r.checklist?.length||1;return(
-            <div key={r.id} onClick={()=>setSel(sel===r.id?null:r.id)} className="card fu" style={{padding:"10px 13px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${RSC[r.stage]||B.muted}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
-                <div style={{flex:1}}>
-                  <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{r.title}</span>
-                    <Pill v={r.stage} sc={RSC} bc={{}}/>
-                  </div>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.bidId} · {r.issuer} · {r.state}</span><UCh uid={r.assignee}/></div>
-                </div>
-                <div style={{textAlign:"right",flexShrink:0,marginLeft:9}}>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(r.value)}</div>
-                  {r.dueDate&&!["No Bid","Lost","Won"].includes(r.stage)&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:d<=3?B.red:d<=7?B.yellow:B.muted,letterSpacing:.3}}>{d<0?`${Math.abs(d)}d OVER`:`${d}d LEFT`}</div>}
-                </div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:7}}>
-                <div style={{flex:1,height:3,background:B.border,borderRadius:2}}><div style={{width:`${dn/tn*100}%`,height:"100%",background:dn===tn?B.green:RSC[r.stage]||B.orange,borderRadius:2}}/></div>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,flexShrink:0}}>{dn}/{tn}</span>
-              </div>
-              {r.results&&(
-                <div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,background:r.results.st1Won?B.green:B.red,color:B.white,padding:"1px 5px",borderRadius:2,letterSpacing:.3}}>{r.results.st1Won?"WON":"LOST"}</span>
-                  {r.results.priceDelta!=null&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:r.results.priceDelta>0?B.red:B.green}}>{r.results.priceDelta>0?"+":""}{(r.results.priceDelta/1000).toFixed(1)}k vs winner</span>}
-                  {r.results.awardedTo&&!r.results.st1Won&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>→ {r.results.awardedTo}</span>}
-                </div>
-              )}
-            </div>
-          );})}
-          {rfps.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"40px 0"}}>No RFPs yet</div>}
-        </div>
-        {sel_r&&(
-          <div className="card" style={{padding:13,position:"sticky",top:0,maxHeight:"calc(100vh - 155px)",overflowY:"auto"}}>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,marginBottom:3}}>{sel_r.title}</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:11}}>{sel_r.bidId} · Due {fmtD(sel_r.dueDate)}</div>
-            <Lbl s={{marginBottom:5}}>Stage</Lbl>
-            <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:11}}>
-              {RFP_STAGES.map(st=><button key={st} onClick={()=>{dispatch("UPDATE_RFP",{id:sel_r.id,stage:st});toast("RFP → "+st);}} style={{background:sel_r.stage===st?RSC[st]:B.surface,color:sel_r.stage===st?B.white:B.muted,border:"1px solid "+(sel_r.stage===st?RSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>)}
-            </div>
-            <Lbl s={{marginBottom:7}}>Checklist</Lbl>
-            {sel_r.checklist?.map(c=>(
-              <label key={c.id} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-                <input type="checkbox" checked={c.done} onChange={()=>toggleChk(sel_r.id,c.id)} style={{accentColor:B.orange,width:13,height:13}}/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:c.done?B.muted:B.text,textDecoration:c.done?"line-through":"none"}}>{c.item}</span>
-              </label>
-            ))}
-            <div style={{display:"flex",gap:6,marginTop:9}}>
-              <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem(sel_r.id)} placeholder="Add checklist item..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}/>
-              <OBtn sm onClick={()=>addItem(sel_r.id)}>+</OBtn>
-            </div>
-            {sel_r.notes&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic",lineHeight:1.6,borderTop:`1px solid ${B.border}`,paddingTop:9}}>{sel_r.notes}</div>}
-
-            {/* Bid Results */}
-            <div style={{marginTop:11,borderTop:`1px solid ${B.border}`,paddingTop:9}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <Lbl>Bid Results</Lbl>
-                <label style={{cursor:resultsUploading?"not-allowed":"pointer",background:B.orange+"18",color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>
-                  {resultsUploading===sel_r.id?"UPLOADING...":"↑ UPLOAD AWARD"}
-                  <input type="file" accept=".pdf,.csv,.xlsx,.xls,.txt" style={{display:"none"}} disabled={!!resultsUploading}
-                    onChange={e=>{const f=e.target.files?.[0];if(f)uploadResults(sel_r.id,f);e.target.value="";}}/>
-                </label>
-              </div>
-              {sel_r.results?(
-                <div style={{background:sel_r.results.st1Won?B.greenBg:B.redBg,borderRadius:5,padding:"9px 11px",border:`1px solid ${sel_r.results.st1Won?B.green:B.red}30`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:sel_r.results.st1Won?B.green:B.red}}>
-                      {sel_r.results.st1Won?"🏆 WON":`⚑ LOST${sel_r.results.awardedTo?" → "+sel_r.results.awardedTo:""}`}
-                    </span>
-                    {sel_r.results.st1Position&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>#{sel_r.results.st1Position} PLACE</span>}
-                  </div>
-                  {sel_r.results.priceDelta!=null&&(
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:3}}>
-                      Price delta: <span style={{color:sel_r.results.priceDelta>0?B.red:B.green,fontWeight:600}}>
-                        {sel_r.results.priceDelta>0?"+" : ""}{fmt$(Math.abs(sel_r.results.priceDelta))} {sel_r.results.priceDelta>0?"over":"under"} winner
-                      </span>
-                    </div>
-                  )}
-                  {sel_r.results.competitors?.length>0&&(
-                    <div style={{marginTop:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:3}}>COMPETITORS</div>
-                      {sel_r.results.competitors.slice(0,4).map((c,ci)=>(
-                        <div key={ci} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,display:"flex",justifyContent:"space-between",padding:"2px 0"}}>
-                          <span>#{c.position!=null?c.position:ci+1} {c.name}</span>
-                          {c.price!=null&&<span style={{color:B.text}}>{fmt$(c.price)}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {sel_r.results.notes&&<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",lineHeight:1.5}}>{sel_r.results.notes}</div>}
-                  <div style={{marginTop:6,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{sel_r.results.uploadedAt} · {sel_r.results.fileName}</div>
-                </div>
-              ):(
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic"}}>No results uploaded yet · Upload the award notice to track outcome</div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-    </div>
-  );
-}
 
 //  REORDER — populated from Zoho Books paid invoices
 // ════════════════════════════════════════════════════════════════════════════
@@ -5949,7 +6037,6 @@ function ModProspecting() {
               </div>
             )}
           </div>
-          <button onClick={()=>{setMod("emails");}} style={{background:"#ffffff20",color:B.white,border:"1px solid #ffffff30",borderRadius:4,padding:"6px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>BATCH EMAIL →</button>
           <button onClick={()=>{
             bulkSel.forEach(cid=>{
               const c=(s.contacts||[]).find(x=>x.id===cid);
@@ -6024,295 +6111,6 @@ Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
-// ════════════════════════════════════════════════════════════════════════════
-//  EMAILS — unified sent history, templates, and batch outreach
-// ════════════════════════════════════════════════════════════════════════════
-function ModEmails() {
-  const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("sent");
-
-  // ── SENT HISTORY ──────────────────────────────────────────────────────────
-  const sentItems = (s.contacts||[])
-    .flatMap(c=>(c.activity||[])
-      .filter(a=>a.type==="sent"||a.type==="replied"||a.type==="opened"||a.type==="clicked")
-      .map(a=>({...a,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),contactEmail:c.email,school:typeof c.school==="string"?c.school:c.school?.name||"",sport:c.sport||""}))
-    )
-    .sort((a,b)=>b.ts-a.ts);
-
-  const typeColor={sent:B.blue,replied:B.green,opened:B.purple,clicked:B.orange};
-
-  // ── TEMPLATES ─────────────────────────────────────────────────────────────
-  const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
-  const [sel,setSel]=useState(allTemplates[0]?.id||null);
-  const [editing,setEditing]=useState(false);
-  const [form,setForm]=useState({name:"",subject:"",body:"",tags:[]});
-  const [tagInput,setTagInput]=useState("");
-  const current=allTemplates.find(t=>t.id===sel);
-  const isDefault=DEFAULT_TEMPLATES.some(t=>t.id===sel);
-  const startNew=()=>{setForm({name:"",subject:"",body:"",tags:[]});setEditing(true);setSel(null);};
-  const startEdit=()=>{if(!current||isDefault)return;setForm({name:current.name,subject:current.subject,body:current.body,tags:current.tags||[]});setEditing(true);};
-  const cancelEdit=()=>{setEditing(false);if(allTemplates.length)setSel(allTemplates[0].id);};
-  const saveTemplate=()=>{
-    if(!form.name||!form.subject||!form.body){toast("Name, subject and body required","error");return;}
-    if(sel&&!isDefault){dispatch("UPDATE_TEMPLATE",{id:sel,...form});toast("Template updated","success");}
-    else{const t={id:mkId(),...form};dispatch("ADD_TEMPLATE",t);setSel(t.id);toast("Template saved","success");}
-    setEditing(false);
-  };
-
-  // ── BATCH SEND ────────────────────────────────────────────────────────────
-  const contacts=s.contacts||[];
-  const [sportFilter,setSportFilter]=useState("");
-  const [stateFilter,setStateFilter]=useState("");
-  const [scoreFilter,setScoreFilter]=useState(0);
-  const [selContacts,setSelContacts]=useState(new Set());
-  const [tplId,setTplId]=useState(allTemplates[0]?.id||"");
-  const [drafts,setDrafts]=useState([]);
-  const [writing,setWriting]=useState(false);
-  const [sending,setSending]=useState(false);
-  const [sentCount,setSentCount]=useState(0);
-  const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
-  const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
-  const filtered=contacts.filter(c=>{
-    if(!c.email)return false;
-    if(sportFilter&&c.sport!==sportFilter)return false;
-    if(stateFilter&&c.state!==stateFilter)return false;
-    if((c.score||0)<scoreFilter)return false;
-    return true;
-  });
-  const eligibleContacts=contacts.filter(c=>!c.optedOut);
-  const optedOutCount=contacts.length-eligibleContacts.length;
-  const togSel=(id)=>setSelContacts(ss=>{const n=new Set(ss);n.has(id)?n.delete(id):n.add(id);return n;});
-  const selAll=()=>setSelContacts(new Set(filtered.map(c=>c.id)));
-  const selNone=()=>setSelContacts(new Set());
-  const selectedList=filtered.filter(c=>selContacts.has(c.id)).filter(c=>!c.optedOut);
-  const buildDrafts=async()=>{
-    if(!selectedList.length){toast("Select contacts first","error");return;}
-    const tpl=allTemplates.find(t=>t.id===tplId);
-    if(!tpl){toast("Select a template","error");return;}
-    setWriting(true);setDrafts([]);
-    const useAI=selectedList.length<=20;
-    if(useAI){
-      const prompt=`You are writing personalized emails for ST1 Sports (athletic equipment) for ${selectedList.length} recipients.\n\nTemplate:\nSubject: ${tpl.subject}\nBody: ${tpl.body}\n\nRecipients:\n${selectedList.map((c,i)=>`${i+1}. ${c.fullName||[c.firstName,c.lastName].filter(Boolean).join(" ")} | ${c.title||"coach"} | ${c.school||""} | ${c.state||""} | Sport: ${c.sport||"general"}`).join("\n")}\n\nFor each recipient personalize the subject and body by filling in {{name}}, {{school}}, and adding 1 specific sentence relevant to their sport/role.\nReturn JSON array: [{"index":1,"subject":"...","body":"..."}] with index matching the list above.`;
-      const raw=await aiCall(prompt,{json:true,tokens:4000});
-      if(Array.isArray(raw)){setDrafts(raw.map((r,i)=>{const c=selectedList[i];return{id:mkId(),contactId:c.id,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),toEmail:c.email,subject:r.subject||tpl.subject,body:r.body||tpl.body,status:"draft"};}));}
-      else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
-    }else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
-    setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
-  };
-  const sendAll=async()=>{
-    const toSend=drafts.filter(d=>d.status==="draft");
-    if(!toSend.length){toast("No drafts to send","error");return;}
-    setSending(true);setSentCount(0);let sent=0;
-    for(const d of toSend){
-      try{
-        setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sending"}:x));
-        const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:d.toEmail,to_name:d.contactName,subject:d.subject,body:d.body})});
-        const res=await r.json();
-        if(res.sent){
-          setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sent"}:x));
-          dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"contacted",lastOutreach:today()});
-          dispatch("SCORE_CONTACT",{contactId:d.contactId,type:"sent",note:`Batch email sent`,campaignId:"batch"});
-          const _bc=(s.contacts||[]).find(c=>c.id===d.contactId);if(_bc?.zohoId) pushActivityToZoho(_bc,`Batch email sent: ${d.subject}`);
-          sent++;setSentCount(sent);
-        }else{setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));}
-        // 15-second gap between sends to avoid spam filters
-        if(sent<toSend.length) await new Promise(r=>setTimeout(r,15000));
-      }catch(e){setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:e.message}:x));}
-    }
-    setSending(false);toast(`${sent}/${toSend.length} emails sent`,sent>0?"success":"error");
-  };
-  const updDraft=(id,field,val)=>setDrafts(ds=>ds.map(d=>d.id===id?{...d,[field]:val}:d));
-
-  return(
-    <div style={{padding:"22px 26px"}}>
-      <PH title="EMAILS" sub="Sent history · reusable templates · batch outreach"/>
-      <div style={{display:"flex",gap:5,marginBottom:18}}>
-        {[["sent","✉ SENT"],["templates","≈ TEMPLATES"],["batch","⟶ BATCH SEND"]].map(([id,l])=>(
-          <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
-        ))}
-      </div>
-
-      {/* ── SENT HISTORY ────────────────────────────────────────────────────── */}
-      {tab==="sent"&&(
-        <div>
-          {sentItems.length===0?(
-            <div className="card" style={{padding:40,textAlign:"center"}}>
-              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No emails sent yet</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Emails sent through campaigns or batch outreach will appear here.</div>
-              <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-                <OBtn sm onClick={()=>setTab("batch")}>BATCH SEND →</OBtn>
-              </div>
-            </div>
-          ):(
-            <div>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>{sentItems.length} EVENTS</div>
-              <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                {sentItems.slice(0,150).map(a=>{
-                  const c=typeColor[a.type]||B.muted;
-                  return(
-                    <div key={a.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"8px 12px",background:B.white,border:`1px solid ${B.border}`,borderLeft:`3px solid ${c}`,borderRadius:5}}>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:`${c}14`,padding:"2px 6px",borderRadius:3,flexShrink:0,marginTop:1}}>{a.type?.toUpperCase()}</span>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{a.contactName}</div>
-                        {a.contactEmail&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{a.contactEmail}{a.school?` · ${a.school}`:""}</div>}
-                        {a.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,fontStyle:"italic"}}>{a.note}</div>}
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{new Date(a.ts).toLocaleDateString()}</div>
-                        {a.campaignId&&a.campaignId!=="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,marginTop:2}}>CAMPAIGN</div>}
-                        {a.campaignId==="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,marginTop:2}}>BATCH</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── TEMPLATES ────────────────────────────────────────────────────────── */}
-      {tab==="templates"&&(
-        <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14,height:"calc(100vh - 200px)",overflow:"hidden"}}>
-          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            <button onClick={startNew} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",marginBottom:6}}>+ NEW TEMPLATE</button>
-            {allTemplates.map(t=>(
-              <div key={t.id} onClick={()=>{setSel(t.id);setEditing(false);}} style={{padding:"9px 12px",borderRadius:6,cursor:"pointer",background:sel===t.id?B.orangeBg:B.white,border:`1px solid ${sel===t.id?B.orange:B.border}`,borderLeft:`3px solid ${sel===t.id?B.orange:B.border}`}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:sel===t.id?500:400,lineHeight:1.3}}>{t.name}</div>
-                {t.tags?.length>0&&<div style={{display:"flex",gap:3,flexWrap:"wrap",marginTop:4}}>{t.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:8}}>{tag}</span>)}</div>}
-              </div>
-            ))}
-          </div>
-          <div style={{overflowY:"auto"}}>
-            {editing?(
-              <div className="card" style={{padding:16}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                  <div><Lbl s={{marginBottom:4}}>TEMPLATE NAME</Lbl><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                  <div><Lbl s={{marginBottom:4}}>TAGS (comma-sep)</Lbl><input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                </div>
-                <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>SUBJECT LINE</Lbl><input value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>BODY — use {"{{name}}"}, {"{{school}}"} as placeholders</Lbl>
-                  <textarea value={form.body} onChange={e=>setForm(f=>({...f,body:e.target.value}))} rows={12} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.7}}/></div>
-                <div style={{display:"flex",gap:7}}><OBtn onClick={saveTemplate}>SAVE TEMPLATE</OBtn><GBtn onClick={cancelEdit}>CANCEL</GBtn></div>
-              </div>
-            ):current?(
-              <div className="card" style={{padding:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-                  <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginBottom:4}}>{current.name}</div>
-                    {current.tags?.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{current.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:8}}>{tag}</span>)}</div>}
-                  </div>
-                  <div style={{display:"flex",gap:7}}>
-                    <button onClick={()=>navigator.clipboard?.writeText(`Subject: ${current.subject}\n\n${current.body}`).catch(()=>{}).then(()=>toast("Copied","success"))} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>📋 COPY</button>
-                    {!isDefault&&<button onClick={startEdit} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>EDIT</button>}
-                    {!isDefault&&<button onClick={()=>{dispatch("DEL_TEMPLATE",sel);setSel(allTemplates[0]?.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>DEL</button>}
-                  </div>
-                </div>
-                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Subject: {current.subject}</div>
-                <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.7,margin:0,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>{current.body}</pre>
-                {isDefault&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Built-in template — create a custom copy to edit it.</div>}
-              </div>
-            ):<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Select a template</div>}
-          </div>
-        </div>
-      )}
-
-      {/* ── BATCH SEND ───────────────────────────────────────────────────────── */}
-      {tab==="batch"&&(
-        drafts.length===0?(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:16}}>
-            <div>
-              <div className="card" style={{padding:14,marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>FILTER CONTACTS</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:10}}>
-                  <div><Lbl s={{marginBottom:3}}>SPORT</Lbl><select value={sportFilter} onChange={e=>setSportFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All sports</option>{sports.map(sp=><option key={sp}>{sp}</option>)}</select></div>
-                  <div><Lbl s={{marginBottom:3}}>STATE</Lbl><select value={stateFilter} onChange={e=>setStateFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All states</option>{states.map(st=><option key={st}>{st}</option>)}</select></div>
-                  <div><Lbl s={{marginBottom:3}}>MIN SCORE</Lbl><input type="number" min="0" max="200" value={scoreFilter} onChange={e=>setScoreFilter(Number(e.target.value)||0)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/></div>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{filtered.length} contacts match · {selContacts.size} selected</div>
-                  <div style={{display:"flex",gap:6}}>
-                    <button onClick={selAll} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>SELECT ALL</button>
-                    <button onClick={selNone} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLEAR</button>
-                  </div>
-                </div>
-              </div>
-              <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-                {filtered.slice(0,100).map(c=>(
-                  <div key={c.id} onClick={()=>togSel(c.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 12px",borderRadius:6,cursor:"pointer",background:selContacts.has(c.id)?B.orangeBg:B.white,border:`1px solid ${selContacts.has(c.id)?B.orange:B.border}`}}>
-                    <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${selContacts.has(c.id)?B.orange:B.border}`,background:selContacts.has(c.id)?B.orange:"none",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{selContacts.has(c.id)&&<span style={{color:B.white,fontSize:10,lineHeight:1}}>✓</span>}</div>
-                    <div style={{flex:1}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
-                    </div>
-                    <div style={{textAlign:"right",flexShrink:0}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</div>
-                      {(c.score||0)>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>{c.score}pts</div>}
-                    </div>
-                  </div>
-                ))}
-                {filtered.length===0&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts match. Adjust filters or import contacts first.</div>}
-              </div>
-            </div>
-            <div>
-              <div className="card" style={{padding:14,marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>SELECT TEMPLATE</div>
-                <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                  {allTemplates.map(t=>(
-                    <div key={t.id} onClick={()=>setTplId(t.id)} style={{padding:"8px 10px",borderRadius:5,cursor:"pointer",background:tplId===t.id?B.orangeBg:B.white,border:`1px solid ${tplId===t.id?B.orange:B.border}`}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:tplId===t.id?500:400}}>{t.name}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.subject}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="card" style={{padding:14}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:8}}>{selectedList.length} contacts{optedOutCount>0?<span style={{color:B.red}}> ({optedOutCount} opted out — excluded)</span>:""}</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:12}}>{selContacts.size} selected · AI will personalize each email with their name and school.</div>
-                <OBtn onClick={buildDrafts} disabled={writing||selectedList.length===0} style={{width:"100%",marginBottom:7}}>{writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}</OBtn>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
-              </div>
-            </div>
-          </div>
-        ):(
-          <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-                {drafts.length} drafts · {drafts.filter(d=>d.status==="sent").length} sent · {drafts.filter(d=>d.status==="failed").length} failed
-                {sending&&<span style={{color:B.orange,marginLeft:8}}>Sending {sentCount}...</span>}
-              </div>
-              <div style={{display:"flex",gap:7}}>
-                <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
-                <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>{sending?"SENDING...":"✉ SEND ALL DRAFTS"}</button>
-              </div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {drafts.map(d=>{
-                const STATUS_C={draft:B.muted,sending:B.orange,sent:B.green,failed:B.red};
-                return(
-                  <div key={d.id} className="card" style={{padding:14,borderLeft:`3px solid ${STATUS_C[d.status]||B.muted}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.contactName} <span style={{color:B.muted,fontWeight:400}}>· {d.toEmail}</span></div>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:STATUS_C[d.status],background:`${STATUS_C[d.status]}18`,padding:"2px 7px",borderRadius:8,letterSpacing:.5,flexShrink:0}}>{d.status.toUpperCase()}</span>
-                    </div>
-                    {d.status==="draft"&&(
-                      <div>
-                        <input value={d.subject} onChange={e=>updDraft(d.id,"subject",e.target.value)} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:5}}/>
-                        <textarea value={d.body} onChange={e=>updDraft(d.id,"body",e.target.value)} rows={5} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-                      </div>
-                    )}
-                    {d.status==="sent"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Sent successfully</div>}
-                    {d.status==="failed"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>✗ {d.error||"Send failed"}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )
-      )}
-    </div>
-  );
-}
 
 function ModTemplates() {
   const {s,dispatch,toast}=useApp();
@@ -7196,10 +6994,8 @@ function ModMarketing() {
       if(d.sent) return {ok:true};
       // Surface detailed error so it shows in the UI
       const reason=d.error||(d.raw?.error?.message)||"send failed";
-      console.error("[sendOneEmail] API error →",d);
       return {ok:false,reason};
     }catch(err){
-      console.error("[sendOneEmail] fetch error →",err);
       return {ok:false,reason:err.message};
     }
   };
@@ -7249,7 +7045,6 @@ function ModMarketing() {
         failed++;
         const failEmail=contactMap[enroll.contactId]?.email||"unknown";
         if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
-        console.warn("[campaign send] failed for",failEmail,"→",res.reason);
       }
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
@@ -8667,7 +8462,6 @@ function ModMarketing() {
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
                 const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
-                  console.log("[sendOneBatch] camp=",camp?.id,"sending=",sending,"batch=",batchEnrollments.length,"noEmail=",noEmailEnrs.length);
                   if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
                   if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
                   setSending(true);
@@ -8724,7 +8518,6 @@ function ModMarketing() {
                   toast(msg,sent>0||skipped>0||noEmailAdv>0?"success":"error");
                   if(failed>0||sent===0&&skipped===0&&noEmailAdv===0) setLastSendErr(msg);
                   } catch(err) {
-                    console.error("[sendOneBatch]",err);
                     const errMsg=`Send crashed: ${err.message}`;
                     toast(errMsg,"error");
                     setLastSendErr(errMsg);
@@ -12526,10 +12319,10 @@ function ModActivity() {
       <PH title="ACTIVITY FEED" sub="Every action across deals, invoices, and outreach"/>
       {s.activity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Activity appears as you use the platform</div>}
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {s.activity.map(a=>{const u=USERS.find(x=>x.id===a.userId);return(
+        {s.activity.map(a=>{const rep=(s.reps||[]).find(x=>x.id===a.userId);const ini=rep?(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase():null;return(
           <div key={a.id} className="card" style={{padding:"9px 12px",display:"flex",gap:9,alignItems:"flex-start"}}>
-            {u&&<div style={{width:26,height:26,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{u.initials}</span></div>}
-            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{u?.name} · {new Date(a.ts).toLocaleString()}</div></div>
+            {rep&&<div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{ini}</span></div>}
+            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{rep?.name} · {new Date(a.ts).toLocaleString()}</div></div>
           </div>
         );})}
       </div>
@@ -13363,16 +13156,6 @@ function ModSettings() {
         <div style={{display:"flex",gap:7}}>
           <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
           <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>
-        </div>
-        <div style={{marginTop:13,paddingTop:11,borderTop:`1px solid ${B.border}`}}>
-          <Lbl s={{marginBottom:9}}>Team</Lbl>
-          {USERS.map(u=>(
-            <div key={u.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
-              <div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span></div>
-              <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{u.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email}</div></div>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:u.role==="owner"?B.orange:B.blue,background:u.role==="owner"?B.orangeBg:B.blueBg,padding:"2px 7px",borderRadius:3,letterSpacing:.5}}>{u.role.toUpperCase()}</span>
-            </div>
-          ))}
         </div>
       </div>
 
