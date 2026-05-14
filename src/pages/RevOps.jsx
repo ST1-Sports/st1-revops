@@ -923,6 +923,7 @@ export default function App() {
             {mod==="orders"      && <ModOrders/>}
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
+            {mod==="social"      && <ModSocial/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="emails"      && <ModEmails/>}
             {mod==="compete"     && <ModCompete/>}
