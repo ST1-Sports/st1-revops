@@ -706,8 +706,6 @@ export default function App() {
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
     {id:"crm",         icon:"◈", label:"CRM"},
-    {id:"workflow",    icon:"⤳", label:"Sales Workflow"},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
     {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
@@ -843,7 +841,7 @@ export default function App() {
                   style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:"rgba(255,255,255,0.55)",padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative"}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
-                  {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:n.id==="invoicing"?B.red:B.orange,color:"#fff",borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
+                  {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:B.orange,color:"#fff",borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
                   {slim&&n.badge>0&&<span style={{position:"absolute",top:5,right:5,background:B.orange,color:"#fff",borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{n.badge}</span>}
                 </button>
               );
@@ -925,11 +923,9 @@ export default function App() {
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
             {mod==="crm"         && <ModCRM/>}
-            {mod==="workflow"    && <ModWorkflow/>}
             {mod==="deals"       && <ModDeals/>}
             {mod==="orders"      && <ModOrders/>}
             {mod==="rfp"         && <ModRFP/>}
-            {mod==="invoicing"   && <ModInvoicing/>}
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="marketing"   && <ModMarketing/>}
@@ -1702,9 +1698,8 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
   const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
   const odDeals=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
   const hotDeals=open.filter(d=>d.priority==="hot").slice(0,3);
-  const odInv=(s.invoices||[]).filter(i=>i.status==="overdue");
   const urgRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=5);
-  const urgentN=odDeals.length+odInv.length+urgRfps.length;
+  const urgentN=odDeals.length+urgRfps.length;
   const ACT_LABELS={create_deal:"+ Create Deal",draft_email:"✉ Copy Email Draft",flag_deal:"🔥 Flag Hot",schedule_followup:"📅 Set Follow-up",log_note:"📝 Log Note",add_contact:"+ Add Contact",navigate:"→ Go There"};
 
   const panelCard=(children,onClick,bg,border)=>(
@@ -1791,11 +1786,6 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
               <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>{Math.abs(dUntil(d.followUpDate))}d overdue · {fmt$(d.value)}</div></>,
               ()=>setMod("deals"),B.redBg,`${B.red}25`
             ))}
-            {odInv.slice(0,2).map(inv=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.customer}</div>
-              <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>Invoice overdue · {fmt$(inv.balance||inv.total)}</div></>,
-              ()=>setMod("invoicing"),B.redBg,`${B.red}25`
-            ))}
             {urgRfps.slice(0,2).map(r=>panelCard(
               <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
               <div style={{fontSize:11,color:B.yellow,fontFamily:"'Lexend',sans-serif"}}>RFP due in {dUntil(r.dueDate)}d</div></>,
@@ -1827,7 +1817,6 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
             ["Open Deals",open.length,()=>setMod("deals")],
             ["Pipeline Value",fmt$(open.reduce((a,d)=>a+d.value,0)),()=>setMod("deals")],
             ["Open RFPs",(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).length,()=>setMod("rfp")],
-            ["AR Outstanding",fmt$((s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0)),()=>setMod("invoicing")],
           ].map(([lbl,val,fn])=>(
             <div key={lbl} onClick={fn} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
               <span style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{lbl}</span>
@@ -1933,7 +1922,7 @@ function SportsPicker({selected,onChange,single=false}){
   );
 }
 
-function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onChange,onCalcInput}){
+function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,schoolClass,onChange,onCalcInput}){
   const [expanded,setExpanded]=useState(!orgType);
   const isComplete=!!(orgType&&(
     orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0))
@@ -1954,6 +1943,7 @@ function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onC
       <div onClick={()=>setExpanded(true)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",marginBottom:14,background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:6,cursor:"pointer"}}>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
           <span style={{fontWeight:600}}>{orgType==="school"?"School":"Organization"}</span>
+          {orgType==="school"&&schoolClass&&<span style={{color:B.orange,fontWeight:600}}> · {schoolClass}</span>}
           {orgType==="school"&&numAthletes&&<span style={{color:B.muted}}> · {numAthletes} athletes</span>}
           <span style={{color:B.muted}}> · {sportSummary}</span>
         </div>
@@ -1973,12 +1963,19 @@ function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onC
       {orgType==="school"&&(<>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
           <div>
-            {sub("# SPORTS")}
-            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
+            {sub("SCHOOL CLASS")}
+            <select value={schoolClass||""} onChange={e=>onCalcInput("schoolClass",e.target.value)} style={numInp({marginTop:0})}>
+              <option value="">— Select —</option>
+              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
+            </select>
           </div>
           <div>
             {sub("# ATHLETES")}
             <input type="number" min="1" value={numAthletes} onChange={e=>onCalcInput("numAthletes",e.target.value)} placeholder="e.g. 300" style={numInp({marginTop:0})}/>
+          </div>
+          <div style={{gridColumn:"1/-1"}}>
+            {sub("# SPORTS")}
+            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
           </div>
         </div>
         {sub("SERVICING")}
@@ -2323,25 +2320,10 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
     <div style={{marginTop:22,paddingTop:18,borderTop:`1px solid ${B.border}`}}>
       <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:2,marginBottom:12}}>SPONSORSHIP CALCULATOR</div>
 
-      {/* Inputs */}
+      {/* Inputs — schoolClass/numSports/numAthletes are captured in OrgProfile above */}
       <div className="card" style={{padding:14,marginBottom:12}}>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <div>
-            <Lbl s={{marginBottom:3}}>School classification</Lbl>
-            <select value={inputs.schoolClass} onChange={e=>onInputChange("schoolClass",e.target.value)} style={inp()}>
-              <option value="">— Select —</option>
-              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of sports</Lbl>
-            <input type="number" min={1} max={40} value={inputs.numSports} onChange={e=>onInputChange("numSports",e.target.value)} placeholder="e.g. 12" style={inp()}/>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of athletes</Lbl>
-            <input type="number" min={1} max={5000} value={inputs.numAthletes} onChange={e=>onInputChange("numAthletes",e.target.value)} placeholder="e.g. 320" style={inp()}/>
-          </div>
-          <div>
+          <div style={{gridColumn:"1/-1"}}>
             <Lbl s={{marginBottom:3}}>Their est. current spend (optional)</Lbl>
             <div style={{position:"relative"}}>
               <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:B.muted,pointerEvents:"none"}}>$</span>
@@ -2362,7 +2344,7 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
       {/* Placeholder */}
       {!hasRequired&&!loading&&!result&&(
         <div style={{background:B.surface,borderRadius:6,border:`1px dashed ${B.border}`,padding:"14px 16px",textAlign:"center"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Enter school classification, number of sports, and number of athletes to see the sponsorship offer</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Fill in School Class, # Sports, and # Athletes above to unlock the sponsorship estimate</div>
         </div>
       )}
 
@@ -2426,7 +2408,7 @@ function SponsorshipCalculator({inputs,onInputChange,result,loading}){
 }
 
 function TalkTrack({onClose,linkedContact}){
-  const {cu,toast}=useApp();
+  const {cu,toast,dispatch,s}=useApp();
   const [sessionId,setSessionId]=useState(null);
   const [questions,setQuestions]=useState([]);
   const [phaseIdx,setPhaseIdx]=useState(0);
@@ -2631,6 +2613,7 @@ function TalkTrack({onClose,linkedContact}){
           selectedSports={selectedSports}
           numSports={calcInputs.numSports}
           numAthletes={calcInputs.numAthletes}
+          schoolClass={calcInputs.schoolClass}
           onChange={handleOrgChange}
           onCalcInput={handleCalcInput}
         />
@@ -2762,6 +2745,20 @@ function TalkTrack({onClose,linkedContact}){
                   fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
                     body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
                   }).catch(()=>{});
+
+                  // Update local CRM contact with profile + sponsorship data
+                  const allContacts=s?.contacts||[];
+                  const localC=allContacts.find(c=>c.zohoId===linked.id||c.id===linked.id);
+                  if(localC){
+                    dispatch("UPDATE_CONTACT",{
+                      id:localC.id,
+                      orgType,sportsMode,selectedSports,
+                      ...(calcInputs.schoolClass?{schoolClass:calcInputs.schoolClass}:{}),
+                      ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
+                      ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
+                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null}:{}),
+                    });
+                  }
                 }
 
                 sessionStorage.removeItem("ttSessionId");
@@ -2800,6 +2797,8 @@ function ModCRM() {
   const [ttContact,setTtContact]=useState(null);
   const [showAddContact,setShowAddContact]=useState(false);
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+  const [leftMode,setLeftMode]=useState("contacts");
+  const [selSchool,setSelSchool]=useState(null);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
@@ -2867,15 +2866,21 @@ function ModCRM() {
       <div style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>ACCOUNTS</div>
+            <div style={{display:"flex",gap:3}}>
+              {[["contacts","CONTACTS"],["accounts","ACCOUNTS"]].map(([v,l])=>(
+                <button key={v} onClick={()=>{setLeftMode(v);setSelId(null);setSelSchool(null);}} style={{padding:"4px 10px",background:leftMode===v?B.orange:B.surface,color:leftMode===v?B.white:B.muted,border:`1px solid ${leftMode===v?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
             <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
           </div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
-          <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
-            {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
-            ))}
-          </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+          {leftMode==="contacts"&&(
+            <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
+              {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          )}
         </div>
         {showAddContact&&(
           <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
@@ -2904,31 +2909,67 @@ function ModCRM() {
           </div>
         )}
         <div style={{flex:1,overflowY:"auto"}}>
-          {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
-          {filtered.map(c=>{
-            const {cd,phase}=getCD(c);
-            const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
-            const pc=PCOL[phase];
-            return(
-              <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+          {leftMode==="contacts"&&(<>
+            {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
+            {filtered.map(c=>{
+              const {cd,phase}=getCD(c);
+              const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+              const pc=PCOL[phase];
+              return(
+                <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
+                      {c.ownerId && c.ownerId !== cu?.id && (()=>{
+                        const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
+                        const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+                        return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
+                      })()}
+                    </div>
                   </div>
-                  <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
-                    {c.ownerId && c.ownerId !== cu?.id && (()=>{
-                      const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
-                      const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-                      return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
-                    })()}
+                  {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                </button>
+              );
+            })}
+          </>)}
+          {leftMode==="accounts"&&(()=>{
+            const sq=search.toLowerCase();
+            const groups={};
+            contacts.filter(c=>!c.deadStatus).forEach(c=>{
+              const school=c.school||"(No School)";
+              if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
+              if(!groups[school]) groups[school]={contacts:[],deals:[],value:0};
+              groups[school].contacts.push(c);
+              const cd=getCD(c);
+              cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[school].deals.push(d);groups[school].value+=(d.value||0);}});
+            });
+            const schoolList=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));
+            if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
+            return schoolList.map(([school,g])=>{
+              const isActive=selSchool===school;
+              const phases=g.contacts.map(c=>getCD(c).phase);
+              const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
+              const pc=PCOL[topPhase];
+              return(
+                <button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{school}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
+                    </div>
+                    <div style={{flexShrink:0,textAlign:"right"}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{topPhase}</span>
+                      {g.value>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,marginTop:2}}>{fmt$K(g.value)}</div>}
+                    </div>
                   </div>
-                </div>
-                {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
-              </button>
-            );
-          })}
+                </button>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -2938,7 +2979,93 @@ function ModCRM() {
           onClose={()=>{setTtView(false);setTtContact(null);}}
           linkedContact={ttContact}
         />
-      ):!sel?(
+      ):leftMode==="accounts"&&selSchool?(()=>{
+        const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
+        const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
+        const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const schoolOrgType=schoolContacts[0]?.orgType||"";
+        const schoolClass=schoolContacts[0]?.schoolClass||"";
+        const numAthletes=schoolContacts[0]?.numAthletes||"";
+        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
+        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        return(
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            {/* School header */}
+            <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+                    {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
+                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                  </div>
+                </div>
+                {sponsorshipMin&&(
+                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
+                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+              {/* Action bar */}
+              <div style={{display:"flex",gap:8,marginBottom:18}}>
+                <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
+                <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+              </div>
+
+              {/* Contacts (coaches) list */}
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+                {schoolContacts.map(c=>{
+                  const {cd,phase}=getCD(c);
+                  const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+                  const pc=PCOL[phase];
+                  return(
+                    <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3}}>{phase}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Open deals for this school */}
+              {openDeals.length>0&&(<>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {openDeals.map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+            </div>
+          </div>
+        );
+      })():!sel?(
         <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
           {(()=>{
             const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
@@ -3276,176 +3403,6 @@ function ModCRM() {
               </div>
             )}
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  SALES WORKFLOW — deal process templates + step tracker
-// ════════════════════════════════════════════════════════════════════════════
-function ModWorkflow() {
-  const {s,dispatch,toast}=useApp();
-  const [view,setView]=useState("active"); // "active"|"templates"
-  const [selTId,setSelTId]=useState(null);
-  const [newStep,setNewStep]=useState({name:"",type:"quote",dueDays:2});
-  const templates=s.workflowTemplates||[];
-  const deals=s.deals||[];
-  const activeWf=deals.filter(d=>d.workflowId);
-
-  const STYPES=["call","email","quote","proposal","demo","approval","po","invoice","meeting","task"];
-  const SCOL={call:B.green,email:B.blue,quote:B.orange,proposal:B.teal,demo:B.purple,approval:B.yellow,po:B.orange,invoice:B.green,meeting:B.blue,task:B.muted};
-
-  const getProgress=(deal)=>{
-    const t=templates.find(t=>t.id===deal.workflowId);
-    if(!t) return{done:0,total:0,next:null};
-    const steps=t.steps||[];
-    const ws=deal.workflowSteps||{};
-    const done=steps.filter(s=>ws[s.id]?.status==="done").length;
-    const next=steps.find(s=>ws[s.id]?.status!=="done");
-    return{done,total:steps.length,next};
-  };
-
-  const selT=selTId?templates.find(t=>t.id===selTId):null;
-
-  return(
-    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
-      {/* LEFT */}
-      <div style={{width:260,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:10}}>SALES WORKFLOW</div>
-          <div style={{display:"flex",gap:4}}>
-            {[["active","Active"],["templates","Templates"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setView(v)} style={{flex:1,background:view===v?B.orange:"none",color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer"}}>{l.toUpperCase()}</button>
-            ))}
-          </div>
-        </div>
-        <div style={{flex:1,overflowY:"auto"}}>
-          {view==="templates"&&(
-            <>
-              <button onClick={()=>{const id=mkId();dispatch("ADD_WORKFLOW_TEMPLATE",{id,name:"New Workflow",steps:[]});setSelTId(id);}} style={{width:"100%",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,padding:"10px 13px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",textAlign:"left",fontWeight:700}}>+ NEW TEMPLATE</button>
-              {templates.map(t=>(
-                <button key={t.id} onClick={()=>setSelTId(t.id)} style={{width:"100%",textAlign:"left",background:selTId===t.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selTId===t.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"10px 12px",cursor:"pointer"}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{t.name}</div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:2}}>{(t.steps||[]).length} steps · {deals.filter(d=>d.workflowId===t.id).length} active deals</div>
-                </button>
-              ))}
-              {templates.length===0&&<div style={{padding:"20px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No templates yet</div>}
-            </>
-          )}
-          {view==="active"&&(
-            <>
-              {activeWf.map(deal=>{
-                const{done,total,next}=getProgress(deal);
-                const pct=total>0?Math.round(done/total*100):0;
-                return(
-                  <button key={deal.id} onClick={()=>{setView("active");}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"10px 12px",cursor:"default"}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{deal.name}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:5}}>{done}/{total} steps</div>
-                    <div style={{height:4,background:B.border,borderRadius:2}}><div style={{height:"100%",width:`${pct}%`,background:pct===100?B.green:B.orange,borderRadius:2}}/></div>
-                    {next&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:3}}>NEXT: {next.name.toUpperCase()}</div>}
-                  </button>
-                );
-              })}
-              {activeWf.length===0&&<div style={{padding:"20px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No active workflows.<br/>Assign a template to a deal.</div>}
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* RIGHT */}
-      {view==="templates"&&!selT&&(
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10,color:B.muted}}>
-          <div style={{fontSize:28,opacity:.2}}>⤳</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13}}>Select or create a workflow template</div>
-        </div>
-      )}
-      {view==="templates"&&selT&&(
-        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-            <input value={selT.name} onChange={e=>dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,name:e.target.value})} style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,border:"none",background:"transparent",outline:"none",flex:1,padding:0}}/>
-            <button onClick={()=>{dispatch("DELETE_WORKFLOW_TEMPLATE",selT.id);setSelTId(null);}} style={{background:"none",border:`1px solid ${B.red}40`,color:B.red,borderRadius:4,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",marginLeft:10}}>Delete</button>
-          </div>
-          {(selT.steps||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0",marginBottom:16}}>No steps yet — add your first step below</div>}
-          <div style={{marginBottom:16}}>
-            {(selT.steps||[]).map((step,i)=>(
-              <div key={step.id} className="card" style={{padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:22,height:22,borderRadius:"50%",background:`${SCOL[step.type]||B.muted}20`,border:`2px solid ${SCOL[step.type]||B.muted}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:SCOL[step.type]||B.muted}}>{i+1}</span>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{step.name}</div>
-                  <div style={{display:"flex",gap:8,marginTop:2}}>
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:SCOL[step.type]||B.muted,background:`${SCOL[step.type]||B.muted}15`,padding:"2px 5px",borderRadius:3}}>{step.type.toUpperCase()}</span>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>Due in {step.dueDays}d</span>
-                  </div>
-                </div>
-                <button onClick={()=>dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:(selT.steps||[]).filter(s=>s.id!==step.id)})} style={{background:"none",border:"none",color:B.muted,fontSize:13,cursor:"pointer",padding:"2px 5px",flexShrink:0}}>✕</button>
-              </div>
-            ))}
-          </div>
-          <div className="card" style={{padding:14,marginBottom:18}}>
-            <Lbl s={{marginBottom:10}}>Add Step</Lbl>
-            <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:8,alignItems:"end",marginBottom:10}}>
-              <div><Lbl s={{marginBottom:3}}>Step Name</Lbl><input value={newStep.name} onChange={e=>setNewStep(f=>({...f,name:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter"&&newStep.name.trim()){dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:[...(selT.steps||[]),{id:mkId(),...newStep}]});setNewStep({name:"",type:"quote",dueDays:2});toast("Step added","success");}}} placeholder="e.g. Send Initial Quote" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
-              <div><Lbl s={{marginBottom:3}}>Type</Lbl><select value={newStep.type} onChange={e=>setNewStep(f=>({...f,type:e.target.value}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>{STYPES.map(t=><option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}</select></div>
-              <div><Lbl s={{marginBottom:3}}>Days</Lbl><input type="number" value={newStep.dueDays} onChange={e=>setNewStep(f=>({...f,dueDays:Number(e.target.value||1)}))} min={1} style={{width:55,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/></div>
-            </div>
-            <OBtn sm onClick={()=>{if(!newStep.name.trim())return;dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:[...(selT.steps||[]),{id:mkId(),...newStep}]});setNewStep({name:"",type:"quote",dueDays:2});toast("Step added","success");}}>+ ADD STEP</OBtn>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:8}}>Assign to Deal</Lbl>
-            <select onChange={e=>{if(!e.target.value)return;const d=(s.deals||[]).find(x=>x.id===e.target.value);if(d){const ws=(selT.steps||[]).reduce((a,s)=>({...a,[s.id]:{status:"pending"}}),{});dispatch("UPDATE_DEAL",{id:d.id,workflowId:selT.id,workflowSteps:{...ws,...(d.workflowSteps||{})}});toast(`Workflow assigned to ${d.name}`,"success");}e.target.value="";}} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11}}>
-              <option value="">— Select a deal —</option>
-              {(s.deals||[]).filter(d=>!d.workflowId).map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </div>
-        </div>
-      )}
-      {view==="active"&&(
-        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-          <PH title="ACTIVE WORKFLOWS" sub="Track where every deal sits in its sales process"/>
-          {activeWf.length===0?(
-            <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No deals have a workflow yet.<br/><br/><span style={{cursor:"pointer",color:B.orange,textDecoration:"underline"}} onClick={()=>setView("templates")}>Go to Templates →</span></div>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
-              {activeWf.map(deal=>{
-                const template=templates.find(t=>t.id===deal.workflowId);
-                const steps=template?.steps||[];
-                const ws=deal.workflowSteps||{};
-                const{done,total}=getProgress(deal);
-                const pct=total>0?Math.round(done/total*100):0;
-                return(
-                  <div key={deal.id} className="card" style={{padding:16}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                      <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{deal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{deal.school} · {template?.name||"—"}</div></div>
-                      <div style={{textAlign:"right"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:12,color:pct===100?B.green:B.orange,fontWeight:700}}>{pct}%</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{done}/{total} steps</div></div>
-                    </div>
-                    <div style={{height:5,background:B.border,borderRadius:3,marginBottom:12}}><div style={{height:"100%",width:`${pct}%`,background:pct===100?B.green:B.orange,borderRadius:3}}/></div>
-                    <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                      {steps.map((step,i)=>{
-                        const ss=ws[step.id]||{status:"pending"};
-                        const isDone=ss.status==="done";
-                        const col=SCOL[step.type]||B.muted;
-                        return(
-                          <div key={step.id} style={{display:"flex",alignItems:"center",gap:9,padding:"6px 10px",background:isDone?B.greenBg:B.surface,borderRadius:5,border:`1px solid ${isDone?B.green+"40":B.border}`}}>
-                            <button onClick={()=>{const nws={...ws,[step.id]:{status:isDone?"pending":"done",completedAt:isDone?null:new Date().toISOString()}};dispatch("UPDATE_DEAL",{id:deal.id,workflowSteps:nws});}} style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${isDone?B.green:B.border}`,background:isDone?B.green:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
-                              {isDone&&<span style={{color:B.white,fontSize:9,lineHeight:1}}>✓</span>}
-                            </button>
-                            <span style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:isDone?B.muted:B.text,textDecoration:isDone?"line-through":"none"}}>{step.name}</span>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,background:`${col}15`,padding:"2px 6px",borderRadius:3}}>{step.type.toUpperCase()}</span>
-                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{step.dueDays}d</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <button onClick={()=>{dispatch("UPDATE_DEAL",{id:deal.id,workflowId:null,workflowSteps:null});toast("Workflow removed","info");}} style={{marginTop:8,background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>Remove workflow</button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
       )}
     </div>
@@ -4454,174 +4411,6 @@ function ModRFP() {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  INVOICING — data live from Zoho Books
-// ════════════════════════════════════════════════════════════════════════════
-function ModInvoicing() {
-  const {s,dispatch,toast}=useApp();
-  const [flt,setFlt]=useState("all");
-  const [sel,setSel]=useState(null);
-  const [drafts,setDrafts]=useState({});
-  const [drafting,setDrafting]=useState(null);
-  const [syncing,setSyncing]=useState(false);
-
-  const pool=s.invoices||[];
-  const STAT_MAP={draft:"draft",sent:"sent",overdue:"overdue",paid:"paid",void:"void",partially_paid:"partial",viewed:"viewed"};
-
-  const syncFromZoho=async()=>{
-    setSyncing(true);
-    try {
-      // Pull all recent invoices — Zoho Books handles status (overdue, paid, etc.)
-      const res=await zohoCall("books","/invoices?per_page=200&sort_column=date&sort_order=D");
-      const raw=res.invoices||[];
-      if(!raw.length&&res.message) throw new Error(res.message);
-      const mapped=raw.map(zi=>({
-        id:"zoho_"+zi.invoice_id,
-        zohoId:zi.invoice_id,
-        number:zi.invoice_number||zi.invoice_number_formatted||"",
-        customer:zi.customer_name,
-        customerId:zi.customer_id,
-        status:STAT_MAP[zi.status]||zi.status,
-        date:zi.date,
-        dueDate:zi.due_date,
-        total:zi.total||0,
-        balance:zi.balance||0,
-        items:(zi.line_items||[]).map(li=>({
-          name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total,
-        })),
-        source:"zoho",
-      }));
-      dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
-      dispatch("LOG",{msg:`Zoho Books sync — ${mapped.length} invoices loaded`});
-      toast(`${mapped.length} invoices synced from Zoho Books`,"success");
-    } catch(e){
-      toast(`Sync failed: ${e.message.slice(0,100)}`,"error");
-    }
-    setSyncing(false);
-  };
-
-  const list=pool.filter(i=>{
-    if(flt==="all") return true;
-    if(flt==="overdue") return i.status==="overdue";
-    if(flt==="unpaid") return ["sent","viewed","partial"].includes(i.status);
-    if(flt==="draft") return i.status==="draft";
-    if(flt==="paid") return i.status==="paid";
-    return true;
-  }).sort((a,b)=>{
-    const o={overdue:0,partial:1,viewed:2,sent:3,draft:4,paid:5,void:6};
-    return (o[a.status]??5)-(o[b.status]??5);
-  });
-
-  const ar=pool.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const overdueTot=pool.filter(i=>i.status==="overdue").reduce((a,i)=>a+(i.balance||0),0);
-  const paidTot=pool.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
-
-  const draftRem=async(inv,type)=>{
-    const k=inv.id+type; setDrafting(k);
-    const dOD=inv.dueDate?dAgo(inv.dueDate):0;
-    const t=await aiCall(`Write a${type==="gentle"?" friendly":type==="firm"?" firm":" final"} invoice reminder from Matt Stone at ST1 Sports.
-Invoice ${inv.number} for ${fmt$(inv.balance)} to ${inv.customer}${type!=="gentle"?`, ${dOD} days overdue`:""}.
-Under 70 words. Sign: Matt Stone | ST1 Sports | matt@st1sports.com`);
-    setDrafts(d=>({...d,[k]:t||""})); setDrafting(null);
-  };
-
-  const lastSync=s.invoiceLastSync
-    ? new Date(s.invoiceLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
-    : null;
-
-  return (
-    <div style={{padding:"22px 26px"}}>
-      <PH title="INVOICES & AR" sub="Live from Zoho Books — all balances and statuses are authoritative from Zoho"
-        action={
-          <div style={{display:"flex",alignItems:"center",gap:9}}>
-            {lastSync&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Synced {lastSync}</span>}
-            <OBtn onClick={syncFromZoho} disabled={syncing} style={{minWidth:160}}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
-          </div>
-        }
-      />
-
-      {pool.length===0?(
-        <div style={{textAlign:"center",padding:"70px 0"}}>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.muted,marginBottom:8}}>No invoices synced yet</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:20}}>Connect Zoho Books and click Sync to pull your invoices</div>
-          <OBtn onClick={syncFromZoho} disabled={syncing}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
-        </div>
-      ):(
-        <>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:16}}>
-            <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.orange}/>
-            <KCard l="Overdue" v={fmt$(overdueTot)} c={B.red}/>
-            <KCard l="Paid (this pull)" v={fmt$(paidTot)} c={B.green}/>
-          </div>
-          <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
-            {[["all","All"],["overdue","Overdue"],["unpaid","Unpaid"],["draft","Draft"],["paid","Paid"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setFlt(v)} style={{background:flt===v?B.orange:B.white,color:flt===v?B.white:B.muted,border:`1px solid ${flt===v?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{l}</button>
-            ))}
-          </div>
-          {list.map(inv=>{
-            const st=ISC[inv.status]||{c:B.muted,bg:B.surface};
-            const isOD=inv.status==="overdue";
-            const dOD=isOD&&inv.dueDate?dAgo(inv.dueDate):0;
-            const ex=sel===inv.id;
-            return(
-              <div key={inv.id} className="card fu" style={{marginBottom:8,borderLeft:`3px solid ${st.c}`,padding:0,overflow:"hidden"}}>
-                <div style={{display:"flex",alignItems:"center",gap:11,padding:"9px 12px",cursor:"pointer",background:ex?B.surface:B.white}} onClick={()=>setSel(ex?null:inv.id)}>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.customer}</span>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:st.c,background:st.bg,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{(inv.status||"").toUpperCase()}{isOD&&dOD>0?` · ${dOD}d`:""}</span>
-                    </div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.number} · Due {fmtD(inv.dueDate)}</div>
-                  </div>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$(inv.balance||inv.total)}</div>
-                </div>
-                {ex&&(
-                  <div style={{borderTop:`1px solid ${B.border}`,padding:"11px 12px",background:B.surface}}>
-                    {(inv.items||[]).length>0&&(
-                      <div style={{background:B.white,borderRadius:5,border:`1px solid ${B.border}`,marginBottom:9,overflow:"hidden"}}>
-                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                          <tbody>{inv.items.map((it,i)=>(
-                            <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2?B.surface:B.white}}>
-                              <td style={{padding:"5px 9px",fontWeight:500}}>{it.name}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{it.qty}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{fmt$(it.rate)}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</td>
-                            </tr>
-                          ))}</tbody>
-                        </table>
-                      </div>
-                    )}
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:drafts[inv.id+"gentle"]||drafts[inv.id+"firm"]||drafts[inv.id+"final"]?9:0}}>
-                      {(isOD||["sent","viewed"].includes(inv.status))&&(
-                        <OBtn sm onClick={()=>draftRem(inv,"gentle")} disabled={!!drafting}>{drafting===inv.id+"gentle"?"...":"✦ DRAFT REMINDER"}</OBtn>
-                      )}
-                      {isOD&&dOD>21&&(
-                        <OBtn sm col={B.red} onClick={()=>draftRem(inv,dOD>35?"final":"firm")} disabled={!!drafting}>{dOD>35?"FINAL NOTICE":"2ND NOTICE"}</OBtn>
-                      )}
-                    </div>
-                    {["gentle","firm","final"].map(type=>{
-                      const k=inv.id+type; if(!drafts[k]) return null;
-                      const lc={gentle:B.orange,firm:B.yellow,final:B.red};
-                      return(
-                        <div key={type} style={{background:B.white,borderRadius:4,padding:9,border:`1px solid ${B.border}`,marginBottom:6}}>
-                          <Lbl c={lc[type]} s={{marginBottom:6}}>{type==="gentle"?"REMINDER":type==="firm"?"2ND NOTICE":"FINAL NOTICE"}</Lbl>
-                          <textarea value={drafts[k]} onChange={e=>setDrafts(d=>({...d,[k]:e.target.value}))} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-                          <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[k])} style={{fontSize:10,padding:"3px 8px",marginTop:6}}>COPY</GBtn>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  REORDER — populated from Zoho Books paid invoices
 // ════════════════════════════════════════════════════════════════════════════
 function ModReorder() {
