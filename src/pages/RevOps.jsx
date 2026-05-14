@@ -78,8 +78,6 @@ const B = {
 
 const STORE = "st1_revops_v2";
 
-const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
-
 const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -113,7 +111,6 @@ const SEED = {
   templates: [],
   reps: [],
   strategies: [],
-  workflowTemplates: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -163,7 +160,6 @@ function mergeServerState(base, server) {
     socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
     savedAds:     mergeById(base.savedAds,     server.savedAds),
     templates:    mergeById(base.templates,    server.templates),
-    workflowTemplates: mergeById(base.workflowTemplates, server.workflowTemplates),
     reps:         mergeById(base.reps,         server.reps),
     orders:       mergeById(base.orders,       server.orders),
     alerts:       mergeById(base.alerts,       server.alerts),
@@ -203,7 +199,6 @@ function useStore() {
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
           strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
-          workflowTemplates: Array.isArray(p.workflowTemplates) ? p.workflowTemplates : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
@@ -482,9 +477,6 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "ADD_WORKFLOW_TEMPLATE":    return {...prev, workflowTemplates:[payload,...(prev.workflowTemplates||[])]};
-    case "UPDATE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
-    case "DELETE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).filter(t=>t.id!==payload)};
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
@@ -550,15 +542,13 @@ const mergeTags=(text,c)=>(text||"")
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
-const RFP_STAGES  = ["New", "In Process", "Bid", "No Bid"];
-const DSC = {Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
+const DSC ={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
 const RSC = {
   "New":B.blue,"In Process":B.orange,"Bid":B.green,"No Bid":B.muted,
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{c:B.purple,bg:B.purpleBg},partial:{c:B.yellow,bg:B.yellowBg},paid:{c:B.green,bg:B.greenBg},overdue:{c:B.red,bg:B.redBg}};
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
@@ -1085,7 +1075,7 @@ function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',s
 function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;}
 function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;}
 function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;}
-function UCh({uid}){const u=USERS.find(x=>x.id===uid);if(!u)return null;return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{u.initials}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
+function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
 function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;}
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
@@ -1213,7 +1203,7 @@ function ModAnalytics() {
                 const replied=enrs.filter(e=>e.status==="replied").length;
                 const done=enrs.filter(e=>e.status==="done").length;
                 const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
-                const rep=USERS.find(u=>u.id===camp.repId);
+                const rep=reps.find(r=>r.id===camp.repId);
                 const campDeals=deals.filter(d=>d.campaignId===camp.id);
                 const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
                 return(
@@ -1402,7 +1392,7 @@ function ModAnalytics() {
                 const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
                 if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
                 return entries.map(([rid,{count,value}])=>{
-                  const u=USERS.find(u=>u.id===rid)||reps.find(r=>r.id===rid);
+                  const u=reps.find(r=>r.id===rid);
                   const avg=count>0?Math.round(value/count):0;
                   return(
                     <div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -3809,9 +3799,10 @@ Under 80 words. Include subject line. Warm tone.`);
             {[["Deal Name","name"],["Contact","contact"],["School","school"],["Value ($)","value"],["Quote Date","quoteDate"],["Follow-Up Date","followUpDate"],["Notes","notes"]].map(([l,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={k.includes("Date")?"date":"text"} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
             ))}
-            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
+            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"]].map(([l,opts,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><select value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{opts.map(o=><option key={o}>{o}</option>)}</select></div>
             ))}
+            <div><Lbl s={{marginBottom:3}}>Assignee</Lbl><select value={form.assignee||""} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— Unassigned —</option>{(s.reps||[]).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
             <div><Lbl s={{marginBottom:3}}>Source Campaign</Lbl><select value={form.campaignId} onChange={e=>setForm(f=>({...f,campaignId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— None —</option>{(s.campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           <div style={{display:"flex",gap:7,marginTop:10}}><OBtn onClick={addDeal}>SAVE</OBtn><GBtn onClick={()=>setAdding(false)}>CANCEL</GBtn></div>
@@ -3891,7 +3882,7 @@ Under 80 words. Include subject line. Warm tone.`);
                 {[...(sel_d.touchHistory||[])].reverse().map(t=>(
                   <div key={t.id} style={{display:"flex",gap:7,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{width:6,height:6,borderRadius:"50%",background:{email:B.blue,call:B.green,note:B.yellow,po:B.teal,quote:B.orange}[t.type]||B.muted,marginTop:3,flexShrink:0}}/>
-                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {USERS.find(u=>u.id===t.author)?.name||t.author}</div></div>
+                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {(s.reps||[]).find(r=>r.id===t.author)?.name||t.author}</div></div>
                   </div>
                 ))}
               </div>
@@ -7296,10 +7287,8 @@ function ModMarketing() {
       if(d.sent) return {ok:true};
       // Surface detailed error so it shows in the UI
       const reason=d.error||(d.raw?.error?.message)||"send failed";
-      console.error("[sendOneEmail] API error →",d);
       return {ok:false,reason};
     }catch(err){
-      console.error("[sendOneEmail] fetch error →",err);
       return {ok:false,reason:err.message};
     }
   };
@@ -7349,7 +7338,6 @@ function ModMarketing() {
         failed++;
         const failEmail=contactMap[enroll.contactId]?.email||"unknown";
         if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
-        console.warn("[campaign send] failed for",failEmail,"→",res.reason);
       }
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
@@ -8767,7 +8755,6 @@ function ModMarketing() {
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
                 const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
-                  console.log("[sendOneBatch] camp=",camp?.id,"sending=",sending,"batch=",batchEnrollments.length,"noEmail=",noEmailEnrs.length);
                   if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
                   if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
                   setSending(true);
@@ -8824,7 +8811,6 @@ function ModMarketing() {
                   toast(msg,sent>0||skipped>0||noEmailAdv>0?"success":"error");
                   if(failed>0||sent===0&&skipped===0&&noEmailAdv===0) setLastSendErr(msg);
                   } catch(err) {
-                    console.error("[sendOneBatch]",err);
                     const errMsg=`Send crashed: ${err.message}`;
                     toast(errMsg,"error");
                     setLastSendErr(errMsg);
@@ -12626,10 +12612,10 @@ function ModActivity() {
       <PH title="ACTIVITY FEED" sub="Every action across deals, invoices, and outreach"/>
       {s.activity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Activity appears as you use the platform</div>}
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {s.activity.map(a=>{const u=USERS.find(x=>x.id===a.userId);return(
+        {s.activity.map(a=>{const rep=(s.reps||[]).find(x=>x.id===a.userId);const ini=rep?(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase():null;return(
           <div key={a.id} className="card" style={{padding:"9px 12px",display:"flex",gap:9,alignItems:"flex-start"}}>
-            {u&&<div style={{width:26,height:26,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{u.initials}</span></div>}
-            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{u?.name} · {new Date(a.ts).toLocaleString()}</div></div>
+            {rep&&<div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{ini}</span></div>}
+            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{rep?.name} · {new Date(a.ts).toLocaleString()}</div></div>
           </div>
         );})}
       </div>
@@ -13463,16 +13449,6 @@ function ModSettings() {
         <div style={{display:"flex",gap:7}}>
           <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
           <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>
-        </div>
-        <div style={{marginTop:13,paddingTop:11,borderTop:`1px solid ${B.border}`}}>
-          <Lbl s={{marginBottom:9}}>Team</Lbl>
-          {USERS.map(u=>(
-            <div key={u.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
-              <div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span></div>
-              <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{u.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email}</div></div>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:u.role==="owner"?B.orange:B.blue,background:u.role==="owner"?B.orangeBg:B.blueBg,padding:"2px 7px",borderRadius:3,letterSpacing:.5}}>{u.role.toUpperCase()}</span>
-            </div>
-          ))}
         </div>
       </div>
 
