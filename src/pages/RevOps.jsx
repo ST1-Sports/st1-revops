@@ -689,6 +689,7 @@ export default function App() {
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
+    {id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
     {id:"crm",           icon:"◈", label:"CRM"},
@@ -705,7 +706,6 @@ export default function App() {
     {id:"agent",       icon:"AI",label:"AI Agent"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
       {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
@@ -726,7 +726,6 @@ export default function App() {
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
-    {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
