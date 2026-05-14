@@ -703,7 +703,6 @@ export default function App() {
     {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
-    {id:"agent",       icon:"AI",label:"AI Agent"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
@@ -1551,82 +1550,114 @@ function ModAnalytics() {
 
 function ModHome() {
   const {s,dispatch,toast,cu,setMod}=useApp();
-  const [msgs,setMsgs]=useState(()=>{
-    const h=new Date().getHours();
-    const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";
-    const nm=cu?.name?.split(" ")[0]||"there";
-    return [{id:"welcome",role:"assistant",text:`${gr}, ${nm}! Ask me anything about ST1's pipeline — deals, invoices, RFPs, contacts, or help drafting emails and creating records.`,ts:Date.now(),suggestions:["What needs my attention today?","Show me overdue invoices","Who are my hottest leads?"]}];
-  });
+
+  // Redux-persisted history — survives navigation within the session
+  const history=s.agentHistory||[];
+  const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",typeof fn==="function"?fn(history):fn);
+
   const [input,setInput]=useState("");
-  const [loading,setLoading]=useState(false);
+  const [running,setRunning]=useState(false);
+  const [expandedEmail,setExpandedEmail]=useState(null);
+  const [agentStatus,setAgentStatus]=useState(null);
+  const [lastMeta,setLastMeta]=useState(null);
+  const [sendingEmail,setSendingEmail]=useState(null);
   const sessionIdRef=useRef(null);
   const endRef=useRef(null);
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+  const inputRef=useRef(null);
 
-  // Start a DB session on mount, fire-and-forget
+  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
+
+  // agentDraft — other modules can pre-fill a question
+  useEffect(()=>{
+    if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
+  },[s.agentDraft]);
+
+  // Start a DB session for org-level conversation storage
   useEffect(()=>{
     fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home"})})
-      .then(r=>r.json()).then(d=>{if(d.sessionId) sessionIdRef.current=d.sessionId;}).catch(()=>{});
+      body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home-agent"})})
+      .then(r=>r.json()).then(d=>{if(d.sessionId)sessionIdRef.current=d.sessionId;}).catch(()=>{});
   },[]);
 
-  // Save a message to DB — fire-and-forget, never blocks the UI
+  // Save every message to DB (org learning — all conversations are searchable)
   const saveMsg=(role,content,actions)=>{
-    if(!sessionIdRef.current) return;
+    if(!sessionIdRef.current)return;
     fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})})
       .catch(()=>{});
   };
 
-  const buildCtx=()=>{
-    const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  // Rich context — full pipeline, contacts, campaigns, RFPs, competitors
+  const buildContext=()=>{
+    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
     const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const od=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+    const hot=openDeals.filter(d=>d.priority==="hot");
     const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const topC=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const camps=(s.sequences||[]).filter(q=>q.status==="active");
-    return `You are the ST1 Sports RevOps AI — sharp, concise sales operations assistant.
+    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
+    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
+    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
+    const recentActivity=(s.activity||[]).slice(-5);
+    const competitors=Object.keys(s.competeIntel||{});
+    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"}
+User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
 
-PIPELINE: ${open.length} open deals · ${fmt$(open.reduce((a,d)=>a+d.value,0))} · ${od.length} overdue
-${open.slice(0,10).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
+=== PIPELINE ===
+${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
+${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
 
-RFPS: ${activeRfps.length===0?"None":activeRfps.map(r=>`${r.name} (${r.stage}${r.dueDate?`, due ${r.dueDate}`:""})`).join(" | ")}
+=== TOP CONTACTS (by lead score) ===
+${topContacts.length===0?"No scored contacts":topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}
+${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
 
-AR: ${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
+=== ACTIVE CAMPAIGNS ===
+${activeCampaigns.length===0?"None":activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}
 
-TOP LEADS: ${topC.length===0?"None":topC.map(c=>`${c.fullName||c.firstName} (${c.score}pts, ${c.school}, ${c.state})`).join(" | ")}
+=== OPEN RFPS ===
+${activeRfps.length===0?"None":activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}
 
-CAMPAIGNS: ${camps.length===0?"None":camps.map(q=>`"${q.name}" (${(q.enrollments||[]).filter(e=>e.status==="active").length} active)`).join(" | ")}
+=== AR ===
+${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
 
-ACTIONS: When taking real action, include an "actions" array in your response:
-· create_deal: {type:"create_deal",name,org,value,stage,product}
+${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
+=== ACTIONS YOU CAN TAKE ===
+Include an "actions" array when taking real action:
 · draft_email: {type:"draft_email",to_name,to_email,subject,body}
+· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
 · flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
 · schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
 · log_note: {type:"log_note",deal_name,note}
 · add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· navigate: {type:"navigate",target:"deals"|"rfp"|"invoicing"|"marketing"|"prices"|"prospecting"}
+· create_campaign: {type:"create_campaign",name,product,audience,channel}
+· navigate: {type:"navigate",target:"deals"|"crm"|"marketing"|"prices"|"prospecting"|"sponsorships"}
 
 Also include "suggestions": 3 short follow-up questions.
-ALWAYS respond with valid JSON: {"message":"...","actions":[],"suggestions":["...","...","..."]}
-Be concise, specific, use real names from the data. Flag hot signals with 🔥.`;
+ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
+Be specific, tactical, use real names. Flag hot signals with 🔥.`;
   };
 
-  const doAction=async(action)=>{
+  const copyEmail=(action)=>{
+    const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
+    try{navigator.clipboard.writeText(text);}catch{}
+    toast("Email copied to clipboard","success");
+    dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
+  };
+
+  const executeAction=async(action,msgIdx,actionIdx)=>{
     if(action.type==="navigate"){setMod(action.target);return;}
-    if(action.type==="create_deal"){
-      const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:""};
-      dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:_zid});}).catch(()=>{});
+    if(action.type==="draft_email"){
+      const key=`${msgIdx}_${actionIdx}`;
+      setExpandedEmail(e=>e===key?null:key);
       return;
     }
-    if(action.type==="draft_email"){
-      const txt=`To: ${action.to_name} <${action.to_email||""}>\nSubject: ${action.subject}\n\n${action.body}`;
-      try{navigator.clipboard.writeText(txt);}catch{}
-      toast("Email draft copied to clipboard","success");return;
+    if(action.type==="create_deal"){
+      const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
+      dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school,closing_date:action.followUpDate||"",description:d.notes})});toast("✓ Created in Zoho CRM","success");}catch{}
+      return;
     }
     if(action.type==="flag_deal"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
@@ -1635,1123 +1666,333 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
     }
     if(action.type==="schedule_followup"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});toast(`Follow-up set: ${action.date}`,"success");}
+      if(d){
+        dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});
+        toast(`Follow-up set for ${d.name}: ${action.date}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${action.date}. ${action.note||""}`})});}catch{}
+      }
       return;
     }
     if(action.type==="log_note"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});toast("Note logged","success");}
+      if(d){
+        dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});
+        toast(`Note logged on ${d.name}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:action.note})});}catch{}
+      }
       return;
     }
     if(action.type==="add_contact"){
-      const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",source:"home-ai",importedAt:Date.now()};
+      const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
       dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Title:c.title,Company:c.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:_zid});}).catch(()=>{});
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});toast("✓ Contact synced to Zoho","success");}catch{}
       return;
     }
+    if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing — create your campaign","info");return;}
   };
 
-  const send=async(txt)=>{
-    const q=(txt||input).trim();
-    if(!q||loading) return;
-    setInput("");
-    setMsgs(m=>[...m,{id:mkId(),role:"user",text:q,ts:Date.now()}]);
-    saveMsg("user",q,null);
-    setLoading(true);
+  const sendEmailNow=async(action,key)=>{
+    if(!action.to_email){toast("No email address — can't send","error");return;}
+    setSendingEmail(key);
     try{
-      const hist=msgs.slice(-10).map(m=>({role:m.role,content:m.text}));
-      const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,system:buildCtx(),messages:[...hist,{role:"user",content:q}]})});
-      let d;
-      try{ d=await r.json(); }catch{ throw new Error(`API returned HTTP ${r.status} (non-JSON)`); }
-      if(!r.ok) throw new Error(d?.error||d?.message||`API error ${r.status}`);
-      const raw=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
-      let parsed;
-      try{const m=raw.match(/\{[\s\S]*\}/s);parsed=m?JSON.parse(m[0]):null;}catch{}
-      const reply=parsed?.message||raw||"(no response)";
-      const actions=parsed?.actions||[];
-      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:reply,actions,suggestions:parsed?.suggestions||[],ts:Date.now()}]);
-      saveMsg("assistant",reply,actions.length?actions:null);
-    }catch(e){
-      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:`Error: ${e.message}`,ts:Date.now()}]);
-    }finally{setLoading(false);}
+      const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body})});
+      const d=await r.json();
+      if(d.sent){
+        toast(`Email sent to ${action.to_name||action.to_email}`,"success");
+        dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
+        const contact=(s.contacts||[]).find(c=>c.email===action.to_email);
+        if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
+        const nameParts=(action.to_name||"").toLowerCase().split(" ");
+        const matchDeal=(s.deals||[]).find(d=>{
+          const dn=(d.name||"").toLowerCase();
+          return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));
+        });
+        if(matchDeal&&!matchDeal.followUpDate){
+          const follow3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
+          dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:follow3});
+          toast(`Follow-up auto-set for ${follow3}`,"info");
+        }
+        setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
+      }else{toast(d.error||"Send failed","error");}
+    }catch(e){toast(`Send error: ${e.message}`,"error");}
+    setSendingEmail(null);
   };
 
-  const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const odDeals=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-  const hotDeals=open.filter(d=>d.priority==="hot").slice(0,3);
-  const urgentN=odDeals.length;
-  const ACT_LABELS={create_deal:"+ Create Deal",draft_email:"✉ Copy Email Draft",flag_deal:"🔥 Flag Hot",schedule_followup:"📅 Set Follow-up",log_note:"📝 Log Note",add_contact:"+ Add Contact",navigate:"→ Go There"};
+  const send=async(overrideMsg)=>{
+    const msg=(overrideMsg||input).trim();
+    if(!msg||running)return;
+    setInput("");setRunning(true);setAgentStatus("thinking");
+    const userEntry={role:"user",content:msg,ts:Date.now()};
+    const nextHistory=[...history,userEntry];
+    setHistory(nextHistory);
+    saveMsg("user",msg,null);
+    const localContext={deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],invoices:s.invoices||[],sequences:s.sequences||[]};
+    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
+    try{
+      const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext})});
+      if(!r.ok){const e=await r.json();throw new Error(e.error||`HTTP ${r.status}`);}
+      const raw=await r.json();
+      const message=raw?.message||"Sorry, something went wrong.";
+      const actions=Array.isArray(raw?.actions)?raw.actions:[];
+      const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
+      const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
+      setLastMeta(meta);
+      const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
+      setHistory(h=>[...h,assistantEntry]);
+      saveMsg("assistant",message,actions.length?actions:null);
+      if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Review in Home"});
+      dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
+      // Auto-execute safe low-risk actions silently
+      actions.forEach(a=>{
+        if(a.type==="schedule_followup"){
+          const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(d){
+            dispatch("UPDATE_DEAL",{id:d.id,followUpDate:a.date,...(a.note?{notes:(d.notes?d.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});
+            toast(`📅 Auto: follow-up set ${a.date} — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}
+          }
+        }
+        if(a.type==="log_note"){
+          const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(d){
+            dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});
+            toast(`📝 Auto: note logged — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}
+          }
+        }
+      });
+    }catch(e){
+      setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
+      saveMsg("assistant",`Error: ${e.message}`,null);
+    }
+    setAgentStatus(null);setRunning(false);
+    setTimeout(()=>inputRef.current?.focus(),100);
+  };
 
-  const panelCard=(children,onClick,bg,border)=>(
-    <div onClick={onClick} style={{padding:"7px 9px",background:bg,border:`1px solid ${border}`,borderRadius:6,marginBottom:4,cursor:"pointer"}}>
-      {children}
-    </div>
-  );
+  const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
+
+  // Sidebar data
+  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
+  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
+  const hotDeals=openDeals.filter(d=>d.priority==="hot").slice(0,3);
+  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
+  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE"};
+
+  const STARTERS=[
+    "Who should I call or email today?",
+    "Draft outreach for my highest-priority contact",
+    "Which deals are most at risk right now?",
+    "How do I counter BSN Sports on pricing?",
+    "Build a 3-touch sequence for Baseball coaches in Iowa",
+    "Analyze my open RFPs — what should I prioritize?",
+    "What product should I push hardest this season?",
+    "Who hasn't heard from us in 30+ days?",
+  ];
 
   return(
     <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
       {/* ── CHAT ── */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
-        <div style={{flex:1,overflowY:"auto",padding:"24px 28px 16px",display:"flex",flexDirection:"column",gap:16}}>
-          {msgs.map((msg,i)=>(
-            <div key={msg.id||i} style={{display:"flex",flexDirection:"column",alignItems:msg.role==="user"?"flex-end":"flex-start",gap:8}}>
-              <div style={{maxWidth:"72%",background:msg.role==="user"?B.orange:B.white,color:msg.role==="user"?"#fff":B.text,borderRadius:msg.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"12px 16px",border:msg.role==="user"?`1px solid ${B.orange}`:`1px solid ${B.border}`,boxShadow:"0 1px 4px rgba(0,0,0,.06)",fontSize:13,lineHeight:1.65,fontFamily:"'Lexend',sans-serif",whiteSpace:"pre-wrap"}}>
-                {msg.text}
+
+        {/* Header bar */}
+        <div style={{padding:"12px 20px 10px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>RevOps Agent</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Full context · drafts outreach, flags deals, syncs CRM · every chat saved</div>
+          </div>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
+            {lastMeta?.searchUsed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>🔍 WEB</span>}
+            {history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}
+          </div>
+        </div>
+
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"20px 22px 10px",display:"flex",flexDirection:"column",gap:12}}>
+
+          {/* Empty state — starter prompts */}
+          {history.length===0&&(
+            <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",paddingTop:16}}>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                {(()=>{const h=new Date().getHours();const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";const nm=cu?.name?.split(" ")[0]||"there";return<div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.muted}}>{gr}, {nm}. What do you need?</div>;})()}
               </div>
-              {(msg.actions||[]).length>0&&(
-                <div style={{display:"flex",flexWrap:"wrap",gap:6,maxWidth:"72%"}}>
-                  {msg.actions.map((a,ai)=>(
-                    <button key={ai} onClick={()=>doAction(a)} style={{background:B.orange,color:"#fff",border:"none",borderRadius:20,padding:"5px 14px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
-                      {ACT_LABELS[a.type]||a.type}
-                    </button>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:520,margin:"0 auto",width:"100%"}}>
+                {STARTERS.map(st=>(
+                  <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Conversation */}
+          {history.map((m,msgIdx)=>(
+            <div key={msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
+
+              {/* Action buttons */}
+              {m.actions?.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
+                  {m.actions.map((a,ai)=>{
+                    if(a.type==="draft_email"){
+                      const key=`${msgIdx}_${ai}`;
+                      const expanded=expandedEmail===key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.greenBg,borderBottom:expanded?`1px solid ${B.green}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✉</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>{a.to_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{a.subject}</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              {a.to_email&&(
+                                <button onClick={()=>sendEmailNow(a,`${msgIdx}_${ai}`)} disabled={sendingEmail===`${msgIdx}_${ai}`} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===`${msgIdx}_${ai}`?.6:1}}>
+                                  {sendingEmail===`${msgIdx}_${ai}`?"SENDING...":"✉ SEND NOW"}
+                                </button>
+                              )}
+                              <button onClick={()=>copyEmail(a)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋 COPY</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    const col=ACTION_COLORS[a.type]||{c:B.muted,bg:B.surface};
+                    return(
+                      <button key={ai} onClick={()=>executeAction(a,msgIdx,ai)} style={{background:col.bg,color:col.c,border:`1px solid ${col.c}40`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",textAlign:"left"}}>
+                        {ACTION_LABELS[a.type]||"▶ DO IT"}
+                        {a.deal_name&&` — ${a.deal_name}`}{a.name&&` — ${a.name}`}{a.to_name&&` — ${a.to_name}`}
+                        {a.date&&` (${a.date})`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Follow-up suggestions */}
+              {m.role==="assistant"&&m.suggestions?.length>0&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,maxWidth:"88%"}}>
+                  {m.suggestions.map((sg,si)=>(
+                    <button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:20,padding:"4px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1}}>→ {sg}</button>
                   ))}
                 </div>
               )}
-              {(msg.suggestions||[]).length>0&&(
-                <div style={{display:"flex",flexWrap:"wrap",gap:5,maxWidth:"100%"}}>
-                  {msg.suggestions.map((sg,si)=>(
-                    <button key={si} onClick={()=>send(sg)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:20,padding:"3px 12px",fontSize:11,color:B.textMid,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
-                      {sg}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?"You":"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
             </div>
           ))}
-          {loading&&(
-            <div style={{display:"flex",gap:5,padding:"11px 15px",background:B.white,border:`1px solid ${B.border}`,borderRadius:"16px 16px 16px 4px",width:"fit-content",boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
-              {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:B.orange,animation:`blink 1.2s ease-in-out ${i*.2}s infinite`}}/>)}
+
+          {running&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
+                <Spin/>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+                  {agentStatus==="searching"?"🔍 Searching web...":agentStatus==="zoho"?"📡 Fetching live Zoho data...":"Thinking..."}
+                </span>
+              </div>
             </div>
           )}
           <div ref={endRef}/>
         </div>
 
-        {/* Input */}
-        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"14px 20px"}}>
-          <div style={{display:"flex",gap:8,alignItems:"flex-end",background:B.pageBg,border:`1px solid ${B.border}`,borderRadius:12,padding:"10px 14px"}}>
-            <textarea value={input} onChange={e=>setInput(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
-              placeholder="Ask anything — deals, contacts, invoices, draft emails…"
-              rows={1} style={{flex:1,border:"none",background:"transparent",resize:"none",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,outline:"none",lineHeight:1.5,maxHeight:100,overflowY:"auto"}}/>
-            <button onClick={()=>send()} disabled={!input.trim()||loading}
-              style={{background:(!input.trim()||loading)?B.border:B.orange,color:"#fff",border:"none",borderRadius:8,width:34,height:34,display:"flex",alignItems:"center",justifyContent:"center",cursor:(!input.trim()||loading)?"default":"pointer",fontSize:16,flexShrink:0,transition:"background .15s"}}>
-              →
-            </button>
+        {/* Input bar */}
+        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"12px 18px"}}>
+          <div style={{display:"flex",gap:9}}>
+            <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..." style={{flex:1,background:B.pageBg,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,fontFamily:"'Lexend',sans-serif"}}/>
+            <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
           </div>
-          <div style={{marginTop:8,display:"flex",gap:5,flexWrap:"wrap"}}>
-            {["What's urgent today?","Overdue invoices","Draft email to top lead","Create a deal","Who's close to closing?"].map(q=>(
-              <button key={q} onClick={()=>send(q)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:99,padding:"3px 11px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
-                {q}
-              </button>
+          <div style={{marginTop:7,display:"flex",gap:5,flexWrap:"wrap"}}>
+            {["What's urgent today?","Overdue deals","Draft email to top lead","Who's close to closing?","Summarize this week"].map(q=>(
+              <button key={q} onClick={()=>send(q)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:99,padding:"3px 11px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>{q}</button>
             ))}
           </div>
         </div>
       </div>
 
-      {/* ── PRIORITY PANEL ── */}
-      <div style={{width:280,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
-        <div style={{padding:"14px 14px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>PRIORITY ITEMS</div>
+      {/* ── PRIORITY SIDEBAR ── */}
+      <div style={{width:230,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
+
+        {/* Pipeline snapshot */}
+        <div style={{padding:"14px 14px 12px",borderBottom:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>PIPELINE</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(pipeline)}</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>{openDeals.length} open deal{openDeals.length!==1?"s":""}</div>
+          <button onClick={()=>setMod("deals")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"7px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
         </div>
 
-        {urgentN>0&&(
+        {/* Overdue */}
+        {overdueDeals.length>0&&(
           <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
             <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
-              <span style={{fontSize:13}}>⚡</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.red,fontFamily:"'Lexend',sans-serif"}}>Needs Attention</span>
-              <span style={{marginLeft:"auto",background:B.red,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>{urgentN}</span>
+              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:1.5}}>OVERDUE</span>
+              <span style={{marginLeft:"auto",background:B.red,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>{overdueDeals.length}</span>
             </div>
-            {odDeals.slice(0,3).map(d=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-              <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>{Math.abs(dUntil(d.followUpDate))}d overdue · {fmt$(d.value)}</div></>,
-              ()=>setMod("deals"),B.redBg,`${B.red}25`
+            {overdueDeals.map(d=>(
+              <div key={d.id} onClick={()=>setMod("deals")} style={{background:B.redBg,border:`1px solid ${B.red}25`,borderLeft:`3px solid ${B.red}`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>{Math.abs(dUntil(d.followUpDate))}d OVERDUE · {fmt$(d.value)}</div>
+              </div>
             ))}
           </div>
         )}
 
+        {/* Hot deals */}
         {hotDeals.length>0&&(
           <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
-            <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
-              <span style={{fontSize:13}}>🔥</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.text,fontFamily:"'Lexend',sans-serif"}}>Hot Deals</span>
-            </div>
-            {hotDeals.map(d=>panelCard(
-              <><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
-                <div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-                <span style={{fontSize:9,fontWeight:700,color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",flexShrink:0}}>HOT</span>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT DEALS</div>
+            {hotDeals.map(d=>(
+              <div key={d.id} onClick={()=>setMod("deals")} style={{background:B.orangeBg,border:`1px solid ${B.orange}25`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                  <span style={{fontSize:9,fontWeight:700,color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",flexShrink:0}}>HOT</span>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{d.stage} · {fmt$(d.value)}</div>
               </div>
-              <div style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{d.stage} · {fmt$(d.value)}</div></>,
-              ()=>setMod("deals"),B.orangeBg,`${B.orange}25`
             ))}
           </div>
         )}
 
-        <div style={{padding:"12px 14px"}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:8}}>SNAPSHOT</div>
-          {[
-            ["Open Deals",open.length,()=>setMod("deals")],
-            ["Pipeline Value",fmt$(open.reduce((a,d)=>a+d.value,0)),()=>setMod("deals")],
-          ].map(([lbl,val,fn])=>(
-            <div key={lbl} onClick={fn} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-              <span style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{lbl}</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.text,fontFamily:"'Lexend',sans-serif"}}>{val}</span>
-            </div>
-          ))}
-          <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>
-            <button onClick={()=>setMod("deals")} style={{background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  TALK TRACK — phase-by-phase sales script sub-view inside CRM
-// ════════════════════════════════════════════════════════════════════════════
-
-const TT_PHASES=[
-  {id:"RAPPORT",   label:"Rapport",    script:"Start by building genuine rapport. Ask about their season, recent wins, or team achievements. Listen actively and find common ground before moving to business."},
-  {id:"INTRO",     label:"ST1 Intro",  script:"ST1 Sports is a full-service athletic supplier serving 200+ schools across the region. We go beyond equipment — we're a partner for team stores, sponsorship revenue, and streamlined procurement. Our goal is to make your program stronger and take work off your plate."},
-  {id:"DISCOVERY", label:"Discovery",  script:"Now let's understand your program. These questions help us build a custom value model and show exactly what a partnership looks like for your school."},
-  {id:"PAIN",      label:"Pain Points",script:"Let's identify where your program has the biggest opportunities. Walk through each challenge below and confirm any that apply."},
-  {id:"SOLUTION",  label:"Solution",   script:"Based on what you've shared, here's what partnering with ST1 means for your program. Let me walk you through the numbers."},
-];
-
-const PAIN_CARDS=[
-  {id:"budget",      title:"Equipment Budget Constraints",     body:"School struggles to buy quality gear within tight budget limits. Coaches spend too much time hunting for deals."},
-  {id:"nostore",     title:"No Online Team Store",             body:"Manual collection of payments and orders overwhelms coaches during uniform season. Parents are frustrated."},
-  {id:"booster",     title:"Weak Booster / Community Support", body:"Fundraising is disorganized, participation is low, and the booster club isn't generating meaningful program revenue."},
-  {id:"vendors",     title:"Multiple Vendor Headaches",        body:"Dealing with 5+ vendors for different sports. No consolidated ordering, inconsistent quality, no single point of contact."},
-  {id:"sponsorship", title:"No Sponsorship Revenue",           body:"Program hasn't tapped brand partnership or giveback opportunities — leaving thousands on the table each year."},
-];
-
-function QuestionInput({question,value,onChange}){
-  const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
-  return(
-    <div>
-      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:3,fontWeight:500}}>
-        {question.questionText}{question.isRequired&&<span style={{color:B.orange,marginLeft:3}}>*</span>}
-      </div>
-      {question.helpText&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5}}>{question.helpText}</div>}
-      {question.inputType==="TEXT"&&<input value={value||""} onChange={e=>onChange(e.target.value)} style={inp}/>}
-      {question.inputType==="TEXTAREA"&&<textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={3} style={{...inp,resize:"vertical"}}/>}
-      {question.inputType==="NUMBER"&&<input type="number" value={value==null?"":value} onChange={e=>onChange(e.target.value===""?null:Number(e.target.value))} style={{...inp,width:140}}/>}
-      {question.inputType==="SELECT"&&(
-        <select value={value||""} onChange={e=>onChange(e.target.value)} style={inp}>
-          <option value="">— Select —</option>
-          {(Array.isArray(question.selectOptions)?question.selectOptions:[]).map(o=><option key={o} value={o}>{o}</option>)}
-        </select>
-      )}
-      {question.inputType==="BOOLEAN"&&(
-        <div style={{display:"flex",gap:6}}>
-          {["Yes","No"].map(opt=>(
-            <button key={opt} onClick={()=>onChange(opt==="Yes")} style={{background:(opt==="Yes"?value===true:value===false)?B.orange:B.surface,color:(opt==="Yes"?value===true:value===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?value===true:value===false)?B.orange:B.border}`,borderRadius:5,padding:"5px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer"}}>{opt}</button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PainCards({selected,onToggle}){
-  return(
-    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-      {PAIN_CARDS.map(c=>{
-        const on=selected.includes(c.id);
-        return(
-          <button key={c.id} onClick={()=>onToggle(c.id)} style={{textAlign:"left",background:on?`${B.orange}10`:B.surface,border:`1px solid ${on?B.orange:B.border}`,borderRadius:6,padding:"10px 13px",cursor:"pointer",width:"100%"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:on?B.orange:B.text}}>{c.title}</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3,lineHeight:1.5}}>{c.body}</div>
+        {/* Hot contacts */}
+        {topContacts.length>0&&(
+          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT CONTACTS</div>
+            {topContacts.map(c=>(
+              <div key={c.id} onClick={()=>setMod("crm")} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:1}}>{c.fullName||c.firstName}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.3}}>{(typeof c.title==="string"?c.title:c.title?.name||"").split(" ").slice(0,3).join(" ")}{c.state?` · ${c.state}`:""}</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.orange,marginTop:2}}>{c.score||0} pts</div>
               </div>
-              <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${on?B.orange:B.border}`,background:on?B.orange:"transparent",flexShrink:0,marginTop:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {on&&<span style={{color:B.white,fontSize:10}}>✓</span>}
-              </div>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-const TT_SPORTS=["Baseball","Basketball","Cheerleading","Cross Country","Dance","Field Hockey","Football","Golf","Gymnastics","Hockey","Lacrosse","Soccer","Softball","Swimming & Diving","Tennis","Track & Field","Volleyball","Wrestling","Bowling","Badminton","Rugby","Archery"];
-
-function SportsPicker({selected,onChange,single=false}){
-  const toggle=(sport)=>{
-    if(single) onChange([sport]);
-    else onChange(selected.includes(sport)?selected.filter(s=>s!==sport):[...selected,sport]);
-  };
-  return(
-    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-      {TT_SPORTS.map(sport=>(
-        <button key={sport} onClick={()=>toggle(sport)} style={{padding:"3px 10px",background:selected.includes(sport)?B.orange:B.surface,color:selected.includes(sport)?B.white:B.text,border:`1px solid ${selected.includes(sport)?B.orange:B.border}`,borderRadius:12,fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer"}}>
-          {sport}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,schoolClass,onChange,onCalcInput}){
-  const [expanded,setExpanded]=useState(!orgType);
-  const isComplete=!!(orgType&&(
-    orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0))
-    :(sportsMode&&selectedSports.length>0)
-  ));
-  const numInp=(extra={})=>({width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,boxSizing:"border-box",...extra});
-  const typeBtn=(label,val)=>(
-    <button key={val} onClick={()=>onChange("orgType",val)} style={{flex:1,padding:"8px 10px",background:orgType===val?B.orange:B.surface,color:orgType===val?B.white:B.text,border:`1px solid ${orgType===val?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,cursor:"pointer"}}>{label}</button>
-  );
-  const modeBtn=(label,val)=>(
-    <button key={val} onClick={()=>onChange("sportsMode",val)} style={{flex:1,padding:"6px 8px",background:sportsMode===val?B.blue:B.surface,color:sportsMode===val?B.white:B.text,border:`1px solid ${sportsMode===val?B.blue:B.border}`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>{label}</button>
-  );
-  const sub=(txt)=><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6,marginTop:10}}>{txt}</div>;
-
-  if(!expanded&&isComplete){
-    const sportSummary=sportsMode==="all"?"All sports":selectedSports.length===1?selectedSports[0]:`${selectedSports.length} sports`;
-    return(
-      <div onClick={()=>setExpanded(true)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",marginBottom:14,background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:6,cursor:"pointer"}}>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
-          <span style={{fontWeight:600}}>{orgType==="school"?"School":"Organization"}</span>
-          {orgType==="school"&&schoolClass&&<span style={{color:B.orange,fontWeight:600}}> · {schoolClass}</span>}
-          {orgType==="school"&&numAthletes&&<span style={{color:B.muted}}> · {numAthletes} athletes</span>}
-          <span style={{color:B.muted}}> · {sportSummary}</span>
-        </div>
-        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue}}>edit</span>
-      </div>
-    );
-  }
-
-  return(
-    <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",marginBottom:14}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>ORG TYPE</div>
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {typeBtn("🏫 SCHOOL / DISTRICT","school")}
-        {typeBtn("🏢 ORGANIZATION / CLUB","org")}
-      </div>
-
-      {orgType==="school"&&(<>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-          <div>
-            {sub("SCHOOL CLASS")}
-            <select value={schoolClass||""} onChange={e=>onCalcInput("schoolClass",e.target.value)} style={numInp({marginTop:0})}>
-              <option value="">— Select —</option>
-              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            {sub("# ATHLETES")}
-            <input type="number" min="1" value={numAthletes} onChange={e=>onCalcInput("numAthletes",e.target.value)} placeholder="e.g. 300" style={numInp({marginTop:0})}/>
-          </div>
-          <div style={{gridColumn:"1/-1"}}>
-            {sub("# SPORTS")}
-            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
-          </div>
-        </div>
-        {sub("SERVICING")}
-        <div style={{display:"flex",gap:6,marginBottom:sportsMode==="some"?0:0}}>
-          {modeBtn("All sports","all")}
-          {modeBtn("Selected sports only","some")}
-        </div>
-        {sportsMode==="some"&&(<>
-          {sub("SELECT SPORTS WE'RE PROPOSING")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
-        </>)}
-      </>)}
-
-      {orgType==="org"&&(<>
-        {sub("SPORT FOCUS")}
-        <div style={{display:"flex",gap:6}}>
-          {modeBtn("Single sport","single")}
-          {modeBtn("Multi-sport","multi")}
-        </div>
-        {sportsMode==="single"&&(<>
-          {sub("SELECT SPORT")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)} single/>
-        </>)}
-        {sportsMode==="multi"&&(<>
-          {sub("SELECT SPORTS")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
-        </>)}
-      </>)}
-
-      {isComplete&&(
-        <div style={{marginTop:12}}>
-          <GBtn sm onClick={()=>setExpanded(false)}>✓ CONFIRM</GBtn>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CrmLinker({linked,onLink,onUnlink}){
-  const [q,setQ]=useState("");
-  const [results,setResults]=useState([]);
-  const [searched,setSearched]=useState(false);
-  const [loading,setLoading]=useState(false);
-  const [searchErr,setSearchErr]=useState(null);
-  const [showCreate,setShowCreate]=useState(false);
-  const [form,setForm]=useState({firstName:"",lastName:"",organization:"",phone:"",email:""});
-  const [creating,setCreating]=useState(false);
-  const searchTimer=useRef(null);
-
-  const doSearch=(val)=>{
-    clearTimeout(searchTimer.current);
-    setSearchErr(null);
-    if(val.trim().length<2){setResults([]);setSearched(false);setLoading(false);return;}
-    setLoading(true);
-    searchTimer.current=setTimeout(()=>{
-      fetch(`/api/crm/search?q=${encodeURIComponent(val.trim())}`)
-        .then(r=>r.json()).then(d=>{
-          setResults(Array.isArray(d)?d:[]);
-          setSearched(true);
-          setLoading(false);
-        })
-        .catch(e=>{setSearchErr("Search failed — check Zoho connection");setLoading(false);setSearched(true);});
-    },400);
-  };
-
-  const createLead=()=>{
-    if(!form.lastName)return;
-    setCreating(true);
-    fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,school:form.organization})})
-      .then(r=>r.json()).then(d=>{
-        setCreating(false);
-        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),school:form.organization||"",email:form.email||"",module:"Lead"});
-        setShowCreate(false);
-      }).catch(()=>setCreating(false));
-  };
-
-  if(linked){
-    return(
-      <div style={{padding:"8px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.green}08`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:10}}>🔗</span>
-          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{linked.name||linked.id}</span>
-          {linked.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{linked.school}</span>}
-          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>{(linked.module||"").toUpperCase()}</span>
-        </div>
-        <button onClick={onUnlink} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>unlink</button>
-      </div>
-    );
-  }
-
-  return(
-    <div style={{padding:"10px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}06`,flexShrink:0}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:6}}>LINK TO CRM CONTACT</div>
-      {!showCreate?(
-        <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
-          <div style={{flex:1}}>
-            <div style={{position:"relative"}}>
-              <input value={q} onChange={e=>{setQ(e.target.value);doSearch(e.target.value);}} placeholder="Search by name, organization, or email…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,boxSizing:"border-box"}}/>
-              {loading&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:9,color:B.muted}}>searching…</span>}
-            </div>
-            {/* Dropdown — rendered outside the relative container to avoid clipping */}
-            {(results.length>0||searchErr||(searched&&!loading&&q.trim().length>=2))&&(
-              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",marginTop:2,maxHeight:160,overflowY:"auto"}}>
-                {searchErr?(
-                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red}}>{searchErr}</div>
-                ):results.length===0?(
-                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No results for "{q}" — try a different name or create a new lead.</div>
-                ):results.map(r=>(
-                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.fullName||r.name||"",school:r.school||"",email:r.email||"",module:r.module});setResults([]);setQ(r.fullName||r.name||"");setSearched(false);}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.fullName||r.name}</span>
-                    {r.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.school}</span>}
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,flexShrink:0}}>{(r.module||"").toUpperCase()}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <GBtn sm onClick={()=>{setShowCreate(true);setResults([]);setSearched(false);}}>+ NEW LEAD</GBtn>
-        </div>
-      ):(
-        <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
-            <input value={form.firstName} onChange={e=>setForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.lastName} onChange={e=>setForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.organization} onChange={e=>setForm(f=>({...f,organization:e.target.value}))} placeholder="Organization" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,gridColumn:"1/-1"}}/>
-          </div>
-          <div style={{display:"flex",gap:6}}><OBtn onClick={createLead} disabled={creating||!form.lastName}>{creating?"CREATING…":"CREATE LEAD"}</OBtn><GBtn onClick={()=>setShowCreate(false)}>Cancel</GBtn></div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,questionMap,nextStep,initialSubject,initialBody,onComplete}){
-  const [subject,setSubject]=useState(initialSubject||"");
-  const [body,setBody]=useState(initialBody||"");
-  const [drafting,setDrafting]=useState(false);
-  const [draftErr,setDraftErr]=useState(null);
-  const [schedDate,setSchedDate]=useState("");
-  const [schedTime,setSchedTime]=useState("");
-  const [logging,setLogging]=useState(false);
-  const [logDone,setLogDone]=useState(false);
-  const [logErr,setLogErr]=useState(null);
-  const [noteCopy,setNoteCopy]=useState("");
-
-  const hasDraft=!!(subject&&body);
-
-  const doDraft=async()=>{
-    setDrafting(true);setDraftErr(null);
-    try{
-      const confirmedPainTitles=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title);
-      const r=await fetch("/api/ai/email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        sessionId:sessRef.current,
-        contactName:linked?.name||"",
-        schoolName:linked?.school||"",
-        schoolClass:calcInputs.schoolClass,
-        numAthletes:Number(calcInputs.numAthletes||0),
-        numSports:Number(calcInputs.numSports||0),
-        confirmedPains:confirmedPainTitles,
-        answers,questionMap,
-        sponsorshipGuaranteedMin:calcResult?.guaranteedMin??null,
-        sponsorshipUpsideMax:calcResult?.upsideMax??null,
-        nextStep,
-      })});
-      const d=await r.json();
-      if(d.error)throw new Error(d.error);
-      setSubject(d.subject||"");setBody(d.body||"");
-    }catch(e){setDraftErr(e.message);}
-    finally{setDrafting(false);}
-  };
-
-  const buildNote=()=>{
-    const today=new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
-    const repName=cu?.name||cu?.id||"Rep";
-    const painList=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>`- ${c.title}`).join("\n")||"None confirmed";
-    const lines=[
-      `School: ${linked?.school||"(not provided)"}${calcInputs.schoolClass?` (${calcInputs.schoolClass})`:""}`,
-      `Athletes: ${calcInputs.numAthletes||"—"} | Sports: ${calcInputs.numSports||"—"}`,
-      `Online store: ${calcInputs.hasOnlineStore===true?"Yes":calcInputs.hasOnlineStore===false?"No":"Not answered"} | Booster club: ${calcInputs.hasBoosterClub===true?"Yes":calcInputs.hasBoosterClub===false?"No":"Not answered"}`,
-      "",
-      "Pain points confirmed:",
-      painList,
-      "",
-      calcResult
-        ?`Sponsorship offer presented:\nGuaranteed minimum: $${(calcResult.guaranteedMin||0).toLocaleString()}\nUpside potential: up to $${(calcResult.upsideMax||0).toLocaleString()}`
-        :"Sponsorship offer: Not calculated",
-      "",
-      `Next step: ${nextStep||"(none recorded)"}`,
-      subject?`\nDraft email subject: ${subject}`:"",
-      schedDate?`Scheduled follow-up: ${schedDate}${schedTime?` at ${schedTime}`:""}` :"",
-      "",
-      `Call conducted by: ${repName} on ${today}`,
-    ];
-    return{
-      title:`ST1 Discovery Call — ${today}`,
-      content:lines.filter(l=>l!==undefined).join("\n"),
-    };
-  };
-
-  const doComplete=async()=>{
-    setLogging(true);setLogErr(null);
-    // Save email + status to session
-    if(sessRef.current){
-      await fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({repId:cu?.id||"unknown",draftEmailSubject:subject,draftEmailBody:body,status:"COMPLETE"})
-      }).catch(()=>{});
-    }
-    if(linked?.id){
-      const{title,content}=buildNote();
-      setNoteCopy(content);
-      const crmModule=linked.module==="Contact"?"Contacts":"Leads";
-      // Log CRM note
-      try{
-        const r=await fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:title,noteContent:content})});
-        const d=await r.json();
-        if(d.error)throw new Error(d.error);
-      }catch(e){
-        setLogErr(e.message);
-      }
-      // Create Zoho Deal
-      const closing=new Date();
-      closing.setDate(closing.getDate()+30);
-      const dealName=`ST1 — ${linked.school||linked.name||"School"} — ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`;
-      const dealFields={
-        Deal_Name:dealName,
-        Stage:"Qualification",
-        Closing_Date:closing.toISOString().split("T")[0],
-        Account_Name:linked.school||linked.name||"",
-        Description:content,
-      };
-      if(calcResult?.guaranteedMin) dealFields.Amount=calcResult.guaranteedMin;
-      if(linked.module==="Contact") dealFields.Contact_Name={id:linked.id};
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
-      }).catch(()=>{});
-    }
-    setLogging(false);setLogDone(true);
-  };
-
-  const copyFull=()=>navigator.clipboard?.writeText(`Subject: ${subject}\n\n${body}`).catch(()=>{});
-  const mailtoHref=()=>`mailto:${linked?.email||""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
-
-  // ── Success state ─────────────────────────────────────────────────────────
-  if(logDone){
-    return(
-      <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:8,padding:"20px 18px",textAlign:"center",marginTop:16}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green,marginBottom:6}}>✓</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>Session complete. Note + deal logged to CRM.</div>
-        {logErr&&(
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>
-            Note: CRM logging failed ({logErr}). Copy note text to log manually.
-            {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",margin:"6px auto 0",background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
-          </div>
-        )}
-        <OBtn col={B.orange} onClick={()=>{sessionStorage.removeItem("ttSessionId");onComplete();}}>→ START NEW CALL</OBtn>
-      </div>
-    );
-  }
-
-  // ── No draft yet ──────────────────────────────────────────────────────────
-  if(!hasDraft){
-    return(
-      <div style={{marginTop:16}}>
-        <OBtn onClick={doDraft} disabled={drafting} style={{width:"100%"}}>
-          {drafting?"Writing your email…":"✦ DRAFT FOLLOW-UP EMAIL"}
-        </OBtn>
-        {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:6,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
-      </div>
-    );
-  }
-
-  // ── Draft ready ───────────────────────────────────────────────────────────
-  return(
-    <div className="card" style={{padding:16,marginTop:16}}>
-      {/* Subject */}
-      <div style={{marginBottom:10}}>
-        <Lbl s={{marginBottom:3}}>Subject</Lbl>
-        <input value={subject} onChange={e=>setSubject(e.target.value)} style={inp()}/>
-      </div>
-      {/* Body */}
-      <div style={{marginBottom:12}}>
-        <Lbl s={{marginBottom:3}}>Email body</Lbl>
-        <textarea value={body} onChange={e=>setBody(e.target.value)} rows={8} style={inp({resize:"vertical",lineHeight:1.7})}/>
-      </div>
-      {/* Regenerate */}
-      <GBtn onClick={doDraft} disabled={drafting} style={{width:"100%",marginBottom:14,textAlign:"center"}}>
-        {drafting?"Rewriting…":"↻ REGENERATE"}
-      </GBtn>
-      {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:8,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
-      {/* Quick actions */}
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-        <GBtn sm onClick={copyFull}>Copy to clipboard</GBtn>
-        <a href={mailtoHref()} style={{display:"inline-flex",alignItems:"center",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"4px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,textDecoration:"none",cursor:"pointer",fontWeight:700}}>OPEN IN MAIL ↗</a>
-      </div>
-      {/* Schedule reminder */}
-      <div style={{background:B.surface,borderRadius:5,padding:"10px 12px",marginBottom:14}}>
-        <Lbl s={{marginBottom:6}}>Schedule follow-up reminder</Lbl>
-        <div style={{display:"flex",gap:8}}>
-          <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp({flex:1})}/>
-          <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp({width:120})}/>
-        </div>
-      </div>
-      {/* Error from previous attempt */}
-      {logErr&&(
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10,padding:"8px 12px",background:`${B.red}10`,borderRadius:4}}>
-          CRM logging failed: {logErr}. You can still complete — copy the note text manually if needed.
-          {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
-        </div>
-      )}
-      {/* Primary action */}
-      <OBtn onClick={doComplete} disabled={logging} style={{width:"100%"}}>
-        {logging?"LOGGING…":"✓ MARK COMPLETE + LOG TO CRM"}
-      </OBtn>
-    </div>
-  );
-}
-
-function SponsorshipCalculator({inputs,onInputChange,result,loading}){
-  const [showBreakdown,setShowBreakdown]=useState(false);
-  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
-  const hasRequired=!!(inputs.schoolClass&&Number(inputs.numSports)>0&&Number(inputs.numAthletes)>0);
-  const bd=result?.breakdown;
-  const netPct=bd&&bd.projectedRevenue>0?Math.round(bd.netProfit/bd.projectedRevenue*100):0;
-  const givePct=bd&&bd.netProfit>0?Math.round(bd.givebackPool/bd.netProfit*100):0;
-  const confPct=bd?Math.round(bd.confidence*100):0;
-  const lastUpd=result?.configLastUpdated?new Date(result.configLastUpdated).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
-  const additional=result?(result.upsideMax||0)-(result.guaranteedMin||0):0;
-
-  const YNBtn=(field,opt)=>{
-    const active=opt==="Yes"?inputs[field]===true:inputs[field]===false;
-    return(
-      <button onClick={()=>onInputChange(field,opt==="Yes")} style={{flex:1,background:active?B.green:B.surface,color:active?B.white:B.muted,border:`1px solid ${active?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>
-    );
-  };
-
-  return(
-    <div style={{marginTop:22,paddingTop:18,borderTop:`1px solid ${B.border}`}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:2,marginBottom:12}}>SPONSORSHIP CALCULATOR</div>
-
-      {/* Inputs — schoolClass/numSports/numAthletes are captured in OrgProfile above */}
-      <div className="card" style={{padding:14,marginBottom:12}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <div style={{gridColumn:"1/-1"}}>
-            <Lbl s={{marginBottom:3}}>Their est. current spend (optional)</Lbl>
-            <div style={{position:"relative"}}>
-              <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:B.muted,pointerEvents:"none"}}>$</span>
-              <input type="number" min={0} value={inputs.estimatedCurrentSpend} onChange={e=>onInputChange("estimatedCurrentSpend",e.target.value)} placeholder="0" style={inp({paddingLeft:20})}/>
-            </div>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Online store today?</Lbl>
-            <div style={{display:"flex",gap:5}}>{YNBtn("hasOnlineStore","Yes")}{YNBtn("hasOnlineStore","No")}</div>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Booster club active?</Lbl>
-            <div style={{display:"flex",gap:5}}>{YNBtn("hasBoosterClub","Yes")}{YNBtn("hasBoosterClub","No")}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Placeholder */}
-      {!hasRequired&&!loading&&!result&&(
-        <div style={{background:B.surface,borderRadius:6,border:`1px dashed ${B.border}`,padding:"14px 16px",textAlign:"center"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Fill in School Class, # Sports, and # Athletes above to unlock the sponsorship estimate</div>
-        </div>
-      )}
-
-      {/* Output card */}
-      {(loading||result)&&(
-        <div className="card" style={{padding:16,borderTop:`3px solid ${B.orange}`,opacity:loading?0.65:1,transition:"opacity .25s"}}>
-          {loading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Calculating…</div>}
-          {result&&!loading&&(
-            <>
-              <div style={{marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP OFFER</div>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(result.guaranteedMin||0)}<span style={{fontSize:14,color:B.orange,marginLeft:6}}>guaranteed</span></div>
-                {additional>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:5}}>Up to {fmt$(additional)} additional based on actual sales</div>}
-              </div>
-
-              {bd&&(
-                <>
-                  <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",color:B.blue,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer",padding:"0 0 6px",display:"block"}}>
-                    {showBreakdown?"Hide breakdown ▲":"Show breakdown ▼"}
-                  </button>
-                  {showBreakdown&&(
-                    <div style={{borderTop:`1px solid ${B.border}`,paddingTop:10,display:"flex",flexDirection:"column",gap:6}}>
-                      {[
-                        [`Projected first-year revenue`,bd.projectedRevenue],
-                        [`Net profit (${netPct}%)`,bd.netProfit],
-                        [`Giveback pool (${givePct}%)`,bd.givebackPool],
-                      ].map(([lbl,val])=>(
-                        <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>{lbl}</span>
-                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(val||0))}</span>
-                        </div>
-                      ))}
-                      <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10}}>
-                        <span style={{color:B.muted}}>School confidence factor ({confPct}%)</span>
-                        <span style={{color:B.orange,fontWeight:500}}>{fmt$(result.guaranteedMin||0)} min</span>
-                      </div>
-                      {inputs.hasOnlineStore===true&&bd.storeRevenue>0&&(
-                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>Store revenue contribution</span>
-                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(bd.storeRevenue||0))}</span>
-                        </div>
-                      )}
-                      {inputs.hasBoosterClub===true&&(
-                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>Booster club multiplier</span>
-                          <span style={{color:B.green,fontWeight:500}}>✓ Applied</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {lastUpd&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:10,borderTop:`1px solid ${B.border}`,paddingTop:8}}>Based on current ST1 metrics — last updated {lastUpd}</div>}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TalkTrack({onClose,linkedContact}){
-  const {cu,toast,dispatch,s}=useApp();
-  const [sessionId,setSessionId]=useState(null);
-  const [questions,setQuestions]=useState([]);
-  const [phaseIdx,setPhaseIdx]=useState(0);
-  const [answers,setAnswers]=useState({});
-  const [pains,setPains]=useState([]);
-  const [linked,setLinked]=useState(linkedContact||null);
-  const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null,estimatedCurrentSpend:""});
-  const [calcResult,setCalcResult]=useState(null);
-  const [calcLoading,setCalcLoading]=useState(false);
-  const [orgType,setOrgType]=useState("");
-  const [sportsMode,setSportsMode]=useState("");
-  const [selectedSports,setSelectedSports]=useState([]);
-  const [emailSubject,setEmailSubject]=useState("");
-  const [emailBody,setEmailBody]=useState("");
-  const [saving,setSaving]=useState(false);
-  const saveTimer=useRef(null);
-  const calcTimer=useRef(null);
-  const sessRef=useRef(null);
-
-  const canCalc=(ci)=>!!(ci.schoolClass&&Number(ci.numSports)>0&&Number(ci.numAthletes)>0);
-
-  const runCalc=(ci)=>{
-    if(!canCalc(ci))return;
-    setCalcLoading(true);
-    fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      schoolClass:ci.schoolClass,numSports:Number(ci.numSports||0),numAthletes:Number(ci.numAthletes||0),
-      hasOnlineStore:ci.hasOnlineStore===true,hasBoosterClub:ci.hasBoosterClub===true,
-    })})
-    .then(r=>{if(!r.ok)throw new Error(`calc ${r.status}`);return r.json();})
-    .then(d=>{
-      if(d.error)throw new Error(d.error);
-      setCalcResult(d);setCalcLoading(false);
-      if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax})}).catch(()=>{});
-    }).catch(()=>setCalcLoading(false));
-  };
-
-  useEffect(()=>{
-    fetch("/api/admin/questions")
-      .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
-      .catch(()=>{});
-    const existing=sessionStorage.getItem("ttSessionId");
-    if(existing){
-      fetch(`/api/sessions/${existing}?repId=${cu?.id||""}`)
-        .then(r=>r.ok?r.json():null)
-        .then(d=>{
-          if(d?.session){
-            const sess=d.session;
-            setSessionId(sess.id);sessRef.current=sess.id;
-            setAnswers(sess.answers||{});
-            setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
-            const restored={
-              schoolClass:sess.schoolClass||"",
-              numSports:sess.numSports!=null?String(sess.numSports):"",
-              numAthletes:sess.numAthletes!=null?String(sess.numAthletes):"",
-              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:null,
-              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:null,
-              estimatedCurrentSpend:sess.estimatedCurrentSpend!=null?String(sess.estimatedCurrentSpend):"",
-            };
-            setCalcInputs(restored);
-            if(canCalc(restored)){
-              runCalc(restored);
-            } else if(sess.sponsorshipGuaranteedMin!=null){
-              setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax,breakdown:null,configLastUpdated:null});
-            }
-            if(sess.orgType)      setOrgType(sess.orgType);
-            if(sess.sportsMode)   setSportsMode(sess.sportsMode);
-            if(Array.isArray(sess.selectedSports)&&sess.selectedSports.length>0) setSelectedSports(sess.selectedSports);
-            if(sess.draftEmailSubject) setEmailSubject(sess.draftEmailSubject);
-            if(sess.draftEmailBody)    setEmailBody(sess.draftEmailBody);
-            if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
-              setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
-            }
-          } else {
-            doCreateSession();
-          }
-        }).catch(()=>doCreateSession());
-    } else {
-      doCreateSession();
-    }
-  },[]);
-
-  const doCreateSession=()=>{
-    fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
-      .then(r=>r.json()).then(d=>{
-        setSessionId(d.session.id);sessRef.current=d.session.id;
-        sessionStorage.setItem("ttSessionId",d.session.id);
-      }).catch(()=>{});
-  };
-
-  const scheduleSave=(patch)=>{
-    if(!sessRef.current)return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current=setTimeout(()=>{
-      setSaving(true);
-      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",...patch})})
-        .then(()=>setSaving(false)).catch(()=>setSaving(false));
-    },800);
-  };
-
-  const setAnswer=(qId,val)=>{
-    const next={...answers,[qId]:val};
-    setAnswers(next);scheduleSave({answers:next});
-  };
-
-  const togglePain=(painId)=>{
-    const next=pains.includes(painId)?pains.filter(p=>p!==painId):[...pains,painId];
-    setPains(next);scheduleSave({confirmedPains:next});
-  };
-
-  const linkContact=(c)=>{
-    setLinked(c);
-    const patch=c.module==="Contact"?{crmContactId:c.id,crmModule:"Contact"}:{crmLeadId:c.id,crmModule:"Lead"};
-    scheduleSave(patch);
-  };
-
-  const unlinkContact=()=>{
-    setLinked(null);
-    scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});
-  };
-
-  const handleOrgChange=(field,value)=>{
-    if(field==="orgType"){
-      setOrgType(value);setSportsMode("");setSelectedSports([]);
-      scheduleSave({orgType:value,sportsMode:null,selectedSports:[]});
-    } else if(field==="sportsMode"){
-      setSportsMode(value);setSelectedSports([]);
-      scheduleSave({sportsMode:value,selectedSports:[]});
-    } else if(field==="selectedSports"){
-      setSelectedSports(value);
-      scheduleSave({selectedSports:value});
-    }
-  };
-
-  const handleCalcInput=(field,value)=>{
-    const next={...calcInputs,[field]:value};
-    setCalcInputs(next);
-    // Immediate fire-and-forget session field save
-    if(sessRef.current){
-      const v=(field==="hasOnlineStore"||field==="hasBoosterClub")?value
-        :["numSports","numAthletes","estimatedCurrentSpend"].includes(field)&&value!==""?Number(value)
-        :value||null;
-      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",[field]:v})}).catch(()=>{});
-    }
-    // Debounced calc
-    clearTimeout(calcTimer.current);
-    if(canCalc(next)){
-      calcTimer.current=setTimeout(()=>runCalc(next),600);
-    } else {
-      setCalcResult(null);
-    }
-  };
-
-  const currentPhase=TT_PHASES[phaseIdx];
-  const phaseQs=questions.filter(q=>q.phase===currentPhase.id).sort((a,b)=>a.order-b.order);
-  const questionMap=Object.fromEntries(questions.map(q=>[q.id,q.questionText]));
-  const nextStepQ=questions.find(q=>q.phase==="SOLUTION"&&q.order===2);
-  const nextStep=nextStepQ?(answers[nextStepQ.id]||""):"";
-
-  return(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* Header */}
-      <div style={{padding:"14px 22px 10px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-          <div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>TALK TRACK</div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginTop:1}}>{linked?.name||"New Session"}</div>
-          </div>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            {saving&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>saving…</span>}
-            <GBtn sm onClick={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}>✕ EXIT</GBtn>
-          </div>
-        </div>
-        {/* Phase stepper */}
-        <div style={{display:"flex",alignItems:"center"}}>
-          {TT_PHASES.map((p,i)=>{
-            const done=i<phaseIdx;const active=i===phaseIdx;
-            const col=done?B.green:active?B.orange:B.border;
-            return(
-              <React.Fragment key={p.id}>
-                <button onClick={()=>setPhaseIdx(i)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
-                  <div style={{width:22,height:22,borderRadius:"50%",background:done?B.green:active?B.orange:B.surface,border:`2px solid ${col}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {done?<span style={{color:B.white,fontSize:9}}>✓</span>:<span style={{width:6,height:6,borderRadius:"50%",background:active?B.white:B.border,display:"block"}}/>}
-                  </div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:.5,whiteSpace:"nowrap"}}>{p.label.toUpperCase()}</div>
-                </button>
-                {i<TT_PHASES.length-1&&<div style={{flex:1,height:2,background:done?B.green:B.border,margin:"0 4px",marginBottom:16}}/>}
-              </React.Fragment>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* CRM linker */}
-      <CrmLinker linked={linked} onLink={linkContact} onUnlink={unlinkContact}/>
-
-      {/* Scrollable content */}
-      <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
-        {/* Org profile — required for all phases */}
-        <OrgProfile
-          orgType={orgType}
-          sportsMode={sportsMode}
-          selectedSports={selectedSports}
-          numSports={calcInputs.numSports}
-          numAthletes={calcInputs.numAthletes}
-          schoolClass={calcInputs.schoolClass}
-          onChange={handleOrgChange}
-          onCalcInput={handleCalcInput}
-        />
-
-        {/* Script block */}
-        <blockquote style={{margin:"0 0 16px",padding:"10px 14px",borderLeft:`3px solid ${B.orange}`,background:`${B.orange}08`,borderRadius:"0 4px 4px 0"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,fontStyle:"italic"}}>{currentPhase.script}</div>
-        </blockquote>
-
-        {/* Pain cards */}
-        {currentPhase.id==="PAIN"&&<PainCards selected={pains} onToggle={togglePain}/>}
-
-        {/* Solution phase — offer summary + email drafter */}
-        {currentPhase.id==="SOLUTION"&&(
-          <div style={{marginBottom:16}}>
-            {calcResult&&(
-              <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6,padding:"12px 16px",marginBottom:14}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1.5,marginBottom:4}}>SPONSORSHIP OFFER</div>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange,lineHeight:1.1}}>{fmt$(calcResult.guaranteedMin||0)}<span style={{fontSize:13,marginLeft:5}}>guaranteed</span></div>
-                {(calcResult.upsideMax||0)>(calcResult.guaranteedMin||0)&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3}}>Up to {fmt$((calcResult.upsideMax||0)-(calcResult.guaranteedMin||0))} additional based on actual sales</div>
-                )}
-              </div>
-            )}
-            {nextStep?(
-              <EmailDrafter
-                sessRef={sessRef}
-                cu={cu}
-                linked={linked}
-                calcInputs={calcInputs}
-                calcResult={calcResult}
-                pains={pains}
-                answers={answers}
-                questionMap={questionMap}
-                nextStep={nextStep}
-                initialSubject={emailSubject}
-                initialBody={emailBody}
-                onComplete={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}
-              />
-            ):(
-              <div style={{background:B.surface,borderRadius:5,border:`1px dashed ${B.border}`,padding:"12px 14px",textAlign:"center"}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Answer the "Next step" question above to unlock email drafting.</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Sponsorship Calculator — top of Discovery phase */}
-        {currentPhase.id==="DISCOVERY"&&orgType!=="org"&&(
-          <SponsorshipCalculator
-            inputs={calcInputs}
-            onInputChange={handleCalcInput}
-            result={calcResult}
-            loading={calcLoading}
-          />
-        )}
-
-        {/* Phase questions */}
-        {phaseQs.length>0&&(
-          <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:8,marginTop:currentPhase.id==="DISCOVERY"?16:0}}>
-            {phaseQs.map(q=>(
-              <QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>
             ))}
           </div>
         )}
 
-        {/* Phase navigation */}
-        {(()=>{
-          const isOrgDone=!!(orgType&&(orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0)):(sportsMode&&selectedSports.length>0)));
-          const canAdvance=linked&&isOrgDone;
-          const hint=!linked?"Link or create a contact above before proceeding":!isOrgDone?"Confirm org type and sports above before proceeding":null;
-          return(
-        <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
-          {hint&&(
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,textAlign:"center",marginBottom:10,padding:"6px 10px",background:`${B.orange}10`,borderRadius:4}}>
-              {hint}
-            </div>
-          )}
-          <div style={{display:"flex",justifyContent:"space-between"}}>
-            <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
-            {phaseIdx<TT_PHASES.length-1
-              ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!canAdvance}>NEXT →</OBtn>
-              :<OBtn col={B.green} disabled={!canAdvance} onClick={async()=>{
-                // Mark session complete
-                if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
-
-                // Build + post CRM note and deal if linked
-                if(linked?.id){
-                  const dt=new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
-                  const lines=[
-                    `ST1 Discovery Call — ${dt}`,
-                    `Contact: ${linked.name}`,
-                    linked.school?`Organization: ${linked.school}`:"",
-                    orgType?`Type: ${orgType==="school"?"School":"Organization"}`:"",
-                    selectedSports.length>0?`Sports: ${selectedSports.join(", ")}`:"",
-                    calcInputs.numAthletes?`Athletes: ${calcInputs.numAthletes}`:"",
-                    calcInputs.numSports?`Sports offered: ${calcInputs.numSports}`:"",
-                  ];
-                  if(pains.length>0){
-                    lines.push("","Pain points confirmed:");
-                    pains.forEach(pid=>{const pc=PAIN_CARDS.find(c=>c.id===pid);if(pc)lines.push(`- ${pc.title}`);});
-                  }
-                  if(calcResult?.guaranteedMin){
-                    lines.push("",`Sponsorship offer: $${calcResult.guaranteedMin.toLocaleString()} guaranteed / up to $${(calcResult.upsideMax||0).toLocaleString()}`);
-                  }
-                  const qas=Object.entries(answers).filter(([,v])=>v!=null&&v!=="").map(([id,v])=>{
-                    const q=questions.find(q=>q.id==id);
-                    return q?`${q.questionText}: ${v===true?"Yes":v===false?"No":String(v)}`:null;
-                  }).filter(Boolean);
-                  if(qas.length>0){lines.push("","Call notes:",...qas);}
-                  lines.push("",`Conducted by: ${cu?.name||"Rep"} on ${dt}`);
-                  const noteContent=lines.filter(l=>l!==undefined).join("\n");
-                  const crmModule=linked.module==="Contact"?"Contacts":"Leads";
-
-                  fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
-                    body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:`ST1 Discovery Call — ${dt}`,noteContent})
-                  }).catch(()=>{});
-
-                  const closing=new Date();closing.setDate(closing.getDate()+30);
-                  const dealFields={
-                    Deal_Name:`ST1 — ${linked.school||linked.name||"Account"} — ${dt}`,
-                    Stage:"Qualification",
-                    Closing_Date:closing.toISOString().split("T")[0],
-                    Account_Name:linked.school||linked.name||"",
-                    Description:noteContent,
-                  };
-                  if(calcResult?.guaranteedMin) dealFields.Amount=calcResult.guaranteedMin;
-                  if(linked.module==="Contact") dealFields.Contact_Name={id:linked.id};
-                  fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-                    body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
-                  }).catch(()=>{});
-
-                  // Update local CRM contact with profile + sponsorship data + call notes
-                  const allContacts=s?.contacts||[];
-                  const localC=allContacts.find(c=>c.zohoId===linked.id||c.id===linked.id);
-                  if(localC){
-                    const answersSummary=Object.entries(answers)
-                      .filter(([,v])=>v!=null&&v!=="")
-                      .map(([id,v])=>{const q=questions.find(q=>q.id==id);return q?{question:q.questionText,answer:v===true?"Yes":v===false?"No":String(v)}:null;})
-                      .filter(Boolean);
-                    const painsSummary=pains.map(pid=>{const pc=PAIN_CARDS.find(c=>c.id===pid);return pc?pc.title:null;}).filter(Boolean);
-                    dispatch("UPDATE_CONTACT",{
-                      id:localC.id,
-                      orgType,sportsMode,selectedSports,
-                      ...(calcInputs.schoolClass?{schoolClass:calcInputs.schoolClass}:{}),
-                      ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
-                      ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
-                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null,sponsorshipStatus:"proposed",sponsorshipProposedAt:new Date().toISOString()}:{}),
-                      ttAnswers:answersSummary,
-                      ttPains:painsSummary,
-                      ttCompletedAt:new Date().toISOString(),
-                    });
-                  }
-                }
-
-                sessionStorage.removeItem("ttSessionId");
-                toast("Talk Track complete — CRM updated!","success");
-                onClose();
-              }}>✓ COMPLETE</OBtn>
-            }
+        {/* Open RFPs */}
+        {openRfps.length>0&&(
+          <div style={{padding:"12px 14px"}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>OPEN RFPS</div>
+            {openRfps.map(r=>(
+              <div key={r.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",marginBottom:4}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2}}>{r.name}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:RSC[r.stage]||B.muted}}>{r.stage}{r.dueDate?` · due ${r.dueDate}`:""}</div>
+              </div>
+            ))}
           </div>
-        </div>
-          );
-        })()}
+        )}
+
+        {!openDeals.length&&!topContacts.length&&!openRfps.length&&(
+          <div style={{padding:"16px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Add deals and contacts to see live context here.</div>
+        )}
       </div>
     </div>
   );
