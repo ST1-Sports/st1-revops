@@ -90,6 +90,7 @@ const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
 const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
@@ -1139,7 +1140,7 @@ function ModAnalytics() {
   // Top products (won + open)
   const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
 
-  const fmt$K=(n)=>{if(n>=1000)return "$"+(n/1000).toFixed(1)+"K";return "$"+Math.round(n).toLocaleString();}
+
 
   const TABS=[["overview","Overview"],["revenue","Revenue"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
 
@@ -2845,8 +2846,9 @@ function ModCRM() {
                 setShowAddContact(false);
                 setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
                 toast(`${c.fullName} added`,"success");
-                // Push to Zoho Leads
-                fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})}).catch(()=>{});
+                // Push to Zoho Leads and save zohoId back
+                fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})})
+                  .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
               }} disabled={!addForm.lastName}>SAVE</OBtn>
               <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
             </div>
