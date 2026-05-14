@@ -689,6 +689,7 @@ export default function App() {
   const NAV = [
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
+    {id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
     {id:"crm",           icon:"◈", label:"CRM"},
@@ -705,7 +706,6 @@ export default function App() {
     {id:"agent",       icon:"AI",label:"AI Agent"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
       {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
@@ -726,7 +726,6 @@ export default function App() {
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
-    {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
@@ -3496,12 +3495,42 @@ function ModCRM() {
 // ════════════════════════════════════════════════════════════════════════════
 //  SPONSORSHIPS
 // ════════════════════════════════════════════════════════════════════════════
+const SPONS_CONFIG_DEFAULTS={avgOrderValuePerAthlete:85,avgEquipmentOrderPerSport:400,netMarginPct:0.18,givebackPct:0.30,schoolClassConfidence:{"1A":0.40,"2A":0.50,"3A":0.60,"4A":0.70,"5A":0.78,"6A":0.85},teamStoreRevenuePerAthlete:35,purchaseFrequencyPerYear:1.5,boosterMultiplier:1.15};
+
 function ModSponsorships(){
-  const {s,dispatch,toast,setMod}=useApp();
+  const {s,dispatch,toast,setMod,cu}=useApp();
   const [tab,setTab]=useState("proposed");
   const [confirmId,setConfirmId]=useState(null);
   const [confirmAmt,setConfirmAmt]=useState("");
   const [payFilter,setPayFilter]=useState("all");
+  // Settings tab state
+  const [cfg,setCfg]=useState(null);
+  const [cfgLoading,setCfgLoading]=useState(false);
+  const [cfgSaving,setCfgSaving]=useState(false);
+
+  useEffect(()=>{
+    if(tab!=="settings"||cfg!==null)return;
+    setCfgLoading(true);
+    fetch("/api/sponsorship/config").then(r=>r.json()).then(d=>{
+      setCfg(d.config??{...SPONS_CONFIG_DEFAULTS});
+    }).catch(()=>setCfg({...SPONS_CONFIG_DEFAULTS})).finally(()=>setCfgLoading(false));
+  },[tab]);
+
+  const saveConfig=async()=>{
+    if(!cfg)return;
+    setCfgSaving(true);
+    try{
+      const r=await fetch("/api/sponsorship/config",{method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...cfg,lastUpdatedBy:cu?.name||null})});
+      const d=await r.json();
+      if(d.ok){toast("Calculator settings saved","success");}
+      else{toast(d.error||"Save failed","error");}
+    }catch(e){toast("Save failed: "+e.message,"error");}
+    setCfgSaving(false);
+  };
+
+  const setC=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  const setCC=(cls,v)=>setCfg(c=>({...c,schoolClassConfidence:{...(c.schoolClassConfidence||{}),[cls]:v}}));
 
   const contacts=s.contacts||[];
   const proposed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="proposed");
@@ -3621,7 +3650,7 @@ function ModSponsorships(){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,marginBottom:18}}>
-        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`]].map(([id,label])=>(
+        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`],["settings","⚙ Settings"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"8px 18px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,cursor:"pointer"}}>{label}</button>
         ))}
       </div>
@@ -3659,6 +3688,82 @@ function ModSponsorships(){
               .map(c=><SCard key={c.id} c={c} showConfirmForm={true}/>)
           )}
         </>
+      )}
+
+      {/* Settings tab */}
+      {tab==="settings"&&(
+        <div style={{maxWidth:620}}>
+          {cfgLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"40px 0",textAlign:"center"}}><Spin/> Loading settings…</div>}
+          {!cfgLoading&&cfg&&(()=>{
+            const fld=({label,help,k,pct,step="1"})=>(
+              <div key={k} style={{marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:4}}>{label}</div>
+                {help&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5,lineHeight:1.4}}>{help}</div>}
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <input type="number" step={step} value={pct?Math.round((cfg[k]||0)*100):cfg[k]||""}
+                    onChange={e=>setC(k,pct?Number(e.target.value)/100:Number(e.target.value))}
+                    style={{width:100,...inp}}/>
+                  {pct&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>%</span>}
+                </div>
+              </div>
+            );
+            return(
+              <>
+                {/* Formula explainer */}
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 16px",marginBottom:22,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:6}}>HOW THE ESTIMATE IS CALCULATED</div>
+                  <div><b style={{color:B.text}}>Revenue</b> = (athletes × $AOV × purchases/yr) + (sports × $equip) + (store rev if online store) × booster multiplier</div>
+                  <div><b style={{color:B.text}}>Giveback Pool</b> = Revenue × net margin × giveback %</div>
+                  <div><b style={{color:B.text}}>Guaranteed Min</b> = Pool × class confidence %</div>
+                  <div><b style={{color:B.text}}>Upside Max</b> = Pool × 100%</div>
+                </div>
+
+                {/* Revenue inputs */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>REVENUE ASSUMPTIONS</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"AVG ORDER VALUE PER ATHLETE ($)",help:"Avg dollars ST1 earns per athlete per order (uniforms, gear, etc.)",k:"avgOrderValuePerAthlete"})}
+                    {fld({label:"AVG EQUIPMENT ORDER PER SPORT ($)",help:"Avg equipment purchase per sport per season",k:"avgEquipmentOrderPerSport"})}
+                    {fld({label:"TEAM STORE REVENUE PER ATHLETE ($)",help:"Online team store earnings per athlete if store is active",k:"teamStoreRevenuePerAthlete"})}
+                    {fld({label:"PURCHASE FREQUENCY PER YEAR",help:"How many times per year athletes/coaches order",k:"purchaseFrequencyPerYear",step:"0.1"})}
+                    {fld({label:"BOOSTER CLUB MULTIPLIER",help:"Revenue uplift factor when a booster club is active (e.g. 1.15 = +15%)",k:"boosterMultiplier",step:"0.01"})}
+                  </div>
+                </div>
+
+                {/* Margin & giveback */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>MARGIN & GIVEBACK</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"NET MARGIN %",help:"ST1's net profit margin after cost of goods and fulfillment",k:"netMarginPct",pct:true,step:"1"})}
+                    {fld({label:"GIVEBACK %",help:"% of net profit returned to the school as sponsorship",k:"givebackPct",pct:true,step:"1"})}
+                  </div>
+                </div>
+
+                {/* School class confidence */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:20}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>SCHOOL CLASS CONFIDENCE %</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:14,lineHeight:1.4}}>How likely ST1 captures the full projected revenue at each school size. Larger schools have more competition so confidence is higher for smaller classes.</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
+                    {["1A","2A","3A","4A","5A","6A"].map(cls=>(
+                      <div key={cls} style={{textAlign:"center"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,marginBottom:4}}>{cls}</div>
+                        <input type="number" min="0" max="100" step="1"
+                          value={Math.round(((cfg.schoolClassConfidence||{})[cls]||0)*100)}
+                          onChange={e=>setCC(cls,Number(e.target.value)/100)}
+                          style={{width:"100%",textAlign:"center",...inp}}/>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>%</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <OBtn onClick={saveConfig} disabled={cfgSaving} style={{width:"100%",justifyContent:"center"}}>
+                  {cfgSaving?"SAVING…":"SAVE CALCULATOR SETTINGS"}
+                </OBtn>
+              </>
+            );
+          })()}
+        </div>
       )}
     </div>
   );
@@ -9512,15 +9617,25 @@ function ModCalendar() {
   // Build all events
   const allEvents=[];
   (s.campaigns||[]).forEach(camp=>{
-    // Email touches
+    // Projected email touch schedule (if campaign has a startDate)
     if(camp.startDate && (camp.touches||[]).length>0){
       (camp.touches||[]).forEach(touch=>{
-        const d=new Date(camp.startDate);
+        const d=new Date(camp.startDate+"T00:00:00");
         d.setDate(d.getDate()+(touch.dayOffset||0));
-        const dateStr=d.toISOString().slice(0,10);
-        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Day ${touch.dayOffset||0}`,campId:camp.id});
+        const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Campaign · Day ${touch.dayOffset||0}`,campId:camp.id});
       });
     }
+    // Actual sent emails from enrollment step history
+    (camp.enrollments||[]).forEach(enr=>{
+      (enr.sentSteps||[]).forEach(step=>{
+        const dateStr=(step.sentAt||"").slice(0,10);
+        if(!dateStr)return;
+        const touch=(camp.touches||[]).find(t=>t.dayOffset===step.dayOffset);
+        const contact=(s.contacts||[]).find(c=>c.id===enr.contactId);
+        allEvents.push({date:dateStr,type:"email",label:touch?.subject||"Email",color:"#f97316",campName:camp.name,subLabel:contact?.school||contact?.fullName||"",campId:camp.id});
+      });
+    });
     // Social drafts
     (camp.socialDrafts||[]).forEach(p=>{
       const dateStr=(p.scheduledDate||p.date||"").slice(0,10);
@@ -9535,7 +9650,16 @@ function ModCalendar() {
   // Standalone social posts
   (s.socialPosts||[]).forEach(p=>{
     const dateStr=(p.date||"").slice(0,10);
-    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:(p.platforms||[]).join(", ")||"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+  });
+  // Emails logged on individual contacts (touch history)
+  (s.contacts||[]).forEach(c=>{
+    const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||c.school||"Contact";
+    (c.touchHistory||[]).forEach(t=>{
+      if(t.type!=="email"||!t.date)return;
+      const dateStr=t.date.slice(0,10);
+      allEvents.push({date:dateStr,type:"email",label:t.note?.slice(0,50)||"Email",color:"#f97316",campName:name,subLabel:c.school||"",campId:null});
+    });
   });
 
   const filtered=allEvents.filter(ev=>{
@@ -9992,9 +10116,7 @@ function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("calendar");
-  const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
-  const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
+  const [tab,setTab]=useState("posts");
   // New post form
   const [caption,setCaption]=useState("");
   const [platforms,setPlatforms]=useState([]);
@@ -10031,11 +10153,6 @@ function ModSocial() {
   );
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
-
-  const getPostsForDay=(y,m,d)=>{
-    const dateStr=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    return allPosts.filter(p=>(p.date||"").slice(0,10)===dateStr);
-  };
 
   const generateCaption=async()=>{
     setGenRunning(true);
@@ -10135,11 +10252,6 @@ function ModSocial() {
     setPosting(false);
   };
 
-  const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const DAY_NAMES=["Su","Mo","Tu","We","Th","Fr","Sa"];
-  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
-  const firstDay=new Date(calYear,calMonth,1).getDay();
-
   const filtered=allPosts.filter(p=>{
     if(filterStatus!=="all"&&p.status!==filterStatus) return false;
     if(filterPlatform!=="all"&&!(p.platforms||[]).includes(filterPlatform)) return false;
@@ -10153,7 +10265,7 @@ function ModSocial() {
       <PH title="SOCIAL MEDIA" sub="Schedule, publish, and track posts across all platforms"/>
       <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{display:"flex",gap:5}}>
-          {[["calendar","📅 CALENDAR"],["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
+          {[["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
             <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
           ))}
         </div>
@@ -10163,57 +10275,6 @@ function ModSocial() {
         </div>
       </div>
 
-      {/* ── CALENDAR ──────────────────────────────────────────────────────── */}
-      {tab==="calendar"&&(
-        <div>
-          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
-            <button onClick={()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>‹</button>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,flex:1,textAlign:"center",letterSpacing:.3}}>{MONTH_NAMES[calMonth]} {calYear}</div>
-            <button onClick={()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>›</button>
-            <OBtn sm onClick={()=>setTab("new")}>+ POST</OBtn>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:2}}>
-            {DAY_NAMES.map(d=><div key={d} style={{textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,padding:"5px 0",letterSpacing:.5}}>{d}</div>)}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-            {Array(firstDay).fill(null).map((_,i)=><div key={`e${i}`} style={{background:B.surface,minHeight:90,borderRadius:4}}/>)}
-            {Array(daysInMonth).fill(null).map((_,i)=>{
-              const d=i+1;
-              const posts=getPostsForDay(calYear,calMonth,d);
-              const isToday=new Date().getFullYear()===calYear&&new Date().getMonth()===calMonth&&new Date().getDate()===d;
-              return(
-                <div key={d} style={{background:B.bg,border:`1px solid ${isToday?B.orange:B.border}`,borderRadius:4,padding:"5px 6px",minHeight:90,cursor:posts.length?"pointer":"default"}} onClick={()=>{if(posts.length)setTab("posts");}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
-                  {posts.slice(0,3).map((p,pi)=>{
-                    const col=PLATFORM_COLORS[(p.platforms||[])[0]]||B.purple;
-                    const isDraft=p._source==="campaign_draft";
-                    return(
-                      <div key={pi} style={{background:`${col}18`,borderLeft:`2px solid ${col}`,padding:"1px 5px",borderRadius:2,marginBottom:2,opacity:isDraft?.7:1}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isDraft?"(draft) ":""}{(p.platforms||[]).join(", ")}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{(p.caption||"").slice(0,28)}</div>
-                      </div>
-                    );
-                  })}
-                  {posts.length>3&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:2}}>+{posts.length-3}</div>}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>PLATFORMS:</div>
-            {Object.entries(PLATFORM_COLORS).map(([pl,col])=>(
-              <div key={pl} style={{display:"flex",alignItems:"center",gap:4}}>
-                <div style={{width:10,height:10,borderRadius:2,background:col,flexShrink:0}}/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{pl}</span>
-              </div>
-            ))}
-            <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:12}}>
-              <div style={{width:10,height:10,borderRadius:2,background:B.purple,opacity:.5,flexShrink:0}}/>
-              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>campaign draft</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── ALL POSTS ─────────────────────────────────────────────────────── */}
       {tab==="posts"&&(
