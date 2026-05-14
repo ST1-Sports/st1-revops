@@ -705,8 +705,9 @@ export default function App() {
     {id:"_s_sales"},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
-    {id:"crm",         icon:"◈", label:"CRM"},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"crm",           icon:"◈", label:"CRM"},
+    {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
+    {id:"rfp",           icon:"⊘", label:"RFP / Bids",   badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
@@ -922,8 +923,9 @@ export default function App() {
             <ErrBound key={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
-            {mod==="crm"         && <ModCRM/>}
-            {mod==="deals"       && <ModDeals/>}
+            {mod==="crm"          && <ModCRM/>}
+            {mod==="sponsorships" && <ModSponsorships/>}
+            {mod==="deals"        && <ModDeals/>}
             {mod==="orders"      && <ModOrders/>}
             {mod==="rfp"         && <ModRFP/>}
             {mod==="reorder"     && <ModReorder/>}
@@ -2761,7 +2763,7 @@ function TalkTrack({onClose,linkedContact}){
                       ...(calcInputs.schoolClass?{schoolClass:calcInputs.schoolClass}:{}),
                       ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
                       ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
-                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null}:{}),
+                      ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null,sponsorshipStatus:"proposed",sponsorshipProposedAt:new Date().toISOString()}:{}),
                       ttAnswers:answersSummary,
                       ttPains:painsSummary,
                       ttCompletedAt:new Date().toISOString(),
@@ -3338,6 +3340,17 @@ function ModCRM() {
                       </div>
                     )}
 
+                    {/* Sponsorship actions */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{display:"flex",gap:8,marginTop:6,marginBottom:8}}>
+                        {sel.sponsorshipStatus==="confirmed"?(
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,border:`1px solid ${B.green}30`,borderRadius:4,padding:"4px 10px"}}>★ SPONSORSHIP CONFIRMED — {fmt$(sel.sponsorshipConfirmedAmount||sel.sponsorshipMin)}</span>
+                        ):(
+                          <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_CONTACT",{id:sel.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:sel.sponsorshipMin,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});toast("Sponsorship confirmed!","success");}}>★ CONFIRM SPONSORSHIP</OBtn>
+                        )}
+                        <GBtn sm onClick={()=>setMod("sponsorships")}>View all sponsorships →</GBtn>
+                      </div>
+                    )}
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"right"}}>
                       Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
                     </div>
@@ -3502,6 +3515,177 @@ function ModCRM() {
             )}
           </div>
         </div>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SPONSORSHIPS
+// ════════════════════════════════════════════════════════════════════════════
+function ModSponsorships(){
+  const {s,dispatch,toast,setMod}=useApp();
+  const [tab,setTab]=useState("proposed");
+  const [confirmId,setConfirmId]=useState(null);
+  const [confirmAmt,setConfirmAmt]=useState("");
+  const [payFilter,setPayFilter]=useState("all");
+
+  const contacts=s.contacts||[];
+  const proposed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="proposed");
+  const confirmed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="confirmed");
+
+  const totalCommitted=confirmed.reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalPaid=confirmed.filter(c=>c.sponsorshipPaid).reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalOwed=totalCommitted-totalPaid;
+
+  const confirmSponsor=(c)=>{
+    const amt=parseFloat(confirmAmt)||c.sponsorshipMin||0;
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:amt,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});
+    toast(`${c.fullName||c.school||"Contact"} confirmed — ${fmt$(amt)}`,"success");
+    setConfirmId(null);setConfirmAmt("");
+  };
+
+  const markPaid=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipPaid:true,sponsorshipPaidAt:new Date().toISOString()});
+    toast("Marked as paid","success");
+  };
+
+  const revertToProposed=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"proposed",sponsorshipConfirmedAmount:null,sponsorshipConfirmedAt:null,sponsorshipPaid:false,sponsorshipPaidAt:null});
+    toast("Moved back to proposed","info");
+  };
+
+  const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const inp={background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,width:"100%",boxSizing:"border-box"};
+
+  const SCard=({c,showConfirmForm})=>{
+    const amt=c.sponsorshipConfirmedAmount||c.sponsorshipMin||0;
+    const upside=c.sponsorshipMax||0;
+    const isConfirming=confirmId===c.id;
+    return(
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"14px 18px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||cName(c)}</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{cName(c)}{c.title?` · ${c.title}`:""}</div>
+            <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+              {c.schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{c.schoolClass}</span>}
+              {c.numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numAthletes} athletes</span>}
+              {c.numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numSports} sports</span>}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>0&&(
+                c.selectedSports.slice(0,3).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}10`,padding:"2px 6px",borderRadius:3}}>{sp}</span>)
+              )}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>3&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>+{c.selectedSports.length-3} more</span>}
+            </div>
+            {Array.isArray(c.ttPains)&&c.ttPains.length>0&&(
+              <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                Pain: {c.ttPains.slice(0,2).join(" · ")}{c.ttPains.length>2?` +${c.ttPains.length-2} more`:""}
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            {showConfirmForm?(
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.orange}}>{fmt$(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0)}</div>
+            ):(
+              <>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(c.sponsorshipMin||0)}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>guaranteed</div>
+                {upside>c.sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(upside)}</div>}
+              </>
+            )}
+            <button onClick={()=>setMod("crm")} style={{marginTop:6,background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer",padding:0}}>View profile →</button>
+          </div>
+        </div>
+
+        {/* Confirm form */}
+        {showConfirmForm&&isConfirming&&(
+          <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${B.border}`,display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:4}}>CONFIRMED AMOUNT ($)</div>
+              <input type="number" value={confirmAmt} onChange={e=>setConfirmAmt(e.target.value)} placeholder={String(c.sponsorshipMin||0)} style={inp}/>
+            </div>
+            <OBtn col={B.green} onClick={()=>confirmSponsor(c)}>✓ CONFIRM</OBtn>
+            <GBtn onClick={()=>{setConfirmId(null);setConfirmAmt("");}}>Cancel</GBtn>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"flex-end"}}>
+          {showConfirmForm?(
+            !isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipConfirmedAmount||c.sponsorshipMin||""));}}>✎ Edit Amount</OBtn>
+          ):(
+            <>
+              {!isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipMin||""));}}>✓ CONFIRM SPONSORSHIP</OBtn>}
+              {!isConfirming&&<GBtn sm onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:null,sponsorshipMin:null,sponsorshipMax:null});toast("Removed from pipeline","info");}}>✕ Remove</GBtn>}
+            </>
+          )}
+          {showConfirmForm&&!c.sponsorshipPaid&&<OBtn sm col={B.blue} onClick={()=>markPaid(c)}>Mark Paid</OBtn>}
+          {showConfirmForm&&c.sponsorshipPaid&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4}}>✓ PAID</span>}
+          {showConfirmForm&&<GBtn sm onClick={()=>revertToProposed(c)}>↩ Move to Proposed</GBtn>}
+        </div>
+      </div>
+    );
+  };
+
+  return(
+    <div style={{padding:"22px 28px",maxWidth:900,margin:"0 auto"}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:4}}>SPONSORSHIPS</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.black}}>Sponsorship Pipeline</div>
+        </div>
+        <OBtn onClick={()=>setMod("crm")}>← Back to CRM</OBtn>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
+        <KCard l="Proposed" v={proposed.length} c={B.orange} sub={fmt$K(proposed.reduce((a,c)=>a+(c.sponsorshipMin||0),0))+" potential"}/>
+        <KCard l="Confirmed" v={confirmed.length} c={B.green} sub={fmt$K(totalCommitted)+" committed"}/>
+        <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.green} sub="owed to schools"/>
+        <KCard l="Paid Out" v={fmt$K(totalPaid)} c={B.blue} sub={`${confirmed.filter(c=>c.sponsorshipPaid).length} of ${confirmed.length} paid`}/>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,marginBottom:18}}>
+        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"8px 18px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
+
+      {/* Proposed tab */}
+      {tab==="proposed"&&(
+        proposed.length===0?(
+          <div style={{textAlign:"center",padding:"60px 0"}}>
+            <div style={{fontSize:32,marginBottom:12}}>★</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:16}}>No sponsorships proposed yet.<br/>Complete a Talk Track with a school to generate an estimate.</div>
+            <OBtn onClick={()=>setMod("crm")}>Go to CRM →</OBtn>
+          </div>
+        ):(
+          proposed.map(c=><SCard key={c.id} c={c} showConfirmForm={false}/>)
+        )
+      )}
+
+      {/* Confirmed tab */}
+      {tab==="confirmed"&&(
+        <>
+          {confirmed.length>0&&(
+            <div style={{display:"flex",gap:6,marginBottom:14}}>
+              {[["all","All"],["unpaid","Unpaid"],["paid","Paid"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setPayFilter(v)} style={{background:payFilter===v?B.orange:"none",color:payFilter===v?B.white:B.muted,border:`1px solid ${payFilter===v?B.orange:B.border}`,borderRadius:99,padding:"3px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          )}
+          {confirmed.length===0?(
+            <div style={{textAlign:"center",padding:"60px 0"}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No confirmed sponsorships yet — confirm a proposed one above.</div>
+            </div>
+          ):(
+            confirmed
+              .filter(c=>payFilter==="all"?true:payFilter==="paid"?c.sponsorshipPaid:!c.sponsorshipPaid)
+              .map(c=><SCard key={c.id} c={c} showConfirmForm={true}/>)
+          )}
+        </>
       )}
     </div>
   );
