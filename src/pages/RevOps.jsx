@@ -2454,7 +2454,9 @@ function TalkTrack({onClose,linkedContact}){
       schoolClass:ci.schoolClass,numSports:Number(ci.numSports||0),numAthletes:Number(ci.numAthletes||0),
       hasOnlineStore:ci.hasOnlineStore===true,hasBoosterClub:ci.hasBoosterClub===true,
     })})
-    .then(r=>r.json()).then(d=>{
+    .then(r=>{if(!r.ok)throw new Error(`calc ${r.status}`);return r.json();})
+    .then(d=>{
+      if(d.error)throw new Error(d.error);
       setCalcResult(d);setCalcLoading(false);
       if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax})}).catch(()=>{});
     }).catch(()=>setCalcLoading(false));
@@ -2676,7 +2678,7 @@ function TalkTrack({onClose,linkedContact}){
         )}
 
         {/* Sponsorship Calculator — top of Discovery phase */}
-        {currentPhase.id==="DISCOVERY"&&(
+        {currentPhase.id==="DISCOVERY"&&orgType!=="org"&&(
           <SponsorshipCalculator
             inputs={calcInputs}
             onInputChange={handleCalcInput}
@@ -2771,6 +2773,7 @@ function ModCRM() {
     const q=search.toLowerCase();
     if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
     if(filter==="all") return true;
+    if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
     return getCD(c).phase===filter;
   }).sort((a,b)=>{
     const po={order:0,quote:1,deal:2,lead:3};
@@ -2814,7 +2817,7 @@ function ModCRM() {
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:8}}>ACCOUNTS</div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
           <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
-            {[["all","All"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+            {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
               <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
             ))}
           </div>
@@ -2832,7 +2835,14 @@ function ModCRM() {
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
                   </div>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,flexShrink:0,textTransform:"uppercase"}}>{phase}</span>
+                  <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
+                    {c.ownerId && c.ownerId !== cu?.id && (()=>{
+                      const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
+                      const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+                      return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
+                    })()}
+                  </div>
                 </div>
                 {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
               </button>
@@ -2848,10 +2858,82 @@ function ModCRM() {
           linkedContact={ttContact}
         />
       ):!sel?(
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:B.muted}}>
-          <div style={{fontSize:32,opacity:.2}}>◈</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13}}>Select an account to manage their deal journey</div>
-          <OBtn sm col={B.orange} onClick={()=>{setTtContact(null);setTtView(true);}}>⤳ NEW TALK TRACK</OBtn>
+        <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+          {(()=>{
+            const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
+            const myDeals=openDeals.filter(d=>d.repId===cu?.id||d.assignee===cu?.id||!d.repId);
+            const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+            const myPipeline=myDeals.reduce((a,d)=>a+(d.value||0),0);
+            const totalContacts=(s.contacts||[]).filter(c=>!c.deadStatus).length;
+            return(<>
+              {/* Stats */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:22}}>
+                <KCard l="Open Deals" v={openDeals.length} c={B.orange} sub={`${fmt$K(openDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}/>
+                <KCard l="My Deals" v={myDeals.length} c={B.blue} sub={fmt$K(myPipeline)}/>
+                <KCard l="Overdue Tasks" v={overdue.length} c={overdue.length>0?B.red:B.green}/>
+                <KCard l="Contacts" v={totalContacts} c={B.muted}/>
+              </div>
+
+              {/* Overdue follow-ups */}
+              {overdue.length>0&&(
+                <div style={{marginBottom:22}}>
+                  <Lbl s={{marginBottom:8,color:B.red}}>OVERDUE FOLLOW-UPS</Lbl>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {overdue.slice(0,5).map(d=>{
+                      const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
+                      return(
+                        <div key={d.id} onClick={()=>setSelId(c?.id)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||"—"} · {d.stage}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>{Math.abs(dUntil(d.followUpDate))}d OVERDUE</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{fmt$(d.value||0)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* My open deals */}
+              <div style={{marginBottom:22}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <Lbl>MY OPEN DEALS</Lbl>
+                  <GBtn sm onClick={()=>setMod("deals")}>View all →</GBtn>
+                </div>
+                {myDeals.length===0?(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"14px 0"}}>No open deals — start a Talk Track to create one.</div>
+                ):(
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {myDeals.slice(0,8).map(d=>{
+                      const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
+                      const dsc=DSC[d.stage]||B.muted;
+                      return(
+                        <div key={d.id} onClick={()=>c&&setSelId(c.id)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||c&&(c.fullName||"")}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:dsc}}>{d.stage}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Quick actions */}
+              <div style={{display:"flex",gap:8}}>
+                <OBtn sm onClick={()=>{setTtContact(null);setTtView(true);}}>⤳ NEW TALK TRACK</OBtn>
+              </div>
+            </>);
+          })()}
         </div>
       ):(
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -2865,6 +2947,24 @@ function ModCRM() {
                   {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
                   {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
                   {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Owner:</span>
+                  <select
+                    value={sel.ownerId||""}
+                    onChange={e=>{
+                      const newOwner=e.target.value;
+                      dispatch("UPDATE_CONTACT",{id:sel.id,ownerId:newOwner||null});
+                      const rep=(s.reps||[]).find(r=>r.id===newOwner);
+                      toast(`Assigned to ${rep?.name||"unassigned"}`,"success");
+                    }}
+                    style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 6px",fontSize:10,color:B.text,fontFamily:"'Lexend',sans-serif"}}
+                  >
+                    <option value="">Unassigned</option>
+                    {(s.reps||[]).map(r=>(
+                      <option key={r.id} value={r.id}>{r.name}{r.id===cu?.id?" (me)":""}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <OBtn sm onClick={()=>{setTtContact({id:sel.id,name:cName(sel),school:sel.school||"",email:sel.email||"",module:"Contact"});setTtView(true);}}>⤳ TALK TRACK</OBtn>
