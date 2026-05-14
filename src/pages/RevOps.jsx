@@ -10098,9 +10098,7 @@ function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("calendar");
-  const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
-  const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
+  const [tab,setTab]=useState("posts");
   // New post form
   const [caption,setCaption]=useState("");
   const [platforms,setPlatforms]=useState([]);
@@ -10137,11 +10135,6 @@ function ModSocial() {
   );
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
-
-  const getPostsForDay=(y,m,d)=>{
-    const dateStr=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    return allPosts.filter(p=>(p.date||"").slice(0,10)===dateStr);
-  };
 
   const generateCaption=async()=>{
     setGenRunning(true);
@@ -10241,11 +10234,6 @@ function ModSocial() {
     setPosting(false);
   };
 
-  const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const DAY_NAMES=["Su","Mo","Tu","We","Th","Fr","Sa"];
-  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
-  const firstDay=new Date(calYear,calMonth,1).getDay();
-
   const filtered=allPosts.filter(p=>{
     if(filterStatus!=="all"&&p.status!==filterStatus) return false;
     if(filterPlatform!=="all"&&!(p.platforms||[]).includes(filterPlatform)) return false;
@@ -10259,7 +10247,7 @@ function ModSocial() {
       <PH title="SOCIAL MEDIA" sub="Schedule, publish, and track posts across all platforms"/>
       <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{display:"flex",gap:5}}>
-          {[["calendar","📅 CALENDAR"],["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
+          {[["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
             <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
           ))}
         </div>
@@ -10269,57 +10257,6 @@ function ModSocial() {
         </div>
       </div>
 
-      {/* ── CALENDAR ──────────────────────────────────────────────────────── */}
-      {tab==="calendar"&&(
-        <div>
-          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
-            <button onClick={()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>‹</button>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,flex:1,textAlign:"center",letterSpacing:.3}}>{MONTH_NAMES[calMonth]} {calYear}</div>
-            <button onClick={()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>›</button>
-            <OBtn sm onClick={()=>setTab("new")}>+ POST</OBtn>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:2}}>
-            {DAY_NAMES.map(d=><div key={d} style={{textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,padding:"5px 0",letterSpacing:.5}}>{d}</div>)}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-            {Array(firstDay).fill(null).map((_,i)=><div key={`e${i}`} style={{background:B.surface,minHeight:90,borderRadius:4}}/>)}
-            {Array(daysInMonth).fill(null).map((_,i)=>{
-              const d=i+1;
-              const posts=getPostsForDay(calYear,calMonth,d);
-              const isToday=new Date().getFullYear()===calYear&&new Date().getMonth()===calMonth&&new Date().getDate()===d;
-              return(
-                <div key={d} style={{background:B.bg,border:`1px solid ${isToday?B.orange:B.border}`,borderRadius:4,padding:"5px 6px",minHeight:90,cursor:posts.length?"pointer":"default"}} onClick={()=>{if(posts.length)setTab("posts");}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
-                  {posts.slice(0,3).map((p,pi)=>{
-                    const col=PLATFORM_COLORS[(p.platforms||[])[0]]||B.purple;
-                    const isDraft=p._source==="campaign_draft";
-                    return(
-                      <div key={pi} style={{background:`${col}18`,borderLeft:`2px solid ${col}`,padding:"1px 5px",borderRadius:2,marginBottom:2,opacity:isDraft?.7:1}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isDraft?"(draft) ":""}{(p.platforms||[]).join(", ")}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{(p.caption||"").slice(0,28)}</div>
-                      </div>
-                    );
-                  })}
-                  {posts.length>3&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:2}}>+{posts.length-3}</div>}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>PLATFORMS:</div>
-            {Object.entries(PLATFORM_COLORS).map(([pl,col])=>(
-              <div key={pl} style={{display:"flex",alignItems:"center",gap:4}}>
-                <div style={{width:10,height:10,borderRadius:2,background:col,flexShrink:0}}/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{pl}</span>
-              </div>
-            ))}
-            <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:12}}>
-              <div style={{width:10,height:10,borderRadius:2,background:B.purple,opacity:.5,flexShrink:0}}/>
-              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>campaign draft</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── ALL POSTS ─────────────────────────────────────────────────────── */}
       {tab==="posts"&&(
