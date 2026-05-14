@@ -9617,15 +9617,25 @@ function ModCalendar() {
   // Build all events
   const allEvents=[];
   (s.campaigns||[]).forEach(camp=>{
-    // Email touches
+    // Projected email touch schedule (if campaign has a startDate)
     if(camp.startDate && (camp.touches||[]).length>0){
       (camp.touches||[]).forEach(touch=>{
-        const d=new Date(camp.startDate);
+        const d=new Date(camp.startDate+"T00:00:00");
         d.setDate(d.getDate()+(touch.dayOffset||0));
-        const dateStr=d.toISOString().slice(0,10);
-        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Day ${touch.dayOffset||0}`,campId:camp.id});
+        const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Campaign · Day ${touch.dayOffset||0}`,campId:camp.id});
       });
     }
+    // Actual sent emails from enrollment step history
+    (camp.enrollments||[]).forEach(enr=>{
+      (enr.sentSteps||[]).forEach(step=>{
+        const dateStr=(step.sentAt||"").slice(0,10);
+        if(!dateStr)return;
+        const touch=(camp.touches||[]).find(t=>t.dayOffset===step.dayOffset);
+        const contact=(s.contacts||[]).find(c=>c.id===enr.contactId);
+        allEvents.push({date:dateStr,type:"email",label:touch?.subject||"Email",color:"#f97316",campName:camp.name,subLabel:contact?.school||contact?.fullName||"",campId:camp.id});
+      });
+    });
     // Social drafts
     (camp.socialDrafts||[]).forEach(p=>{
       const dateStr=(p.scheduledDate||p.date||"").slice(0,10);
@@ -9640,7 +9650,16 @@ function ModCalendar() {
   // Standalone social posts
   (s.socialPosts||[]).forEach(p=>{
     const dateStr=(p.date||"").slice(0,10);
-    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:(p.platforms||[]).join(", ")||"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+  });
+  // Emails logged on individual contacts (touch history)
+  (s.contacts||[]).forEach(c=>{
+    const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||c.school||"Contact";
+    (c.touchHistory||[]).forEach(t=>{
+      if(t.type!=="email"||!t.date)return;
+      const dateStr=t.date.slice(0,10);
+      allEvents.push({date:dateStr,type:"email",label:t.note?.slice(0,50)||"Email",color:"#f97316",campName:name,subLabel:c.school||"",campId:null});
+    });
   });
 
   const filtered=allEvents.filter(ev=>{
