@@ -1914,6 +1914,108 @@ function PainCards({selected,onToggle}){
   );
 }
 
+const TT_SPORTS=["Baseball","Basketball","Cheerleading","Cross Country","Dance","Field Hockey","Football","Golf","Gymnastics","Hockey","Lacrosse","Soccer","Softball","Swimming & Diving","Tennis","Track & Field","Volleyball","Wrestling","Bowling","Badminton","Rugby","Archery"];
+
+function SportsPicker({selected,onChange,single=false}){
+  const toggle=(sport)=>{
+    if(single) onChange([sport]);
+    else onChange(selected.includes(sport)?selected.filter(s=>s!==sport):[...selected,sport]);
+  };
+  return(
+    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+      {TT_SPORTS.map(sport=>(
+        <button key={sport} onClick={()=>toggle(sport)} style={{padding:"3px 10px",background:selected.includes(sport)?B.orange:B.surface,color:selected.includes(sport)?B.white:B.text,border:`1px solid ${selected.includes(sport)?B.orange:B.border}`,borderRadius:12,fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer"}}>
+          {sport}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onChange,onCalcInput}){
+  const [expanded,setExpanded]=useState(!orgType);
+  const isComplete=!!(orgType&&(
+    orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0))
+    :(sportsMode&&selectedSports.length>0)
+  ));
+  const numInp=(extra={})=>({width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,boxSizing:"border-box",...extra});
+  const typeBtn=(label,val)=>(
+    <button key={val} onClick={()=>onChange("orgType",val)} style={{flex:1,padding:"8px 10px",background:orgType===val?B.orange:B.surface,color:orgType===val?B.white:B.text,border:`1px solid ${orgType===val?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,cursor:"pointer"}}>{label}</button>
+  );
+  const modeBtn=(label,val)=>(
+    <button key={val} onClick={()=>onChange("sportsMode",val)} style={{flex:1,padding:"6px 8px",background:sportsMode===val?B.blue:B.surface,color:sportsMode===val?B.white:B.text,border:`1px solid ${sportsMode===val?B.blue:B.border}`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>{label}</button>
+  );
+  const sub=(txt)=><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6,marginTop:10}}>{txt}</div>;
+
+  if(!expanded&&isComplete){
+    const sportSummary=sportsMode==="all"?"All sports":selectedSports.length===1?selectedSports[0]:`${selectedSports.length} sports`;
+    return(
+      <div onClick={()=>setExpanded(true)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",marginBottom:14,background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:6,cursor:"pointer"}}>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
+          <span style={{fontWeight:600}}>{orgType==="school"?"School":"Organization"}</span>
+          {orgType==="school"&&numAthletes&&<span style={{color:B.muted}}> · {numAthletes} athletes</span>}
+          <span style={{color:B.muted}}> · {sportSummary}</span>
+        </div>
+        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue}}>edit</span>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",marginBottom:14}}>
+      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>ORG TYPE</div>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {typeBtn("🏫 SCHOOL / DISTRICT","school")}
+        {typeBtn("🏢 ORGANIZATION / CLUB","org")}
+      </div>
+
+      {orgType==="school"&&(<>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+          <div>
+            {sub("# SPORTS")}
+            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
+          </div>
+          <div>
+            {sub("# ATHLETES")}
+            <input type="number" min="1" value={numAthletes} onChange={e=>onCalcInput("numAthletes",e.target.value)} placeholder="e.g. 300" style={numInp({marginTop:0})}/>
+          </div>
+        </div>
+        {sub("SERVICING")}
+        <div style={{display:"flex",gap:6,marginBottom:sportsMode==="some"?0:0}}>
+          {modeBtn("All sports","all")}
+          {modeBtn("Selected sports only","some")}
+        </div>
+        {sportsMode==="some"&&(<>
+          {sub("SELECT SPORTS WE'RE PROPOSING")}
+          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
+        </>)}
+      </>)}
+
+      {orgType==="org"&&(<>
+        {sub("SPORT FOCUS")}
+        <div style={{display:"flex",gap:6}}>
+          {modeBtn("Single sport","single")}
+          {modeBtn("Multi-sport","multi")}
+        </div>
+        {sportsMode==="single"&&(<>
+          {sub("SELECT SPORT")}
+          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)} single/>
+        </>)}
+        {sportsMode==="multi"&&(<>
+          {sub("SELECT SPORTS")}
+          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
+        </>)}
+      </>)}
+
+      {isComplete&&(
+        <div style={{marginTop:12}}>
+          <GBtn sm onClick={()=>setExpanded(false)}>✓ CONFIRM</GBtn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CrmLinker({linked,onLink,onUnlink}){
   const [q,setQ]=useState("");
   const [results,setResults]=useState([]);
@@ -2333,6 +2435,9 @@ function TalkTrack({onClose,linkedContact}){
   const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null,estimatedCurrentSpend:""});
   const [calcResult,setCalcResult]=useState(null);
   const [calcLoading,setCalcLoading]=useState(false);
+  const [orgType,setOrgType]=useState("");
+  const [sportsMode,setSportsMode]=useState("");
+  const [selectedSports,setSelectedSports]=useState([]);
   const [emailSubject,setEmailSubject]=useState("");
   const [emailBody,setEmailBody]=useState("");
   const [saving,setSaving]=useState(false);
@@ -2383,6 +2488,9 @@ function TalkTrack({onClose,linkedContact}){
             } else if(sess.sponsorshipGuaranteedMin!=null){
               setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax,breakdown:null,configLastUpdated:null});
             }
+            if(sess.orgType)      setOrgType(sess.orgType);
+            if(sess.sportsMode)   setSportsMode(sess.sportsMode);
+            if(Array.isArray(sess.selectedSports)&&sess.selectedSports.length>0) setSelectedSports(sess.selectedSports);
             if(sess.draftEmailSubject) setEmailSubject(sess.draftEmailSubject);
             if(sess.draftEmailBody)    setEmailBody(sess.draftEmailBody);
             if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
@@ -2434,6 +2542,19 @@ function TalkTrack({onClose,linkedContact}){
   const unlinkContact=()=>{
     setLinked(null);
     scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});
+  };
+
+  const handleOrgChange=(field,value)=>{
+    if(field==="orgType"){
+      setOrgType(value);setSportsMode("");setSelectedSports([]);
+      scheduleSave({orgType:value,sportsMode:null,selectedSports:[]});
+    } else if(field==="sportsMode"){
+      setSportsMode(value);setSelectedSports([]);
+      scheduleSave({sportsMode:value,selectedSports:[]});
+    } else if(field==="selectedSports"){
+      setSelectedSports(value);
+      scheduleSave({selectedSports:value});
+    }
   };
 
   const handleCalcInput=(field,value)=>{
@@ -2500,6 +2621,17 @@ function TalkTrack({onClose,linkedContact}){
 
       {/* Scrollable content */}
       <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+        {/* Org profile — required for all phases */}
+        <OrgProfile
+          orgType={orgType}
+          sportsMode={sportsMode}
+          selectedSports={selectedSports}
+          numSports={calcInputs.numSports}
+          numAthletes={calcInputs.numAthletes}
+          onChange={handleOrgChange}
+          onCalcInput={handleCalcInput}
+        />
+
         {/* Script block */}
         <blockquote style={{margin:"0 0 16px",padding:"10px 14px",borderLeft:`3px solid ${B.orange}`,background:`${B.orange}08`,borderRadius:"0 4px 4px 0"}}>
           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,fontStyle:"italic"}}>{currentPhase.script}</div>
@@ -2563,17 +2695,22 @@ function TalkTrack({onClose,linkedContact}){
         )}
 
         {/* Phase navigation */}
+        {(()=>{
+          const isOrgDone=!!(orgType&&(orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0)):(sportsMode&&selectedSports.length>0)));
+          const canAdvance=linked&&isOrgDone;
+          const hint=!linked?"Link or create a contact above before proceeding":!isOrgDone?"Confirm org type and sports above before proceeding":null;
+          return(
         <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
-          {!linked&&(
+          {hint&&(
             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,textAlign:"center",marginBottom:10,padding:"6px 10px",background:`${B.orange}10`,borderRadius:4}}>
-              Link or create a contact above before proceeding
+              {hint}
             </div>
           )}
           <div style={{display:"flex",justifyContent:"space-between"}}>
             <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
             {phaseIdx<TT_PHASES.length-1
-              ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!linked}>NEXT →</OBtn>
-              :<OBtn col={B.green} disabled={!linked} onClick={()=>{
+              ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!canAdvance}>NEXT →</OBtn>
+              :<OBtn col={B.green} disabled={!canAdvance} onClick={()=>{
                 if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
                 sessionStorage.removeItem("ttSessionId");
                 toast("Talk Track complete!","success");
@@ -2582,6 +2719,8 @@ function TalkTrack({onClose,linkedContact}){
             }
           </div>
         </div>
+          );
+        })()}
       </div>
     </div>
   );

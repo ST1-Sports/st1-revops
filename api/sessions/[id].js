@@ -69,6 +69,11 @@ export default async function handler(req, res) {
       if (body.hasBoosterClub        !== undefined) data.hasBoosterClub        = body.hasBoosterClub;
       if (body.estimatedCurrentSpend !== undefined) data.estimatedCurrentSpend = body.estimatedCurrentSpend != null ? Number(body.estimatedCurrentSpend) : null;
 
+      // Org profile
+      if (body.orgType        !== undefined) data.orgType        = body.orgType;
+      if (body.sportsMode     !== undefined) data.sportsMode     = body.sportsMode;
+      if (body.selectedSports !== undefined) data.selectedSports = body.selectedSports;
+
       // Answers and pains
       if (body.answers        !== undefined) data.answers        = body.answers;
       if (body.confirmedPains !== undefined) data.confirmedPains = body.confirmedPains;
