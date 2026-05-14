@@ -17,6 +17,8 @@
     "api/inbound-email.js":                       { "maxDuration": 15 },
     "api/state.js":                                { "maxDuration": 15 },
     "api/reddit/index.js":                         { "maxDuration": 30 },
+    "api/reddit/slack-feed.js":                    { "maxDuration": 15 },
+    "api/reddit/thread-detail.js":                 { "maxDuration": 15 },
     "api/ads/meta.js":                             { "maxDuration": 30 },
     "api/ads/google.js":                           { "maxDuration": 30 },
     "api/ads/linkedin.js":                         { "maxDuration": 30 },
