@@ -2748,6 +2748,8 @@ function ModCRM() {
   const [draft,setDraft]=useState("");
   const [ttView,setTtView]=useState(false);
   const [ttContact,setTtContact]=useState(null);
+  const [showAddContact,setShowAddContact]=useState(false);
+  const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
@@ -2814,7 +2816,10 @@ function ModCRM() {
       {/* LEFT LIST */}
       <div style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:8}}>ACCOUNTS</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>ACCOUNTS</div>
+            <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
+          </div>
           <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
           <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
             {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
@@ -2822,6 +2827,31 @@ function ModCRM() {
             ))}
           </div>
         </div>
+        {showAddContact&&(
+          <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
+              <input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.school} onChange={e=>setAddForm(f=>({...f,school:e.target.value}))} placeholder="School / Org" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
+              <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+            </div>
+            <div style={{display:"flex",gap:5}}>
+              <OBtn sm onClick={()=>{
+                if(!addForm.lastName) return;
+                const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+                dispatch("ADD_CONTACT",c);
+                setSelId(c.id);
+                setShowAddContact(false);
+                setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
+                toast(`${c.fullName} added`,"success");
+                // Push to Zoho Leads
+                fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})}).catch(()=>{});
+              }} disabled={!addForm.lastName}>SAVE</OBtn>
+              <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
+            </div>
+          </div>
+        )}
         <div style={{flex:1,overflowY:"auto"}}>
           {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
           {filtered.map(c=>{
