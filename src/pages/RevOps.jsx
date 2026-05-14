@@ -2746,10 +2746,15 @@ function TalkTrack({onClose,linkedContact}){
                     body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
                   }).catch(()=>{});
 
-                  // Update local CRM contact with profile + sponsorship data
+                  // Update local CRM contact with profile + sponsorship data + call notes
                   const allContacts=s?.contacts||[];
                   const localC=allContacts.find(c=>c.zohoId===linked.id||c.id===linked.id);
                   if(localC){
+                    const answersSummary=Object.entries(answers)
+                      .filter(([,v])=>v!=null&&v!=="")
+                      .map(([id,v])=>{const q=questions.find(q=>q.id==id);return q?{question:q.questionText,answer:v===true?"Yes":v===false?"No":String(v)}:null;})
+                      .filter(Boolean);
+                    const painsSummary=pains.map(pid=>{const pc=PAIN_CARDS.find(c=>c.id===pid);return pc?pc.title:null;}).filter(Boolean);
                     dispatch("UPDATE_CONTACT",{
                       id:localC.id,
                       orgType,sportsMode,selectedSports,
@@ -2757,6 +2762,9 @@ function TalkTrack({onClose,linkedContact}){
                       ...(calcInputs.numSports?{numSports:Number(calcInputs.numSports)}:{}),
                       ...(calcInputs.numAthletes?{numAthletes:Number(calcInputs.numAthletes)}:{}),
                       ...(calcResult?.guaranteedMin?{sponsorshipMin:calcResult.guaranteedMin,sponsorshipMax:calcResult.upsideMax||null}:{}),
+                      ttAnswers:answersSummary,
+                      ttPains:painsSummary,
+                      ttCompletedAt:new Date().toISOString(),
                     });
                   }
                 }
@@ -3199,8 +3207,11 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
-              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
+            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
+                {label}
+                {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
+              </button>
             ))}
           </div>
           {/* Tab content */}
@@ -3243,6 +3254,93 @@ function ModCRM() {
                         ))}
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {crmTab==="discovery"&&(
+              <div>
+                {!sel.ttCompletedAt?(
+                  <div style={{textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:28,marginBottom:10}}>⤳</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No Talk Track completed yet for this contact.</div>
+                    <OBtn onClick={()=>{setTtContact(sel);setTtView(true);}}>START TALK TRACK</OBtn>
+                  </div>
+                ):(
+                  <>
+                    {/* Sponsorship estimate */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:8,padding:"14px 18px",marginBottom:16}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP ESTIMATE</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(sel.sponsorshipMin)}<span style={{fontSize:13,marginLeft:6}}>guaranteed</span></div>
+                        {sel.sponsorshipMax&&sel.sponsorshipMax>sel.sponsorshipMin&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:4}}>Up to {fmt$(sel.sponsorshipMax - sel.sponsorshipMin)} additional based on actual sales</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Org profile */}
+                    <div className="card" style={{padding:14,marginBottom:14}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        {[
+                          ["Type", sel.orgType==="school"?"School / District":sel.orgType==="org"?"Organization / Club":"—"],
+                          ["School Class", sel.schoolClass||"—"],
+                          ["# Athletes", sel.numAthletes||"—"],
+                          ["# Sports", sel.numSports||"—"],
+                          ["Servicing", sel.sportsMode==="all"?"All sports":sel.sportsMode==="some"?"Selected sports":sel.sportsMode==="single"?"Single sport":sel.sportsMode==="multi"?"Multi-sport":"—"],
+                        ].map(([l,v])=>(
+                          <div key={l}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:2}}>{l}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {Array.isArray(sel.selectedSports)&&sel.selectedSports.length>0&&(
+                        <div style={{marginTop:10}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Sports</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                            {sel.selectedSports.map(sp=>(
+                              <span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}12`,border:`1px solid ${B.blue}25`,borderRadius:4,padding:"2px 8px"}}>{sp}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Confirmed pain points */}
+                    {Array.isArray(sel.ttPains)&&sel.ttPains.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONFIRMED PAIN POINTS</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                          {sel.ttPains.map(p=>(
+                            <div key={p} style={{display:"flex",alignItems:"center",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                              <span style={{color:B.orange,fontWeight:700}}>✓</span>{p}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Call Q&A */}
+                    {Array.isArray(sel.ttAnswers)&&sel.ttAnswers.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CALL NOTES</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                          {sel.ttAnswers.map((qa,i)=>(
+                            <div key={i}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{qa.question}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{qa.answer}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"right"}}>
+                      Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                    </div>
                   </>
                 )}
               </div>
