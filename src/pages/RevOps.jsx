@@ -2713,10 +2713,59 @@ function TalkTrack({onClose,linkedContact}){
             <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
             {phaseIdx<TT_PHASES.length-1
               ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!canAdvance}>NEXT →</OBtn>
-              :<OBtn col={B.green} disabled={!canAdvance} onClick={()=>{
+              :<OBtn col={B.green} disabled={!canAdvance} onClick={async()=>{
+                // Mark session complete
                 if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
+
+                // Build + post CRM note and deal if linked
+                if(linked?.id){
+                  const dt=new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+                  const lines=[
+                    `ST1 Discovery Call — ${dt}`,
+                    `Contact: ${linked.name}`,
+                    linked.school?`Organization: ${linked.school}`:"",
+                    orgType?`Type: ${orgType==="school"?"School":"Organization"}`:"",
+                    selectedSports.length>0?`Sports: ${selectedSports.join(", ")}`:"",
+                    calcInputs.numAthletes?`Athletes: ${calcInputs.numAthletes}`:"",
+                    calcInputs.numSports?`Sports offered: ${calcInputs.numSports}`:"",
+                  ];
+                  if(pains.length>0){
+                    lines.push("","Pain points confirmed:");
+                    pains.forEach(pid=>{const pc=PAIN_CARDS.find(c=>c.id===pid);if(pc)lines.push(`- ${pc.title}`);});
+                  }
+                  if(calcResult?.guaranteedMin){
+                    lines.push("",`Sponsorship offer: $${calcResult.guaranteedMin.toLocaleString()} guaranteed / up to $${(calcResult.upsideMax||0).toLocaleString()}`);
+                  }
+                  const qas=Object.entries(answers).filter(([,v])=>v!=null&&v!=="").map(([id,v])=>{
+                    const q=questions.find(q=>q.id==id);
+                    return q?`${q.questionText}: ${v===true?"Yes":v===false?"No":String(v)}`:null;
+                  }).filter(Boolean);
+                  if(qas.length>0){lines.push("","Call notes:",...qas);}
+                  lines.push("",`Conducted by: ${cu?.name||"Rep"} on ${dt}`);
+                  const noteContent=lines.filter(l=>l!==undefined).join("\n");
+                  const crmModule=linked.module==="Contact"?"Contacts":"Leads";
+
+                  fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:`ST1 Discovery Call — ${dt}`,noteContent})
+                  }).catch(()=>{});
+
+                  const closing=new Date();closing.setDate(closing.getDate()+30);
+                  const dealFields={
+                    Deal_Name:`ST1 — ${linked.school||linked.name||"Account"} — ${dt}`,
+                    Stage:"Qualification",
+                    Closing_Date:closing.toISOString().split("T")[0],
+                    Account_Name:linked.school||linked.name||"",
+                    Description:noteContent,
+                  };
+                  if(calcResult?.guaranteedMin) dealFields.Amount=calcResult.guaranteedMin;
+                  if(linked.module==="Contact") dealFields.Contact_Name={id:linked.id};
+                  fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+                    body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
+                  }).catch(()=>{});
+                }
+
                 sessionStorage.removeItem("ttSessionId");
-                toast("Talk Track complete!","success");
+                toast("Talk Track complete — CRM updated!","success");
                 onClose();
               }}>✓ COMPLETE</OBtn>
             }
