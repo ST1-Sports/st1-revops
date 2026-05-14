@@ -3496,12 +3496,42 @@ function ModCRM() {
 // ════════════════════════════════════════════════════════════════════════════
 //  SPONSORSHIPS
 // ════════════════════════════════════════════════════════════════════════════
+const SPONS_CONFIG_DEFAULTS={avgOrderValuePerAthlete:85,avgEquipmentOrderPerSport:400,netMarginPct:0.18,givebackPct:0.30,schoolClassConfidence:{"1A":0.40,"2A":0.50,"3A":0.60,"4A":0.70,"5A":0.78,"6A":0.85},teamStoreRevenuePerAthlete:35,purchaseFrequencyPerYear:1.5,boosterMultiplier:1.15};
+
 function ModSponsorships(){
-  const {s,dispatch,toast,setMod}=useApp();
+  const {s,dispatch,toast,setMod,cu}=useApp();
   const [tab,setTab]=useState("proposed");
   const [confirmId,setConfirmId]=useState(null);
   const [confirmAmt,setConfirmAmt]=useState("");
   const [payFilter,setPayFilter]=useState("all");
+  // Settings tab state
+  const [cfg,setCfg]=useState(null);
+  const [cfgLoading,setCfgLoading]=useState(false);
+  const [cfgSaving,setCfgSaving]=useState(false);
+
+  useEffect(()=>{
+    if(tab!=="settings"||cfg!==null)return;
+    setCfgLoading(true);
+    fetch("/api/sponsorship/config").then(r=>r.json()).then(d=>{
+      setCfg(d.config??{...SPONS_CONFIG_DEFAULTS});
+    }).catch(()=>setCfg({...SPONS_CONFIG_DEFAULTS})).finally(()=>setCfgLoading(false));
+  },[tab]);
+
+  const saveConfig=async()=>{
+    if(!cfg)return;
+    setCfgSaving(true);
+    try{
+      const r=await fetch("/api/sponsorship/config",{method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...cfg,lastUpdatedBy:cu?.name||null})});
+      const d=await r.json();
+      if(d.ok){toast("Calculator settings saved","success");}
+      else{toast(d.error||"Save failed","error");}
+    }catch(e){toast("Save failed: "+e.message,"error");}
+    setCfgSaving(false);
+  };
+
+  const setC=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  const setCC=(cls,v)=>setCfg(c=>({...c,schoolClassConfidence:{...(c.schoolClassConfidence||{}),[cls]:v}}));
 
   const contacts=s.contacts||[];
   const proposed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="proposed");
@@ -3621,7 +3651,7 @@ function ModSponsorships(){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,marginBottom:18}}>
-        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`]].map(([id,label])=>(
+        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`],["settings","⚙ Settings"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"8px 18px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,cursor:"pointer"}}>{label}</button>
         ))}
       </div>
@@ -3659,6 +3689,82 @@ function ModSponsorships(){
               .map(c=><SCard key={c.id} c={c} showConfirmForm={true}/>)
           )}
         </>
+      )}
+
+      {/* Settings tab */}
+      {tab==="settings"&&(
+        <div style={{maxWidth:620}}>
+          {cfgLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"40px 0",textAlign:"center"}}><Spin/> Loading settings…</div>}
+          {!cfgLoading&&cfg&&(()=>{
+            const fld=({label,help,k,pct,step="1"})=>(
+              <div key={k} style={{marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:4}}>{label}</div>
+                {help&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5,lineHeight:1.4}}>{help}</div>}
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <input type="number" step={step} value={pct?Math.round((cfg[k]||0)*100):cfg[k]||""}
+                    onChange={e=>setC(k,pct?Number(e.target.value)/100:Number(e.target.value))}
+                    style={{width:100,...inp}}/>
+                  {pct&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>%</span>}
+                </div>
+              </div>
+            );
+            return(
+              <>
+                {/* Formula explainer */}
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 16px",marginBottom:22,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:6}}>HOW THE ESTIMATE IS CALCULATED</div>
+                  <div><b style={{color:B.text}}>Revenue</b> = (athletes × $AOV × purchases/yr) + (sports × $equip) + (store rev if online store) × booster multiplier</div>
+                  <div><b style={{color:B.text}}>Giveback Pool</b> = Revenue × net margin × giveback %</div>
+                  <div><b style={{color:B.text}}>Guaranteed Min</b> = Pool × class confidence %</div>
+                  <div><b style={{color:B.text}}>Upside Max</b> = Pool × 100%</div>
+                </div>
+
+                {/* Revenue inputs */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>REVENUE ASSUMPTIONS</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"AVG ORDER VALUE PER ATHLETE ($)",help:"Avg dollars ST1 earns per athlete per order (uniforms, gear, etc.)",k:"avgOrderValuePerAthlete"})}
+                    {fld({label:"AVG EQUIPMENT ORDER PER SPORT ($)",help:"Avg equipment purchase per sport per season",k:"avgEquipmentOrderPerSport"})}
+                    {fld({label:"TEAM STORE REVENUE PER ATHLETE ($)",help:"Online team store earnings per athlete if store is active",k:"teamStoreRevenuePerAthlete"})}
+                    {fld({label:"PURCHASE FREQUENCY PER YEAR",help:"How many times per year athletes/coaches order",k:"purchaseFrequencyPerYear",step:"0.1"})}
+                    {fld({label:"BOOSTER CLUB MULTIPLIER",help:"Revenue uplift factor when a booster club is active (e.g. 1.15 = +15%)",k:"boosterMultiplier",step:"0.01"})}
+                  </div>
+                </div>
+
+                {/* Margin & giveback */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>MARGIN & GIVEBACK</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"NET MARGIN %",help:"ST1's net profit margin after cost of goods and fulfillment",k:"netMarginPct",pct:true,step:"1"})}
+                    {fld({label:"GIVEBACK %",help:"% of net profit returned to the school as sponsorship",k:"givebackPct",pct:true,step:"1"})}
+                  </div>
+                </div>
+
+                {/* School class confidence */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:20}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>SCHOOL CLASS CONFIDENCE %</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:14,lineHeight:1.4}}>How likely ST1 captures the full projected revenue at each school size. Larger schools have more competition so confidence is higher for smaller classes.</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
+                    {["1A","2A","3A","4A","5A","6A"].map(cls=>(
+                      <div key={cls} style={{textAlign:"center"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,marginBottom:4}}>{cls}</div>
+                        <input type="number" min="0" max="100" step="1"
+                          value={Math.round(((cfg.schoolClassConfidence||{})[cls]||0)*100)}
+                          onChange={e=>setCC(cls,Number(e.target.value)/100)}
+                          style={{width:"100%",textAlign:"center",...inp}}/>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>%</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <OBtn onClick={saveConfig} disabled={cfgSaving} style={{width:"100%",justifyContent:"center"}}>
+                  {cfgSaving?"SAVING…":"SAVE CALCULATOR SETTINGS"}
+                </OBtn>
+              </>
+            );
+          })()}
+        </div>
       )}
     </div>
   );
