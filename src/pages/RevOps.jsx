@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
@@ -686,7 +686,7 @@ export default function App() {
 
   if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
-  const NAV = [
+  const NAV = useMemo(()=>[
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
     {id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
@@ -724,7 +724,8 @@ export default function App() {
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
     ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
   // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
@@ -888,10 +889,7 @@ export default function App() {
                 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
               </button>
               <div style={{width:1,height:14,background:B.border}}/>
-              <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:(s.alerts||[]).filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
-                ◎
-                {(s.alerts||[]).filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{(s.alerts||[]).filter(a=>!a.sent).length}</span>}
-              </button>
+              {(()=>{const unread=(s.alerts||[]).filter(a=>!a.sent).length;return(<button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:unread?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>◎{unread>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{unread}</span>}</button>);})()}
             </div>
           </header>
 
@@ -916,7 +914,7 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("cc-quote");}}/></Suspense>}
+            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("home");}}/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
@@ -1061,16 +1059,16 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 }
 
 // ─── SHARED UI ────────────────────────────────────────────────────────────────
-function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;}
-function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;}
-function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;}
-function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;}
-function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;}
-function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
-function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;}
+const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
+const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
+const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
+const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
+const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
+const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;}
+const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 
 // ════════════════════════════════════════════════════════════════════════════
 //  BRIEFING
@@ -1087,31 +1085,28 @@ function ModAnalytics() {
   const contacts=s.contacts||[];
   const reps=s.reps||[];
 
-  const closedStages=["Closed Won","Closed Lost","PO Received"];
-  const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
-  const won=deals.filter(d=>d.stage==="Closed Won");
-  const lost=deals.filter(d=>d.stage==="Closed Lost");
-  const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
-  const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
-  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-  const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
-  const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
-  const totalClosed=won.length+lost.length;
-  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
-
-  // Won by month (last 6)
-  const now=new Date();
-  const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
-  const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
-  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
-
-  // Pipeline by stage (for Revenue tab)
-  const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
-
-  // Top products (won + open)
-  const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const {openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts}=useMemo(()=>{
+    const closedStages=["Closed Won","Closed Lost","PO Received"];
+    const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
+    const won=deals.filter(d=>d.stage==="Closed Won");
+    const lost=deals.filter(d=>d.stage==="Closed Lost");
+    const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
+    const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
+    const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
+    const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+    const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
+    const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
+    const totalClosed=won.length+lost.length;
+    const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
+    const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+    const now=new Date();
+    const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
+    const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
+    const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
+    const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
+    const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    return{openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts};
+  },[deals,invoices,campaigns,contacts]);
 
 
 
@@ -1140,7 +1135,7 @@ function ModAnalytics() {
             <div className="card" style={{padding:14}}>
               <Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {[...deals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
+                {deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
                   <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
@@ -1446,7 +1441,7 @@ function ModAnalytics() {
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:7}}>
                     {group.map(c=>{
-                      const lastAct=(c.activity||[]).sort((a,b)=>b.ts-a.ts)[0];
+                      const lastAct=(c.activity||[]).reduce((best,a)=>(!best||a.ts>best.ts)?a:best,null);
                       const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
                       const school=typeof c.school==="string"?c.school:c.school?.name||"";
                       const title=typeof c.title==="string"?c.title:c.title?.name||"";
@@ -1636,56 +1631,6 @@ function ModHome() {
     setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
   };
 
-  // Rich context
-  const buildContext=()=>{
-    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
-    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
-    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const recentActivity=(s.activity||[]).slice(-5);
-    const competitors=Object.keys(s.competeIntel||{});
-    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
-
-=== PIPELINE ===
-${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
-${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-=== TOP CONTACTS (by lead score) ===
-${topContacts.length===0?"No scored contacts":topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}
-${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
-
-=== ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"None":activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}
-
-=== OPEN RFPS ===
-${activeRfps.length===0?"None":activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}
-
-=== AR ===
-${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
-=== ACTIONS YOU CAN TAKE ===
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· create_campaign: {type:"create_campaign",name,product,audience,channel}
-· navigate: {type:"navigate",target:"deals"|"crm"|"marketing"|"prices"|"prospecting"|"sponsorships"}
-Also include "suggestions": 3 short follow-up questions.
-ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
-Be specific, tactical, use real names. Flag hot signals with 🔥.`;
-  };
-
   const copyEmail=(action)=>{
     const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
     try{navigator.clipboard.writeText(text);}catch{}
@@ -1871,13 +1816,13 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);setInsights({});toast("Conversation cleared","info");};
 
-  // Sidebar data
-  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
-  const hotDeals=openDeals.filter(d=>d.priority==="hot").slice(0,3);
-  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE"};
@@ -2194,33 +2139,42 @@ function ModCRM() {
 
   const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
 
-  const getCD=(c)=>{
-    const nm=cName(c).toLowerCase();
-    const sch=(c.school||"").toLowerCase();
-    const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
-    const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
-    let phase="lead";
-    if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
-    else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
-    else if(cd.length>0) phase="deal";
-    return{cd,co,phase};
-  };
+  // Build phase map once per deals/orders change — O(n) instead of O(n*m) per render
+  const cdMap=useMemo(()=>{
+    const m=new Map();
+    for(const c of contacts){
+      const nm=cName(c).toLowerCase();
+      const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
+      const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
+      let phase="lead";
+      if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
+      else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
+      else if(cd.length>0) phase="deal";
+      m.set(c.id,{cd,co,phase});
+    }
+    return m;
+  },[contacts,deals,orders]);
+
+  const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 
   const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
 
-  const filtered=[...contacts].filter(c=>{
-    if(c.deadStatus) return false;
+  const filtered=useMemo(()=>{
     const q=search.toLowerCase();
-    if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
-    if(filter==="all") return true;
-    if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
-    return getCD(c).phase===filter;
-  }).sort((a,b)=>{
     const po={order:0,quote:1,deal:2,lead:3};
-    const pa=getCD(a).phase, pb=getCD(b).phase;
-    if(po[pa]!==po[pb]) return po[pa]-po[pb];
-    return cName(a).localeCompare(cName(b));
-  });
+    return contacts.filter(c=>{
+      if(c.deadStatus) return false;
+      if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
+      if(filter==="all") return true;
+      if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
+      return (cdMap.get(c.id)||{phase:"lead"}).phase===filter;
+    }).sort((a,b)=>{
+      const pa=(cdMap.get(a.id)||{phase:"lead"}).phase;
+      const pb=(cdMap.get(b.id)||{phase:"lead"}).phase;
+      if(po[pa]!==po[pb]) return po[pa]-po[pb];
+      return cName(a).localeCompare(cName(b));
+    });
+  },[contacts,cdMap,search,filter,cu?.id]);
 
   const sel=selId?contacts.find(c=>c.id===selId):null;
   const selCD=sel?getCD(sel):null;
@@ -3238,20 +3192,19 @@ function ModDeals() {
   };
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
-  const pool=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
-  const list=pool.filter(d=>{
+  const pool=useMemo(()=>isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id),[s.deals,isOwner,cu?.id]);
+  const list=useMemo(()=>pool.filter(d=>{
     if(flt==="active") return !["Closed Won","Closed Lost","On Hold"].includes(d.stage);
     if(flt==="overdue") return d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received"].includes(d.stage);
     if(flt==="won") return d.stage==="Closed Won";
     if(flt==="all") return true;
     return d.stage===flt;
   }).sort((a,b)=>{
-    // Closed Lost always sinks to the bottom; within groups sort by value desc
     const aLost=a.stage==="Closed Lost"?1:0;
     const bLost=b.stage==="Closed Lost"?1:0;
     if(aLost!==bLost) return aLost-bLost;
     return b.value-a.value;
-  });
+  }),[pool,flt]);
   const sel_d=sel?(s.deals||[]).find(d=>d.id===sel):null;
 
   const addDeal=()=>{
@@ -4025,28 +3978,28 @@ function ModReorder() {
 
   const now=Date.now();
 
-  // Enrich every pending reorder with daysSince + stage
-  const withDays=(s.reorders||[])
+  // Enrich every pending reorder with daysSince + stage — memoized on reorders data
+  const withDays=useMemo(()=>(s.reorders||[])
     .filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()))
     .map(r=>{
       const daysSince=r.lastOrderDate?Math.floor((now-new Date(r.lastOrderDate).getTime())/86400000):0;
       const stage=daysSince>=365?"lapsed":daysSince>=270?"follow-up":daysSince>=180?"check-in":"early";
       return{...r,daysSince,stage};
-    });
+    }),[s.reorders]);
 
   // Bucket filter
-  const filtered=
+  const filtered=useMemo(()=>
     dayFilter==="90"  ?withDays.filter(r=>r.daysSince>=90&&r.daysSince<180):
     dayFilter==="180" ?withDays.filter(r=>r.daysSince>=180&&r.daysSince<270):
     dayFilter==="270" ?withDays.filter(r=>r.daysSince>=270&&r.daysSince<365):
     dayFilter==="365" ?withDays.filter(r=>r.daysSince>=365):
-    withDays;
+    withDays,[withDays,dayFilter]);
 
   // Top 5 by priority: follow-up > check-in > lapsed > early, then by value
   const stageRank={lapsed:50,"follow-up":100,"check-in":80,early:20};
-  const top5=[...withDays]
+  const top5=useMemo(()=>[...withDays]
     .sort((a,b)=>((stageRank[b.stage]||0)+(b.lastOrderValue||0)/200)-((stageRank[a.stage]||0)+(a.lastOrderValue||0)/200))
-    .slice(0,5);
+    .slice(0,5),[withDays]);
 
   const STAGE={
     "early":      {color:B.blue,  label:"EARLY",      dot:"·"},
@@ -6180,12 +6133,12 @@ function ModMarketing() {
 
   const campaigns = s.campaigns || [];
   const strategies = s.strategies || [];
-  const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+  const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
   selCampIdRef.current = selCamp?.id || null;
   campaignsRef.current = campaigns;
   const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
-  const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
+  const allSports = useMemo(()=>[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort(),[s.contacts]);
 
   const CHANNELS = [
     {id:"email",icon:"✉",label:"Cold Email"},
@@ -11555,58 +11508,6 @@ function ModAgent() {
   useEffect(()=>{
     if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
   },[s.agentDraft]);
-
-  const buildContext=()=>{
-    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
-    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
-    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const recentActivity=(s.activity||[]).slice(-5);
-    const competitors=Object.keys(s.competeIntel||{});
-
-    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
-
-=== PIPELINE ===
-${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
-${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-=== TOP CONTACTS (by lead score) ===
-${topContacts.length===0?"No scored contacts":`${topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}`}
-${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
-
-=== ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
-
-=== OPEN RFPS ===
-${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
-
-=== AR ===
-${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
-=== ACTIONS YOU CAN TAKE ===
-Include an "actions" array when taking real action:
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· create_campaign: {type:"create_campaign",name,product,audience,channel}
-
-Also include "suggestions": 3 short follow-up questions the user might want to ask next.
-
-ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
-Be specific, tactical, use real names. Flag hot signals with 🔥.`;
-  };
 
   const copyEmail=(action)=>{
     const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
