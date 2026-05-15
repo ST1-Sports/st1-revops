@@ -712,14 +712,11 @@ export default function App() {
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
     {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
+    {id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    // ── AI TOOLS (expandable) ───────────────────────────────────────────
-    {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-    ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
       {id:"price-lists",icon:"$",  label:"Price Lists"},
