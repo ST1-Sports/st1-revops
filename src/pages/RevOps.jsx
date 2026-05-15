@@ -718,7 +718,6 @@ export default function App() {
     {id:"compete",     icon:"⊗", label:"Competitors"},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
     ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
