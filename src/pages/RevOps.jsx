@@ -708,8 +708,6 @@ export default function App() {
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
       {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
-      {id:"cc-social",      icon:"📱", label:"Social Media"},
-      {id:"cc-image",       icon:"🖼", label:"Image Generator"},
       {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
       {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
       {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
@@ -9586,6 +9584,19 @@ function ModSocial() {
   const [verboseDebugId,setVerboseDebugId]=useState(null);
   const [verboseResult,setVerboseResult]=useState(null);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
+  // Tone + topic/product for AI writing
+  const [tone,setTone]=useState("Professional");
+  const [topic,setTopic]=useState("");
+  const [product,setProduct]=useState("");
+  const [platformVariants,setPlatformVariants]=useState(null); // per-platform captions from AI
+  // AI image generator
+  const [imgUseCase,setImgUseCase]=useState("Social Post");
+  const [imgMood,setImgMood]=useState("Clean");
+  const [imgColors,setImgColors]=useState("");
+  const [imgGenerating,setImgGenerating]=useState(false);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgError,setImgError]=useState(null);
+  const [showImgGen,setShowImgGen]=useState(false);
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
@@ -9607,6 +9618,8 @@ function ModSocial() {
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
 
+  const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
+
   const generateCaption=async()=>{
     setGenRunning(true);
     const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
@@ -9616,13 +9629,48 @@ function ModSocial() {
     const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
     const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
     const direction=caption.trim();
+    const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
     const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
     const prompt=direction
-      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
+      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
     const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
+  };
+
+  // Generate separate per-platform captions with hashtags
+  const generatePerPlatform=async()=>{
+    if(!platforms.length) return;
+    setGenRunning(true); setPlatformVariants(null);
+    const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+    const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
+    const r=await aiCall(task,{tokens:900});
+    if(r){
+      try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
+    }
+    setGenRunning(false);
+  };
+
+  // AI image generator: topic+mood → AI prompt → Ideogram image
+  const generateAiImage=async()=>{
+    setImgGenerating(true); setImgError(null); setImgPrompt("");
+    const MOOD_STYLE={Bold:"DESIGN",Clean:"REALISTIC",Energetic:"REALISTIC"};
+    const CASE_SIZE={"Social Post":"square","Product Promo":"square","Email Banner":"landscape","Event Flyer":"story"};
+    try{
+      const featured=product.trim()||topic.trim()||"ST1 Sports athletic equipment";
+      const builtPrompt=await aiCall(`Create an image generation prompt for a "${imgUseCase}" for ST1 Sports athletic equipment brand. Featured: ${featured}. Visual mood: ${imgMood}. Brand colors: orange (#F37321) and black.${imgColors.trim()?` Additional colors: ${imgColors.trim()}.`:""} Athletic sports marketing. Professional commercial quality. Return ONLY the image prompt — no preamble.`,{tokens:200});
+      if(!builtPrompt) throw new Error("AI prompt generation failed");
+      setImgPrompt(builtPrompt);
+      const imgRes=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:builtPrompt,style:MOOD_STYLE[imgMood]||"REALISTIC",sizeKey:CASE_SIZE[imgUseCase]||"square"})});
+      const imgData=await imgRes.json();
+      if(!imgRes.ok) throw new Error(imgData.error||`Image API error ${imgRes.status}`);
+      setImageUrl(imgData.imageUrl);
+    }catch(e){setImgError(e.message);}
+    setImgGenerating(false);
   };
 
   // Poll Publer job status until done, then update post state with result
@@ -9914,25 +9962,122 @@ function ModSocial() {
                 ))}
               </div>
             </div>
+            {/* Tone */}
+            <div style={{marginBottom:16}}>
+              <Lbl s={{marginBottom:7}}>TONE</Lbl>
+              <div style={{display:"flex",gap:6}}>
+                {["Hype","Professional","Educational"].map(t=>(
+                  <button key={t} onClick={()=>setTone(t)} style={{background:tone===t?`${B.orange}14`:B.surface,color:tone===t?B.orange:B.muted,border:`1px solid ${tone===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>
+                ))}
+              </div>
+            </div>
+            {/* Topic + Product (help AI write better) */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              <div>
+                <Lbl s={{marginBottom:5}}>TOPIC (helps AI write)</Lbl>
+                <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="New track gear, baseball season…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+              <div>
+                <Lbl s={{marginBottom:5}}>PRODUCT (optional)</Lbl>
+                <input value={product} onChange={e=>setProduct(e.target.value)} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+            </div>
             {/* Caption */}
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
                   {["short","medium","long"].map(l=>(
                     <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
                   ))}
-                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?0.7:1}}>
+                    {genRunning?"✦ WRITING…":"✦ AI WRITE"}
+                  </button>
+                  <button onClick={generatePerPlatform} disabled={genRunning||!platforms.length} style={{background:"transparent",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",opacity:(genRunning||!platforms.length)?0.5:1}} title="Generate separate captions per platform">
+                    PER PLATFORM
                   </button>
                 </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
+              {/* Per-platform variants */}
+              {platformVariants&&(
+                <div style={{marginTop:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:7}}>PER-PLATFORM VARIANTS — click USE THIS to load into caption</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {platforms.map(pl=>{
+                      const key=pl.toLowerCase();
+                      const data=platformVariants[key];
+                      if(!data) return null;
+                      const col=PLATFORM_COLORS[pl]||B.blue;
+                      const tags=Array.isArray(data.hashtags)?data.hashtags:[];
+                      const full=data.caption+(tags.length?"\n\n"+tags.join(" "):"");
+                      return(
+                        <div key={pl} style={{background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`,padding:"9px 11px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:1.5}}>{pl.toUpperCase()}</span>
+                            <div style={{display:"flex",gap:5}}>
+                              <button onClick={()=>navigator.clipboard?.writeText(full)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>COPY</button>
+                              <button onClick={()=>setCaption(full)} style={{background:col,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>USE THIS ↑</button>
+                            </div>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,marginBottom:tags.length?6:0}}>{data.caption}</div>
+                          {tags.length>0&&(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                              {tags.map((tag,i)=><span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:col,background:`${col}12`,border:`1px solid ${col}30`,borderRadius:3,padding:"1px 6px"}}>{tag}</span>)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-            {/* Image */}
+            {/* Image — with AI generator panel */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <Lbl>IMAGE (optional)</Lbl>
+                <button onClick={()=>setShowImgGen(v=>!v)} style={{background:showImgGen?`${B.orange}14`:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>
+                  {showImgGen?"HIDE GENERATOR":"⚡ AI GENERATE"}
+                </button>
+              </div>
+              {showImgGen&&(
+                <div style={{background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,padding:14,marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>AI IMAGE GENERATOR — uses topic + product above</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>USE CASE</Lbl>
+                      <select value={imgUseCase} onChange={e=>setImgUseCase(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}>
+                        {["Social Post","Product Promo","Email Banner","Event Flyer"].map(u=><option key={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>MOOD</Lbl>
+                      <div style={{display:"flex",gap:5}}>
+                        {["Bold","Clean","Energetic"].map(m=>(
+                          <button key={m} onClick={()=>setImgMood(m)} style={{background:imgMood===m?`${B.orange}14`:B.white,color:imgMood===m?B.orange:B.muted,border:`1px solid ${imgMood===m?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{m}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <Lbl s={{marginBottom:4}}>ACCENT COLORS (optional)</Lbl>
+                    <input value={imgColors} onChange={e=>setImgColors(e.target.value)} placeholder="navy blue, gold, white…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <button onClick={generateAiImage} disabled={imgGenerating} style={{background:imgGenerating?B.border:B.orange,color:"#fff",border:"none",borderRadius:4,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:imgGenerating?"default":"pointer"}}>
+                    {imgGenerating?"GENERATING IMAGE…":"GENERATE IMAGE →"}
+                  </button>
+                  {imgError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:7}}>{imgError}</div>}
+                  {imgPrompt&&imgGenerating&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:7,lineHeight:1.5}}>{imgPrompt}</div>}
+                  {imageUrl&&!imgGenerating&&(
+                    <div style={{marginTop:10}}>
+                      <img src={imageUrl} alt="Generated" style={{width:"100%",borderRadius:6,display:"block",marginBottom:6}}/>
+                      <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.jpg`;a.click();}} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
+                    </div>
+                  )}
+                </div>
+              )}
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
             </div>
