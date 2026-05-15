@@ -715,8 +715,6 @@ export default function App() {
       {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-      {id:"cc-analytics",   icon:"📈", label:"Analytics"},
-      {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
     ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
