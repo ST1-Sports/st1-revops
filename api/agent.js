@@ -133,6 +133,35 @@ const TOOLS = [
       required: ["deal_name", "note"],
     },
   },
+  {
+    name: "propose_create_quote",
+    description: "Build and create a Zoho Books estimate/quote for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin.",
+    input_schema: {
+      type: "object",
+      properties: {
+        customer_name:  { type: "string", description: "Customer or school name" },
+        contact_person: { type: "string", description: "Contact person's name" },
+        email:          { type: "string", description: "Email to send the quote to" },
+        line_items: {
+          type: "array",
+          description: "Products/services to quote",
+          items: {
+            type: "object",
+            properties: {
+              name:        { type: "string" },
+              description: { type: "string" },
+              quantity:    { type: "number" },
+              rate:        { type: "number", description: "Price per unit after margin" },
+            },
+            required: ["name", "quantity", "rate"],
+          },
+        },
+        notes:      { type: "string", description: "Notes visible on the quote" },
+        send_email: { type: "boolean", description: "Whether to email the quote to the customer" },
+      },
+      required: ["customer_name", "line_items"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -157,8 +186,31 @@ async function fetchZohoContext() {
   }
 }
 
+// ── ZOHO BOOKS INVENTORY ──────────────────────────────────────────────────────
+async function fetchZohoInventory() {
+  try {
+    const orgId = process.env.ZOHO_ORG_ID;
+    if (!orgId) return [];
+    const token = await getZohoToken();
+    const res = await fetch(
+      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items || []).map(i => ({
+      name: i.name,
+      rate: parseFloat(i.rate || i.selling_price || 0),
+      sku:  i.sku  || "",
+      unit: i.unit || "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho) {
+function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
@@ -200,6 +252,10 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
+${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books) ===
+${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
+(Use these rates as the base cost when building quotes — apply margin on top)
+` : ""}
 === YOUR CAPABILITIES ===
 You have access to:
 1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
@@ -210,6 +266,7 @@ You have access to:
 6. propose_flag_deal — mark a deal as hot/warm priority
 7. propose_add_to_nurture — add cold leads to email nurture campaign
 8. propose_log_note — log notes on a deal
+9. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
 
 IMPORTANT BEHAVIORS:
 - Use web_search proactively when asked about specific prospects, schools, competitors, or market data
@@ -228,7 +285,7 @@ AUTOMATION — ALWAYS DO THIS:
 After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
-Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"`;
+Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -283,10 +340,10 @@ async function _handler(req, res) {
     return res.status(400).json({ error: "messages array required" });
   }
 
-  // Fetch fresh Zoho context in parallel with nothing blocking
-  const zoho = await fetchZohoContext();
+  // Fetch fresh Zoho context + inventory in parallel
+  const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system = buildSystemPrompt(localContext, zoho);
+  const system = buildSystemPrompt(localContext, zoho, inventory);
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({
@@ -355,6 +412,7 @@ async function _handler(req, res) {
         propose_flag_deal:       "flag_deal",
         propose_add_to_nurture:  "add_to_nurture",
         propose_log_note:        "log_note",
+        propose_create_quote:    "create_quote",
       };
       return { type: typeMap[t.name] || t.name, ...t.input };
     });
