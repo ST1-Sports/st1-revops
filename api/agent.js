@@ -163,6 +163,19 @@ const TOOLS = [
     },
   },
   {
+    name: "propose_store_competitor_intel",
+    description: "Save competitor intelligence to the Competitors tab so it persists and the user can reference it. ALWAYS call this when you research or learn anything useful about a competitor — pricing, strengths, weaknesses, customer segments, tactics. This executes automatically (no user confirmation needed).",
+    input_schema: {
+      type: "object",
+      properties: {
+        competitor_name: { type: "string", description: "Company name exactly as it should appear (e.g. 'BSN Sports', 'VS Athletics', 'Track Supply Co')" },
+        intel: { type: "string", description: "All intelligence gathered — product focus, pricing approach, strengths, weaknesses vs ST1, key states/customers, counter-tactics. Be specific and comprehensive." },
+        source: { type: "string", description: "How gathered: 'web search', 'RFP document', 'user provided', 'price list upload'" },
+      },
+      required: ["competitor_name", "intel"],
+    },
+  },
+  {
     name: "propose_create_campaign_sequence",
     description: "Build a multi-email outreach sequence, match contacts from the CRM, and set it up ready to launch. Use when the user asks to build a campaign, send a sequence to a group, or automate outreach to a segment.",
     input_schema: {
@@ -253,6 +266,7 @@ function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const invoices = localCtx.invoices || [];
   const sequences = localCtx.sequences || [];
   const priceLists = localCtx.priceLists || [];
+  const storedIntel = localCtx.competeIntel || [];
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -331,7 +345,10 @@ ${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} �
   }
   return out;
 })()}
-=== YOUR CAPABILITIES ===
+${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
+${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
+(Use this when answering questions about competitors or building counter-strategies)
+` : ""}=== YOUR CAPABILITIES ===
 You have access to:
 1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
 2. propose_create_deal — suggest creating a deal (user confirms)
@@ -342,7 +359,8 @@ You have access to:
 7. propose_add_to_nurture — add cold leads to email nurture campaign
 8. propose_log_note — log notes on a deal
 9. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
-10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
+10. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
+11. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 
 IMPORTANT BEHAVIORS:
 - Use web_search proactively when asked about specific prospects, schools, competitors, or market data
@@ -357,6 +375,13 @@ AUTOMATION — ALWAYS DO THIS:
 - Always propose the full next-step chain: email → follow-up in 3 days → "if no response" nurture add at 7 days.
 - If asked "what's next" or "auto-execute", respond with propose_log_note + propose_schedule_followup right away.
 - Never end a conversation with just an email draft — always add the follow-up scaffolding.
+
+COMPETITOR INTEL — ALWAYS DO THIS:
+- Whenever you research, discuss, learn, or look up ANYTHING about a competitor (BSN Sports, VS Athletics, MF Athletic, School Specialty, Varsity Group, Gopher Sport, Anderson's, Epic Sports, or any other athletic equipment supplier), ALWAYS call propose_store_competitor_intel to save the intel.
+- This auto-executes silently — the user just sees a "✓ Saved" chip. It does not require confirmation.
+- Include: product/category focus, pricing approach (premium/value/volume), key states/markets, their strengths, their weaknesses vs ST1, and how Matt should counter them.
+- If the user mentions a competitor in passing ("BSN Sports bid lower on that RFP"), save that pricing intel too.
+- If new info about an already-stored competitor is found, update it with the combined/latest intel.
 
 PRICING & RFP STRATEGY:
 - When asked "how much should we charge", "what's our cost", or "what's the price" — reference OUR PRICE LISTS first, then fall back to the Zoho Books product catalog.
@@ -502,7 +527,8 @@ async function _handler(req, res) {
         propose_flag_deal:       "flag_deal",
         propose_add_to_nurture:  "add_to_nurture",
         propose_log_note:        "log_note",
-        propose_create_quote:            "create_quote",
+        propose_create_quote:             "create_quote",
+        propose_store_competitor_intel:   "store_competitor_intel",
         propose_create_campaign_sequence: "create_campaign_sequence",
       };
       return { type: typeMap[t.name] || t.name, ...t.input };

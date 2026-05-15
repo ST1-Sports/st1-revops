@@ -445,6 +445,7 @@ function reducer(prev, action, payload) {
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
+    case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next[payload];return {...prev,competeIntel:next};}
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
@@ -717,7 +718,6 @@ export default function App() {
     {id:"compete",     icon:"⊗", label:"Competitors"},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
     ]},
@@ -1809,6 +1809,7 @@ function ModHome() {
         itemCount:(pl.items||[]).length,
         items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",price:it.price||0,listPrice:it.listPrice||0})),
       })),
+      competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
     };
 
     try{
@@ -1846,6 +1847,10 @@ function ModHome() {
           if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});toast(`📝 Auto: note logged — ${d.name}`,"info");
             try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}}
         }
+        if(a.type==="store_competitor_intel"&&a.competitor_name&&a.intel){
+          dispatch("SET_COMPETE_INTEL",{[a.competitor_name]:a.intel});
+          toast(`⊗ Intel saved: ${a.competitor_name}`,  "info");
+        }
       });
 
       // Fire-and-forget: look for similar questions from other team members
@@ -1874,8 +1879,8 @@ function ModHome() {
   const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
   const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
-  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg}};
-  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN"};
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED"};
 
   const STARTERS=[
     "Who should I call or email today?",
@@ -2109,6 +2114,20 @@ function ModHome() {
                               {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
                             </div>
                           )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="store_competitor_intel"){
+                      return(
+                        <div key={ai} style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"6px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                          <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                            <span style={{fontSize:13,color:B.orange}}>⊗</span>
+                            <div>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>COMPETITOR INTEL SAVED</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{a.competitor_name}</div>
+                            </div>
+                          </div>
+                          <button onClick={()=>setMod("compete")} style={{background:"none",border:`1px solid ${B.orange}40`,color:B.orange,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>VIEW →</button>
                         </div>
                       );
                     }
@@ -11549,70 +11568,154 @@ function AssetGallery({toast}) {
 //  COMPETE
 // ════════════════════════════════════════════════════════════════════════════
 function ModCompete() {
-  const {s,dispatch}=useApp();
-  const COMPS=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
+  const {s,dispatch,setMod}=useApp();
+  const HARDCODED=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
   const [sel,setSel]=useState(null);
   const intel=s.competeIntel||{};
   const bc=s.battlecards||{};
   const [running,setRunning]=useState(null);
   const [bcRunning,setBcRunning]=useState(null);
+  const [editingIntel,setEditingIntel]=useState(null); // competitor name being edited
+  const [editText,setEditText]=useState("");
+
+  const withIntel=useMemo(()=>Object.keys(intel).sort(),[intel]);
+  const noIntel=useMemo(()=>HARDCODED.filter(c=>!intel[c]),[intel]);
+
+  // Auto-select first with intel on mount
+  useEffect(()=>{if(!sel&&withIntel.length>0)setSel(withIntel[0]);},[withIntel]);
 
   const research=async(comp)=>{
-    setSel(comp);if(intel[comp])return;
+    setSel(comp);
     setRunning(comp);
     const t=await aiCall(`Research ${comp} as a competitor to ST1 Sports. ${ST1}. Provide: what they focus on, strengths, weaknesses vs ST1, pricing approach, strongest states, and how ST1 can counter them. Be specific and tactical.`,{search:true});
-    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});setRunning(null);
+    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});
+    setRunning(null);
   };
+
   const genBc=async(comp)=>{
     setBcRunning(comp);
     const r=await aiCall(`Sales battlecard for ST1 Sports vs ${comp}. ${ST1}. Return JSON: {"competitor":"","our_strengths":["3 items"],"their_strengths":["2 items"],"key_messages":["3 messages"],"objection_handlers":[{"objection":"","response":""}]}`,{json:true});
-    dispatch("SET_BATTLECARD",{[comp]:r});setBcRunning(null);
+    dispatch("SET_BATTLECARD",{[comp]:r});
+    setBcRunning(null);
   };
 
-  return (
-    <div style={{padding:"22px 26px"}}>
-      <PH title="COMPETITOR INTEL" sub="Research competitors · generate battlecards · counter strategies"/>
-      <div style={{display:"grid",gridTemplateColumns:"190px 1fr",gap:16}}>
-        <div>
-          <Lbl s={{marginBottom:9}}>Competitors</Lbl>
-          {COMPS.map(c=>(
-            <button key={c} onClick={()=>research(c)} style={{display:"block",width:"100%",background:sel===c?`${B.orange}10`:B.white,color:sel===c?B.orange:B.textMid,border:`1px solid ${sel===c?B.orange:B.border}`,borderRadius:5,padding:"8px 11px",fontSize:11,textAlign:"left",fontFamily:"'Lexend',sans-serif",marginBottom:5}}>
-              {c} {intel[c]?"✓":""}
-            </button>
-          ))}
+  const delIntel=(comp)=>{
+    if(!window.confirm(`Delete all intel for ${comp}?`)) return;
+    dispatch("DEL_COMPETE_INTEL",comp);
+    if(sel===comp) setSel(withIntel.find(c=>c!==comp)||null);
+  };
+
+  return(
+    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+      {/* LEFT RAIL */}
+      <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+        <div style={{padding:"14px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.text,letterSpacing:.5,marginBottom:6}}>COMPETITOR INTEL</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>Ask the home chat about any competitor to auto-save intel here.</div>
         </div>
-        <div>
-          {!sel&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Select a competitor to research</div>}
-          {sel&&running===sel&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12,padding:"20px 0"}}><Spin/>Researching {sel} with live web search...</div>}
-          {sel&&intel[sel]&&(
-            <div className="card fu" style={{padding:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.3}}>{sel}</div>
-                <OBtn sm onClick={()=>genBc(sel)} disabled={bcRunning===sel}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
-              </div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:bc[sel]?14:0}}>{intel[sel]}</div>
-              {bc[sel]&&(
-                <div style={{borderTop:`1px solid ${B.border}`,paddingTop:13}}>
-                  <Lbl c={B.orange} s={{marginBottom:11}}>BATTLECARD vs {bc[sel].competitor?.toUpperCase()}</Lbl>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:11}}>
-                    {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
-                      <div key={k} style={{background:bg,borderRadius:5,padding:10}}><Lbl c={c} s={{marginBottom:6}}>{l}</Lbl>{(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}</div>
-                    ))}
+        <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+          {withIntel.length>0&&(
+            <>
+              <div style={{padding:"5px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>INTEL SAVED</div>
+              {withIntel.map(c=>(
+                <div key={c} onClick={()=>setSel(c)} style={{padding:"8px 12px",cursor:"pointer",borderLeft:`3px solid ${sel===c?B.orange:"transparent"}`,background:sel===c?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:sel===c?B.orange:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{c}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginTop:1}}>{bc[c]?"✓ battlecard":""}</div>
                   </div>
-                  <div style={{background:B.surface,borderRadius:5,padding:10,marginBottom:10}}><Lbl s={{marginBottom:6}}>Key Messages</Lbl>{(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}</div>
-                  {(bc[sel].objection_handlers||[]).map((oh,i)=>(
-                    <div key={i} style={{marginBottom:7,padding:"9px 10px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:5}}>"{oh.objection}"</div>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:3}}>RESPONSE</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  <span style={{fontSize:9,color:B.green,flexShrink:0}}>✓</span>
+                </div>
+              ))}
+            </>
+          )}
+          {noIntel.length>0&&(
+            <>
+              <div style={{padding:"8px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>QUICK RESEARCH</div>
+              {noIntel.map(c=>(
+                <div key={c} style={{padding:"7px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${B.border}`}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{c}</span>
+                  <button onClick={()=>research(c)} disabled={!!running} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",flexShrink:0,letterSpacing:.3,opacity:running?.6:1}}>{running===c?"...":"RESEARCH"}</button>
+                </div>
+              ))}
+            </>
+          )}
+          {withIntel.length===0&&noIntel.length===0&&(
+            <div style={{padding:"20px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>No competitor data yet. Ask the home chat about a competitor to save intel here automatically.</div>
+          )}
+        </div>
+        <div style={{padding:"10px 12px",borderTop:`1px solid ${B.border}`,flexShrink:0}}>
+          <button onClick={()=>setMod("home")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:5,padding:"7px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>ASK HOME CHAT →</button>
+        </div>
+      </div>
+
+      {/* MAIN AREA */}
+      <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+        {!sel&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:12,opacity:.7}}>
+            <div style={{fontSize:32}}>⊗</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,textAlign:"center",maxWidth:280,lineHeight:1.6}}>Select a competitor from the left, or ask the home chat something like "Research BSN Sports as a competitor"</div>
+            <button onClick={()=>setMod("home")} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>GO TO HOME CHAT →</button>
+          </div>
+        )}
+        {sel&&running===sel&&(
+          <div style={{display:"flex",gap:10,alignItems:"center",padding:"40px 0",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:13}}>
+            <Spin/>Researching {sel} with live web search...
+          </div>
+        )}
+        {sel&&intel[sel]&&running!==sel&&(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.text,letterSpacing:.3,marginBottom:3}}>{sel}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>COMPETITOR INTEL</div>
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <OBtn sm onClick={()=>research(sel)} disabled={!!running}>REFRESH</OBtn>
+                <OBtn sm onClick={()=>genBc(sel)} disabled={!!bcRunning}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
+                <button onClick={()=>{setEditText(intel[sel]);setEditingIntel(sel);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>EDIT</button>
+                <button onClick={()=>delIntel(sel)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>DELETE</button>
+              </div>
+            </div>
+
+            {editingIntel===sel?(
+              <div style={{marginBottom:16}}>
+                <textarea value={editText} onChange={e=>setEditText(e.target.value)} rows={12} style={{width:"100%",padding:"10px 12px",border:`1px solid ${B.border}`,borderRadius:6,fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.7,resize:"vertical",color:B.text}}/>
+                <div style={{display:"flex",gap:7,marginTop:8}}>
+                  <OBtn onClick={()=>{dispatch("SET_COMPETE_INTEL",{[sel]:editText});setEditingIntel(null);}}>SAVE</OBtn>
+                  <GBtn onClick={()=>setEditingIntel(null)}>CANCEL</GBtn>
+                </div>
+              </div>
+            ):(
+              <div className="card" style={{padding:16,marginBottom:16,whiteSpace:"pre-wrap",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8}}>{intel[sel]}</div>
+            )}
+
+            {bc[sel]&&(
+              <div>
+                <Lbl c={B.orange} s={{marginBottom:12}}>BATTLECARD vs {(bc[sel].competitor||sel).toUpperCase()}</Lbl>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
+                    <div key={k} style={{background:bg,borderRadius:6,padding:12}}>
+                      <Lbl c={c} s={{marginBottom:8}}>{l}</Lbl>
+                      {(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12}}>
+                  <Lbl s={{marginBottom:8}}>Key Messages</Lbl>
+                  {(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}
+                </div>
+                {(bc[sel].objection_handlers||[]).map((oh,i)=>(
+                  <div key={i} style={{marginBottom:8,padding:"10px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>"{oh.objection}"</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>RESPONSE</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
