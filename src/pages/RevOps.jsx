@@ -707,7 +707,6 @@ export default function App() {
     {id:"compete",     icon:"⊗", label:"Competitors"},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
       {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
       {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
@@ -1550,10 +1549,13 @@ function ModHome() {
   const [running,setRunning]=useState(false);
   const [expandedEmail,setExpandedEmail]=useState(null);
   const [expandedQuote,setExpandedQuote]=useState(null);
+  const [expandedCampaign,setExpandedCampaign]=useState(null);
   const [agentStatus,setAgentStatus]=useState(null);
   const [lastMeta,setLastMeta]=useState(null);
   const [sendingEmail,setSendingEmail]=useState(null);
   const [sendingQuote,setSendingQuote]=useState(null);
+  const [launchingCampaign,setLaunchingCampaign]=useState(null);
+  const [campaignSendTime,setCampaignSendTime]=useState({});
 
   // Session management
   const [sessions,setSessions]=useState([]);
@@ -1673,6 +1675,7 @@ function ModHome() {
     }
     if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
     if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
+    if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
   };
 
   const createQuoteNow=async(action,key)=>{
@@ -1696,6 +1699,32 @@ function ModHome() {
       }else{toast(d.error||"Quote creation failed","error");}
     }catch(e){toast(`Quote error: ${e.message}`,"error");}
     setSendingQuote(null);
+  };
+
+  const launchCampaignNow=async(action,key,matchedContacts)=>{
+    setLaunchingCampaign(key);
+    try{
+      const sendAt=campaignSendTime[key]||"";
+      const touches=(action.emails||[]).map((e,i)=>({id:mkId(),step:i,subject:e.subject,body:e.body,delay:e.delay_days||0,channel:"email"}));
+      const enrollments=matchedContacts.map(c=>({contactId:c.id,email:c.email,name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),status:"active",step:0,enrolledAt:Date.now()}));
+      const camp={
+        id:mkId(),
+        name:action.campaign_name,
+        product:action.product||"",
+        status:"active",
+        createdAt:new Date().toISOString().slice(0,10),
+        touches,
+        enrollments,
+        scheduledSendAt:sendAt||null,
+        notes:action.notes||"",
+        source:"agent",
+      };
+      dispatch("ADD_CAMPAIGN",camp);
+      dispatch("LOG",{msg:`Campaign "${camp.name}" created with ${enrollments.length} contacts via agent`});
+      toast(`✓ "${camp.name}" created — ${enrollments.length} contacts enrolled${sendAt?`, scheduled ${sendAt}`:""}. Go to Campaigns to send.`,"success");
+      setTimeout(()=>setMod("marketing"),1200);
+    }catch(e){toast(`Campaign error: ${e.message}`,"error");}
+    setLaunchingCampaign(null);
   };
 
   const sendEmailNow=async(action,key)=>{
@@ -1825,16 +1854,16 @@ function ModHome() {
   const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
   const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
-  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg}};
-  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE"};
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN"};
 
   const STARTERS=[
     "Who should I call or email today?",
     "Draft outreach for my highest-priority contact",
-    "Which deals are most at risk right now?",
+    "Build a 3-email sequence for Baseball coaches in Iowa and enroll them",
     "Build a quote for 10 hurdles and 2 starting blocks",
+    "Which deals are most at risk right now?",
     "How do I counter BSN Sports on pricing?",
-    "Build a 3-touch sequence for Baseball coaches in Iowa",
     "What product should I push hardest this season?",
     "Who hasn't heard from us in 30+ days?",
   ];
@@ -1979,6 +2008,85 @@ function ModHome() {
                               </table>
                               {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>{a.notes}</div>}
                               {a.send_email&&a.email&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginTop:4,letterSpacing:.3}}>✉ Quote will be emailed to {a.email}</div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="create_campaign_sequence"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedCampaign===key;
+                      const filters=a.contact_filters||{};
+                      const matched=(s.contacts||[]).filter(c=>{
+                        if(c.deadStatus||!c.email) return false;
+                        const sport=(c.sport||"").toLowerCase();
+                        const state=(c.state||"").toLowerCase();
+                        const title=(c.title||"").toLowerCase();
+                        const score=c.score||0;
+                        if(filters.sports?.length&&!filters.sports.some(sp=>sport.includes(sp.toLowerCase()))) return false;
+                        if(filters.states?.length&&!filters.states.some(st=>state===st.toLowerCase()||state.includes(st.toLowerCase()))) return false;
+                        if(filters.titles?.length&&!filters.titles.some(t=>title.includes(t.toLowerCase()))) return false;
+                        if(filters.min_score&&score<filters.min_score) return false;
+                        return true;
+                      });
+                      const emails=a.emails||[];
+                      const ck=key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg,borderBottom:expanded?`1px solid ${B.purple}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✦</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{a.campaign_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{emails.length} emails · {matched.length} contacts matched</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+                              <input type="datetime-local" value={campaignSendTime[ck]||""} onChange={e=>setCampaignSendTime(prev=>({...prev,[ck]:e.target.value}))}
+                                style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 5px",color:B.text,background:B.white}}/>
+                              <button onClick={()=>{if(!matched.length){toast("No contacts match these filters","error");return;}launchCampaignNow(a,ck,matched);}} disabled={launchingCampaign===ck} style={{background:B.purple,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:launchingCampaign===ck?.6:1,whiteSpace:"nowrap"}}>{launchingCampaign===ck?"CREATING...":"✦ CREATE & ENROLL"}</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              {/* Contact filters summary */}
+                              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                                {filters.sports?.map(sp=><span key={sp} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,background:B.purpleBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{sp}</span>)}
+                                {filters.states?.map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{st}</span>)}
+                                {filters.titles?.map(t=><span key={t} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,background:B.tealBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{t}</span>)}
+                                {filters.min_score&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:B.orangeBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>score ≥ {filters.min_score}</span>}
+                              </div>
+                              {/* Matched contacts */}
+                              <div style={{marginBottom:10}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:5}}>{matched.length} CONTACTS MATCHED</div>
+                                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                                  {matched.slice(0,12).map(c=>(
+                                    <div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 7px"}}>
+                                      {c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}
+                                      {c.school&&<span style={{color:B.muted}}> · {typeof c.school==="string"?c.school:c.school?.name||""}</span>}
+                                    </div>
+                                  ))}
+                                  {matched.length>12&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"2px 7px"}}>+{matched.length-12} more</div>}
+                                </div>
+                                {matched.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>No contacts match — adjust filters or add contacts first.</div>}
+                              </div>
+                              {/* Email sequence */}
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>EMAIL SEQUENCE</div>
+                              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                                {emails.map((e,i)=>(
+                                  <div key={i} style={{border:`1px solid ${B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>
+                                      <div style={{width:18,height:18,borderRadius:"50%",background:B.purple,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{i+1}</span></div>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.subject}</div>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{i===0?"Send immediately":`+${e.delay_days} day${e.delay_days!==1?"s":""} after previous`}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.6,maxHeight:120,overflow:"hidden"}}>{e.body}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
                             </div>
                           )}
                         </div>

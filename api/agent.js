@@ -162,6 +162,42 @@ const TOOLS = [
       required: ["customer_name", "line_items"],
     },
   },
+  {
+    name: "propose_create_campaign_sequence",
+    description: "Build a multi-email outreach sequence, match contacts from the CRM, and set it up ready to launch. Use when the user asks to build a campaign, send a sequence to a group, or automate outreach to a segment.",
+    input_schema: {
+      type: "object",
+      properties: {
+        campaign_name: { type: "string", description: "Short descriptive name for this campaign" },
+        product:       { type: "string", description: "Product or category being promoted" },
+        emails: {
+          type: "array",
+          description: "The email sequence — each is one touch",
+          items: {
+            type: "object",
+            properties: {
+              subject:    { type: "string" },
+              body:       { type: "string", description: "Full email body, personalized, signed by Matt Stone" },
+              delay_days: { type: "number", description: "Days after previous email (0 = send first)" },
+            },
+            required: ["subject", "body", "delay_days"],
+          },
+        },
+        contact_filters: {
+          type: "object",
+          description: "Filters to match the right contacts from CRM",
+          properties: {
+            sports:    { type: "array", items: { type: "string" }, description: "Sports to match (e.g. ['Baseball', 'Softball'])" },
+            states:    { type: "array", items: { type: "string" }, description: "State codes to match (e.g. ['IA', 'MN'])" },
+            titles:    { type: "array", items: { type: "string" }, description: "Title keywords to match (e.g. ['Athletic Director', 'Coach'])" },
+            min_score: { type: "number", description: "Minimum lead score (omit to include all)" },
+          },
+        },
+        notes: { type: "string", description: "Context or strategy notes for this campaign" },
+      },
+      required: ["campaign_name", "emails"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -267,6 +303,7 @@ You have access to:
 7. propose_add_to_nurture — add cold leads to email nurture campaign
 8. propose_log_note — log notes on a deal
 9. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
+10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 
 IMPORTANT BEHAVIORS:
 - Use web_search proactively when asked about specific prospects, schools, competitors, or market data
@@ -282,10 +319,18 @@ AUTOMATION — ALWAYS DO THIS:
 - If asked "what's next" or "auto-execute", respond with propose_log_note + propose_schedule_followup right away.
 - Never end a conversation with just an email draft — always add the follow-up scaffolding.
 
+CAMPAIGN BUILDING:
+- When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.
+- Always write COMPLETE email bodies — not placeholders. Every email should be fully personalized and ready to send.
+- For contact_filters, be specific: if the user says "baseball coaches in Iowa" → sports:["Baseball","Baseball/Softball"], states:["IA"], titles:["Coach","Head Coach","Athletic Director"].
+- Each email in the sequence should be a distinct touch with its own angle: email 1 = intro/value, email 2 = follow-up with social proof or urgency, email 3 = final ask or offer.
+- delay_days: email 1 = 0, email 2 = 3–5 days, email 3 = 7–10 days.
+- Always sign emails: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+
 After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
-Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"`;
+Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -412,7 +457,8 @@ async function _handler(req, res) {
         propose_flag_deal:       "flag_deal",
         propose_add_to_nurture:  "add_to_nurture",
         propose_log_note:        "log_note",
-        propose_create_quote:    "create_quote",
+        propose_create_quote:            "create_quote",
+        propose_create_campaign_sequence: "create_campaign_sequence",
       };
       return { type: typeMap[t.name] || t.name, ...t.input };
     });
