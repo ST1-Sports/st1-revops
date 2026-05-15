@@ -1105,7 +1105,8 @@ function ModAnalytics() {
     const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
     const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
     const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
-    return{openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts};
+    const campaignDeals=deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0));
+    return{openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts,campaignDeals};
   },[deals,invoices,campaigns,contacts]);
 
 
@@ -1399,7 +1400,7 @@ function ModAnalytics() {
               <div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
             ):(
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0)).map(d=>{
+                {campaignDeals.map(d=>{
                   const camp=campaigns.find(c=>c.id===d.campaignId);
                   return(
                     <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -4337,6 +4338,7 @@ function ModProspecting() {
     bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
   };
   const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
+  const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
 
   const runScrape=async(area)=>{
     setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
@@ -5126,7 +5128,7 @@ function ModProspecting() {
                 })()}
                 {/* Hot leads leaderboard */}
                 {(()=>{
-                  const hot=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5);
+                  const hot=hotLeads;
                   if(!hot.length) return null;
                   return(
                     <div style={{marginBottom:14,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:7,padding:12}}>
@@ -11684,12 +11686,12 @@ function ModAgent() {
 
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 
-  // Sidebar data
-  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
-  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
