@@ -3943,29 +3943,82 @@ function ModReorder() {
   const [drafting,setDrafting]=useState(null);
   const [pulling,setPulling]=useState(false);
   const [showAdd,setShowAdd]=useState(false);
+  const [autoDrafting,setAutoDrafting]=useState(false);
+  const [dayFilter,setDayFilter]=useState("all");
   const [form,setForm]=useState({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
 
-  const active=(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()));
+  const now=Date.now();
+
+  // Enrich every pending reorder with daysSince + stage
+  const withDays=(s.reorders||[])
+    .filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()))
+    .map(r=>{
+      const daysSince=r.lastOrderDate?Math.floor((now-new Date(r.lastOrderDate).getTime())/86400000):0;
+      const stage=daysSince>=365?"lapsed":daysSince>=270?"follow-up":daysSince>=180?"check-in":"early";
+      return{...r,daysSince,stage};
+    });
+
+  // Bucket filter
+  const filtered=
+    dayFilter==="90"  ?withDays.filter(r=>r.daysSince>=90&&r.daysSince<180):
+    dayFilter==="180" ?withDays.filter(r=>r.daysSince>=180&&r.daysSince<270):
+    dayFilter==="270" ?withDays.filter(r=>r.daysSince>=270&&r.daysSince<365):
+    dayFilter==="365" ?withDays.filter(r=>r.daysSince>=365):
+    withDays;
+
+  // Top 5 by priority: follow-up > check-in > lapsed > early, then by value
+  const stageRank={lapsed:50,"follow-up":100,"check-in":80,early:20};
+  const top5=[...withDays]
+    .sort((a,b)=>((stageRank[b.stage]||0)+(b.lastOrderValue||0)/200)-((stageRank[a.stage]||0)+(a.lastOrderValue||0)/200))
+    .slice(0,5);
+
+  const STAGE={
+    "early":      {color:B.blue,  label:"EARLY",      dot:"·"},
+    "check-in":   {color:B.orange,label:"CHECK-IN",   dot:"·"},
+    "follow-up":  {color:B.red,   label:"FOLLOW-UP",  dot:"·"},
+    "lapsed":     {color:B.muted, label:"LAPSED",     dot:"·"},
+  };
+
+  const draftPrompt=(r)=>{
+    if(r.stage==="check-in")
+      return `This is a friendly 6-month check-in — keep it warm and low-pressure, ask if they're thinking about the upcoming season.`;
+    if(r.stage==="follow-up")
+      return `They haven't reordered in 9 months — be a bit more direct, mention limited stock or seasonal timing, and ask if they want the same items.`;
+    if(r.stage==="lapsed")
+      return `Over a year since their last order — acknowledge the time, share what's new at ST1, make it easy for them to re-engage.`;
+    return `Early seasonal check-in — light touch, mention new products or season prep.`;
+  };
 
   const draftReo=async(r)=>{
     setDrafting(r.id);
-    const t=await aiCall(`Write a short seasonal reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a short reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
-Last order: ${fmtD(r.lastOrderDate)} — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
-Under 80 words. Reference exact last order. Ask if they need to restock. Warm tone.`);
-    setDrafts(d=>({...d,[r.id]:t||""})); setDrafting(null);
+Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
+${draftPrompt(r)}
+Under 80 words. Reference the exact last order. Warm, direct tone. Sign off as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
+    setDrafts(d=>({...d,[r.id]:t||""}));
+    setDrafting(null);
   };
 
-  // Pull paid invoices from Zoho Books → build reorder queue
-  // Window: last ordered 45–365 days ago, skip if already queued
+  // Auto-draft all 180d check-ins that don't yet have a draft
+  const autoDraftCheckIns=async()=>{
+    const targets=withDays.filter(r=>r.stage==="check-in"&&!drafts[r.id]);
+    if(!targets.length){toast("No new 180d check-ins to draft","info");return;}
+    setAutoDrafting(true);
+    toast(`Auto-drafting ${targets.length} check-in${targets.length>1?"s":""}…`,"info");
+    for(const r of targets) await draftReo(r);
+    setAutoDrafting(false);
+    toast(`${targets.length} draft${targets.length>1?"s":""} ready — review and send`,"success");
+  };
+
+  // Pull paid invoices from Zoho Books → build reorder queue (75–550 days)
   const pullFromZoho=async()=>{
     setPulling(true);
-    try {
+    try{
       const res=await zohoCall("books","/invoices?filter_by=Status.Paid&per_page=200&sort_column=date&sort_order=D");
       const invoices=res.invoices||[];
       if(!invoices.length&&res.message) throw new Error(res.message);
 
-      // Keep only most recent paid invoice per customer
       const byCustomer={};
       for(const inv of invoices){
         const key=inv.customer_id||inv.customer_name;
@@ -3974,13 +4027,12 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       const existingIds=new Set((s.reorders||[]).map(r=>r.zohoInvoiceId).filter(Boolean));
-      const now=Date.now();
       let added=0;
 
       for(const inv of Object.values(byCustomer)){
         if(existingIds.has(inv.invoice_id)) continue;
         const daysSince=Math.floor((now-new Date(inv.date).getTime())/86400000);
-        if(daysSince<45||daysSince>365) continue; // outside reorder window
+        if(daysSince<75||daysSince>550) continue;
 
         dispatch("ADD_REORDER",{
           id:"reorder_"+inv.invoice_id,
@@ -3999,8 +4051,8 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       dispatch("LOG",{msg:`Reorder sync from Zoho Books — ${added} new accounts queued`});
-      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window (45–365 days since last order)`,"success");
-    } catch(e){
+      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window`,"success");
+    }catch(e){
       toast(`Zoho sync failed: ${e.message.slice(0,100)}`,"error");
     }
     setPulling(false);
@@ -4010,36 +4062,98 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
     if(!form.school.trim()) return toast("School name required","error");
     dispatch("ADD_REORDER",{
       id:mkId(),
-      school:form.school,
-      contact:form.contact,
-      state:form.state,
-      sport:form.sport,
+      school:form.school,contact:form.contact,state:form.state,sport:form.sport,
       lastOrderDate:form.lastOrderDate,
       lastItems:form.lastItems.split(",").map(x=>x.trim()).filter(Boolean),
       lastOrderValue:parseFloat(form.lastOrderValue)||0,
-      status:"pending",
-      source:"manual",
+      status:"pending",source:"manual",
     });
     setForm({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
     setShowAdd(false);
     toast("Added to reorder queue","success");
   };
 
+  const checkInCount=withDays.filter(r=>r.stage==="check-in").length;
+  const followUpCount=withDays.filter(r=>r.stage==="follow-up").length;
+
+  const FILTERS=[
+    ["all","ALL",null],
+    ["90","90D · EARLY",B.blue],
+    ["180","180D · CHECK-IN",B.orange],
+    ["270","270D · FOLLOW-UP",B.red],
+    ["365","365D · LAPSED",B.muted],
+  ];
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="REORDER ENGINE" sub={active.length>0?`${active.length} account${active.length!==1?"s":""} ready for seasonal outreach`:"All accounts up to date"}
+      <PH title="REORDER ENGINE"
+        sub={`${withDays.length} in window · ${checkInCount} check-in${checkInCount!==1?"s":""} ready · ${followUpCount} need follow-up`}
         action={
           <div style={{display:"flex",gap:7}}>
-            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD MANUALLY"}</GBtn>
-            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
+            <GBtn onClick={autoDraftCheckIns} disabled={autoDrafting} style={{fontSize:10,padding:"4px 10px"}}>
+              {autoDrafting?"DRAFTING…":"⚡ AUTO-DRAFT 180D"}
+            </GBtn>
+            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD"}</GBtn>
+            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING…":"↓ SYNC ZOHO"}</OBtn>
           </div>
         }
       />
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:18}}>
-        <KCard l="In Queue" v={active.length} c={B.orange}/>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:18}}>
+        <KCard l="Queue" v={withDays.length} c={B.text}/>
+        <KCard l="90d Early" v={withDays.filter(r=>r.stage==="early").length} c={B.blue}/>
+        <KCard l="180d Check-In" v={checkInCount} c={B.orange}/>
+        <KCard l="270d Follow-Up" v={followUpCount} c={B.red}/>
         <KCard l="Sent" v={(s.reorders||[]).filter(r=>r.status==="sent").length} c={B.green}/>
-        <KCard l="Snoozed" v={(s.reorders||[]).filter(r=>r.snoozedUntil&&new Date(r.snoozedUntil)>new Date()).length} c={B.muted}/>
+      </div>
+
+      {/* Top 5 priority panel */}
+      {top5.length>0&&(
+        <div style={{background:B.surface,borderRadius:8,padding:14,marginBottom:18,border:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:11}}>TOP 5 · REACH OUT NOW</div>
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {top5.map((r,i)=>{
+              const st=STAGE[r.stage]||STAGE.early;
+              return(
+                <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:B.white,borderRadius:6,border:`1px solid ${B.border}`,borderLeft:`3px solid ${st.color}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,minWidth:18}}>#{i+1}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{r.school}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.sport}{r.contact?` · ${r.contact}`:""}{r.state?`, ${r.state}`:""}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginRight:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,letterSpacing:.5,marginBottom:1}}>{st.label} · {r.daysSince}d AGO</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{fmt$(r.lastOrderValue)}</div>
+                  </div>
+                  <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Day-range filter tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+        {FILTERS.map(([v,label,col])=>{
+          const active=dayFilter===v;
+          const c=active?(col||B.orange):B.muted;
+          return(
+            <button key={v} onClick={()=>setDayFilter(v)}
+              style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,padding:"4px 11px",borderRadius:4,
+                border:`1px solid ${active?(col||B.orange):B.border}`,
+                background:active?(col||B.orange)+"22":"transparent",
+                color:active?(col||B.orange):B.muted,cursor:"pointer"}}>
+              {label}
+            </button>
+          );
+        })}
+        {dayFilter!=="all"&&(
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,alignSelf:"center",marginLeft:4}}>
+            {filtered.length} account{filtered.length!==1?"s":""}
+          </span>
+        )}
       </div>
 
       {/* Manual add form */}
@@ -4067,7 +4181,7 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Items (comma-sep)</Lbl>
-              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus..." style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Order Value</Lbl>
@@ -4078,39 +4192,49 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
         </div>
       )}
 
-      {active.length===0&&!showAdd&&(
+      {filtered.length===0&&!showAdd&&(
         <div style={{textAlign:"center",padding:"40px 0"}}>
           <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Sync Zoho Books to populate from paid invoices (45–365 days old), or add accounts manually</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+            {dayFilter==="all"?"Sync Zoho Books or add accounts manually to populate this queue.":"No accounts in this time window."}
+          </div>
         </div>
       )}
 
-      {active.map(r=>(
-        <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${B.orange}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
-            <div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:2}}>{r.school}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
-                Last order: {fmtD(r.lastOrderDate)} · {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+      {filtered.map(r=>{
+        const st=STAGE[r.stage]||STAGE.early;
+        return(
+          <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${st.color}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{r.school}</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,background:st.color+"18",padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{st.label}</span>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                  Last order: {fmtD(r.lastOrderDate)}&nbsp;
+                  <span style={{color:st.color,fontWeight:600}}>({r.daysSince}d ago)</span>
+                  &nbsp;· {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
+                <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(now+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
               </div>
             </div>
-            <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
-              <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"...":"✦ DRAFT"}</OBtn>
-              <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(Date.now()+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
-            </div>
+            {drafts[r.id]&&(
+              <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
+                <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
+                <div style={{display:"flex",gap:6,marginTop:6}}>
+                  <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
+                  <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
+                </div>
+              </div>
+            )}
           </div>
-          {drafts[r.id]&&(
-            <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
-              <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-              <div style={{display:"flex",gap:6,marginTop:6}}>
-                <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
-                <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
