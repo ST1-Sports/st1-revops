@@ -13251,7 +13251,7 @@ function ModSettings() {
             <Lbl s={{marginBottom:3}}>Inbound Email Webhook Secret</Lbl>
             <input value={co.inboundEmailSecret||""} onChange={e=>setCo(c=>({...c,inboundEmailSecret:e.target.value}))}
               placeholder="Generate a random string here"
-              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontFamily:"monospace"}}/>
+              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"monospace"}}/>
             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Add this to your email provider's webhook URL as <code style={{color:B.orange}}>?secret=...</code></div>
           </div>
           <div>

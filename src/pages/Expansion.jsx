@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -41,8 +41,7 @@ const EXPANSION_STATES = [
 const SPORTS_FOCUS = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball"];
 const PRIORITIES = ["Track & Field first — core competency","All sports simultaneously","Baseball/Softball only","Follow largest bid opportunities"];
 
-const uid  = () => Math.random().toString(36).slice(2,9);
-const sleep= ms => new Promise(r=>setTimeout(r,ms));
+const uid = () => Math.random().toString(36).slice(2,9);
 
 async function aiSearch(prompt) {
   const r = await fetch("/api/claude",{
