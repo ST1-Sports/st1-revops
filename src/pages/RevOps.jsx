@@ -1783,11 +1783,26 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
       ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
 
     const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
-    const localContext={deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],invoices:s.invoices||[],sequences:s.sequences||[]};
+    // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
+    const allContacts=s.contacts||[];
+    const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
+    const unscoredContacts=allContacts.filter(c=>!(c.score||0)).slice(0,20);
+    const localContext={
+      deals:(s.deals||[]).slice(0,60),
+      contacts:[...scoredContacts,...unscoredContacts],
+      rfps:(s.rfps||[]).slice(0,20),
+      invoices:(s.invoices||[]).slice(0,20),
+      sequences:(s.sequences||[]).slice(0,10),
+    };
 
     try{
-      const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext})});
-      if(!r.ok){const e=await r.json();throw new Error(e.error||`HTTP ${r.status}`);}
+      const ctrl=new AbortController();
+      const timeout=setTimeout(()=>ctrl.abort(),90000);
+      let r;
+      try{
+        r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext}),signal:ctrl.signal});
+      }finally{clearTimeout(timeout);}
+      if(!r.ok){let errMsg=`HTTP ${r.status}`;try{const e=await r.json();errMsg=e.error||errMsg;}catch{}throw new Error(errMsg);}
       const raw=await r.json();
       const message=raw?.message||"Sorry, something went wrong.";
       const actions=Array.isArray(raw?.actions)?raw.actions:[];

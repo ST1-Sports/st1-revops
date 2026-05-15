@@ -259,12 +259,22 @@ async function callClaude(messages, system, tools, apiKey) {
 
 // ── MAIN HANDLER ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // CORS headers first — guaranteed even if the function crashes below
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
+  try {
+    return await _handler(req, res);
+  } catch (err) {
+    console.error("[agent] unhandled crash:", err.message, err.stack);
+    if (!res.headersSent) res.status(500).json({ error: `Agent crashed: ${err.message}` });
+  }
+}
+
+async function _handler(req, res) {
   const apiKey = process.env.ANTHROPIC_KEY;
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_KEY not configured" });
 
