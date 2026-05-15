@@ -317,10 +317,10 @@ ${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} �
       const items = (pl.items || []).slice(0, 20);
       for (const it of items) {
         out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}${it.category ? " ("+it.category+")" : ""}`;
-        if (it.price > 0) out += ` — Cost: $${Number(it.price).toFixed(2)}`;
-        if (it.listPrice > 0) {
-          out += ` — List: $${Number(it.listPrice).toFixed(2)}`;
-          if (it.price > 0) out += ` (${Math.round((it.listPrice - it.price) / it.price * 100)}% margin)`;
+        if (it.cost > 0) out += ` — Our Cost: $${Number(it.cost).toFixed(2)}`;
+        if (it.price > 0) {
+          out += ` — Our Price: $${Number(it.price).toFixed(2)}`;
+          if (it.cost > 0) out += ` (${Math.round((it.price - it.cost) / it.price * 100)}% margin)`;
         }
         out += "\n";
       }
