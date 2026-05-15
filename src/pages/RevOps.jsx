@@ -1781,7 +1781,8 @@ function ModHome() {
     setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
       ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
 
-    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
+    // Keep last 20 turns — full history grows unbounded and can exceed Vercel's body limit
+    const apiMsgs=nextHistory.slice(-20).map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
     const allContacts=s.contacts||[];
     const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
@@ -1791,7 +1792,12 @@ function ModHome() {
       contacts:[...scoredContacts,...unscoredContacts],
       rfps:(s.rfps||[]).slice(0,20),
       invoices:(s.invoices||[]).slice(0,20),
-      sequences:(s.sequences||[]).slice(0,10),
+      sequences:(s.sequences||[]).slice(0,10).map(seq=>({
+        id:seq.id,name:seq.name,status:seq.status,
+        enrollmentCount:(seq.enrollments||[]).length,
+        activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
+      })),
       priceLists:(s.priceLists||[]).map(pl=>({
         id:pl.id,
         name:pl.name,

@@ -16,10 +16,7 @@
 
 import { getZohoToken } from './_lib/zoho-token.js';
 
-export const config = {
-  api: { bodyParser: { sizeLimit: "4mb" } },
-  maxDuration: 60,
-};
+export const config = { maxDuration: 120 };
 
 const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks, shot puts, throws equipment, training gear) sold directly to high school and college athletic programs, coaches, and athletic directors across the US. Based in Colorado. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Website: st1sports.com. Direct sales model, volume discounts for teams, fast shipping, personalized service.`;
 
@@ -214,17 +211,24 @@ const TOOLS = [
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
+function fetchWithTimeout(url, opts = {}, ms = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchZohoContext() {
   try {
     const token = await getZohoToken();
+    const hdrs = { headers: { Authorization: `Zoho-oauthtoken ${token}` } };
     const [dealsRes, contactsRes] = await Promise.allSettled([
-      fetch(
+      fetchWithTimeout(
         "https://www.zohoapis.com/crm/v3/Deals?fields=Deal_Name,Account_Name,Amount,Stage,Closing_Date,id&per_page=25&sort_by=Modified_Time&sort_order=desc",
-        { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+        hdrs
       ),
-      fetch(
+      fetchWithTimeout(
         "https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,id&per_page=20&sort_by=Modified_Time&sort_order=desc",
-        { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+        hdrs
       ),
     ]);
     const deals    = dealsRes.status === "fulfilled" && dealsRes.value.ok    ? (await dealsRes.value.json()).data || []    : [];
@@ -241,7 +245,7 @@ async function fetchZohoInventory() {
     const orgId = process.env.ZOHO_ORG_ID;
     if (!orgId) return [];
     const token = await getZohoToken();
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
       { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
     );
@@ -405,28 +409,35 @@ Each tool proposal maps to an action in the actions array with the same fields f
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
 async function callClaude(messages, system, tools, apiKey) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type":    "application/json",
-      "x-api-key":       apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta":  "web-search-2025-03-05",
-    },
-    body: JSON.stringify({
-      model:      "claude-sonnet-4-6",
-      max_tokens: 3000,
-      system,
-      tools,
-      tool_choice: { type: "auto" },
-      messages,
-    }),
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Anthropic ${res.status}: ${txt.slice(0, 200)}`);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 50_000);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta":    "web-search-2025-03-05",
+      },
+      body: JSON.stringify({
+        model:       "claude-sonnet-4-6",
+        max_tokens:  2000,
+        system,
+        tools,
+        tool_choice: { type: "auto" },
+        messages,
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`Anthropic ${res.status}: ${txt.slice(0, 300)}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 // ── MAIN HANDLER ─────────────────────────────────────────────────────────────
