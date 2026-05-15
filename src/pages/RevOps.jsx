@@ -720,7 +720,6 @@ export default function App() {
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
       {id:"price-lists",icon:"$",  label:"Price Lists"},
-      {id:"prices",     icon:"◈",  label:"Price Manager"},
       {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
@@ -920,7 +919,6 @@ export default function App() {
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
             {mod==="price-lists" &&<ModPriceLists/>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("home");}}/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
@@ -1803,7 +1801,7 @@ function ModHome() {
         competitorName:pl.competitorName||"",
         source:pl.source||"",
         itemCount:(pl.items||[]).length,
-        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",price:it.price||0,listPrice:it.listPrice||0})),
+        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
     };
@@ -12538,13 +12536,21 @@ function ModAdmin() {
   );
 }
 
-// ─── PRICE LISTS ─────────────────────────────────────────────────────────────
+// ─── PRICE LISTS (unified) ────────────────────────────────────────────────────
+const MARGIN_TARGET=20,MARGIN_WARN=15,MARGIN_CRITICAL=10;
+function getMarginStatus(cost,price){
+  const m=cost&&price?((price-cost)/price*100):0;
+  if(m<MARGIN_CRITICAL) return{color:"#C0392B",bg:"#FDECEA",label:"Critical"};
+  if(m<MARGIN_WARN)     return{color:"#C77800",bg:"#FFF8E6",label:"Low"};
+  if(m>=MARGIN_TARGET)  return{color:"#1E8F4E",bg:"#EAF7EE",label:"Good"};
+  return                      {color:"#1A5FA8",bg:"#E8F0FA",label:"OK"};
+}
+
 function ModPriceLists() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("own");          // "own" | "competitor"
   const [selId,setSelId]=useState(null);
   const [showUpload,setShowUpload]=useState(false);
-  const [editItem,setEditItem]=useState(null); // {listId, item}
+  const [editItem,setEditItem]=useState(null);
   const [searchQ,setSearchQ]=useState("");
 
   const lists=useMemo(()=>(s.priceLists||[]).filter(pl=>pl.type===tab),[s.priceLists,tab]);
