@@ -1551,7 +1551,7 @@ function ModAnalytics() {
 function ModHome() {
   const {s,dispatch,toast,cu,setMod}=useApp();
 
-  // Redux-persisted history — survives navigation within the session
+  // Per-session Redux history — persists across navigation
   const history=s.agentHistory||[];
   const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",typeof fn==="function"?fn(history):fn);
 
@@ -1561,6 +1561,15 @@ function ModHome() {
   const [agentStatus,setAgentStatus]=useState(null);
   const [lastMeta,setLastMeta]=useState(null);
   const [sendingEmail,setSendingEmail]=useState(null);
+
+  // Session management
+  const [sessions,setSessions]=useState([]);
+  const [sessionsLoading,setSessionsLoading]=useState(true);
+  const [activeSessionId,setActiveSessionId]=useState(null);
+
+  // Team insights: assistantMsgId → [{userName, snippet, ts}]
+  const [insights,setInsights]=useState({});
+
   const sessionIdRef=useRef(null);
   const endRef=useRef(null);
   const inputRef=useRef(null);
@@ -1572,14 +1581,36 @@ function ModHome() {
     if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
   },[s.agentDraft]);
 
-  // Start a DB session for org-level conversation storage
+  // Load user's past sessions on mount
   useEffect(()=>{
-    fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home-agent"})})
-      .then(r=>r.json()).then(d=>{if(d.sessionId)sessionIdRef.current=d.sessionId;}).catch(()=>{});
-  },[]);
+    if(!cu?.id){setSessionsLoading(false);return;}
+    fetch(`/api/chat?userId=${encodeURIComponent(cu.id)}&limit=40`)
+      .then(r=>r.json())
+      .then(d=>{
+        // Only show sessions that have at least one user message
+        const valid=(d.sessions||[]).filter(s=>(s.messages||[]).some(m=>m.role==="user"));
+        setSessions(valid);
+        setSessionsLoading(false);
+      })
+      .catch(()=>setSessionsLoading(false));
+  },[cu?.id]);
 
-  // Save every message to DB (org learning — all conversations are searchable)
+  // Helpers
+  const sessionTitle=(sess)=>{
+    const first=(sess.messages||[]).find(m=>m.role==="user");
+    const txt=first?.content||"Conversation";
+    return txt.length>44?txt.slice(0,44)+"…":txt;
+  };
+
+  const relDate=(iso)=>{
+    const d=new Date(iso);const now=new Date();
+    const days=Math.floor((now-d)/86400000);
+    if(days===0)return"Today";if(days===1)return"Yesterday";
+    if(days<7)return`${days}d ago`;
+    return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  };
+
+  // Save every message to DB
   const saveMsg=(role,content,actions)=>{
     if(!sessionIdRef.current)return;
     fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -1587,7 +1618,28 @@ function ModHome() {
       .catch(()=>{});
   };
 
-  // Rich context — full pipeline, contacts, campaigns, RFPs, competitors
+  // New chat — clears history, next message lazily creates a new session
+  const newChat=()=>{
+    setHistory([]);setInsights({});
+    sessionIdRef.current=null;setActiveSessionId(null);
+    setTimeout(()=>inputRef.current?.focus(),100);
+  };
+
+  // Load a past session
+  const loadSession=async(sess)=>{
+    setActiveSessionId(sess.id);
+    sessionIdRef.current=sess.id;
+    setInsights({});
+    const msgs=(sess.messages||[]).map(m=>({
+      id:m.id,role:m.role,content:m.content,
+      actions:Array.isArray(m.actions)?m.actions:m.actions?[]:m.actions||[],
+      suggestions:[],ts:new Date(m.ts).getTime(),
+    }));
+    setHistory(msgs);
+    setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
+  };
+
+  // Rich context
   const buildContext=()=>{
     const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
     const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
@@ -1624,16 +1676,14 @@ ${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length
 
 ${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
 === ACTIONS YOU CAN TAKE ===
-Include an "actions" array when taking real action:
 · draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
+· create_deal: {type:"create_deal",name,org,value,stage,product}
 · flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
 · schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
 · log_note: {type:"log_note",deal_name,note}
 · add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
 · create_campaign: {type:"create_campaign",name,product,audience,channel}
 · navigate: {type:"navigate",target:"deals"|"crm"|"marketing"|"prices"|"prospecting"|"sponsorships"}
-
 Also include "suggestions": 3 short follow-up questions.
 ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
 Be specific, tactical, use real names. Flag hot signals with 🔥.`;
@@ -1648,15 +1698,11 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   const executeAction=async(action,msgIdx,actionIdx)=>{
     if(action.type==="navigate"){setMod(action.target);return;}
-    if(action.type==="draft_email"){
-      const key=`${msgIdx}_${actionIdx}`;
-      setExpandedEmail(e=>e===key?null:key);
-      return;
-    }
+    if(action.type==="draft_email"){const key=`${msgIdx}_${actionIdx}`;setExpandedEmail(e=>e===key?null:key);return;}
     if(action.type==="create_deal"){
       const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
       dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school,closing_date:action.followUpDate||"",description:d.notes})});toast("✓ Created in Zoho CRM","success");}catch{}
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school})});toast("✓ Created in Zoho CRM","success");}catch{}
       return;
     }
     if(action.type==="flag_deal"){
@@ -1666,33 +1712,27 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
     }
     if(action.type==="schedule_followup"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){
-        dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});
-        toast(`Follow-up set for ${d.name}: ${action.date}`,"success");
-        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${action.date}. ${action.note||""}`})});}catch{}
-      }
+      if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});toast(`Follow-up set: ${action.date}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${action.date}. ${action.note||""}`})});}catch{}}
       return;
     }
     if(action.type==="log_note"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){
-        dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});
-        toast(`Note logged on ${d.name}`,"success");
-        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:action.note})});}catch{}
-      }
+      if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});toast(`Note logged on ${d.name}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:action.note})});}catch{}}
       return;
     }
     if(action.type==="add_contact"){
       const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
       dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});toast("✓ Contact synced to Zoho","success");}catch{}
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});toast("✓ Synced to Zoho","success");}catch{}
       return;
     }
-    if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing — create your campaign","info");return;}
+    if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
   };
 
   const sendEmailNow=async(action,key)=>{
-    if(!action.to_email){toast("No email address — can't send","error");return;}
+    if(!action.to_email){toast("No email — can't send","error");return;}
     setSendingEmail(key);
     try{
       const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body})});
@@ -1703,15 +1743,8 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
         const contact=(s.contacts||[]).find(c=>c.email===action.to_email);
         if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
         const nameParts=(action.to_name||"").toLowerCase().split(" ");
-        const matchDeal=(s.deals||[]).find(d=>{
-          const dn=(d.name||"").toLowerCase();
-          return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));
-        });
-        if(matchDeal&&!matchDeal.followUpDate){
-          const follow3=new Date(Date.now()+3*86400000).toISOString().slice(0,10);
-          dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:follow3});
-          toast(`Follow-up auto-set for ${follow3}`,"info");
-        }
+        const matchDeal=(s.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
+        if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});toast(`Follow-up auto-set ${f}`,"info");}
         setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
       }else{toast(d.error||"Send failed","error");}
     }catch(e){toast(`Send error: ${e.message}`,"error");}
@@ -1722,12 +1755,36 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
     const msg=(overrideMsg||input).trim();
     if(!msg||running)return;
     setInput("");setRunning(true);setAgentStatus("thinking");
-    const userEntry={role:"user",content:msg,ts:Date.now()};
+
+    // Lazily create session on first message, attributed to the current user
+    if(!sessionIdRef.current){
+      try{
+        const sr=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home-agent"})});
+        const sd=await sr.json();
+        if(sd.sessionId){
+          sessionIdRef.current=sd.sessionId;
+          setActiveSessionId(sd.sessionId);
+          // Prepend to sessions list
+          const stub={id:sd.sessionId,userId:cu?.id,userName:cu?.name,createdAt:new Date().toISOString(),messages:[]};
+          setSessions(prev=>[stub,...prev]);
+        }
+      }catch{}
+    }
+
+    const msgId=mkId();
+    const userEntry={id:msgId,role:"user",content:msg,ts:Date.now()};
     const nextHistory=[...history,userEntry];
     setHistory(nextHistory);
     saveMsg("user",msg,null);
-    const localContext={deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],invoices:s.invoices||[],sequences:s.sequences||[]};
+
+    // Update session in list with this message for live preview
+    setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
+      ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
+
     const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
+    const localContext={deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],invoices:s.invoices||[],sequences:s.sequences||[]};
+
     try{
       const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext})});
       if(!r.ok){const e=await r.json();throw new Error(e.error||`HTTP ${r.status}`);}
@@ -1737,39 +1794,46 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
       const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
       const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
       setLastMeta(meta);
-      const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
+
+      const aId=mkId();
+      const assistantEntry={id:aId,role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
       setHistory(h=>[...h,assistantEntry]);
       saveMsg("assistant",message,actions.length?actions:null);
+
       if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Review in Home"});
       dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
-      // Auto-execute safe low-risk actions silently
+
+      // Auto-execute safe actions
       actions.forEach(a=>{
         if(a.type==="schedule_followup"){
           const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
-          if(d){
-            dispatch("UPDATE_DEAL",{id:d.id,followUpDate:a.date,...(a.note?{notes:(d.notes?d.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});
-            toast(`📅 Auto: follow-up set ${a.date} — ${d.name}`,"info");
-            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}
-          }
+          if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:a.date,...(a.note?{notes:(d.notes?d.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});toast(`📅 Auto: follow-up set ${a.date} — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}}
         }
         if(a.type==="log_note"){
           const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
-          if(d){
-            dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});
-            toast(`📝 Auto: note logged — ${d.name}`,"info");
-            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}
-          }
+          if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});toast(`📝 Auto: note logged — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}}
         }
       });
+
+      // Fire-and-forget: look for similar questions from other team members
+      if(cu?.id){
+        fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"find_similar",query:msg,excludeUserId:cu.id,limit:2})})
+          .then(r=>r.json())
+          .then(d=>{if(d.matches?.length)setInsights(prev=>({...prev,[aId]:d.matches}));})
+          .catch(()=>{});
+      }
     }catch(e){
-      setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
+      setHistory(h=>[...h,{id:mkId(),role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
       saveMsg("assistant",`Error: ${e.message}`,null);
     }
     setAgentStatus(null);setRunning(false);
     setTimeout(()=>inputRef.current?.focus(),100);
   };
 
-  const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
+  const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);setInsights({});toast("Conversation cleared","info");};
 
   // Sidebar data
   const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
@@ -1795,14 +1859,44 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   return(
     <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+
+      {/* ── SESSIONS RAIL (left) ── */}
+      <div style={{width:220,background:B.surface,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0}}>
+        <div style={{padding:"12px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+          <button onClick={newChat} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 0",fontSize:11,fontWeight:700,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ NEW CHAT</button>
+        </div>
+        <div style={{padding:"8px 8px 4px",flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"0 4px"}}>CHAT HISTORY</div>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"0 8px 8px"}}>
+          {sessionsLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 4px"}}>Loading…</div>}
+          {!sessionsLoading&&sessions.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 4px",lineHeight:1.5}}>Your conversations will appear here.</div>}
+          {sessions.map(sess=>{
+            const isActive=sess.id===activeSessionId;
+            const title=sessionTitle(sess);
+            const msgCount=(sess.messages||[]).filter(m=>m.role==="user").length;
+            return(
+              <button key={sess.id} onClick={()=>loadSession(sess)}
+                style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparent",border:`1px solid ${isActive?B.orange:B.border}`,borderRadius:6,padding:"8px 9px",marginBottom:4,cursor:"pointer",display:"block"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:isActive?600:400,color:isActive?B.orange:B.text,lineHeight:1.35,marginBottom:3,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{title}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{relDate(sess.createdAt)}</span>
+                  {msgCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{msgCount}q</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* ── CHAT ── */}
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
 
-        {/* Header bar */}
-        <div style={{padding:"12px 20px 10px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+        {/* Header */}
+        <div style={{padding:"11px 18px 9px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
           <div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>RevOps Agent</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Full context · drafts outreach, flags deals, syncs CRM · every chat saved</div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>RevOps Agent</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Full context · chats saved per user · team insights surfaced</div>
           </div>
           <div style={{display:"flex",gap:6,alignItems:"center"}}>
             {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
@@ -1812,15 +1906,13 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
         </div>
 
         {/* Messages */}
-        <div style={{flex:1,overflowY:"auto",padding:"20px 22px 10px",display:"flex",flexDirection:"column",gap:12}}>
-
-          {/* Empty state — starter prompts */}
+        <div style={{flex:1,overflowY:"auto",padding:"18px 20px 8px",display:"flex",flexDirection:"column",gap:12}}>
           {history.length===0&&(
             <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",paddingTop:16}}>
               <div style={{textAlign:"center",marginBottom:18}}>
                 {(()=>{const h=new Date().getHours();const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";const nm=cu?.name?.split(" ")[0]||"there";return<div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.muted}}>{gr}, {nm}. What do you need?</div>;})()}
               </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:520,margin:"0 auto",width:"100%"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:500,margin:"0 auto",width:"100%"}}>
                 {STARTERS.map(st=>(
                   <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
                 ))}
@@ -1828,9 +1920,8 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
             </div>
           )}
 
-          {/* Conversation */}
           {history.map((m,msgIdx)=>(
-            <div key={msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+            <div key={m.id||msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
               <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
 
               {/* Action buttons */}
@@ -1838,46 +1929,44 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
                 <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
                   {m.actions.map((a,ai)=>{
                     if(a.type==="draft_email"){
-                      const key=`${msgIdx}_${ai}`;
-                      const expanded=expandedEmail===key;
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedEmail===key;
                       return(
                         <div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
                           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.greenBg,borderBottom:expanded?`1px solid ${B.green}20`:"none"}}>
                             <div style={{display:"flex",gap:8,alignItems:"center"}}>
                               <span style={{fontSize:14}}>✉</span>
-                              <div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>{a.to_name}</div>
-                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{a.subject}</div>
-                              </div>
+                              <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>{a.to_name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{a.subject}</div></div>
                             </div>
                             <div style={{display:"flex",gap:5,flexShrink:0}}>
-                              {a.to_email&&(
-                                <button onClick={()=>sendEmailNow(a,`${msgIdx}_${ai}`)} disabled={sendingEmail===`${msgIdx}_${ai}`} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===`${msgIdx}_${ai}`?.6:1}}>
-                                  {sendingEmail===`${msgIdx}_${ai}`?"SENDING...":"✉ SEND NOW"}
-                                </button>
-                              )}
+                              {a.to_email&&<button onClick={()=>sendEmailNow(a,`${msgIdx}_${ai}`)} disabled={sendingEmail===`${msgIdx}_${ai}`} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===`${msgIdx}_${ai}`?.6:1}}>{sendingEmail===`${msgIdx}_${ai}`?"SENDING...":"✉ SEND NOW"}</button>}
                               <button onClick={()=>copyEmail(a)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋 COPY</button>
                               <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
                             </div>
                           </div>
-                          {expanded&&(
-                            <div style={{padding:"10px 12px"}}>
-                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div>
-                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div>
-                            </div>
-                          )}
+                          {expanded&&<div style={{padding:"10px 12px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div></div>}
                         </div>
                       );
                     }
                     const col=ACTION_COLORS[a.type]||{c:B.muted,bg:B.surface};
                     return(
                       <button key={ai} onClick={()=>executeAction(a,msgIdx,ai)} style={{background:col.bg,color:col.c,border:`1px solid ${col.c}40`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",textAlign:"left"}}>
-                        {ACTION_LABELS[a.type]||"▶ DO IT"}
-                        {a.deal_name&&` — ${a.deal_name}`}{a.name&&` — ${a.name}`}{a.to_name&&` — ${a.to_name}`}
-                        {a.date&&` (${a.date})`}
+                        {ACTION_LABELS[a.type]||"▶ DO IT"}{a.deal_name&&` — ${a.deal_name}`}{a.name&&` — ${a.name}`}{a.to_name&&` — ${a.to_name}`}{a.date&&` (${a.date})`}
                       </button>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Team insights — similar questions from other users */}
+              {m.role==="assistant"&&insights[m.id]?.length>0&&(
+                <div style={{maxWidth:"88%",marginTop:5,background:`${B.blue}08`,border:`1px solid ${B.blue}25`,borderRadius:6,padding:"7px 12px"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.6,marginBottom:5}}>💡 TEAM ASKED SOMETHING SIMILAR</div>
+                  {insights[m.id].map((ins,i)=>(
+                    <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.mid,lineHeight:1.5,marginBottom:i<insights[m.id].length-1?4:0}}>
+                      <span style={{color:B.blue,fontWeight:600}}>{ins.userName}</span> · <span style={{fontStyle:"italic"}}>"{ins.snippet}{ins.snippet.length>=80?"…":""}"</span>
+                      <span style={{color:B.muted,fontSize:9,marginLeft:6}}>{relDate(ins.ts)}</span>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -1889,17 +1978,14 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
                   ))}
                 </div>
               )}
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?"You":"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
             </div>
           ))}
 
           {running&&(
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
-                <Spin/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-                  {agentStatus==="searching"?"🔍 Searching web...":agentStatus==="zoho"?"📡 Fetching live Zoho data...":"Thinking..."}
-                </span>
+                <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{agentStatus==="searching"?"🔍 Searching web...":agentStatus==="zoho"?"📡 Fetching live Zoho data...":"Thinking..."}</span>
               </div>
             </div>
           )}
@@ -1907,12 +1993,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
         </div>
 
         {/* Input bar */}
-        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"12px 18px"}}>
+        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"11px 16px"}}>
           <div style={{display:"flex",gap:9}}>
             <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..." style={{flex:1,background:B.pageBg,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,fontFamily:"'Lexend',sans-serif"}}/>
             <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
           </div>
-          <div style={{marginTop:7,display:"flex",gap:5,flexWrap:"wrap"}}>
+          <div style={{marginTop:6,display:"flex",gap:5,flexWrap:"wrap"}}>
             {["What's urgent today?","Overdue deals","Draft email to top lead","Who's close to closing?","Summarize this week"].map(q=>(
               <button key={q} onClick={()=>send(q)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:99,padding:"3px 11px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>{q}</button>
             ))}
@@ -1920,18 +2006,14 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
         </div>
       </div>
 
-      {/* ── PRIORITY SIDEBAR ── */}
-      <div style={{width:230,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
-
-        {/* Pipeline snapshot */}
+      {/* ── PRIORITY SIDEBAR (right) ── */}
+      <div style={{width:220,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
         <div style={{padding:"14px 14px 12px",borderBottom:`1px solid ${B.border}`}}>
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>PIPELINE</div>
           <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(pipeline)}</div>
           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>{openDeals.length} open deal{openDeals.length!==1?"s":""}</div>
           <button onClick={()=>setMod("deals")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"7px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
         </div>
-
-        {/* Overdue */}
         {overdueDeals.length>0&&(
           <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
             <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
@@ -1946,8 +2028,6 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
             ))}
           </div>
         )}
-
-        {/* Hot deals */}
         {hotDeals.length>0&&(
           <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT DEALS</div>
@@ -1962,8 +2042,6 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
             ))}
           </div>
         )}
-
-        {/* Hot contacts */}
         {topContacts.length>0&&(
           <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT CONTACTS</div>
@@ -1976,8 +2054,6 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
             ))}
           </div>
         )}
-
-        {/* Open RFPs */}
         {openRfps.length>0&&(
           <div style={{padding:"12px 14px"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>OPEN RFPS</div>
@@ -1989,7 +2065,6 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
             ))}
           </div>
         )}
-
         {!openDeals.length&&!topContacts.length&&!openRfps.length&&(
           <div style={{padding:"16px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Add deals and contacts to see live context here.</div>
         )}
