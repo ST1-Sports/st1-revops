@@ -1,10 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
-const RFPToolPage    = lazy(() => import('./RFPTool.jsx'))
-const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
@@ -14,8 +12,6 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 function usePrefetchPanels() {
   useEffect(() => {
     import('./CommandCenter.jsx');
-    import('./PriceTool.jsx');
-    import('./RFPTool.jsx');
   }, []);
 }
 
@@ -80,8 +76,6 @@ const B = {
 
 const STORE = "st1_revops_v2";
 
-const USERS = []; // Reps are managed in Settings → Sales Reps (stored in s.reps)
-
 const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
@@ -90,6 +84,7 @@ const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
 const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
@@ -114,7 +109,6 @@ const SEED = {
   templates: [],
   reps: [],
   strategies: [],
-  workflowTemplates: [],
   activity: [],
   integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
   company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -122,6 +116,7 @@ const SEED = {
   savedAds: [],
   socialPosts: [],
   campaigns: [],
+  priceLists: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -164,11 +159,11 @@ function mergeServerState(base, server) {
     socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
     savedAds:     mergeById(base.savedAds,     server.savedAds),
     templates:    mergeById(base.templates,    server.templates),
-    workflowTemplates: mergeById(base.workflowTemplates, server.workflowTemplates),
     reps:         mergeById(base.reps,         server.reps),
     orders:       mergeById(base.orders,       server.orders),
     alerts:       mergeById(base.alerts,       server.alerts),
     activity:     mergeById(base.activity,     server.activity),
+    priceLists:   mergeById(base.priceLists,   server.priceLists),
   };
 }
 
@@ -204,13 +199,13 @@ function useStore() {
           campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
           reps:         Array.isArray(p.reps)         ? p.reps         : [],
           strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
-          workflowTemplates: Array.isArray(p.workflowTemplates) ? p.workflowTemplates : [],
           invoiceLastSync: p.invoiceLastSync||null,
           contactsLastSync: p.contactsLastSync||null,
           lastBriefDate: p.lastBriefDate||null,
           pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
           appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
           contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
+          priceLists:   Array.isArray(p.priceLists)   ? p.priceLists   : [],
         };
       }
     } catch {}
@@ -448,6 +443,7 @@ function reducer(prev, action, payload) {
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
+    case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next[payload];return {...prev,competeIntel:next};}
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
@@ -483,9 +479,13 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
-    case "ADD_WORKFLOW_TEMPLATE":    return {...prev, workflowTemplates:[payload,...(prev.workflowTemplates||[])]};
-    case "UPDATE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).map(t=>t.id===payload.id?{...t,...payload}:t)};
-    case "DELETE_WORKFLOW_TEMPLATE": return {...prev, workflowTemplates:(prev.workflowTemplates||[]).filter(t=>t.id!==payload)};
+    case "ADD_PRICE_LIST":  return {...prev, priceLists:[payload,...(prev.priceLists||[])]};
+    case "UPDATE_PRICE_LIST": return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id===payload.id?{...pl,...payload}:pl)};
+    case "DEL_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).filter(pl=>pl.id!==payload)};
+    case "UPDATE_PRICE_LIST_ITEM": {
+      const {listId, itemId, updates} = payload;
+      return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id!==listId?pl:{...pl,items:(pl.items||[]).map(it=>it.id===itemId?{...it,...updates}:it)})};
+    }
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
@@ -551,15 +551,13 @@ const mergeTags=(text,c)=>(text||"")
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
-const RFP_STAGES  = ["New", "In Process", "Bid", "No Bid"];
-const DSC = {Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
+const DSC ={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
 const RSC = {
   "New":B.blue,"In Process":B.orange,"Bid":B.green,"No Bid":B.muted,
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ISC = {draft:{c:B.muted,bg:B.surface},sent:{c:B.blue,bg:B.blueBg},viewed:{c:B.purple,bg:B.purpleBg},partial:{c:B.yellow,bg:B.yellowBg},paid:{c:B.green,bg:B.greenBg},overdue:{c:B.red,bg:B.redBg}};
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
@@ -575,9 +573,7 @@ const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleybal
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 
 function urgentCount(s) {
-  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length
-    + (s.invoices||[]).filter(i=>i.status==="overdue").length
-    + (s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=3).length;
+  return (s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage)&&d.followUpDate&&dUntil(d.followUpDate)<0).length;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -699,56 +695,39 @@ export default function App() {
 
   if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
-  const NAV = [
+  const NAV = useMemo(()=>[
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
+    {id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
     {id:"analytics",   icon:"▣", label:"Analytics"},
-    {id:"crm",         icon:"◈", label:"CRM"},
-    {id:"workflow",    icon:"⤳", label:"Sales Workflow"},
-    {id:"invoicing",   icon:"▲", label:"Invoices & AR",  badge:(s.invoices||[]).filter(i=>i.status==="overdue").length},
-    {id:"rfp",         icon:"⊘", label:"RFP / Bids",     badge:(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=7).length},
+    {id:"crm",           icon:"◈", label:"CRM"},
+    {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
     // ── GROWTH ─────────────────────────────────────────────────────────
     {id:"_s_growth"},
     {id:"prospecting", icon:"⊕", label:"Prospecting"},
-    {id:"emails",      icon:"✉", label:"Emails"},
     {id:"social",      icon:"📱", label:"Social"},
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
     {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
+    {id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
-    {id:"agent",       icon:"AI",label:"AI Agent"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    {id:"alerts",      icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
-    // ── AI TOOLS (expandable) ───────────────────────────────────────────
-    {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
-      {id:"cc-social",      icon:"📱", label:"Social Media"},
-      {id:"cc-image",       icon:"🖼", label:"Image Generator"},
-      {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
-      {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
-      {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
-      {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
-      {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-      {id:"cc-analytics",   icon:"📈", label:"Analytics"},
-      {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
-    ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"rfp-tool",   icon:"📋", label:"RFP Automation"},
-      {id:"prices",     icon:"$",  label:"Price Manager"},
+      {id:"price-lists",icon:"$",  label:"Price Lists"},
       {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
-    {id:"alerts",        icon:"◎", label:"Alerts",             badge:(s.alerts||[]).filter(a=>!a.sent).length},
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
     ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
   // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
@@ -842,7 +821,7 @@ export default function App() {
                   style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:"rgba(255,255,255,0.55)",padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative"}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
-                  {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:n.id==="invoicing"?B.red:B.orange,color:"#fff",borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
+                  {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:B.orange,color:"#fff",borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
                   {slim&&n.badge>0&&<span style={{position:"absolute",top:5,right:5,background:B.orange,color:"#fff",borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{n.badge}</span>}
                 </button>
               );
@@ -912,10 +891,7 @@ export default function App() {
                 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
               </button>
               <div style={{width:1,height:14,background:B.border}}/>
-              <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:(s.alerts||[]).filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
-                ◎
-                {(s.alerts||[]).filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{(s.alerts||[]).filter(a=>!a.sent).length}</span>}
-              </button>
+              {(()=>{const unread=(s.alerts||[]).filter(a=>!a.sent).length;return(<button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:unread?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>◎{unread>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{unread}</span>}</button>);})()}
             </div>
           </header>
 
@@ -923,16 +899,14 @@ export default function App() {
             <ErrBound key={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
-            {mod==="crm"         && <ModCRM/>}
-            {mod==="workflow"    && <ModWorkflow/>}
-            {mod==="deals"       && <ModDeals/>}
+            {mod==="crm"          && <ModCRM/>}
+            {mod==="sponsorships" && <ModSponsorships/>}
+            {mod==="deals"        && <ModDeals/>}
             {mod==="orders"      && <ModOrders/>}
-            {mod==="rfp"         && <ModRFP/>}
-            {mod==="invoicing"   && <ModInvoicing/>}
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
+            {mod==="social"      && <ModSocial/>}
             {mod==="marketing"   && <ModMarketing/>}
-            {mod==="emails"      && <ModEmails/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -942,8 +916,8 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("cc-quote");}}/></Suspense>}
-            {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
+            {mod==="price-lists" &&<ModPriceLists/>}
+            {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
             </ErrBound>
@@ -1087,16 +1061,16 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 }
 
 // ─── SHARED UI ────────────────────────────────────────────────────────────────
-function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;}
-function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;}
-function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;}
-function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;}
-function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;}
-function UCh({uid}){const u=USERS.find(x=>x.id===uid);if(!u)return null;return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{u.initials}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
-function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;}
+const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
+const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
+const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
+const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
+const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
+const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;}
+const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 
 // ════════════════════════════════════════════════════════════════════════════
 //  BRIEFING
@@ -1113,33 +1087,31 @@ function ModAnalytics() {
   const contacts=s.contacts||[];
   const reps=s.reps||[];
 
-  const closedStages=["Closed Won","Closed Lost","PO Received"];
-  const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
-  const won=deals.filter(d=>d.stage==="Closed Won");
-  const lost=deals.filter(d=>d.stage==="Closed Lost");
-  const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
-  const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
-  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-  const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
-  const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
-  const totalClosed=won.length+lost.length;
-  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+  const {openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts}=useMemo(()=>{
+    const closedStages=["Closed Won","Closed Lost","PO Received"];
+    const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
+    const won=deals.filter(d=>d.stage==="Closed Won");
+    const lost=deals.filter(d=>d.stage==="Closed Lost");
+    const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
+    const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
+    const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
+    const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+    const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
+    const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
+    const totalClosed=won.length+lost.length;
+    const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
+    const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+    const now=new Date();
+    const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
+    const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
+    const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
+    const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
+    const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const campaignDeals=deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0));
+    return{openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts,campaignDeals};
+  },[deals,invoices,campaigns,contacts]);
 
-  // Won by month (last 6)
-  const now=new Date();
-  const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
-  const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
-  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
 
-  // Pipeline by stage (for Revenue tab)
-  const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
-
-  // Top products (won + open)
-  const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
-
-  const fmt$K=(n)=>{if(n>=1000)return "$"+(n/1000).toFixed(1)+"K";return "$"+Math.round(n).toLocaleString();}
 
   const TABS=[["overview","Overview"],["revenue","Revenue"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
 
@@ -1166,7 +1138,7 @@ function ModAnalytics() {
             <div className="card" style={{padding:14}}>
               <Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {[...deals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
+                {deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
                   <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
@@ -1220,7 +1192,7 @@ function ModAnalytics() {
                 const replied=enrs.filter(e=>e.status==="replied").length;
                 const done=enrs.filter(e=>e.status==="done").length;
                 const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
-                const rep=USERS.find(u=>u.id===camp.repId);
+                const rep=reps.find(r=>r.id===camp.repId);
                 const campDeals=deals.filter(d=>d.campaignId===camp.id);
                 const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
                 return(
@@ -1409,7 +1381,7 @@ function ModAnalytics() {
                 const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
                 if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
                 return entries.map(([rid,{count,value}])=>{
-                  const u=USERS.find(u=>u.id===rid)||reps.find(r=>r.id===rid);
+                  const u=reps.find(r=>r.id===rid);
                   const avg=count>0?Math.round(value/count):0;
                   return(
                     <div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -1430,7 +1402,7 @@ function ModAnalytics() {
               <div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
             ):(
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0)).map(d=>{
+                {campaignDeals.map(d=>{
                   const camp=campaigns.find(c=>c.id===d.campaignId);
                   return(
                     <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -1472,7 +1444,7 @@ function ModAnalytics() {
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:7}}>
                     {group.map(c=>{
-                      const lastAct=(c.activity||[]).sort((a,b)=>b.ts-a.ts)[0];
+                      const lastAct=(c.activity||[]).reduce((best,a)=>(!best||a.ts>best.ts)?a:best,null);
                       const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
                       const school=typeof c.school==="string"?c.school:c.school?.name||"";
                       const title=typeof c.title==="string"?c.title:c.title?.name||"";
@@ -1497,7 +1469,6 @@ function ModAnalytics() {
                               {lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
                             </div>
                             <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
-                              <OBtn sm col={B.blue} onClick={()=>setMod("emails")}>EMAIL →</OBtn>
                               <OBtn sm col={B.green} onClick={()=>setMod("deals")}>DEAL +</OBtn>
                             </div>
                           </div>
@@ -1572,82 +1543,115 @@ function ModAnalytics() {
 
 function ModHome() {
   const {s,dispatch,toast,cu,setMod}=useApp();
-  const [msgs,setMsgs]=useState(()=>{
-    const h=new Date().getHours();
-    const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";
-    const nm=cu?.name?.split(" ")[0]||"there";
-    return [{id:"welcome",role:"assistant",text:`${gr}, ${nm}! Ask me anything about ST1's pipeline — deals, invoices, RFPs, contacts, or help drafting emails and creating records.`,ts:Date.now(),suggestions:["What needs my attention today?","Show me overdue invoices","Who are my hottest leads?"]}];
-  });
+
+  // Per-session Redux history — persists across navigation
+  const history=s.agentHistory||[];
+  const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",typeof fn==="function"?fn(history):fn);
+
   const [input,setInput]=useState("");
-  const [loading,setLoading]=useState(false);
+  const [running,setRunning]=useState(false);
+  const [expandedEmail,setExpandedEmail]=useState(null);
+  const [expandedQuote,setExpandedQuote]=useState(null);
+  const [expandedCampaign,setExpandedCampaign]=useState(null);
+  const [agentStatus,setAgentStatus]=useState(null);
+  const [lastMeta,setLastMeta]=useState(null);
+  const [sendingEmail,setSendingEmail]=useState(null);
+  const [sendingQuote,setSendingQuote]=useState(null);
+  const [launchingCampaign,setLaunchingCampaign]=useState(null);
+  const [campaignSendTime,setCampaignSendTime]=useState({});
+
+  // Session management
+  const [sessions,setSessions]=useState([]);
+  const [sessionsLoading,setSessionsLoading]=useState(true);
+  const [activeSessionId,setActiveSessionId]=useState(null);
+
+  // Team insights: assistantMsgId → [{userName, snippet, ts}]
+  const [insights,setInsights]=useState({});
+
   const sessionIdRef=useRef(null);
   const endRef=useRef(null);
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+  const inputRef=useRef(null);
 
-  // Start a DB session on mount, fire-and-forget
+  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
+
+  // agentDraft — other modules can pre-fill a question
   useEffect(()=>{
-    fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home"})})
-      .then(r=>r.json()).then(d=>{if(d.sessionId) sessionIdRef.current=d.sessionId;}).catch(()=>{});
-  },[]);
+    if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
+  },[s.agentDraft]);
 
-  // Save a message to DB — fire-and-forget, never blocks the UI
+  // Load user's past sessions on mount
+  useEffect(()=>{
+    if(!cu?.id){setSessionsLoading(false);return;}
+    fetch(`/api/chat?userId=${encodeURIComponent(cu.id)}&limit=40`)
+      .then(r=>r.json())
+      .then(d=>{
+        // Only show sessions that have at least one user message
+        const valid=(d.sessions||[]).filter(s=>(s.messages||[]).some(m=>m.role==="user"));
+        setSessions(valid);
+        setSessionsLoading(false);
+      })
+      .catch(()=>setSessionsLoading(false));
+  },[cu?.id]);
+
+  // Helpers
+  const sessionTitle=(sess)=>{
+    const first=(sess.messages||[]).find(m=>m.role==="user");
+    const txt=first?.content||"Conversation";
+    return txt.length>44?txt.slice(0,44)+"…":txt;
+  };
+
+  const relDate=(iso)=>{
+    const d=new Date(iso);const now=new Date();
+    const days=Math.floor((now-d)/86400000);
+    if(days===0)return"Today";if(days===1)return"Yesterday";
+    if(days<7)return`${days}d ago`;
+    return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  };
+
+  // Save every message to DB
   const saveMsg=(role,content,actions)=>{
-    if(!sessionIdRef.current) return;
+    if(!sessionIdRef.current)return;
     fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})})
       .catch(()=>{});
   };
 
-  const buildCtx=()=>{
-    const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const od=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const topC=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const camps=(s.sequences||[]).filter(q=>q.status==="active");
-    return `You are the ST1 Sports RevOps AI — sharp, concise sales operations assistant.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"}
-
-PIPELINE: ${open.length} open deals · ${fmt$(open.reduce((a,d)=>a+d.value,0))} · ${od.length} overdue
-${open.slice(0,10).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-RFPS: ${activeRfps.length===0?"None":activeRfps.map(r=>`${r.name} (${r.stage}${r.dueDate?`, due ${r.dueDate}`:""})`).join(" | ")}
-
-AR: ${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-TOP LEADS: ${topC.length===0?"None":topC.map(c=>`${c.fullName||c.firstName} (${c.score}pts, ${c.school}, ${c.state})`).join(" | ")}
-
-CAMPAIGNS: ${camps.length===0?"None":camps.map(q=>`"${q.name}" (${(q.enrollments||[]).filter(e=>e.status==="active").length} active)`).join(" | ")}
-
-ACTIONS: When taking real action, include an "actions" array in your response:
-· create_deal: {type:"create_deal",name,org,value,stage,product}
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· navigate: {type:"navigate",target:"deals"|"rfp"|"invoicing"|"marketing"|"prices"|"prospecting"}
-
-Also include "suggestions": 3 short follow-up questions.
-ALWAYS respond with valid JSON: {"message":"...","actions":[],"suggestions":["...","...","..."]}
-Be concise, specific, use real names from the data. Flag hot signals with 🔥.`;
+  // New chat — clears history, next message lazily creates a new session
+  const newChat=()=>{
+    setHistory([]);setInsights({});
+    sessionIdRef.current=null;setActiveSessionId(null);
+    setTimeout(()=>inputRef.current?.focus(),100);
   };
 
-  const doAction=async(action)=>{
+  // Load a past session
+  const loadSession=async(sess)=>{
+    setActiveSessionId(sess.id);
+    sessionIdRef.current=sess.id;
+    setInsights({});
+    const msgs=(sess.messages||[]).map(m=>({
+      id:m.id,role:m.role,content:m.content,
+      actions:Array.isArray(m.actions)?m.actions:m.actions?[]:m.actions||[],
+      suggestions:[],ts:new Date(m.ts).getTime(),
+    }));
+    setHistory(msgs);
+    setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
+  };
+
+  const copyEmail=(action)=>{
+    const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
+    try{navigator.clipboard.writeText(text);}catch{}
+    toast("Email copied to clipboard","success");
+    dispatch("LOG",{msg:`Agent drafted email to ${action.to_name}`});
+  };
+
+  const executeAction=async(action,msgIdx,actionIdx)=>{
     if(action.type==="navigate"){setMod(action.target);return;}
+    if(action.type==="draft_email"){const key=`${msgIdx}_${actionIdx}`;setExpandedEmail(e=>e===key?null:key);return;}
     if(action.type==="create_deal"){
-      const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:""};
+      const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
       dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:_zid});}).catch(()=>{});
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school})});toast("✓ Created in Zoho CRM","success");}catch{}
       return;
-    }
-    if(action.type==="draft_email"){
-      const txt=`To: ${action.to_name} <${action.to_email||""}>\nSubject: ${action.subject}\n\n${action.body}`;
-      try{navigator.clipboard.writeText(txt);}catch{}
-      toast("Email draft copied to clipboard","success");return;
     }
     if(action.type==="flag_deal"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
@@ -1656,1071 +1660,590 @@ Be concise, specific, use real names from the data. Flag hot signals with 🔥.`
     }
     if(action.type==="schedule_followup"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});toast(`Follow-up set: ${action.date}`,"success");}
+      if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});toast(`Follow-up set: ${action.date}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${action.date}. ${action.note||""}`})});}catch{}}
       return;
     }
     if(action.type==="log_note"){
       const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
-      if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});toast("Note logged","success");}
+      if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});toast(`Note logged on ${d.name}`,"success");
+        try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:action.note})});}catch{}}
       return;
     }
     if(action.type==="add_contact"){
-      const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",source:"home-ai",importedAt:Date.now()};
+      const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
       dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Title:c.title,Company:c.school}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:_zid});}).catch(()=>{});
+      try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});toast("✓ Synced to Zoho","success");}catch{}
       return;
     }
+    if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
+    if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
+    if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
   };
 
-  const send=async(txt)=>{
-    const q=(txt||input).trim();
-    if(!q||loading) return;
-    setInput("");
-    setMsgs(m=>[...m,{id:mkId(),role:"user",text:q,ts:Date.now()}]);
-    saveMsg("user",q,null);
-    setLoading(true);
+  const createQuoteNow=async(action,key)=>{
+    setSendingQuote(key);
     try{
-      const hist=msgs.slice(-10).map(m=>({role:m.role,content:m.text}));
-      const r=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,system:buildCtx(),messages:[...hist,{role:"user",content:q}]})});
-      let d;
-      try{ d=await r.json(); }catch{ throw new Error(`API returned HTTP ${r.status} (non-JSON)`); }
-      if(!r.ok) throw new Error(d?.error||d?.message||`API error ${r.status}`);
-      const raw=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").trim();
-      let parsed;
-      try{const m=raw.match(/\{[\s\S]*\}/s);parsed=m?JSON.parse(m[0]):null;}catch{}
-      const reply=parsed?.message||raw||"(no response)";
-      const actions=parsed?.actions||[];
-      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:reply,actions,suggestions:parsed?.suggestions||[],ts:Date.now()}]);
-      saveMsg("assistant",reply,actions.length?actions:null);
-    }catch(e){
-      setMsgs(m=>[...m,{id:mkId(),role:"assistant",text:`Error: ${e.message}`,ts:Date.now()}]);
-    }finally{setLoading(false);}
+      const r=await fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"create_quote",
+        customer_name:action.customer_name,
+        contact_person:action.contact_person||"",
+        email:action.email||"",
+        line_items:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0})),
+        notes:action.notes||"",
+        send_email:!!(action.send_email&&action.email),
+      })});
+      const d=await r.json();
+      if(d.quote_id||d.estimate_number){
+        toast(`Quote created: ${d.estimate_number||d.quote_id}${d.emailed?" · emailed":""}!`,"success");
+        dispatch("LOG",{msg:`Quote ${d.estimate_number} created for ${action.customer_name}`});
+        const matchDeal=(s.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
+        if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.estimate_number} created`});
+      }else{toast(d.error||"Quote creation failed","error");}
+    }catch(e){toast(`Quote error: ${e.message}`,"error");}
+    setSendingQuote(null);
   };
 
-  const open=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const odDeals=open.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-  const hotDeals=open.filter(d=>d.priority==="hot").slice(0,3);
-  const odInv=(s.invoices||[]).filter(i=>i.status==="overdue");
-  const urgRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)&&r.dueDate&&dUntil(r.dueDate)<=5);
-  const urgentN=odDeals.length+odInv.length+urgRfps.length;
-  const ACT_LABELS={create_deal:"+ Create Deal",draft_email:"✉ Copy Email Draft",flag_deal:"🔥 Flag Hot",schedule_followup:"📅 Set Follow-up",log_note:"📝 Log Note",add_contact:"+ Add Contact",navigate:"→ Go There"};
+  const launchCampaignNow=async(action,key,matchedContacts)=>{
+    setLaunchingCampaign(key);
+    try{
+      const sendAt=campaignSendTime[key]||"";
+      const touches=(action.emails||[]).map((e,i)=>({id:mkId(),step:i,subject:e.subject,body:e.body,delay:e.delay_days||0,channel:"email"}));
+      const enrollments=matchedContacts.map(c=>({contactId:c.id,email:c.email,name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),status:"active",step:0,enrolledAt:Date.now()}));
+      const camp={
+        id:mkId(),
+        name:action.campaign_name,
+        product:action.product||"",
+        status:"active",
+        createdAt:new Date().toISOString().slice(0,10),
+        touches,
+        enrollments,
+        scheduledSendAt:sendAt||null,
+        notes:action.notes||"",
+        source:"agent",
+      };
+      dispatch("ADD_CAMPAIGN",camp);
+      dispatch("LOG",{msg:`Campaign "${camp.name}" created with ${enrollments.length} contacts via agent`});
+      toast(`✓ "${camp.name}" created — ${enrollments.length} contacts enrolled${sendAt?`, scheduled ${sendAt}`:""}. Go to Campaigns to send.`,"success");
+      setTimeout(()=>setMod("marketing"),1200);
+    }catch(e){toast(`Campaign error: ${e.message}`,"error");}
+    setLaunchingCampaign(null);
+  };
 
-  const panelCard=(children,onClick,bg,border)=>(
-    <div onClick={onClick} style={{padding:"7px 9px",background:bg,border:`1px solid ${border}`,borderRadius:6,marginBottom:4,cursor:"pointer"}}>
-      {children}
-    </div>
-  );
+  const sendEmailNow=async(action,key)=>{
+    if(!action.to_email){toast("No email — can't send","error");return;}
+    setSendingEmail(key);
+    try{
+      const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body})});
+      const d=await r.json();
+      if(d.sent){
+        toast(`Email sent to ${action.to_name||action.to_email}`,"success");
+        dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
+        const contact=(s.contacts||[]).find(c=>c.email===action.to_email);
+        if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
+        const nameParts=(action.to_name||"").toLowerCase().split(" ");
+        const matchDeal=(s.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
+        if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});toast(`Follow-up auto-set ${f}`,"info");}
+        setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
+      }else{toast(d.error||"Send failed","error");}
+    }catch(e){toast(`Send error: ${e.message}`,"error");}
+    setSendingEmail(null);
+  };
+
+  const send=async(overrideMsg)=>{
+    const msg=(overrideMsg||input).trim();
+    if(!msg||running)return;
+    setInput("");setRunning(true);setAgentStatus("thinking");
+
+    // Lazily create session on first message, attributed to the current user
+    if(!sessionIdRef.current){
+      try{
+        const sr=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"home-agent"})});
+        const sd=await sr.json();
+        if(sd.sessionId){
+          sessionIdRef.current=sd.sessionId;
+          setActiveSessionId(sd.sessionId);
+          // Prepend to sessions list
+          const stub={id:sd.sessionId,userId:cu?.id,userName:cu?.name,createdAt:new Date().toISOString(),messages:[]};
+          setSessions(prev=>[stub,...prev]);
+        }
+      }catch{}
+    }
+
+    const msgId=mkId();
+    const userEntry={id:msgId,role:"user",content:msg,ts:Date.now()};
+    const nextHistory=[...history,userEntry];
+    setHistory(nextHistory);
+    saveMsg("user",msg,null);
+
+    // Update session in list with this message for live preview
+    setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
+      ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
+
+    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
+    // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
+    const allContacts=s.contacts||[];
+    const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
+    const unscoredContacts=allContacts.filter(c=>!(c.score||0)).slice(0,20);
+    const localContext={
+      deals:(s.deals||[]).slice(0,60),
+      contacts:[...scoredContacts,...unscoredContacts],
+      rfps:(s.rfps||[]).slice(0,20),
+      invoices:(s.invoices||[]).slice(0,20),
+      sequences:(s.sequences||[]).slice(0,10),
+      priceLists:(s.priceLists||[]).map(pl=>({
+        id:pl.id,
+        name:pl.name,
+        type:pl.type,
+        competitorName:pl.competitorName||"",
+        source:pl.source||"",
+        itemCount:(pl.items||[]).length,
+        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
+      })),
+      competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
+    };
+
+    try{
+      const ctrl=new AbortController();
+      const timeout=setTimeout(()=>ctrl.abort(),90000);
+      let r;
+      try{
+        r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext}),signal:ctrl.signal});
+      }finally{clearTimeout(timeout);}
+      if(!r.ok){let errMsg=`HTTP ${r.status}`;try{const e=await r.json();errMsg=e.error||errMsg;}catch{}throw new Error(errMsg);}
+      const raw=await r.json();
+      const message=raw?.message||"Sorry, something went wrong.";
+      const actions=Array.isArray(raw?.actions)?raw.actions:[];
+      const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
+      const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
+      setLastMeta(meta);
+
+      const aId=mkId();
+      const assistantEntry={id:aId,role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
+      setHistory(h=>[...h,assistantEntry]);
+      saveMsg("assistant",message,actions.length?actions:null);
+
+      if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Review in Home"});
+      dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
+
+      // Auto-execute safe actions
+      actions.forEach(a=>{
+        if(a.type==="schedule_followup"){
+          const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:a.date,...(a.note?{notes:(d.notes?d.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});toast(`📅 Auto: follow-up set ${a.date} — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}}
+        }
+        if(a.type==="log_note"){
+          const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
+          if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});toast(`📝 Auto: note logged — ${d.name}`,"info");
+            try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}}
+        }
+        if(a.type==="store_competitor_intel"&&a.competitor_name&&a.intel){
+          dispatch("SET_COMPETE_INTEL",{[a.competitor_name]:a.intel});
+          toast(`⊗ Intel saved: ${a.competitor_name}`,  "info");
+        }
+      });
+
+      // Fire-and-forget: look for similar questions from other team members
+      if(cu?.id){
+        fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({action:"find_similar",query:msg,excludeUserId:cu.id,limit:2})})
+          .then(r=>r.json())
+          .then(d=>{if(d.matches?.length)setInsights(prev=>({...prev,[aId]:d.matches}));})
+          .catch(()=>{});
+      }
+    }catch(e){
+      setHistory(h=>[...h,{id:mkId(),role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
+      saveMsg("assistant",`Error: ${e.message}`,null);
+    }
+    setAgentStatus(null);setRunning(false);
+    setTimeout(()=>inputRef.current?.focus(),100);
+  };
+
+  const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);setInsights({});toast("Conversation cleared","info");};
+
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
+
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED"};
+
+  const STARTERS=[
+    "Who should I call or email today?",
+    "Draft outreach for my highest-priority contact",
+    "Build a 3-email sequence for Baseball coaches in Iowa and enroll them",
+    "Build a quote for 10 hurdles and 2 starting blocks",
+    "Which deals are most at risk right now?",
+    "How do I counter BSN Sports on pricing?",
+    "What product should I push hardest this season?",
+    "Who hasn't heard from us in 30+ days?",
+  ];
 
   return(
     <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
-      {/* ── CHAT ── */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
-        <div style={{flex:1,overflowY:"auto",padding:"24px 28px 16px",display:"flex",flexDirection:"column",gap:16}}>
-          {msgs.map((msg,i)=>(
-            <div key={msg.id||i} style={{display:"flex",flexDirection:"column",alignItems:msg.role==="user"?"flex-end":"flex-start",gap:8}}>
-              <div style={{maxWidth:"72%",background:msg.role==="user"?B.orange:B.white,color:msg.role==="user"?"#fff":B.text,borderRadius:msg.role==="user"?"16px 16px 4px 16px":"16px 16px 16px 4px",padding:"12px 16px",border:msg.role==="user"?`1px solid ${B.orange}`:`1px solid ${B.border}`,boxShadow:"0 1px 4px rgba(0,0,0,.06)",fontSize:13,lineHeight:1.65,fontFamily:"'Lexend',sans-serif",whiteSpace:"pre-wrap"}}>
-                {msg.text}
-              </div>
-              {(msg.actions||[]).length>0&&(
-                <div style={{display:"flex",flexWrap:"wrap",gap:6,maxWidth:"72%"}}>
-                  {msg.actions.map((a,ai)=>(
-                    <button key={ai} onClick={()=>doAction(a)} style={{background:B.orange,color:"#fff",border:"none",borderRadius:20,padding:"5px 14px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>
-                      {ACT_LABELS[a.type]||a.type}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {(msg.suggestions||[]).length>0&&(
-                <div style={{display:"flex",flexWrap:"wrap",gap:5,maxWidth:"100%"}}>
-                  {msg.suggestions.map((sg,si)=>(
-                    <button key={si} onClick={()=>send(sg)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:20,padding:"3px 12px",fontSize:11,color:B.textMid,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
-                      {sg}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-          {loading&&(
-            <div style={{display:"flex",gap:5,padding:"11px 15px",background:B.white,border:`1px solid ${B.border}`,borderRadius:"16px 16px 16px 4px",width:"fit-content",boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
-              {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:"50%",background:B.orange,animation:`blink 1.2s ease-in-out ${i*.2}s infinite`}}/>)}
-            </div>
-          )}
-          <div ref={endRef}/>
+
+      {/* ── SESSIONS RAIL (left) ── */}
+      <div style={{width:220,background:B.surface,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflow:"hidden",flexShrink:0}}>
+        <div style={{padding:"12px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+          <button onClick={newChat} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 0",fontSize:11,fontWeight:700,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ NEW CHAT</button>
         </div>
-
-        {/* Input */}
-        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"14px 20px"}}>
-          <div style={{display:"flex",gap:8,alignItems:"flex-end",background:B.pageBg,border:`1px solid ${B.border}`,borderRadius:12,padding:"10px 14px"}}>
-            <textarea value={input} onChange={e=>setInput(e.target.value)}
-              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
-              placeholder="Ask anything — deals, contacts, invoices, draft emails…"
-              rows={1} style={{flex:1,border:"none",background:"transparent",resize:"none",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,outline:"none",lineHeight:1.5,maxHeight:100,overflowY:"auto"}}/>
-            <button onClick={()=>send()} disabled={!input.trim()||loading}
-              style={{background:(!input.trim()||loading)?B.border:B.orange,color:"#fff",border:"none",borderRadius:8,width:34,height:34,display:"flex",alignItems:"center",justifyContent:"center",cursor:(!input.trim()||loading)?"default":"pointer",fontSize:16,flexShrink:0,transition:"background .15s"}}>
-              →
-            </button>
-          </div>
-          <div style={{marginTop:8,display:"flex",gap:5,flexWrap:"wrap"}}>
-            {["What's urgent today?","Overdue invoices","Draft email to top lead","Create a deal","Who's close to closing?"].map(q=>(
-              <button key={q} onClick={()=>send(q)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:99,padding:"3px 11px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
-                {q}
-              </button>
-            ))}
-          </div>
+        <div style={{padding:"8px 8px 4px",flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"0 4px"}}>CHAT HISTORY</div>
         </div>
-      </div>
-
-      {/* ── PRIORITY PANEL ── */}
-      <div style={{width:280,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
-        <div style={{padding:"14px 14px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>PRIORITY ITEMS</div>
-        </div>
-
-        {urgentN>0&&(
-          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
-            <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
-              <span style={{fontSize:13}}>⚡</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.red,fontFamily:"'Lexend',sans-serif"}}>Needs Attention</span>
-              <span style={{marginLeft:"auto",background:B.red,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>{urgentN}</span>
-            </div>
-            {odDeals.slice(0,3).map(d=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-              <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>{Math.abs(dUntil(d.followUpDate))}d overdue · {fmt$(d.value)}</div></>,
-              ()=>setMod("deals"),B.redBg,`${B.red}25`
-            ))}
-            {odInv.slice(0,2).map(inv=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{inv.customer}</div>
-              <div style={{fontSize:11,color:B.red,fontFamily:"'Lexend',sans-serif"}}>Invoice overdue · {fmt$(inv.balance||inv.total)}</div></>,
-              ()=>setMod("invoicing"),B.redBg,`${B.red}25`
-            ))}
-            {urgRfps.slice(0,2).map(r=>panelCard(
-              <><div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</div>
-              <div style={{fontSize:11,color:B.yellow,fontFamily:"'Lexend',sans-serif"}}>RFP due in {dUntil(r.dueDate)}d</div></>,
-              ()=>setMod("rfp"),B.yellowBg,`${B.yellow}40`
-            ))}
-          </div>
-        )}
-
-        {hotDeals.length>0&&(
-          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
-            <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
-              <span style={{fontSize:13}}>🔥</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.text,fontFamily:"'Lexend',sans-serif"}}>Hot Deals</span>
-            </div>
-            {hotDeals.map(d=>panelCard(
-              <><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
-                <div style={{fontSize:12,fontWeight:500,color:B.text,fontFamily:"'Lexend',sans-serif",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-                <span style={{fontSize:9,fontWeight:700,color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",flexShrink:0}}>HOT</span>
-              </div>
-              <div style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{d.stage} · {fmt$(d.value)}</div></>,
-              ()=>setMod("deals"),B.orangeBg,`${B.orange}25`
-            ))}
-          </div>
-        )}
-
-        <div style={{padding:"12px 14px"}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:8}}>SNAPSHOT</div>
-          {[
-            ["Open Deals",open.length,()=>setMod("deals")],
-            ["Pipeline Value",fmt$(open.reduce((a,d)=>a+d.value,0)),()=>setMod("deals")],
-            ["Open RFPs",(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).length,()=>setMod("rfp")],
-            ["AR Outstanding",fmt$((s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0)),()=>setMod("invoicing")],
-          ].map(([lbl,val,fn])=>(
-            <div key={lbl} onClick={fn} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-              <span style={{fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>{lbl}</span>
-              <span style={{fontSize:12,fontWeight:600,color:B.text,fontFamily:"'Lexend',sans-serif"}}>{val}</span>
-            </div>
-          ))}
-          <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:6}}>
-            <button onClick={()=>setMod("deals")} style={{background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
-            <button onClick={()=>setMod("rfp")} style={{background:"none",border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"7px 12px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>New RFP</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  TALK TRACK — phase-by-phase sales script sub-view inside CRM
-// ════════════════════════════════════════════════════════════════════════════
-
-const TT_PHASES=[
-  {id:"RAPPORT",   label:"Rapport",    script:"Start by building genuine rapport. Ask about their season, recent wins, or team achievements. Listen actively and find common ground before moving to business."},
-  {id:"INTRO",     label:"ST1 Intro",  script:"ST1 Sports is a full-service athletic supplier serving 200+ schools across the region. We go beyond equipment — we're a partner for team stores, sponsorship revenue, and streamlined procurement. Our goal is to make your program stronger and take work off your plate."},
-  {id:"DISCOVERY", label:"Discovery",  script:"Now let's understand your program. These questions help us build a custom value model and show exactly what a partnership looks like for your school."},
-  {id:"PAIN",      label:"Pain Points",script:"Let's identify where your program has the biggest opportunities. Walk through each challenge below and confirm any that apply."},
-  {id:"SOLUTION",  label:"Solution",   script:"Based on what you've shared, here's what partnering with ST1 means for your program. Let me walk you through the numbers."},
-];
-
-const PAIN_CARDS=[
-  {id:"budget",      title:"Equipment Budget Constraints",     body:"School struggles to buy quality gear within tight budget limits. Coaches spend too much time hunting for deals."},
-  {id:"nostore",     title:"No Online Team Store",             body:"Manual collection of payments and orders overwhelms coaches during uniform season. Parents are frustrated."},
-  {id:"booster",     title:"Weak Booster / Community Support", body:"Fundraising is disorganized, participation is low, and the booster club isn't generating meaningful program revenue."},
-  {id:"vendors",     title:"Multiple Vendor Headaches",        body:"Dealing with 5+ vendors for different sports. No consolidated ordering, inconsistent quality, no single point of contact."},
-  {id:"sponsorship", title:"No Sponsorship Revenue",           body:"Program hasn't tapped brand partnership or giveback opportunities — leaving thousands on the table each year."},
-];
-
-function QuestionInput({question,value,onChange}){
-  const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
-  return(
-    <div>
-      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:3,fontWeight:500}}>
-        {question.questionText}{question.isRequired&&<span style={{color:B.orange,marginLeft:3}}>*</span>}
-      </div>
-      {question.helpText&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5}}>{question.helpText}</div>}
-      {question.inputType==="TEXT"&&<input value={value||""} onChange={e=>onChange(e.target.value)} style={inp}/>}
-      {question.inputType==="TEXTAREA"&&<textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={3} style={{...inp,resize:"vertical"}}/>}
-      {question.inputType==="NUMBER"&&<input type="number" value={value==null?"":value} onChange={e=>onChange(e.target.value===""?null:Number(e.target.value))} style={{...inp,width:140}}/>}
-      {question.inputType==="SELECT"&&(
-        <select value={value||""} onChange={e=>onChange(e.target.value)} style={inp}>
-          <option value="">— Select —</option>
-          {(Array.isArray(question.selectOptions)?question.selectOptions:[]).map(o=><option key={o} value={o}>{o}</option>)}
-        </select>
-      )}
-      {question.inputType==="BOOLEAN"&&(
-        <div style={{display:"flex",gap:6}}>
-          {["Yes","No"].map(opt=>(
-            <button key={opt} onClick={()=>onChange(opt==="Yes")} style={{background:(opt==="Yes"?value===true:value===false)?B.orange:B.surface,color:(opt==="Yes"?value===true:value===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?value===true:value===false)?B.orange:B.border}`,borderRadius:5,padding:"5px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer"}}>{opt}</button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PainCards({selected,onToggle}){
-  return(
-    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
-      {PAIN_CARDS.map(c=>{
-        const on=selected.includes(c.id);
-        return(
-          <button key={c.id} onClick={()=>onToggle(c.id)} style={{textAlign:"left",background:on?`${B.orange}10`:B.surface,border:`1px solid ${on?B.orange:B.border}`,borderRadius:6,padding:"10px 13px",cursor:"pointer",width:"100%"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-              <div style={{flex:1}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:on?B.orange:B.text}}>{c.title}</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3,lineHeight:1.5}}>{c.body}</div>
-              </div>
-              <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${on?B.orange:B.border}`,background:on?B.orange:"transparent",flexShrink:0,marginTop:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                {on&&<span style={{color:B.white,fontSize:10}}>✓</span>}
-              </div>
-            </div>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-const TT_SPORTS=["Baseball","Basketball","Cheerleading","Cross Country","Dance","Field Hockey","Football","Golf","Gymnastics","Hockey","Lacrosse","Soccer","Softball","Swimming & Diving","Tennis","Track & Field","Volleyball","Wrestling","Bowling","Badminton","Rugby","Archery"];
-
-function SportsPicker({selected,onChange,single=false}){
-  const toggle=(sport)=>{
-    if(single) onChange([sport]);
-    else onChange(selected.includes(sport)?selected.filter(s=>s!==sport):[...selected,sport]);
-  };
-  return(
-    <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-      {TT_SPORTS.map(sport=>(
-        <button key={sport} onClick={()=>toggle(sport)} style={{padding:"3px 10px",background:selected.includes(sport)?B.orange:B.surface,color:selected.includes(sport)?B.white:B.text,border:`1px solid ${selected.includes(sport)?B.orange:B.border}`,borderRadius:12,fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer"}}>
-          {sport}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function OrgProfile({orgType,sportsMode,selectedSports,numSports,numAthletes,onChange,onCalcInput}){
-  const [expanded,setExpanded]=useState(!orgType);
-  const isComplete=!!(orgType&&(
-    orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0))
-    :(sportsMode&&selectedSports.length>0)
-  ));
-  const numInp=(extra={})=>({width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,boxSizing:"border-box",...extra});
-  const typeBtn=(label,val)=>(
-    <button key={val} onClick={()=>onChange("orgType",val)} style={{flex:1,padding:"8px 10px",background:orgType===val?B.orange:B.surface,color:orgType===val?B.white:B.text,border:`1px solid ${orgType===val?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,cursor:"pointer"}}>{label}</button>
-  );
-  const modeBtn=(label,val)=>(
-    <button key={val} onClick={()=>onChange("sportsMode",val)} style={{flex:1,padding:"6px 8px",background:sportsMode===val?B.blue:B.surface,color:sportsMode===val?B.white:B.text,border:`1px solid ${sportsMode===val?B.blue:B.border}`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>{label}</button>
-  );
-  const sub=(txt)=><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6,marginTop:10}}>{txt}</div>;
-
-  if(!expanded&&isComplete){
-    const sportSummary=sportsMode==="all"?"All sports":selectedSports.length===1?selectedSports[0]:`${selectedSports.length} sports`;
-    return(
-      <div onClick={()=>setExpanded(true)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",marginBottom:14,background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:6,cursor:"pointer"}}>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
-          <span style={{fontWeight:600}}>{orgType==="school"?"School":"Organization"}</span>
-          {orgType==="school"&&numAthletes&&<span style={{color:B.muted}}> · {numAthletes} athletes</span>}
-          <span style={{color:B.muted}}> · {sportSummary}</span>
-        </div>
-        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue}}>edit</span>
-      </div>
-    );
-  }
-
-  return(
-    <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px",marginBottom:14}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:8}}>ORG TYPE</div>
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {typeBtn("🏫 SCHOOL / DISTRICT","school")}
-        {typeBtn("🏢 ORGANIZATION / CLUB","org")}
-      </div>
-
-      {orgType==="school"&&(<>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-          <div>
-            {sub("# SPORTS")}
-            <input type="number" min="1" value={numSports} onChange={e=>onCalcInput("numSports",e.target.value)} placeholder="e.g. 12" style={numInp({marginTop:0})}/>
-          </div>
-          <div>
-            {sub("# ATHLETES")}
-            <input type="number" min="1" value={numAthletes} onChange={e=>onCalcInput("numAthletes",e.target.value)} placeholder="e.g. 300" style={numInp({marginTop:0})}/>
-          </div>
-        </div>
-        {sub("SERVICING")}
-        <div style={{display:"flex",gap:6,marginBottom:sportsMode==="some"?0:0}}>
-          {modeBtn("All sports","all")}
-          {modeBtn("Selected sports only","some")}
-        </div>
-        {sportsMode==="some"&&(<>
-          {sub("SELECT SPORTS WE'RE PROPOSING")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
-        </>)}
-      </>)}
-
-      {orgType==="org"&&(<>
-        {sub("SPORT FOCUS")}
-        <div style={{display:"flex",gap:6}}>
-          {modeBtn("Single sport","single")}
-          {modeBtn("Multi-sport","multi")}
-        </div>
-        {sportsMode==="single"&&(<>
-          {sub("SELECT SPORT")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)} single/>
-        </>)}
-        {sportsMode==="multi"&&(<>
-          {sub("SELECT SPORTS")}
-          <SportsPicker selected={selectedSports} onChange={s=>onChange("selectedSports",s)}/>
-        </>)}
-      </>)}
-
-      {isComplete&&(
-        <div style={{marginTop:12}}>
-          <GBtn sm onClick={()=>setExpanded(false)}>✓ CONFIRM</GBtn>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CrmLinker({linked,onLink,onUnlink}){
-  const [q,setQ]=useState("");
-  const [results,setResults]=useState([]);
-  const [searched,setSearched]=useState(false);
-  const [loading,setLoading]=useState(false);
-  const [searchErr,setSearchErr]=useState(null);
-  const [showCreate,setShowCreate]=useState(false);
-  const [form,setForm]=useState({firstName:"",lastName:"",organization:"",phone:"",email:""});
-  const [creating,setCreating]=useState(false);
-  const searchTimer=useRef(null);
-
-  const doSearch=(val)=>{
-    clearTimeout(searchTimer.current);
-    setSearchErr(null);
-    if(val.trim().length<2){setResults([]);setSearched(false);setLoading(false);return;}
-    setLoading(true);
-    searchTimer.current=setTimeout(()=>{
-      fetch(`/api/crm/search?q=${encodeURIComponent(val.trim())}`)
-        .then(r=>r.json()).then(d=>{
-          setResults(Array.isArray(d)?d:[]);
-          setSearched(true);
-          setLoading(false);
-        })
-        .catch(e=>{setSearchErr("Search failed — check Zoho connection");setLoading(false);setSearched(true);});
-    },400);
-  };
-
-  const createLead=()=>{
-    if(!form.lastName)return;
-    setCreating(true);
-    fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...form,school:form.organization})})
-      .then(r=>r.json()).then(d=>{
-        setCreating(false);
-        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),school:form.organization||"",email:form.email||"",module:"Lead"});
-        setShowCreate(false);
-      }).catch(()=>setCreating(false));
-  };
-
-  if(linked){
-    return(
-      <div style={{padding:"8px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.green}08`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:10}}>🔗</span>
-          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{linked.name||linked.id}</span>
-          {linked.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{linked.school}</span>}
-          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>{(linked.module||"").toUpperCase()}</span>
-        </div>
-        <button onClick={onUnlink} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>unlink</button>
-      </div>
-    );
-  }
-
-  return(
-    <div style={{padding:"10px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}06`,flexShrink:0}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:6}}>LINK TO CRM CONTACT</div>
-      {!showCreate?(
-        <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
-          <div style={{flex:1}}>
-            <div style={{position:"relative"}}>
-              <input value={q} onChange={e=>{setQ(e.target.value);doSearch(e.target.value);}} placeholder="Search by name, organization, or email…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,boxSizing:"border-box"}}/>
-              {loading&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:9,color:B.muted}}>searching…</span>}
-            </div>
-            {/* Dropdown — rendered outside the relative container to avoid clipping */}
-            {(results.length>0||searchErr||(searched&&!loading&&q.trim().length>=2))&&(
-              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",marginTop:2,maxHeight:160,overflowY:"auto"}}>
-                {searchErr?(
-                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red}}>{searchErr}</div>
-                ):results.length===0?(
-                  <div style={{padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No results for "{q}" — try a different name or create a new lead.</div>
-                ):results.map(r=>(
-                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.fullName||r.name||"",school:r.school||"",email:r.email||"",module:r.module});setResults([]);setQ(r.fullName||r.name||"");setSearched(false);}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.fullName||r.name}</span>
-                    {r.school&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.school}</span>}
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,flexShrink:0}}>{(r.module||"").toUpperCase()}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          <GBtn sm onClick={()=>{setShowCreate(true);setResults([]);setSearched(false);}}>+ NEW LEAD</GBtn>
-        </div>
-      ):(
-        <div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
-            <input value={form.firstName} onChange={e=>setForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.lastName} onChange={e=>setForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.organization} onChange={e=>setForm(f=>({...f,organization:e.target.value}))} placeholder="Organization" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
-            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,gridColumn:"1/-1"}}/>
-          </div>
-          <div style={{display:"flex",gap:6}}><OBtn onClick={createLead} disabled={creating||!form.lastName}>{creating?"CREATING…":"CREATE LEAD"}</OBtn><GBtn onClick={()=>setShowCreate(false)}>Cancel</GBtn></div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EmailDrafter({sessRef,cu,linked,calcInputs,calcResult,pains,answers,questionMap,nextStep,initialSubject,initialBody,onComplete}){
-  const [subject,setSubject]=useState(initialSubject||"");
-  const [body,setBody]=useState(initialBody||"");
-  const [drafting,setDrafting]=useState(false);
-  const [draftErr,setDraftErr]=useState(null);
-  const [schedDate,setSchedDate]=useState("");
-  const [schedTime,setSchedTime]=useState("");
-  const [logging,setLogging]=useState(false);
-  const [logDone,setLogDone]=useState(false);
-  const [logErr,setLogErr]=useState(null);
-  const [noteCopy,setNoteCopy]=useState("");
-
-  const hasDraft=!!(subject&&body);
-
-  const doDraft=async()=>{
-    setDrafting(true);setDraftErr(null);
-    try{
-      const confirmedPainTitles=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title);
-      const r=await fetch("/api/ai/email",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        sessionId:sessRef.current,
-        contactName:linked?.name||"",
-        schoolName:linked?.school||"",
-        schoolClass:calcInputs.schoolClass,
-        numAthletes:Number(calcInputs.numAthletes||0),
-        numSports:Number(calcInputs.numSports||0),
-        confirmedPains:confirmedPainTitles,
-        answers,questionMap,
-        sponsorshipGuaranteedMin:calcResult?.guaranteedMin??null,
-        sponsorshipUpsideMax:calcResult?.upsideMax??null,
-        nextStep,
-      })});
-      const d=await r.json();
-      if(d.error)throw new Error(d.error);
-      setSubject(d.subject||"");setBody(d.body||"");
-    }catch(e){setDraftErr(e.message);}
-    finally{setDrafting(false);}
-  };
-
-  const buildNote=()=>{
-    const today=new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
-    const repName=cu?.name||cu?.id||"Rep";
-    const painList=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>`- ${c.title}`).join("\n")||"None confirmed";
-    const lines=[
-      `School: ${linked?.school||"(not provided)"}${calcInputs.schoolClass?` (${calcInputs.schoolClass})`:""}`,
-      `Athletes: ${calcInputs.numAthletes||"—"} | Sports: ${calcInputs.numSports||"—"}`,
-      `Online store: ${calcInputs.hasOnlineStore===true?"Yes":calcInputs.hasOnlineStore===false?"No":"Not answered"} | Booster club: ${calcInputs.hasBoosterClub===true?"Yes":calcInputs.hasBoosterClub===false?"No":"Not answered"}`,
-      "",
-      "Pain points confirmed:",
-      painList,
-      "",
-      calcResult
-        ?`Sponsorship offer presented:\nGuaranteed minimum: $${(calcResult.guaranteedMin||0).toLocaleString()}\nUpside potential: up to $${(calcResult.upsideMax||0).toLocaleString()}`
-        :"Sponsorship offer: Not calculated",
-      "",
-      `Next step: ${nextStep||"(none recorded)"}`,
-      subject?`\nDraft email subject: ${subject}`:"",
-      schedDate?`Scheduled follow-up: ${schedDate}${schedTime?` at ${schedTime}`:""}` :"",
-      "",
-      `Call conducted by: ${repName} on ${today}`,
-    ];
-    return{
-      title:`ST1 Discovery Call — ${today}`,
-      content:lines.filter(l=>l!==undefined).join("\n"),
-    };
-  };
-
-  const doComplete=async()=>{
-    setLogging(true);setLogErr(null);
-    // Save email + status to session
-    if(sessRef.current){
-      await fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({repId:cu?.id||"unknown",draftEmailSubject:subject,draftEmailBody:body,status:"COMPLETE"})
-      }).catch(()=>{});
-    }
-    if(linked?.id){
-      const{title,content}=buildNote();
-      setNoteCopy(content);
-      const crmModule=linked.module==="Contact"?"Contacts":"Leads";
-      // Log CRM note
-      try{
-        const r=await fetch("/api/crm/note",{method:"POST",headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({crmId:linked.id,crmModule,noteTitle:title,noteContent:content})});
-        const d=await r.json();
-        if(d.error)throw new Error(d.error);
-      }catch(e){
-        setLogErr(e.message);
-      }
-      // Create Zoho Deal
-      const closing=new Date();
-      closing.setDate(closing.getDate()+30);
-      const dealName=`ST1 — ${linked.school||linked.name||"School"} — ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`;
-      const dealFields={
-        Deal_Name:dealName,
-        Stage:"Qualification",
-        Closing_Date:closing.toISOString().split("T")[0],
-        Account_Name:linked.school||linked.name||"",
-        Description:content,
-      };
-      if(calcResult?.guaranteedMin) dealFields.Amount=calcResult.guaranteedMin;
-      if(linked.module==="Contact") dealFields.Contact_Name={id:linked.id};
-      fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[dealFields]}})
-      }).catch(()=>{});
-    }
-    setLogging(false);setLogDone(true);
-  };
-
-  const copyFull=()=>navigator.clipboard?.writeText(`Subject: ${subject}\n\n${body}`).catch(()=>{});
-  const mailtoHref=()=>`mailto:${linked?.email||""}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-
-  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
-
-  // ── Success state ─────────────────────────────────────────────────────────
-  if(logDone){
-    return(
-      <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:8,padding:"20px 18px",textAlign:"center",marginTop:16}}>
-        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green,marginBottom:6}}>✓</div>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:4}}>Session complete. Note + deal logged to CRM.</div>
-        {logErr&&(
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>
-            Note: CRM logging failed ({logErr}). Copy note text to log manually.
-            {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",margin:"6px auto 0",background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
-          </div>
-        )}
-        <OBtn col={B.orange} onClick={()=>{sessionStorage.removeItem("ttSessionId");onComplete();}}>→ START NEW CALL</OBtn>
-      </div>
-    );
-  }
-
-  // ── No draft yet ──────────────────────────────────────────────────────────
-  if(!hasDraft){
-    return(
-      <div style={{marginTop:16}}>
-        <OBtn onClick={doDraft} disabled={drafting} style={{width:"100%"}}>
-          {drafting?"Writing your email…":"✦ DRAFT FOLLOW-UP EMAIL"}
-        </OBtn>
-        {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:6,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
-      </div>
-    );
-  }
-
-  // ── Draft ready ───────────────────────────────────────────────────────────
-  return(
-    <div className="card" style={{padding:16,marginTop:16}}>
-      {/* Subject */}
-      <div style={{marginBottom:10}}>
-        <Lbl s={{marginBottom:3}}>Subject</Lbl>
-        <input value={subject} onChange={e=>setSubject(e.target.value)} style={inp()}/>
-      </div>
-      {/* Body */}
-      <div style={{marginBottom:12}}>
-        <Lbl s={{marginBottom:3}}>Email body</Lbl>
-        <textarea value={body} onChange={e=>setBody(e.target.value)} rows={8} style={inp({resize:"vertical",lineHeight:1.7})}/>
-      </div>
-      {/* Regenerate */}
-      <GBtn onClick={doDraft} disabled={drafting} style={{width:"100%",marginBottom:14,textAlign:"center"}}>
-        {drafting?"Rewriting…":"↻ REGENERATE"}
-      </GBtn>
-      {draftErr&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:8,padding:"6px 10px",background:`${B.red}10`,borderRadius:4}}>{draftErr}</div>}
-      {/* Quick actions */}
-      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-        <GBtn sm onClick={copyFull}>Copy to clipboard</GBtn>
-        <a href={mailtoHref()} style={{display:"inline-flex",alignItems:"center",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"4px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,textDecoration:"none",cursor:"pointer",fontWeight:700}}>OPEN IN MAIL ↗</a>
-      </div>
-      {/* Schedule reminder */}
-      <div style={{background:B.surface,borderRadius:5,padding:"10px 12px",marginBottom:14}}>
-        <Lbl s={{marginBottom:6}}>Schedule follow-up reminder</Lbl>
-        <div style={{display:"flex",gap:8}}>
-          <input type="date" value={schedDate} onChange={e=>setSchedDate(e.target.value)} style={inp({flex:1})}/>
-          <input type="time" value={schedTime} onChange={e=>setSchedTime(e.target.value)} style={inp({width:120})}/>
-        </div>
-      </div>
-      {/* Error from previous attempt */}
-      {logErr&&(
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10,padding:"8px 12px",background:`${B.red}10`,borderRadius:4}}>
-          CRM logging failed: {logErr}. You can still complete — copy the note text manually if needed.
-          {noteCopy&&<button onClick={()=>navigator.clipboard?.writeText(noteCopy).catch(()=>{})} style={{display:"block",marginTop:4,background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,cursor:"pointer",color:B.muted}}>Copy note text</button>}
-        </div>
-      )}
-      {/* Primary action */}
-      <OBtn onClick={doComplete} disabled={logging} style={{width:"100%"}}>
-        {logging?"LOGGING…":"✓ MARK COMPLETE + LOG TO CRM"}
-      </OBtn>
-    </div>
-  );
-}
-
-function SponsorshipCalculator({inputs,onInputChange,result,loading}){
-  const [showBreakdown,setShowBreakdown]=useState(false);
-  const inp=(extra={})=>({width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box",...extra});
-  const hasRequired=!!(inputs.schoolClass&&Number(inputs.numSports)>0&&Number(inputs.numAthletes)>0);
-  const bd=result?.breakdown;
-  const netPct=bd&&bd.projectedRevenue>0?Math.round(bd.netProfit/bd.projectedRevenue*100):0;
-  const givePct=bd&&bd.netProfit>0?Math.round(bd.givebackPool/bd.netProfit*100):0;
-  const confPct=bd?Math.round(bd.confidence*100):0;
-  const lastUpd=result?.configLastUpdated?new Date(result.configLastUpdated).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):"";
-  const additional=result?(result.upsideMax||0)-(result.guaranteedMin||0):0;
-
-  const YNBtn=(field,opt)=>{
-    const active=opt==="Yes"?inputs[field]===true:inputs[field]===false;
-    return(
-      <button onClick={()=>onInputChange(field,opt==="Yes")} style={{flex:1,background:active?B.green:B.surface,color:active?B.white:B.muted,border:`1px solid ${active?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>
-    );
-  };
-
-  return(
-    <div style={{marginTop:22,paddingTop:18,borderTop:`1px solid ${B.border}`}}>
-      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:2,marginBottom:12}}>SPONSORSHIP CALCULATOR</div>
-
-      {/* Inputs */}
-      <div className="card" style={{padding:14,marginBottom:12}}>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-          <div>
-            <Lbl s={{marginBottom:3}}>School classification</Lbl>
-            <select value={inputs.schoolClass} onChange={e=>onInputChange("schoolClass",e.target.value)} style={inp()}>
-              <option value="">— Select —</option>
-              {["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
-            </select>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of sports</Lbl>
-            <input type="number" min={1} max={40} value={inputs.numSports} onChange={e=>onInputChange("numSports",e.target.value)} placeholder="e.g. 12" style={inp()}/>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Number of athletes</Lbl>
-            <input type="number" min={1} max={5000} value={inputs.numAthletes} onChange={e=>onInputChange("numAthletes",e.target.value)} placeholder="e.g. 320" style={inp()}/>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Their est. current spend (optional)</Lbl>
-            <div style={{position:"relative"}}>
-              <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontSize:11,color:B.muted,pointerEvents:"none"}}>$</span>
-              <input type="number" min={0} value={inputs.estimatedCurrentSpend} onChange={e=>onInputChange("estimatedCurrentSpend",e.target.value)} placeholder="0" style={inp({paddingLeft:20})}/>
-            </div>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Online store today?</Lbl>
-            <div style={{display:"flex",gap:5}}>{YNBtn("hasOnlineStore","Yes")}{YNBtn("hasOnlineStore","No")}</div>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:3}}>Booster club active?</Lbl>
-            <div style={{display:"flex",gap:5}}>{YNBtn("hasBoosterClub","Yes")}{YNBtn("hasBoosterClub","No")}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Placeholder */}
-      {!hasRequired&&!loading&&!result&&(
-        <div style={{background:B.surface,borderRadius:6,border:`1px dashed ${B.border}`,padding:"14px 16px",textAlign:"center"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Enter school classification, number of sports, and number of athletes to see the sponsorship offer</div>
-        </div>
-      )}
-
-      {/* Output card */}
-      {(loading||result)&&(
-        <div className="card" style={{padding:16,borderTop:`3px solid ${B.orange}`,opacity:loading?0.65:1,transition:"opacity .25s"}}>
-          {loading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Calculating…</div>}
-          {result&&!loading&&(
-            <>
-              <div style={{marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP OFFER</div>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(result.guaranteedMin||0)}<span style={{fontSize:14,color:B.orange,marginLeft:6}}>guaranteed</span></div>
-                {additional>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:5}}>Up to {fmt$(additional)} additional based on actual sales</div>}
-              </div>
-
-              {bd&&(
-                <>
-                  <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",color:B.blue,fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer",padding:"0 0 6px",display:"block"}}>
-                    {showBreakdown?"Hide breakdown ▲":"Show breakdown ▼"}
-                  </button>
-                  {showBreakdown&&(
-                    <div style={{borderTop:`1px solid ${B.border}`,paddingTop:10,display:"flex",flexDirection:"column",gap:6}}>
-                      {[
-                        [`Projected first-year revenue`,bd.projectedRevenue],
-                        [`Net profit (${netPct}%)`,bd.netProfit],
-                        [`Giveback pool (${givePct}%)`,bd.givebackPool],
-                      ].map(([lbl,val])=>(
-                        <div key={lbl} style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>{lbl}</span>
-                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(val||0))}</span>
-                        </div>
-                      ))}
-                      <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10}}>
-                        <span style={{color:B.muted}}>School confidence factor ({confPct}%)</span>
-                        <span style={{color:B.orange,fontWeight:500}}>{fmt$(result.guaranteedMin||0)} min</span>
-                      </div>
-                      {inputs.hasOnlineStore===true&&bd.storeRevenue>0&&(
-                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>Store revenue contribution</span>
-                          <span style={{color:B.text,fontWeight:500}}>{fmt$(Math.round(bd.storeRevenue||0))}</span>
-                        </div>
-                      )}
-                      {inputs.hasBoosterClub===true&&(
-                        <div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                          <span>Booster club multiplier</span>
-                          <span style={{color:B.green,fontWeight:500}}>✓ Applied</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </>
-              )}
-
-              {lastUpd&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:10,borderTop:`1px solid ${B.border}`,paddingTop:8}}>Based on current ST1 metrics — last updated {lastUpd}</div>}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TalkTrack({onClose,linkedContact}){
-  const {cu,toast}=useApp();
-  const [sessionId,setSessionId]=useState(null);
-  const [questions,setQuestions]=useState([]);
-  const [phaseIdx,setPhaseIdx]=useState(0);
-  const [answers,setAnswers]=useState({});
-  const [pains,setPains]=useState([]);
-  const [linked,setLinked]=useState(linkedContact||null);
-  const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null,estimatedCurrentSpend:""});
-  const [calcResult,setCalcResult]=useState(null);
-  const [calcLoading,setCalcLoading]=useState(false);
-  const [orgType,setOrgType]=useState("");
-  const [sportsMode,setSportsMode]=useState("");
-  const [selectedSports,setSelectedSports]=useState([]);
-  const [emailSubject,setEmailSubject]=useState("");
-  const [emailBody,setEmailBody]=useState("");
-  const [saving,setSaving]=useState(false);
-  const saveTimer=useRef(null);
-  const calcTimer=useRef(null);
-  const sessRef=useRef(null);
-
-  const canCalc=(ci)=>!!(ci.schoolClass&&Number(ci.numSports)>0&&Number(ci.numAthletes)>0);
-
-  const runCalc=(ci)=>{
-    if(!canCalc(ci))return;
-    setCalcLoading(true);
-    fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      schoolClass:ci.schoolClass,numSports:Number(ci.numSports||0),numAthletes:Number(ci.numAthletes||0),
-      hasOnlineStore:ci.hasOnlineStore===true,hasBoosterClub:ci.hasBoosterClub===true,
-    })})
-    .then(r=>r.json()).then(d=>{
-      setCalcResult(d);setCalcLoading(false);
-      if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax})}).catch(()=>{});
-    }).catch(()=>setCalcLoading(false));
-  };
-
-  useEffect(()=>{
-    fetch("/api/admin/questions")
-      .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
-      .catch(()=>{});
-    const existing=sessionStorage.getItem("ttSessionId");
-    if(existing){
-      fetch(`/api/sessions/${existing}?repId=${cu?.id||""}`)
-        .then(r=>r.ok?r.json():null)
-        .then(d=>{
-          if(d?.session){
-            const sess=d.session;
-            setSessionId(sess.id);sessRef.current=sess.id;
-            setAnswers(sess.answers||{});
-            setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
-            const restored={
-              schoolClass:sess.schoolClass||"",
-              numSports:sess.numSports!=null?String(sess.numSports):"",
-              numAthletes:sess.numAthletes!=null?String(sess.numAthletes):"",
-              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:null,
-              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:null,
-              estimatedCurrentSpend:sess.estimatedCurrentSpend!=null?String(sess.estimatedCurrentSpend):"",
-            };
-            setCalcInputs(restored);
-            if(canCalc(restored)){
-              runCalc(restored);
-            } else if(sess.sponsorshipGuaranteedMin!=null){
-              setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax,breakdown:null,configLastUpdated:null});
-            }
-            if(sess.orgType)      setOrgType(sess.orgType);
-            if(sess.sportsMode)   setSportsMode(sess.sportsMode);
-            if(Array.isArray(sess.selectedSports)&&sess.selectedSports.length>0) setSelectedSports(sess.selectedSports);
-            if(sess.draftEmailSubject) setEmailSubject(sess.draftEmailSubject);
-            if(sess.draftEmailBody)    setEmailBody(sess.draftEmailBody);
-            if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
-              setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
-            }
-          } else {
-            doCreateSession();
-          }
-        }).catch(()=>doCreateSession());
-    } else {
-      doCreateSession();
-    }
-  },[]);
-
-  const doCreateSession=()=>{
-    fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
-      .then(r=>r.json()).then(d=>{
-        setSessionId(d.session.id);sessRef.current=d.session.id;
-        sessionStorage.setItem("ttSessionId",d.session.id);
-      }).catch(()=>{});
-  };
-
-  const scheduleSave=(patch)=>{
-    if(!sessRef.current)return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current=setTimeout(()=>{
-      setSaving(true);
-      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",...patch})})
-        .then(()=>setSaving(false)).catch(()=>setSaving(false));
-    },800);
-  };
-
-  const setAnswer=(qId,val)=>{
-    const next={...answers,[qId]:val};
-    setAnswers(next);scheduleSave({answers:next});
-  };
-
-  const togglePain=(painId)=>{
-    const next=pains.includes(painId)?pains.filter(p=>p!==painId):[...pains,painId];
-    setPains(next);scheduleSave({confirmedPains:next});
-  };
-
-  const linkContact=(c)=>{
-    setLinked(c);
-    const patch=c.module==="Contact"?{crmContactId:c.id,crmModule:"Contact"}:{crmLeadId:c.id,crmModule:"Lead"};
-    scheduleSave(patch);
-  };
-
-  const unlinkContact=()=>{
-    setLinked(null);
-    scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});
-  };
-
-  const handleOrgChange=(field,value)=>{
-    if(field==="orgType"){
-      setOrgType(value);setSportsMode("");setSelectedSports([]);
-      scheduleSave({orgType:value,sportsMode:null,selectedSports:[]});
-    } else if(field==="sportsMode"){
-      setSportsMode(value);setSelectedSports([]);
-      scheduleSave({sportsMode:value,selectedSports:[]});
-    } else if(field==="selectedSports"){
-      setSelectedSports(value);
-      scheduleSave({selectedSports:value});
-    }
-  };
-
-  const handleCalcInput=(field,value)=>{
-    const next={...calcInputs,[field]:value};
-    setCalcInputs(next);
-    // Immediate fire-and-forget session field save
-    if(sessRef.current){
-      const v=(field==="hasOnlineStore"||field==="hasBoosterClub")?value
-        :["numSports","numAthletes","estimatedCurrentSpend"].includes(field)&&value!==""?Number(value)
-        :value||null;
-      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",[field]:v})}).catch(()=>{});
-    }
-    // Debounced calc
-    clearTimeout(calcTimer.current);
-    if(canCalc(next)){
-      calcTimer.current=setTimeout(()=>runCalc(next),600);
-    } else {
-      setCalcResult(null);
-    }
-  };
-
-  const currentPhase=TT_PHASES[phaseIdx];
-  const phaseQs=questions.filter(q=>q.phase===currentPhase.id).sort((a,b)=>a.order-b.order);
-  const questionMap=Object.fromEntries(questions.map(q=>[q.id,q.questionText]));
-  const nextStepQ=questions.find(q=>q.phase==="SOLUTION"&&q.order===2);
-  const nextStep=nextStepQ?(answers[nextStepQ.id]||""):"";
-
-  return(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* Header */}
-      <div style={{padding:"14px 22px 10px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-          <div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>TALK TRACK</div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginTop:1}}>{linked?.name||"New Session"}</div>
-          </div>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            {saving&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>saving…</span>}
-            <GBtn sm onClick={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}>✕ EXIT</GBtn>
-          </div>
-        </div>
-        {/* Phase stepper */}
-        <div style={{display:"flex",alignItems:"center"}}>
-          {TT_PHASES.map((p,i)=>{
-            const done=i<phaseIdx;const active=i===phaseIdx;
-            const col=done?B.green:active?B.orange:B.border;
+        <div style={{flex:1,overflowY:"auto",padding:"0 8px 8px"}}>
+          {sessionsLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 4px"}}>Loading…</div>}
+          {!sessionsLoading&&sessions.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 4px",lineHeight:1.5}}>Your conversations will appear here.</div>}
+          {sessions.map(sess=>{
+            const isActive=sess.id===activeSessionId;
+            const title=sessionTitle(sess);
+            const msgCount=(sess.messages||[]).filter(m=>m.role==="user").length;
             return(
-              <React.Fragment key={p.id}>
-                <button onClick={()=>setPhaseIdx(i)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
-                  <div style={{width:22,height:22,borderRadius:"50%",background:done?B.green:active?B.orange:B.surface,border:`2px solid ${col}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    {done?<span style={{color:B.white,fontSize:9}}>✓</span>:<span style={{width:6,height:6,borderRadius:"50%",background:active?B.white:B.border,display:"block"}}/>}
-                  </div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:.5,whiteSpace:"nowrap"}}>{p.label.toUpperCase()}</div>
-                </button>
-                {i<TT_PHASES.length-1&&<div style={{flex:1,height:2,background:done?B.green:B.border,margin:"0 4px",marginBottom:16}}/>}
-              </React.Fragment>
+              <button key={sess.id} onClick={()=>loadSession(sess)}
+                style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparent",border:`1px solid ${isActive?B.orange:B.border}`,borderRadius:6,padding:"8px 9px",marginBottom:4,cursor:"pointer",display:"block"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:isActive?600:400,color:isActive?B.orange:B.text,lineHeight:1.35,marginBottom:3,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{title}</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{relDate(sess.createdAt)}</span>
+                  {msgCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{msgCount}q</span>}
+                </div>
+              </button>
             );
           })}
         </div>
       </div>
 
-      {/* CRM linker */}
-      <CrmLinker linked={linked} onLink={linkContact} onUnlink={unlinkContact}/>
+      {/* ── CHAT ── */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0}}>
 
-      {/* Scrollable content */}
-      <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
-        {/* Org profile — required for all phases */}
-        <OrgProfile
-          orgType={orgType}
-          sportsMode={sportsMode}
-          selectedSports={selectedSports}
-          numSports={calcInputs.numSports}
-          numAthletes={calcInputs.numAthletes}
-          onChange={handleOrgChange}
-          onCalcInput={handleCalcInput}
-        />
-
-        {/* Script block */}
-        <blockquote style={{margin:"0 0 16px",padding:"10px 14px",borderLeft:`3px solid ${B.orange}`,background:`${B.orange}08`,borderRadius:"0 4px 4px 0"}}>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,fontStyle:"italic"}}>{currentPhase.script}</div>
-        </blockquote>
-
-        {/* Pain cards */}
-        {currentPhase.id==="PAIN"&&<PainCards selected={pains} onToggle={togglePain}/>}
-
-        {/* Solution phase — offer summary + email drafter */}
-        {currentPhase.id==="SOLUTION"&&(
-          <div style={{marginBottom:16}}>
-            {calcResult&&(
-              <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:6,padding:"12px 16px",marginBottom:14}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1.5,marginBottom:4}}>SPONSORSHIP OFFER</div>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange,lineHeight:1.1}}>{fmt$(calcResult.guaranteedMin||0)}<span style={{fontSize:13,marginLeft:5}}>guaranteed</span></div>
-                {(calcResult.upsideMax||0)>(calcResult.guaranteedMin||0)&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3}}>Up to {fmt$((calcResult.upsideMax||0)-(calcResult.guaranteedMin||0))} additional based on actual sales</div>
-                )}
-              </div>
-            )}
-            {nextStep?(
-              <EmailDrafter
-                sessRef={sessRef}
-                cu={cu}
-                linked={linked}
-                calcInputs={calcInputs}
-                calcResult={calcResult}
-                pains={pains}
-                answers={answers}
-                questionMap={questionMap}
-                nextStep={nextStep}
-                initialSubject={emailSubject}
-                initialBody={emailBody}
-                onComplete={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}
-              />
-            ):(
-              <div style={{background:B.surface,borderRadius:5,border:`1px dashed ${B.border}`,padding:"12px 14px",textAlign:"center"}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Answer the "Next step" question above to unlock email drafting.</div>
-              </div>
-            )}
+        {/* Header */}
+        <div style={{padding:"11px 18px 9px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>RevOps Agent</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Full context · chats saved per user · team insights surfaced</div>
           </div>
-        )}
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
+            {lastMeta?.searchUsed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>🔍 WEB</span>}
+            {history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}
+          </div>
+        </div>
 
-        {/* Sponsorship Calculator — top of Discovery phase */}
-        {currentPhase.id==="DISCOVERY"&&(
-          <SponsorshipCalculator
-            inputs={calcInputs}
-            onInputChange={handleCalcInput}
-            result={calcResult}
-            loading={calcLoading}
-          />
-        )}
+        {/* Messages */}
+        <div style={{flex:1,overflowY:"auto",padding:"18px 20px 8px",display:"flex",flexDirection:"column",gap:12}}>
+          {history.length===0&&(
+            <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",paddingTop:16}}>
+              <div style={{textAlign:"center",marginBottom:18}}>
+                {(()=>{const h=new Date().getHours();const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";const nm=cu?.name?.split(" ")[0]||"there";return<div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.muted}}>{gr}, {nm}. What do you need?</div>;})()}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:500,margin:"0 auto",width:"100%"}}>
+                {STARTERS.map(st=>(
+                  <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
+                ))}
+              </div>
+            </div>
+          )}
 
-        {/* Phase questions */}
-        {phaseQs.length>0&&(
-          <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:8,marginTop:currentPhase.id==="DISCOVERY"?16:0}}>
-            {phaseQs.map(q=>(
-              <QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>
+          {history.map((m,msgIdx)=>(
+            <div key={m.id||msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+              <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
+
+              {/* Action buttons */}
+              {m.actions?.length>0&&(
+                <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
+                  {m.actions.map((a,ai)=>{
+                    if(a.type==="draft_email"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedEmail===key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.greenBg,borderBottom:expanded?`1px solid ${B.green}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✉</span>
+                              <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>{a.to_name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{a.subject}</div></div>
+                            </div>
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              {a.to_email&&<button onClick={()=>sendEmailNow(a,`${msgIdx}_${ai}`)} disabled={sendingEmail===`${msgIdx}_${ai}`} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===`${msgIdx}_${ai}`?.6:1}}>{sendingEmail===`${msgIdx}_${ai}`?"SENDING...":"✉ SEND NOW"}</button>}
+                              <button onClick={()=>copyEmail(a)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋 COPY</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&<div style={{padding:"10px 12px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div></div>}
+                        </div>
+                      );
+                    }
+                    if(a.type==="create_quote"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedQuote===key;
+                      const lineItems=a.line_items||[];
+                      const total=lineItems.reduce((sum,li)=>sum+(Number(li.rate)||0)*(Number(li.quantity)||1),0);
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.blue}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.blueBg,borderBottom:expanded?`1px solid ${B.blue}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>▤</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,fontWeight:600}}>{a.customer_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{lineItems.length} item{lineItems.length!==1?"s":""} · ${total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              <button onClick={()=>createQuoteNow(a,key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"CREATING...":"▤ CREATE IN ZOHO"}</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              {a.contact_person&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:4}}>Contact: {a.contact_person}{a.email?` · ${a.email}`:""}</div>}
+                              <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
+                                <thead>
+                                  <tr style={{borderBottom:`1px solid ${B.border}`}}>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>ITEM</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>RATE</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {lineItems.map((li,i)=>(
+                                    <tr key={i} style={{borderBottom:`1px solid ${B.border}20`}}>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>{li.name}{li.description?<span style={{color:B.muted,display:"block",fontSize:9}}>{li.description}</span>:null}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>${Number(li.rate).toFixed(2)}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0",fontWeight:600}}>${(Number(li.rate)*Number(li.quantity)).toFixed(2)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr>
+                                    <td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
+                                    <td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.blue,textAlign:"right",paddingTop:6,fontWeight:700}}>${total.toFixed(2)}</td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                              {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>{a.notes}</div>}
+                              {a.send_email&&a.email&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginTop:4,letterSpacing:.3}}>✉ Quote will be emailed to {a.email}</div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="create_campaign_sequence"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedCampaign===key;
+                      const filters=a.contact_filters||{};
+                      const matched=(s.contacts||[]).filter(c=>{
+                        if(c.deadStatus||!c.email) return false;
+                        const sport=(c.sport||"").toLowerCase();
+                        const state=(c.state||"").toLowerCase();
+                        const title=(c.title||"").toLowerCase();
+                        const score=c.score||0;
+                        if(filters.sports?.length&&!filters.sports.some(sp=>sport.includes(sp.toLowerCase()))) return false;
+                        if(filters.states?.length&&!filters.states.some(st=>state===st.toLowerCase()||state.includes(st.toLowerCase()))) return false;
+                        if(filters.titles?.length&&!filters.titles.some(t=>title.includes(t.toLowerCase()))) return false;
+                        if(filters.min_score&&score<filters.min_score) return false;
+                        return true;
+                      });
+                      const emails=a.emails||[];
+                      const ck=key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg,borderBottom:expanded?`1px solid ${B.purple}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✦</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{a.campaign_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{emails.length} emails · {matched.length} contacts matched</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+                              <input type="datetime-local" value={campaignSendTime[ck]||""} onChange={e=>setCampaignSendTime(prev=>({...prev,[ck]:e.target.value}))}
+                                style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 5px",color:B.text,background:B.white}}/>
+                              <button onClick={()=>{if(!matched.length){toast("No contacts match these filters","error");return;}launchCampaignNow(a,ck,matched);}} disabled={launchingCampaign===ck} style={{background:B.purple,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:launchingCampaign===ck?.6:1,whiteSpace:"nowrap"}}>{launchingCampaign===ck?"CREATING...":"✦ CREATE & ENROLL"}</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              {/* Contact filters summary */}
+                              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                                {filters.sports?.map(sp=><span key={sp} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,background:B.purpleBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{sp}</span>)}
+                                {filters.states?.map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{st}</span>)}
+                                {filters.titles?.map(t=><span key={t} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,background:B.tealBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{t}</span>)}
+                                {filters.min_score&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:B.orangeBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>score ≥ {filters.min_score}</span>}
+                              </div>
+                              {/* Matched contacts */}
+                              <div style={{marginBottom:10}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:5}}>{matched.length} CONTACTS MATCHED</div>
+                                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                                  {matched.slice(0,12).map(c=>(
+                                    <div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 7px"}}>
+                                      {c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}
+                                      {c.school&&<span style={{color:B.muted}}> · {typeof c.school==="string"?c.school:c.school?.name||""}</span>}
+                                    </div>
+                                  ))}
+                                  {matched.length>12&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"2px 7px"}}>+{matched.length-12} more</div>}
+                                </div>
+                                {matched.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>No contacts match — adjust filters or add contacts first.</div>}
+                              </div>
+                              {/* Email sequence */}
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>EMAIL SEQUENCE</div>
+                              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                                {emails.map((e,i)=>(
+                                  <div key={i} style={{border:`1px solid ${B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>
+                                      <div style={{width:18,height:18,borderRadius:"50%",background:B.purple,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{i+1}</span></div>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.subject}</div>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{i===0?"Send immediately":`+${e.delay_days} day${e.delay_days!==1?"s":""} after previous`}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.6,maxHeight:120,overflow:"hidden"}}>{e.body}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="store_competitor_intel"){
+                      return(
+                        <div key={ai} style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"6px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                          <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                            <span style={{fontSize:13,color:B.orange}}>⊗</span>
+                            <div>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>COMPETITOR INTEL SAVED</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{a.competitor_name}</div>
+                            </div>
+                          </div>
+                          <button onClick={()=>setMod("compete")} style={{background:"none",border:`1px solid ${B.orange}40`,color:B.orange,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>VIEW →</button>
+                        </div>
+                      );
+                    }
+                    const col=ACTION_COLORS[a.type]||{c:B.muted,bg:B.surface};
+                    return(
+                      <button key={ai} onClick={()=>executeAction(a,msgIdx,ai)} style={{background:col.bg,color:col.c,border:`1px solid ${col.c}40`,borderRadius:5,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",textAlign:"left"}}>
+                        {ACTION_LABELS[a.type]||"▶ DO IT"}{a.deal_name&&` — ${a.deal_name}`}{a.name&&` — ${a.name}`}{a.to_name&&` — ${a.to_name}`}{a.date&&` (${a.date})`}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Team insights — similar questions from other users */}
+              {m.role==="assistant"&&insights[m.id]?.length>0&&(
+                <div style={{maxWidth:"88%",marginTop:5,background:`${B.blue}08`,border:`1px solid ${B.blue}25`,borderRadius:6,padding:"7px 12px"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.6,marginBottom:5}}>💡 TEAM ASKED SOMETHING SIMILAR</div>
+                  {insights[m.id].map((ins,i)=>(
+                    <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.mid,lineHeight:1.5,marginBottom:i<insights[m.id].length-1?4:0}}>
+                      <span style={{color:B.blue,fontWeight:600}}>{ins.userName}</span> · <span style={{fontStyle:"italic"}}>"{ins.snippet}{ins.snippet.length>=80?"…":""}"</span>
+                      <span style={{color:B.muted,fontSize:9,marginLeft:6}}>{relDate(ins.ts)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Follow-up suggestions */}
+              {m.role==="assistant"&&m.suggestions?.length>0&&(
+                <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,maxWidth:"88%"}}>
+                  {m.suggestions.map((sg,si)=>(
+                    <button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:20,padding:"4px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1}}>→ {sg}</button>
+                  ))}
+                </div>
+              )}
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
+            </div>
+          ))}
+
+          {running&&(
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{padding:"10px 14px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:8,display:"flex",gap:8,alignItems:"center"}}>
+                <Spin/><span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{agentStatus==="searching"?"🔍 Searching web...":agentStatus==="zoho"?"📡 Fetching live Zoho data...":"Thinking..."}</span>
+              </div>
+            </div>
+          )}
+          <div ref={endRef}/>
+        </div>
+
+        {/* Input bar */}
+        <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"11px 16px"}}>
+          <div style={{display:"flex",gap:9}}>
+            <input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..." style={{flex:1,background:B.pageBg,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,fontFamily:"'Lexend',sans-serif"}}/>
+            <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
+          </div>
+          <div style={{marginTop:6,display:"flex",gap:5,flexWrap:"wrap"}}>
+            {["What's urgent today?","Overdue deals","Draft email to top lead","Who's close to closing?","Summarize this week"].map(q=>(
+              <button key={q} onClick={()=>send(q)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:99,padding:"3px 11px",fontSize:11,color:B.muted,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>{q}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── PRIORITY SIDEBAR (right) ── */}
+      <div style={{width:220,background:B.white,borderLeft:`1px solid ${B.border}`,display:"flex",flexDirection:"column",overflowY:"auto",flexShrink:0}}>
+        <div style={{padding:"14px 14px 12px",borderBottom:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>PIPELINE</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(pipeline)}</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>{openDeals.length} open deal{openDeals.length!==1?"s":""}</div>
+          <button onClick={()=>setMod("deals")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"7px 12px",fontSize:11,fontWeight:600,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>+ New Deal</button>
+        </div>
+        {overdueDeals.length>0&&(
+          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:8}}>
+              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:1.5}}>OVERDUE</span>
+              <span style={{marginLeft:"auto",background:B.red,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>{overdueDeals.length}</span>
+            </div>
+            {overdueDeals.map(d=>(
+              <div key={d.id} onClick={()=>setMod("deals")} style={{background:B.redBg,border:`1px solid ${B.red}25`,borderLeft:`3px solid ${B.red}`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>{Math.abs(dUntil(d.followUpDate))}d OVERDUE · {fmt$(d.value)}</div>
+              </div>
             ))}
           </div>
         )}
-
-        {/* Phase navigation */}
-        {(()=>{
-          const isOrgDone=!!(orgType&&(orgType==="school"?(sportsMode==="all"||(sportsMode==="some"&&selectedSports.length>0)):(sportsMode&&selectedSports.length>0)));
-          const canAdvance=linked&&isOrgDone;
-          const hint=!linked?"Link or create a contact above before proceeding":!isOrgDone?"Confirm org type and sports above before proceeding":null;
-          return(
-        <div style={{marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
-          {hint&&(
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,textAlign:"center",marginBottom:10,padding:"6px 10px",background:`${B.orange}10`,borderRadius:4}}>
-              {hint}
-            </div>
-          )}
-          <div style={{display:"flex",justifyContent:"space-between"}}>
-            <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
-            {phaseIdx<TT_PHASES.length-1
-              ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)} disabled={!canAdvance}>NEXT →</OBtn>
-              :<OBtn col={B.green} disabled={!canAdvance} onClick={()=>{
-                if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
-                sessionStorage.removeItem("ttSessionId");
-                toast("Talk Track complete!","success");
-                onClose();
-              }}>✓ COMPLETE</OBtn>
-            }
+        {hotDeals.length>0&&(
+          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT DEALS</div>
+            {hotDeals.map(d=>(
+              <div key={d.id} onClick={()=>setMod("deals")} style={{background:B.orangeBg,border:`1px solid ${B.orange}25`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:4}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+                  <span style={{fontSize:9,fontWeight:700,color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",flexShrink:0}}>HOT</span>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{d.stage} · {fmt$(d.value)}</div>
+              </div>
+            ))}
           </div>
-        </div>
-          );
-        })()}
+        )}
+        {topContacts.length>0&&(
+          <div style={{padding:"12px 14px",borderBottom:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>HOT CONTACTS</div>
+            {topContacts.map(c=>(
+              <div key={c.id} onClick={()=>setMod("crm")} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",marginBottom:4,cursor:"pointer"}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:1}}>{c.fullName||c.firstName}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.3}}>{(typeof c.title==="string"?c.title:c.title?.name||"").split(" ").slice(0,3).join(" ")}{c.state?` · ${c.state}`:""}</div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.orange,marginTop:2}}>{c.score||0} pts</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {openRfps.length>0&&(
+          <div style={{padding:"12px 14px"}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>OPEN RFPS</div>
+            {openRfps.map(r=>(
+              <div key={r.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",marginBottom:4}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,lineHeight:1.3,marginBottom:2}}>{r.name}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:RSC[r.stage]||B.muted}}>{r.stage}{r.dueDate?` · due ${r.dueDate}`:""}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {!openDeals.length&&!topContacts.length&&!openRfps.length&&(
+          <div style={{padding:"16px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Add deals and contacts to see live context here.</div>
+        )}
       </div>
     </div>
   );
@@ -2746,38 +2269,52 @@ function ModCRM() {
   const [draft,setDraft]=useState("");
   const [ttView,setTtView]=useState(false);
   const [ttContact,setTtContact]=useState(null);
+  const [showAddContact,setShowAddContact]=useState(false);
+  const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+  const [leftMode,setLeftMode]=useState("contacts");
+  const [selSchool,setSelSchool]=useState(null);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
 
   const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
 
-  const getCD=(c)=>{
-    const nm=cName(c).toLowerCase();
-    const sch=(c.school||"").toLowerCase();
-    const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
-    const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
-    let phase="lead";
-    if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
-    else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
-    else if(cd.length>0) phase="deal";
-    return{cd,co,phase};
-  };
+  // Build phase map once per deals/orders change — O(n) instead of O(n*m) per render
+  const cdMap=useMemo(()=>{
+    const m=new Map();
+    for(const c of contacts){
+      const nm=cName(c).toLowerCase();
+      const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
+      const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
+      let phase="lead";
+      if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
+      else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
+      else if(cd.length>0) phase="deal";
+      m.set(c.id,{cd,co,phase});
+    }
+    return m;
+  },[contacts,deals,orders]);
+
+  const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 
   const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
 
-  const filtered=[...contacts].filter(c=>{
-    if(c.deadStatus) return false;
+  const filtered=useMemo(()=>{
     const q=search.toLowerCase();
-    if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
-    if(filter==="all") return true;
-    return getCD(c).phase===filter;
-  }).sort((a,b)=>{
     const po={order:0,quote:1,deal:2,lead:3};
-    const pa=getCD(a).phase, pb=getCD(b).phase;
-    if(po[pa]!==po[pb]) return po[pa]-po[pb];
-    return cName(a).localeCompare(cName(b));
-  });
+    return contacts.filter(c=>{
+      if(c.deadStatus) return false;
+      if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
+      if(filter==="all") return true;
+      if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
+      return (cdMap.get(c.id)||{phase:"lead"}).phase===filter;
+    }).sort((a,b)=>{
+      const pa=(cdMap.get(a.id)||{phase:"lead"}).phase;
+      const pb=(cdMap.get(b.id)||{phase:"lead"}).phase;
+      if(po[pa]!==po[pb]) return po[pa]-po[pb];
+      return cName(a).localeCompare(cName(b));
+    });
+  },[contacts,cdMap,search,filter,cu?.id]);
 
   const sel=selId?contacts.find(c=>c.id===selId):null;
   const selCD=sel?getCD(sel):null;
@@ -2811,33 +2348,111 @@ function ModCRM() {
       {/* LEFT LIST */}
       <div style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:8}}>ACCOUNTS</div>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
-          <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
-            {[["all","All"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
-            ))}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div style={{display:"flex",gap:3}}>
+              {[["contacts","CONTACTS"],["accounts","ACCOUNTS"]].map(([v,l])=>(
+                <button key={v} onClick={()=>{setLeftMode(v);setSelId(null);setSelSchool(null);}} style={{padding:"4px 10px",background:leftMode===v?B.orange:B.surface,color:leftMode===v?B.white:B.muted,border:`1px solid ${leftMode===v?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+            <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
           </div>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+          {leftMode==="contacts"&&(
+            <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
+              {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
+              ))}
+            </div>
+          )}
         </div>
+        {showAddContact&&(
+          <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
+              <input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.school} onChange={e=>setAddForm(f=>({...f,school:e.target.value}))} placeholder="School / Org" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
+              <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+              <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+            </div>
+            <div style={{display:"flex",gap:5}}>
+              <OBtn sm onClick={()=>{
+                if(!addForm.lastName) return;
+                const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+                dispatch("ADD_CONTACT",c);
+                setSelId(c.id);
+                setShowAddContact(false);
+                setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
+                toast(`${c.fullName} added`,"success");
+                // Push to Zoho Leads and save zohoId back
+                fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})})
+                  .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
+              }} disabled={!addForm.lastName}>SAVE</OBtn>
+              <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
+            </div>
+          </div>
+        )}
         <div style={{flex:1,overflowY:"auto"}}>
-          {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
-          {filtered.map(c=>{
-            const {cd,phase}=getCD(c);
-            const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
-            const pc=PCOL[phase];
-            return(
-              <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+          {leftMode==="contacts"&&(<>
+            {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
+            {filtered.map(c=>{
+              const {cd,phase}=getCD(c);
+              const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+              const pc=PCOL[phase];
+              return(
+                <button key={c.id} onClick={()=>setSelId(c.id)} style={{width:"100%",textAlign:"left",background:selId===c.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selId===c.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
+                      {c.ownerId && c.ownerId !== cu?.id && (()=>{
+                        const owner=(s.reps||[]).find(r=>r.id===c.ownerId);
+                        const initials=(owner?.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
+                        return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.blue,borderRadius:"50%",width:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{initials}</span>;
+                      })()}
+                    </div>
                   </div>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,flexShrink:0,textTransform:"uppercase"}}>{phase}</span>
-                </div>
-                {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
-              </button>
-            );
-          })}
+                  {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted,marginTop:4}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                </button>
+              );
+            })}
+          </>)}
+          {leftMode==="accounts"&&(()=>{
+            const sq=search.toLowerCase();
+            const groups={};
+            contacts.filter(c=>!c.deadStatus).forEach(c=>{
+              const school=c.school||"(No School)";
+              if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
+              if(!groups[school]) groups[school]={contacts:[],deals:[],value:0};
+              groups[school].contacts.push(c);
+              const cd=getCD(c);
+              cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[school].deals.push(d);groups[school].value+=(d.value||0);}});
+            });
+            const schoolList=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));
+            if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
+            return schoolList.map(([school,g])=>{
+              const isActive=selSchool===school;
+              const phases=g.contacts.map(c=>getCD(c).phase);
+              const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
+              const pc=PCOL[topPhase];
+              return(
+                <button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{school}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
+                    </div>
+                    <div style={{flexShrink:0,textAlign:"right"}}>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{topPhase}</span>
+                      {g.value>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,marginTop:2}}>{fmt$K(g.value)}</div>}
+                    </div>
+                  </div>
+                </button>
+              );
+            });
+          })()}
         </div>
       </div>
 
@@ -2847,11 +2462,169 @@ function ModCRM() {
           onClose={()=>{setTtView(false);setTtContact(null);}}
           linkedContact={ttContact}
         />
-      ):!sel?(
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12,color:B.muted}}>
-          <div style={{fontSize:32,opacity:.2}}>◈</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13}}>Select an account to manage their deal journey</div>
-          <OBtn sm col={B.orange} onClick={()=>{setTtContact(null);setTtView(true);}}>⤳ NEW TALK TRACK</OBtn>
+      ):leftMode==="accounts"&&selSchool?(()=>{
+        const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
+        const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
+        const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
+        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const schoolOrgType=schoolContacts[0]?.orgType||"";
+        const schoolClass=schoolContacts[0]?.schoolClass||"";
+        const numAthletes=schoolContacts[0]?.numAthletes||"";
+        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
+        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        return(
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            {/* School header */}
+            <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+                    {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
+                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                  </div>
+                </div>
+                {sponsorshipMin&&(
+                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
+                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+              {/* Action bar */}
+              <div style={{display:"flex",gap:8,marginBottom:18}}>
+                <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
+                <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+              </div>
+
+              {/* Contacts (coaches) list */}
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+                {schoolContacts.map(c=>{
+                  const {cd,phase}=getCD(c);
+                  const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
+                  const pc=PCOL[phase];
+                  return(
+                    <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                        {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3}}>{phase}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Open deals for this school */}
+              {openDeals.length>0&&(<>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+                <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                  {openDeals.map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+            </div>
+          </div>
+        );
+      })():!sel?(
+        <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+          {(()=>{
+            const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
+            const myDeals=openDeals.filter(d=>d.repId===cu?.id||d.assignee===cu?.id||!d.repId);
+            const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
+            const myPipeline=myDeals.reduce((a,d)=>a+(d.value||0),0);
+            const totalContacts=(s.contacts||[]).filter(c=>!c.deadStatus).length;
+            return(<>
+              {/* Stats */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:22}}>
+                <KCard l="Open Deals" v={openDeals.length} c={B.orange} sub={`${fmt$K(openDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}/>
+                <KCard l="My Deals" v={myDeals.length} c={B.blue} sub={fmt$K(myPipeline)}/>
+                <KCard l="Overdue Tasks" v={overdue.length} c={overdue.length>0?B.red:B.green}/>
+                <KCard l="Contacts" v={totalContacts} c={B.muted}/>
+              </div>
+
+              {/* Overdue follow-ups */}
+              {overdue.length>0&&(
+                <div style={{marginBottom:22}}>
+                  <Lbl s={{marginBottom:8,color:B.red}}>OVERDUE FOLLOW-UPS</Lbl>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {overdue.slice(0,5).map(d=>{
+                      const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
+                      return(
+                        <div key={d.id} onClick={()=>setSelId(c?.id)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||"—"} · {d.stage}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>{Math.abs(dUntil(d.followUpDate))}d OVERDUE</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{fmt$(d.value||0)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* My open deals */}
+              <div style={{marginBottom:22}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <Lbl>MY OPEN DEALS</Lbl>
+                  <GBtn sm onClick={()=>setMod("deals")}>View all →</GBtn>
+                </div>
+                {myDeals.length===0?(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"14px 0"}}>No open deals — start a Talk Track to create one.</div>
+                ):(
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {myDeals.slice(0,8).map(d=>{
+                      const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
+                      const dsc=DSC[d.stage]||B.muted;
+                      return(
+                        <div key={d.id} onClick={()=>c&&setSelId(c.id)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||c&&(c.fullName||"")}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:dsc}}>{d.stage}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Quick actions */}
+              <div style={{display:"flex",gap:8}}>
+                <OBtn sm onClick={()=>{setTtContact(null);setTtView(true);}}>⤳ NEW TALK TRACK</OBtn>
+              </div>
+            </>);
+          })()}
         </div>
       ):(
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -2865,6 +2638,24 @@ function ModCRM() {
                   {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
                   {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
                   {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Owner:</span>
+                  <select
+                    value={sel.ownerId||""}
+                    onChange={e=>{
+                      const newOwner=e.target.value;
+                      dispatch("UPDATE_CONTACT",{id:sel.id,ownerId:newOwner||null});
+                      const rep=(s.reps||[]).find(r=>r.id===newOwner);
+                      toast(`Assigned to ${rep?.name||"unassigned"}`,"success");
+                    }}
+                    style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 6px",fontSize:10,color:B.text,fontFamily:"'Lexend',sans-serif"}}
+                  >
+                    <option value="">Unassigned</option>
+                    {(s.reps||[]).map(r=>(
+                      <option key={r.id} value={r.id}>{r.name}{r.id===cu?.id?" (me)":""}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
               <OBtn sm onClick={()=>{setTtContact({id:sel.id,name:cName(sel),school:sel.school||"",email:sel.email||"",module:"Contact"});setTtView(true);}}>⤳ TALK TRACK</OBtn>
@@ -2891,8 +2682,11 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
-              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
+            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+              <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
+                {label}
+                {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
+              </button>
             ))}
           </div>
           {/* Tab content */}
@@ -2935,6 +2729,104 @@ function ModCRM() {
                         ))}
                       </div>
                     )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {crmTab==="discovery"&&(
+              <div>
+                {!sel.ttCompletedAt?(
+                  <div style={{textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:28,marginBottom:10}}>⤳</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No Talk Track completed yet for this contact.</div>
+                    <OBtn onClick={()=>{setTtContact(sel);setTtView(true);}}>START TALK TRACK</OBtn>
+                  </div>
+                ):(
+                  <>
+                    {/* Sponsorship estimate */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:8,padding:"14px 18px",marginBottom:16}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:6}}>SPONSORSHIP ESTIMATE</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.orange,lineHeight:1.1}}>{fmt$(sel.sponsorshipMin)}<span style={{fontSize:13,marginLeft:6}}>guaranteed</span></div>
+                        {sel.sponsorshipMax&&sel.sponsorshipMax>sel.sponsorshipMin&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:4}}>Up to {fmt$(sel.sponsorshipMax - sel.sponsorshipMin)} additional based on actual sales</div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Org profile */}
+                    <div className="card" style={{padding:14,marginBottom:14}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                        {[
+                          ["Type", sel.orgType==="school"?"School / District":sel.orgType==="org"?"Organization / Club":"—"],
+                          ["School Class", sel.schoolClass||"—"],
+                          ["# Athletes", sel.numAthletes||"—"],
+                          ["# Sports", sel.numSports||"—"],
+                          ["Servicing", sel.sportsMode==="all"?"All sports":sel.sportsMode==="some"?"Selected sports":sel.sportsMode==="single"?"Single sport":sel.sportsMode==="multi"?"Multi-sport":"—"],
+                        ].map(([l,v])=>(
+                          <div key={l}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:2}}>{l}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {Array.isArray(sel.selectedSports)&&sel.selectedSports.length>0&&(
+                        <div style={{marginTop:10}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Sports</div>
+                          <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                            {sel.selectedSports.map(sp=>(
+                              <span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}12`,border:`1px solid ${B.blue}25`,borderRadius:4,padding:"2px 8px"}}>{sp}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Confirmed pain points */}
+                    {Array.isArray(sel.ttPains)&&sel.ttPains.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONFIRMED PAIN POINTS</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                          {sel.ttPains.map(p=>(
+                            <div key={p} style={{display:"flex",alignItems:"center",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                              <span style={{color:B.orange,fontWeight:700}}>✓</span>{p}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Call Q&A */}
+                    {Array.isArray(sel.ttAnswers)&&sel.ttAnswers.length>0&&(
+                      <div className="card" style={{padding:14,marginBottom:14}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CALL NOTES</div>
+                        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                          {sel.ttAnswers.map((qa,i)=>(
+                            <div key={i}>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{qa.question}</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{qa.answer}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Sponsorship actions */}
+                    {sel.sponsorshipMin&&(
+                      <div style={{display:"flex",gap:8,marginTop:6,marginBottom:8}}>
+                        {sel.sponsorshipStatus==="confirmed"?(
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,border:`1px solid ${B.green}30`,borderRadius:4,padding:"4px 10px"}}>★ SPONSORSHIP CONFIRMED — {fmt$(sel.sponsorshipConfirmedAmount||sel.sponsorshipMin)}</span>
+                        ):(
+                          <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_CONTACT",{id:sel.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:sel.sponsorshipMin,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});toast("Sponsorship confirmed!","success");}}>★ CONFIRM SPONSORSHIP</OBtn>
+                        )}
+                        <GBtn sm onClick={()=>setMod("sponsorships")}>View all sponsorships →</GBtn>
+                      </div>
+                    )}
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,textAlign:"right"}}>
+                      Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                    </div>
                   </>
                 )}
               </div>
@@ -3102,169 +2994,276 @@ function ModCRM() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  SALES WORKFLOW — deal process templates + step tracker
+//  SPONSORSHIPS
 // ════════════════════════════════════════════════════════════════════════════
-function ModWorkflow() {
-  const {s,dispatch,toast}=useApp();
-  const [view,setView]=useState("active"); // "active"|"templates"
-  const [selTId,setSelTId]=useState(null);
-  const [newStep,setNewStep]=useState({name:"",type:"quote",dueDays:2});
-  const templates=s.workflowTemplates||[];
-  const deals=s.deals||[];
-  const activeWf=deals.filter(d=>d.workflowId);
+const SPONS_CONFIG_DEFAULTS={avgOrderValuePerAthlete:85,avgEquipmentOrderPerSport:400,netMarginPct:0.18,givebackPct:0.30,schoolClassConfidence:{"1A":0.40,"2A":0.50,"3A":0.60,"4A":0.70,"5A":0.78,"6A":0.85},teamStoreRevenuePerAthlete:35,purchaseFrequencyPerYear:1.5,boosterMultiplier:1.15};
 
-  const STYPES=["call","email","quote","proposal","demo","approval","po","invoice","meeting","task"];
-  const SCOL={call:B.green,email:B.blue,quote:B.orange,proposal:B.teal,demo:B.purple,approval:B.yellow,po:B.orange,invoice:B.green,meeting:B.blue,task:B.muted};
+function ModSponsorships(){
+  const {s,dispatch,toast,setMod,cu}=useApp();
+  const [tab,setTab]=useState("proposed");
+  const [confirmId,setConfirmId]=useState(null);
+  const [confirmAmt,setConfirmAmt]=useState("");
+  const [payFilter,setPayFilter]=useState("all");
+  // Settings tab state
+  const [cfg,setCfg]=useState(null);
+  const [cfgLoading,setCfgLoading]=useState(false);
+  const [cfgSaving,setCfgSaving]=useState(false);
 
-  const getProgress=(deal)=>{
-    const t=templates.find(t=>t.id===deal.workflowId);
-    if(!t) return{done:0,total:0,next:null};
-    const steps=t.steps||[];
-    const ws=deal.workflowSteps||{};
-    const done=steps.filter(s=>ws[s.id]?.status==="done").length;
-    const next=steps.find(s=>ws[s.id]?.status!=="done");
-    return{done,total:steps.length,next};
+  useEffect(()=>{
+    if(tab!=="settings"||cfg!==null)return;
+    setCfgLoading(true);
+    fetch("/api/sponsorship/config").then(r=>r.json()).then(d=>{
+      setCfg(d.config??{...SPONS_CONFIG_DEFAULTS});
+    }).catch(()=>setCfg({...SPONS_CONFIG_DEFAULTS})).finally(()=>setCfgLoading(false));
+  },[tab]);
+
+  const saveConfig=async()=>{
+    if(!cfg)return;
+    setCfgSaving(true);
+    try{
+      const r=await fetch("/api/sponsorship/config",{method:"PATCH",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...cfg,lastUpdatedBy:cu?.name||null})});
+      const d=await r.json();
+      if(d.ok){toast("Calculator settings saved","success");}
+      else{toast(d.error||"Save failed","error");}
+    }catch(e){toast("Save failed: "+e.message,"error");}
+    setCfgSaving(false);
   };
 
-  const selT=selTId?templates.find(t=>t.id===selTId):null;
+  const setC=(k,v)=>setCfg(c=>({...c,[k]:v}));
+  const setCC=(cls,v)=>setCfg(c=>({...c,schoolClassConfidence:{...(c.schoolClassConfidence||{}),[cls]:v}}));
 
-  return(
-    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
-      {/* LEFT */}
-      <div style={{width:260,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
-        <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
-          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:10}}>SALES WORKFLOW</div>
-          <div style={{display:"flex",gap:4}}>
-            {[["active","Active"],["templates","Templates"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setView(v)} style={{flex:1,background:view===v?B.orange:"none",color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer"}}>{l.toUpperCase()}</button>
-            ))}
+  const contacts=s.contacts||[];
+  const proposed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="proposed");
+  const confirmed=contacts.filter(c=>!c.deadStatus&&c.sponsorshipStatus==="confirmed");
+
+  const totalCommitted=confirmed.reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalPaid=confirmed.filter(c=>c.sponsorshipPaid).reduce((a,c)=>a+(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0),0);
+  const totalOwed=totalCommitted-totalPaid;
+
+  const confirmSponsor=(c)=>{
+    const amt=parseFloat(confirmAmt)||c.sponsorshipMin||0;
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"confirmed",sponsorshipConfirmedAmount:amt,sponsorshipConfirmedAt:new Date().toISOString(),sponsorshipPaid:false});
+    toast(`${c.fullName||c.school||"Contact"} confirmed — ${fmt$(amt)}`,"success");
+    setConfirmId(null);setConfirmAmt("");
+  };
+
+  const markPaid=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipPaid:true,sponsorshipPaidAt:new Date().toISOString()});
+    toast("Marked as paid","success");
+  };
+
+  const revertToProposed=(c)=>{
+    dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:"proposed",sponsorshipConfirmedAmount:null,sponsorshipConfirmedAt:null,sponsorshipPaid:false,sponsorshipPaidAt:null});
+    toast("Moved back to proposed","info");
+  };
+
+  const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const inp={background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,width:"100%",boxSizing:"border-box"};
+
+  const SCard=({c,showConfirmForm})=>{
+    const amt=c.sponsorshipConfirmedAmount||c.sponsorshipMin||0;
+    const upside=c.sponsorshipMax||0;
+    const isConfirming=confirmId===c.id;
+    return(
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"14px 18px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||cName(c)}</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{cName(c)}{c.title?` · ${c.title}`:""}</div>
+            <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
+              {c.schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{c.schoolClass}</span>}
+              {c.numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numAthletes} athletes</span>}
+              {c.numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.numSports} sports</span>}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>0&&(
+                c.selectedSports.slice(0,3).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}10`,padding:"2px 6px",borderRadius:3}}>{sp}</span>)
+              )}
+              {Array.isArray(c.selectedSports)&&c.selectedSports.length>3&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>+{c.selectedSports.length-3} more</span>}
+            </div>
+            {Array.isArray(c.ttPains)&&c.ttPains.length>0&&(
+              <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                Pain: {c.ttPains.slice(0,2).join(" · ")}{c.ttPains.length>2?` +${c.ttPains.length-2} more`:""}
+              </div>
+            )}
+          </div>
+          <div style={{textAlign:"right",flexShrink:0}}>
+            {showConfirmForm?(
+              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.orange}}>{fmt$(c.sponsorshipConfirmedAmount||c.sponsorshipMin||0)}</div>
+            ):(
+              <>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(c.sponsorshipMin||0)}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>guaranteed</div>
+                {upside>c.sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(upside)}</div>}
+              </>
+            )}
+            <button onClick={()=>setMod("crm")} style={{marginTop:6,background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer",padding:0}}>View profile →</button>
           </div>
         </div>
-        <div style={{flex:1,overflowY:"auto"}}>
-          {view==="templates"&&(
+
+        {/* Confirm form */}
+        {showConfirmForm&&isConfirming&&(
+          <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${B.border}`,display:"flex",gap:8,alignItems:"flex-end"}}>
+            <div style={{flex:1}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:4}}>CONFIRMED AMOUNT ($)</div>
+              <input type="number" value={confirmAmt} onChange={e=>setConfirmAmt(e.target.value)} placeholder={String(c.sponsorshipMin||0)} style={inp}/>
+            </div>
+            <OBtn col={B.green} onClick={()=>confirmSponsor(c)}>✓ CONFIRM</OBtn>
+            <GBtn onClick={()=>{setConfirmId(null);setConfirmAmt("");}}>Cancel</GBtn>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{marginTop:10,display:"flex",gap:6,justifyContent:"flex-end"}}>
+          {showConfirmForm?(
+            !isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipConfirmedAmount||c.sponsorshipMin||""));}}>✎ Edit Amount</OBtn>
+          ):(
             <>
-              <button onClick={()=>{const id=mkId();dispatch("ADD_WORKFLOW_TEMPLATE",{id,name:"New Workflow",steps:[]});setSelTId(id);}} style={{width:"100%",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,padding:"10px 13px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",textAlign:"left",fontWeight:700}}>+ NEW TEMPLATE</button>
-              {templates.map(t=>(
-                <button key={t.id} onClick={()=>setSelTId(t.id)} style={{width:"100%",textAlign:"left",background:selTId===t.id?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${selTId===t.id?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"10px 12px",cursor:"pointer"}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{t.name}</div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:2}}>{(t.steps||[]).length} steps · {deals.filter(d=>d.workflowId===t.id).length} active deals</div>
-                </button>
-              ))}
-              {templates.length===0&&<div style={{padding:"20px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No templates yet</div>}
+              {!isConfirming&&<OBtn sm col={B.green} onClick={()=>{setConfirmId(c.id);setConfirmAmt(String(c.sponsorshipMin||""));}}>✓ CONFIRM SPONSORSHIP</OBtn>}
+              {!isConfirming&&<GBtn sm onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,sponsorshipStatus:null,sponsorshipMin:null,sponsorshipMax:null});toast("Removed from pipeline","info");}}>✕ Remove</GBtn>}
             </>
           )}
-          {view==="active"&&(
-            <>
-              {activeWf.map(deal=>{
-                const{done,total,next}=getProgress(deal);
-                const pct=total>0?Math.round(done/total*100):0;
-                return(
-                  <button key={deal.id} onClick={()=>{setView("active");}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"10px 12px",cursor:"default"}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{deal.name}</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:5}}>{done}/{total} steps</div>
-                    <div style={{height:4,background:B.border,borderRadius:2}}><div style={{height:"100%",width:`${pct}%`,background:pct===100?B.green:B.orange,borderRadius:2}}/></div>
-                    {next&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:3}}>NEXT: {next.name.toUpperCase()}</div>}
-                  </button>
-                );
-              })}
-              {activeWf.length===0&&<div style={{padding:"20px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No active workflows.<br/>Assign a template to a deal.</div>}
-            </>
-          )}
+          {showConfirmForm&&!c.sponsorshipPaid&&<OBtn sm col={B.blue} onClick={()=>markPaid(c)}>Mark Paid</OBtn>}
+          {showConfirmForm&&c.sponsorshipPaid&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"3px 8px",borderRadius:4}}>✓ PAID</span>}
+          {showConfirmForm&&<GBtn sm onClick={()=>revertToProposed(c)}>↩ Move to Proposed</GBtn>}
         </div>
       </div>
+    );
+  };
 
-      {/* RIGHT */}
-      {view==="templates"&&!selT&&(
-        <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10,color:B.muted}}>
-          <div style={{fontSize:28,opacity:.2}}>⤳</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13}}>Select or create a workflow template</div>
+  return(
+    <div style={{padding:"22px 28px",maxWidth:900,margin:"0 auto"}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:4}}>SPONSORSHIPS</div>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.black}}>Sponsorship Pipeline</div>
         </div>
+        <OBtn onClick={()=>setMod("crm")}>← Back to CRM</OBtn>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
+        <KCard l="Proposed" v={proposed.length} c={B.orange} sub={fmt$K(proposed.reduce((a,c)=>a+(c.sponsorshipMin||0),0))+" potential"}/>
+        <KCard l="Confirmed" v={confirmed.length} c={B.green} sub={fmt$K(totalCommitted)+" committed"}/>
+        <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.green} sub="owed to schools"/>
+        <KCard l="Paid Out" v={fmt$K(totalPaid)} c={B.blue} sub={`${confirmed.filter(c=>c.sponsorshipPaid).length} of ${confirmed.length} paid`}/>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,marginBottom:18}}>
+        {[["proposed",`Proposed (${proposed.length})`],["confirmed",`Confirmed (${confirmed.length})`],["settings","⚙ Settings"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"8px 18px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
+
+      {/* Proposed tab */}
+      {tab==="proposed"&&(
+        proposed.length===0?(
+          <div style={{textAlign:"center",padding:"60px 0"}}>
+            <div style={{fontSize:32,marginBottom:12}}>★</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:16}}>No sponsorships proposed yet.<br/>Complete a Talk Track with a school to generate an estimate.</div>
+            <OBtn onClick={()=>setMod("crm")}>Go to CRM →</OBtn>
+          </div>
+        ):(
+          proposed.map(c=><SCard key={c.id} c={c} showConfirmForm={false}/>)
+        )
       )}
-      {view==="templates"&&selT&&(
-        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
-            <input value={selT.name} onChange={e=>dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,name:e.target.value})} style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,border:"none",background:"transparent",outline:"none",flex:1,padding:0}}/>
-            <button onClick={()=>{dispatch("DELETE_WORKFLOW_TEMPLATE",selT.id);setSelTId(null);}} style={{background:"none",border:`1px solid ${B.red}40`,color:B.red,borderRadius:4,padding:"5px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",marginLeft:10}}>Delete</button>
-          </div>
-          {(selT.steps||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"20px 0",marginBottom:16}}>No steps yet — add your first step below</div>}
-          <div style={{marginBottom:16}}>
-            {(selT.steps||[]).map((step,i)=>(
-              <div key={step.id} className="card" style={{padding:"10px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:22,height:22,borderRadius:"50%",background:`${SCOL[step.type]||B.muted}20`,border:`2px solid ${SCOL[step.type]||B.muted}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:SCOL[step.type]||B.muted}}>{i+1}</span>
-                </div>
-                <div style={{flex:1}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{step.name}</div>
-                  <div style={{display:"flex",gap:8,marginTop:2}}>
-                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:SCOL[step.type]||B.muted,background:`${SCOL[step.type]||B.muted}15`,padding:"2px 5px",borderRadius:3}}>{step.type.toUpperCase()}</span>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>Due in {step.dueDays}d</span>
-                  </div>
-                </div>
-                <button onClick={()=>dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:(selT.steps||[]).filter(s=>s.id!==step.id)})} style={{background:"none",border:"none",color:B.muted,fontSize:13,cursor:"pointer",padding:"2px 5px",flexShrink:0}}>✕</button>
-              </div>
-            ))}
-          </div>
-          <div className="card" style={{padding:14,marginBottom:18}}>
-            <Lbl s={{marginBottom:10}}>Add Step</Lbl>
-            <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:8,alignItems:"end",marginBottom:10}}>
-              <div><Lbl s={{marginBottom:3}}>Step Name</Lbl><input value={newStep.name} onChange={e=>setNewStep(f=>({...f,name:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter"&&newStep.name.trim()){dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:[...(selT.steps||[]),{id:mkId(),...newStep}]});setNewStep({name:"",type:"quote",dueDays:2});toast("Step added","success");}}} placeholder="e.g. Send Initial Quote" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
-              <div><Lbl s={{marginBottom:3}}>Type</Lbl><select value={newStep.type} onChange={e=>setNewStep(f=>({...f,type:e.target.value}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>{STYPES.map(t=><option key={t} value={t}>{t.charAt(0).toUpperCase()+t.slice(1)}</option>)}</select></div>
-              <div><Lbl s={{marginBottom:3}}>Days</Lbl><input type="number" value={newStep.dueDays} onChange={e=>setNewStep(f=>({...f,dueDays:Number(e.target.value||1)}))} min={1} style={{width:55,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/></div>
-            </div>
-            <OBtn sm onClick={()=>{if(!newStep.name.trim())return;dispatch("UPDATE_WORKFLOW_TEMPLATE",{id:selT.id,steps:[...(selT.steps||[]),{id:mkId(),...newStep}]});setNewStep({name:"",type:"quote",dueDays:2});toast("Step added","success");}}>+ ADD STEP</OBtn>
-          </div>
-          <div>
-            <Lbl s={{marginBottom:8}}>Assign to Deal</Lbl>
-            <select onChange={e=>{if(!e.target.value)return;const d=(s.deals||[]).find(x=>x.id===e.target.value);if(d){const ws=(selT.steps||[]).reduce((a,s)=>({...a,[s.id]:{status:"pending"}}),{});dispatch("UPDATE_DEAL",{id:d.id,workflowId:selT.id,workflowSteps:{...ws,...(d.workflowSteps||{})}});toast(`Workflow assigned to ${d.name}`,"success");}e.target.value="";}} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11}}>
-              <option value="">— Select a deal —</option>
-              {(s.deals||[]).filter(d=>!d.workflowId).map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </div>
-        </div>
-      )}
-      {view==="active"&&(
-        <div style={{flex:1,overflowY:"auto",padding:"20px 24px"}}>
-          <PH title="ACTIVE WORKFLOWS" sub="Track where every deal sits in its sales process"/>
-          {activeWf.length===0?(
-            <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No deals have a workflow yet.<br/><br/><span style={{cursor:"pointer",color:B.orange,textDecoration:"underline"}} onClick={()=>setView("templates")}>Go to Templates →</span></div>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:14}}>
-              {activeWf.map(deal=>{
-                const template=templates.find(t=>t.id===deal.workflowId);
-                const steps=template?.steps||[];
-                const ws=deal.workflowSteps||{};
-                const{done,total}=getProgress(deal);
-                const pct=total>0?Math.round(done/total*100):0;
-                return(
-                  <div key={deal.id} className="card" style={{padding:16}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                      <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{deal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{deal.school} · {template?.name||"—"}</div></div>
-                      <div style={{textAlign:"right"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:12,color:pct===100?B.green:B.orange,fontWeight:700}}>{pct}%</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{done}/{total} steps</div></div>
-                    </div>
-                    <div style={{height:5,background:B.border,borderRadius:3,marginBottom:12}}><div style={{height:"100%",width:`${pct}%`,background:pct===100?B.green:B.orange,borderRadius:3}}/></div>
-                    <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                      {steps.map((step,i)=>{
-                        const ss=ws[step.id]||{status:"pending"};
-                        const isDone=ss.status==="done";
-                        const col=SCOL[step.type]||B.muted;
-                        return(
-                          <div key={step.id} style={{display:"flex",alignItems:"center",gap:9,padding:"6px 10px",background:isDone?B.greenBg:B.surface,borderRadius:5,border:`1px solid ${isDone?B.green+"40":B.border}`}}>
-                            <button onClick={()=>{const nws={...ws,[step.id]:{status:isDone?"pending":"done",completedAt:isDone?null:new Date().toISOString()}};dispatch("UPDATE_DEAL",{id:deal.id,workflowSteps:nws});}} style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${isDone?B.green:B.border}`,background:isDone?B.green:"transparent",cursor:"pointer",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",padding:0}}>
-                              {isDone&&<span style={{color:B.white,fontSize:9,lineHeight:1}}>✓</span>}
-                            </button>
-                            <span style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:isDone?B.muted:B.text,textDecoration:isDone?"line-through":"none"}}>{step.name}</span>
-                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,background:`${col}15`,padding:"2px 6px",borderRadius:3}}>{step.type.toUpperCase()}</span>
-                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,flexShrink:0}}>{step.dueDays}d</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <button onClick={()=>{dispatch("UPDATE_DEAL",{id:deal.id,workflowId:null,workflowSteps:null});toast("Workflow removed","info");}} style={{marginTop:8,background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>Remove workflow</button>
-                  </div>
-                );
-              })}
+
+      {/* Confirmed tab */}
+      {tab==="confirmed"&&(
+        <>
+          {confirmed.length>0&&(
+            <div style={{display:"flex",gap:6,marginBottom:14}}>
+              {[["all","All"],["unpaid","Unpaid"],["paid","Paid"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setPayFilter(v)} style={{background:payFilter===v?B.orange:"none",color:payFilter===v?B.white:B.muted,border:`1px solid ${payFilter===v?B.orange:B.border}`,borderRadius:99,padding:"3px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>{l}</button>
+              ))}
             </div>
           )}
+          {confirmed.length===0?(
+            <div style={{textAlign:"center",padding:"60px 0"}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No confirmed sponsorships yet — confirm a proposed one above.</div>
+            </div>
+          ):(
+            confirmed
+              .filter(c=>payFilter==="all"?true:payFilter==="paid"?c.sponsorshipPaid:!c.sponsorshipPaid)
+              .map(c=><SCard key={c.id} c={c} showConfirmForm={true}/>)
+          )}
+        </>
+      )}
+
+      {/* Settings tab */}
+      {tab==="settings"&&(
+        <div style={{maxWidth:620}}>
+          {cfgLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,padding:"40px 0",textAlign:"center"}}><Spin/> Loading settings…</div>}
+          {!cfgLoading&&cfg&&(()=>{
+            const fld=({label,help,k,pct,step="1"})=>(
+              <div key={k} style={{marginBottom:14}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:4}}>{label}</div>
+                {help&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5,lineHeight:1.4}}>{help}</div>}
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <input type="number" step={step} value={pct?Math.round((cfg[k]||0)*100):cfg[k]||""}
+                    onChange={e=>setC(k,pct?Number(e.target.value)/100:Number(e.target.value))}
+                    style={{width:100,...inp}}/>
+                  {pct&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>%</span>}
+                </div>
+              </div>
+            );
+            return(
+              <>
+                {/* Formula explainer */}
+                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 16px",marginBottom:22,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:6}}>HOW THE ESTIMATE IS CALCULATED</div>
+                  <div><b style={{color:B.text}}>Revenue</b> = (athletes × $AOV × purchases/yr) + (sports × $equip) + (store rev if online store) × booster multiplier</div>
+                  <div><b style={{color:B.text}}>Giveback Pool</b> = Revenue × net margin × giveback %</div>
+                  <div><b style={{color:B.text}}>Guaranteed Min</b> = Pool × class confidence %</div>
+                  <div><b style={{color:B.text}}>Upside Max</b> = Pool × 100%</div>
+                </div>
+
+                {/* Revenue inputs */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>REVENUE ASSUMPTIONS</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"AVG ORDER VALUE PER ATHLETE ($)",help:"Avg dollars ST1 earns per athlete per order (uniforms, gear, etc.)",k:"avgOrderValuePerAthlete"})}
+                    {fld({label:"AVG EQUIPMENT ORDER PER SPORT ($)",help:"Avg equipment purchase per sport per season",k:"avgEquipmentOrderPerSport"})}
+                    {fld({label:"TEAM STORE REVENUE PER ATHLETE ($)",help:"Online team store earnings per athlete if store is active",k:"teamStoreRevenuePerAthlete"})}
+                    {fld({label:"PURCHASE FREQUENCY PER YEAR",help:"How many times per year athletes/coaches order",k:"purchaseFrequencyPerYear",step:"0.1"})}
+                    {fld({label:"BOOSTER CLUB MULTIPLIER",help:"Revenue uplift factor when a booster club is active (e.g. 1.15 = +15%)",k:"boosterMultiplier",step:"0.01"})}
+                  </div>
+                </div>
+
+                {/* Margin & giveback */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:14}}>MARGIN & GIVEBACK</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 20px"}}>
+                    {fld({label:"NET MARGIN %",help:"ST1's net profit margin after cost of goods and fulfillment",k:"netMarginPct",pct:true,step:"1"})}
+                    {fld({label:"GIVEBACK %",help:"% of net profit returned to the school as sponsorship",k:"givebackPct",pct:true,step:"1"})}
+                  </div>
+                </div>
+
+                {/* School class confidence */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"16px 18px",marginBottom:20}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>SCHOOL CLASS CONFIDENCE %</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:14,lineHeight:1.4}}>How likely ST1 captures the full projected revenue at each school size. Larger schools have more competition so confidence is higher for smaller classes.</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:8}}>
+                    {["1A","2A","3A","4A","5A","6A"].map(cls=>(
+                      <div key={cls} style={{textAlign:"center"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,marginBottom:4}}>{cls}</div>
+                        <input type="number" min="0" max="100" step="1"
+                          value={Math.round(((cfg.schoolClassConfidence||{})[cls]||0)*100)}
+                          onChange={e=>setCC(cls,Number(e.target.value)/100)}
+                          style={{width:"100%",textAlign:"center",...inp}}/>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>%</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <OBtn onClick={saveConfig} disabled={cfgSaving} style={{width:"100%",justifyContent:"center"}}>
+                  {cfgSaving?"SAVING…":"SAVE CALCULATOR SETTINGS"}
+                </OBtn>
+              </>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -3333,20 +3332,19 @@ function ModDeals() {
   };
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
-  const pool=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
-  const list=pool.filter(d=>{
+  const pool=useMemo(()=>isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id),[s.deals,isOwner,cu?.id]);
+  const list=useMemo(()=>pool.filter(d=>{
     if(flt==="active") return !["Closed Won","Closed Lost","On Hold"].includes(d.stage);
     if(flt==="overdue") return d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received"].includes(d.stage);
     if(flt==="won") return d.stage==="Closed Won";
     if(flt==="all") return true;
     return d.stage===flt;
   }).sort((a,b)=>{
-    // Closed Lost always sinks to the bottom; within groups sort by value desc
     const aLost=a.stage==="Closed Lost"?1:0;
     const bLost=b.stage==="Closed Lost"?1:0;
     if(aLost!==bLost) return aLost-bLost;
     return b.value-a.value;
-  });
+  }),[pool,flt]);
   const sel_d=sel?(s.deals||[]).find(d=>d.id===sel):null;
 
   const addDeal=()=>{
@@ -3403,9 +3401,10 @@ Under 80 words. Include subject line. Warm tone.`);
             {[["Deal Name","name"],["Contact","contact"],["School","school"],["Value ($)","value"],["Quote Date","quoteDate"],["Follow-Up Date","followUpDate"],["Notes","notes"]].map(([l,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><input type={k.includes("Date")?"date":"text"} value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
             ))}
-            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"],["Assignee",USERS.map(u=>u.id),"assignee"]].map(([l,opts,k])=>(
+            {[["Stage",DEAL_STAGES,"stage"],["Product",PRODUCT_CATS,"product"],["State",STATES_LIST,"state"]].map(([l,opts,k])=>(
               <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl><select value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>{opts.map(o=><option key={o}>{o}</option>)}</select></div>
             ))}
+            <div><Lbl s={{marginBottom:3}}>Assignee</Lbl><select value={form.assignee||""} onChange={e=>setForm(f=>({...f,assignee:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— Unassigned —</option>{(s.reps||[]).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
             <div><Lbl s={{marginBottom:3}}>Source Campaign</Lbl><select value={form.campaignId} onChange={e=>setForm(f=>({...f,campaignId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}><option value="">— None —</option>{(s.campaigns||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
           <div style={{display:"flex",gap:7,marginTop:10}}><OBtn onClick={addDeal}>SAVE</OBtn><GBtn onClick={()=>setAdding(false)}>CANCEL</GBtn></div>
@@ -3485,7 +3484,7 @@ Under 80 words. Include subject line. Warm tone.`);
                 {[...(sel_d.touchHistory||[])].reverse().map(t=>(
                   <div key={t.id} style={{display:"flex",gap:7,padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{width:6,height:6,borderRadius:"50%",background:{email:B.blue,call:B.green,note:B.yellow,po:B.teal,quote:B.orange}[t.type]||B.muted,marginTop:3,flexShrink:0}}/>
-                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {USERS.find(u=>u.id===t.author)?.name||t.author}</div></div>
+                    <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{t.note}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{fmtD(t.date)} · {(s.reps||[]).find(r=>r.id===t.author)?.name||t.author}</div></div>
                   </div>
                 ))}
               </div>
@@ -4104,343 +4103,7 @@ function ModQuotes() {
   );
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-//  RFP
-// ════════════════════════════════════════════════════════════════════════════
-function ModRFP() {
-  const {s,dispatch,cu,toast}=useApp();
-  const [rfpTab,setRfpTab]=useState("tracker");
-  const [sel,setSel]=useState(null);
-  const [newItem,setNewItem]=useState("");
-  const isOwner=cu?.role==="owner";
-  const rfps=isOwner?(s.rfps||[]):(s.rfps||[]).filter(r=>r.assignee===cu?.id);
-  const sel_r=sel?(s.rfps||[]).find(r=>r.id===sel):null;
-  const toggleChk=(rid,cid)=>{const r=(s.rfps||[]).find(r=>r.id===rid);if(r)dispatch("UPDATE_RFP",{id:rid,checklist:(r.checklist||[]).map(c=>c.id===cid?{...c,done:!c.done}:c)});}
-  const addItem=(rid)=>{if(!newItem.trim())return;dispatch("UPDATE_RFP",{id:rid,checklist:[...((s.rfps||[]).find(r=>r.id===rid)?.checklist||[]),{id:mkId(),item:newItem,done:false}]});setNewItem("");}
 
-  const [resultsUploading, setResultsUploading] = useState(null);
-  const uploadResults = async (rfpId, file) => {
-    setResultsUploading(rfpId);
-    try {
-      let msgContent;
-      const ext = file.name.toLowerCase().split(".").pop();
-      const extractPrompt = `Extract bid award/results information from this document. ST1 Sports was one of the vendors who submitted a bid.\n\nReturn ONLY valid JSON:\n{"awardedTo":"winning vendor name","awardedValue":number or null,"st1Submitted":null,"st1Won":true or false,"st1Position":finishing position number or null,"priceDelta":ST1 price minus winner price or null,"competitors":[{"name":"...","price":number or null,"position":number}],"notes":"key findings summary"}`;
-      if(ext==="pdf") {
-        const b64 = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(file);});
-        msgContent=[{type:"text",text:extractPrompt},{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}}];
-      } else {
-        const txt = await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(file);});
-        msgContent=extractPrompt+"\n\nDOCUMENT:\n"+txt.slice(0,8000);
-      }
-      const resp = await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-        model:"claude-sonnet-4-6",max_tokens:700,
-        messages:[{role:"user",content:msgContent}]
-      })});
-      const d = await resp.json();
-      const txt2=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-      let results=null;
-      try{const m=txt2.match(/\{[\s\S]*\}/);results=m?JSON.parse(m[0]):null;}catch{}
-      if(results){
-        dispatch("UPDATE_RFP",{id:rfpId,results:{...results,uploadedAt:new Date().toISOString().slice(0,10),fileName:file.name}});
-        toast(results.st1Won?"🏆 Win recorded!":"Results recorded");
-      } else { toast("Could not parse results — try a different file"); }
-    } catch(e){ toast("Upload failed: "+e.message); }
-    finally{ setResultsUploading(null); }
-  };
-
-  const tabBar=(
-    <div style={{display:"flex",gap:4,padding:"12px 26px 0",background:B.white,borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
-      {[["tracker","Active Bids"],["generate","Generate Response"]].map(([tid,tlabel])=>(
-        <button key={tid} onClick={()=>setRfpTab(tid)} style={{background:"none",border:"none",borderBottom:rfpTab===tid?`2px solid ${B.orange}`:"2px solid transparent",color:rfpTab===tid?B.orange:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,padding:"6px 12px 10px",cursor:"pointer",fontWeight:rfpTab===tid?700:400}}>{tlabel}</button>
-      ))}
-    </div>
-  );
-
-  if(rfpTab==="generate") return (
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      {tabBar}
-      <Suspense fallback={<PanelLoader/>}><RFPToolPage/></Suspense>
-    </div>
-  );
-
-  return (
-    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
-      {tabBar}
-    <div style={{padding:"22px 26px",overflowY:"auto",flex:1}}>
-      <PH title="RFP / BID TRACKER" sub="Manage bids from receipt to award"
-        action={<a href="/rfp" style={{background:B.orange,color:B.white,borderRadius:4,padding:"7px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,textDecoration:"none",display:"inline-block"}}>+ NEW RFP →</a>}/>
-      <div style={{display:"grid",gridTemplateColumns:sel_r?"1fr 350px":"1fr",gap:13}}>
-        <div>
-          {rfps.map(r=>{const d=dUntil(r.dueDate);const dn=r.checklist?.filter(c=>c.done).length||0;const tn=r.checklist?.length||1;return(
-            <div key={r.id} onClick={()=>setSel(sel===r.id?null:r.id)} className="card fu" style={{padding:"10px 13px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${RSC[r.stage]||B.muted}`}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
-                <div style={{flex:1}}>
-                  <div style={{display:"flex",gap:7,alignItems:"center",marginBottom:2,flexWrap:"wrap"}}>
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{r.title}</span>
-                    <Pill v={r.stage} sc={RSC} bc={{}}/>
-                  </div>
-                  <div style={{display:"flex",gap:6,alignItems:"center"}}><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.bidId} · {r.issuer} · {r.state}</span><UCh uid={r.assignee}/></div>
-                </div>
-                <div style={{textAlign:"right",flexShrink:0,marginLeft:9}}>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(r.value)}</div>
-                  {r.dueDate&&!["No Bid","Lost","Won"].includes(r.stage)&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:d<=3?B.red:d<=7?B.yellow:B.muted,letterSpacing:.3}}>{d<0?`${Math.abs(d)}d OVER`:`${d}d LEFT`}</div>}
-                </div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:7}}>
-                <div style={{flex:1,height:3,background:B.border,borderRadius:2}}><div style={{width:`${dn/tn*100}%`,height:"100%",background:dn===tn?B.green:RSC[r.stage]||B.orange,borderRadius:2}}/></div>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,flexShrink:0}}>{dn}/{tn}</span>
-              </div>
-              {r.results&&(
-                <div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
-                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,background:r.results.st1Won?B.green:B.red,color:B.white,padding:"1px 5px",borderRadius:2,letterSpacing:.3}}>{r.results.st1Won?"WON":"LOST"}</span>
-                  {r.results.priceDelta!=null&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:r.results.priceDelta>0?B.red:B.green}}>{r.results.priceDelta>0?"+":""}{(r.results.priceDelta/1000).toFixed(1)}k vs winner</span>}
-                  {r.results.awardedTo&&!r.results.st1Won&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>→ {r.results.awardedTo}</span>}
-                </div>
-              )}
-            </div>
-          );})}
-          {rfps.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"40px 0"}}>No RFPs yet</div>}
-        </div>
-        {sel_r&&(
-          <div className="card" style={{padding:13,position:"sticky",top:0,maxHeight:"calc(100vh - 155px)",overflowY:"auto"}}>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,marginBottom:3}}>{sel_r.title}</div>
-            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:11}}>{sel_r.bidId} · Due {fmtD(sel_r.dueDate)}</div>
-            <Lbl s={{marginBottom:5}}>Stage</Lbl>
-            <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:11}}>
-              {RFP_STAGES.map(st=><button key={st} onClick={()=>{dispatch("UPDATE_RFP",{id:sel_r.id,stage:st});toast("RFP → "+st);}} style={{background:sel_r.stage===st?RSC[st]:B.surface,color:sel_r.stage===st?B.white:B.muted,border:"1px solid "+(sel_r.stage===st?RSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>)}
-            </div>
-            <Lbl s={{marginBottom:7}}>Checklist</Lbl>
-            {sel_r.checklist?.map(c=>(
-              <label key={c.id} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer",padding:"4px 0",borderBottom:`1px solid ${B.border}`}}>
-                <input type="checkbox" checked={c.done} onChange={()=>toggleChk(sel_r.id,c.id)} style={{accentColor:B.orange,width:13,height:13}}/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:c.done?B.muted:B.text,textDecoration:c.done?"line-through":"none"}}>{c.item}</span>
-              </label>
-            ))}
-            <div style={{display:"flex",gap:6,marginTop:9}}>
-              <input value={newItem} onChange={e=>setNewItem(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addItem(sel_r.id)} placeholder="Add checklist item..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}/>
-              <OBtn sm onClick={()=>addItem(sel_r.id)}>+</OBtn>
-            </div>
-            {sel_r.notes&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic",lineHeight:1.6,borderTop:`1px solid ${B.border}`,paddingTop:9}}>{sel_r.notes}</div>}
-
-            {/* Bid Results */}
-            <div style={{marginTop:11,borderTop:`1px solid ${B.border}`,paddingTop:9}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <Lbl>Bid Results</Lbl>
-                <label style={{cursor:resultsUploading?"not-allowed":"pointer",background:B.orange+"18",color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>
-                  {resultsUploading===sel_r.id?"UPLOADING...":"↑ UPLOAD AWARD"}
-                  <input type="file" accept=".pdf,.csv,.xlsx,.xls,.txt" style={{display:"none"}} disabled={!!resultsUploading}
-                    onChange={e=>{const f=e.target.files?.[0];if(f)uploadResults(sel_r.id,f);e.target.value="";}}/>
-                </label>
-              </div>
-              {sel_r.results?(
-                <div style={{background:sel_r.results.st1Won?B.greenBg:B.redBg,borderRadius:5,padding:"9px 11px",border:`1px solid ${sel_r.results.st1Won?B.green:B.red}30`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:sel_r.results.st1Won?B.green:B.red}}>
-                      {sel_r.results.st1Won?"🏆 WON":`⚑ LOST${sel_r.results.awardedTo?" → "+sel_r.results.awardedTo:""}`}
-                    </span>
-                    {sel_r.results.st1Position&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>#{sel_r.results.st1Position} PLACE</span>}
-                  </div>
-                  {sel_r.results.priceDelta!=null&&(
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:3}}>
-                      Price delta: <span style={{color:sel_r.results.priceDelta>0?B.red:B.green,fontWeight:600}}>
-                        {sel_r.results.priceDelta>0?"+" : ""}{fmt$(Math.abs(sel_r.results.priceDelta))} {sel_r.results.priceDelta>0?"over":"under"} winner
-                      </span>
-                    </div>
-                  )}
-                  {sel_r.results.competitors?.length>0&&(
-                    <div style={{marginTop:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,marginBottom:3}}>COMPETITORS</div>
-                      {sel_r.results.competitors.slice(0,4).map((c,ci)=>(
-                        <div key={ci} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,display:"flex",justifyContent:"space-between",padding:"2px 0"}}>
-                          <span>#{c.position!=null?c.position:ci+1} {c.name}</span>
-                          {c.price!=null&&<span style={{color:B.text}}>{fmt$(c.price)}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {sel_r.results.notes&&<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",lineHeight:1.5}}>{sel_r.results.notes}</div>}
-                  <div style={{marginTop:6,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{sel_r.results.uploadedAt} · {sel_r.results.fileName}</div>
-                </div>
-              ):(
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,fontStyle:"italic"}}>No results uploaded yet · Upload the award notice to track outcome</div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  INVOICING — data live from Zoho Books
-// ════════════════════════════════════════════════════════════════════════════
-function ModInvoicing() {
-  const {s,dispatch,toast}=useApp();
-  const [flt,setFlt]=useState("all");
-  const [sel,setSel]=useState(null);
-  const [drafts,setDrafts]=useState({});
-  const [drafting,setDrafting]=useState(null);
-  const [syncing,setSyncing]=useState(false);
-
-  const pool=s.invoices||[];
-  const STAT_MAP={draft:"draft",sent:"sent",overdue:"overdue",paid:"paid",void:"void",partially_paid:"partial",viewed:"viewed"};
-
-  const syncFromZoho=async()=>{
-    setSyncing(true);
-    try {
-      // Pull all recent invoices — Zoho Books handles status (overdue, paid, etc.)
-      const res=await zohoCall("books","/invoices?per_page=200&sort_column=date&sort_order=D");
-      const raw=res.invoices||[];
-      if(!raw.length&&res.message) throw new Error(res.message);
-      const mapped=raw.map(zi=>({
-        id:"zoho_"+zi.invoice_id,
-        zohoId:zi.invoice_id,
-        number:zi.invoice_number||zi.invoice_number_formatted||"",
-        customer:zi.customer_name,
-        customerId:zi.customer_id,
-        status:STAT_MAP[zi.status]||zi.status,
-        date:zi.date,
-        dueDate:zi.due_date,
-        total:zi.total||0,
-        balance:zi.balance||0,
-        items:(zi.line_items||[]).map(li=>({
-          name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total,
-        })),
-        source:"zoho",
-      }));
-      dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
-      dispatch("LOG",{msg:`Zoho Books sync — ${mapped.length} invoices loaded`});
-      toast(`${mapped.length} invoices synced from Zoho Books`,"success");
-    } catch(e){
-      toast(`Sync failed: ${e.message.slice(0,100)}`,"error");
-    }
-    setSyncing(false);
-  };
-
-  const list=pool.filter(i=>{
-    if(flt==="all") return true;
-    if(flt==="overdue") return i.status==="overdue";
-    if(flt==="unpaid") return ["sent","viewed","partial"].includes(i.status);
-    if(flt==="draft") return i.status==="draft";
-    if(flt==="paid") return i.status==="paid";
-    return true;
-  }).sort((a,b)=>{
-    const o={overdue:0,partial:1,viewed:2,sent:3,draft:4,paid:5,void:6};
-    return (o[a.status]??5)-(o[b.status]??5);
-  });
-
-  const ar=pool.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const overdueTot=pool.filter(i=>i.status==="overdue").reduce((a,i)=>a+(i.balance||0),0);
-  const paidTot=pool.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
-
-  const draftRem=async(inv,type)=>{
-    const k=inv.id+type; setDrafting(k);
-    const dOD=inv.dueDate?dAgo(inv.dueDate):0;
-    const t=await aiCall(`Write a${type==="gentle"?" friendly":type==="firm"?" firm":" final"} invoice reminder from Matt Stone at ST1 Sports.
-Invoice ${inv.number} for ${fmt$(inv.balance)} to ${inv.customer}${type!=="gentle"?`, ${dOD} days overdue`:""}.
-Under 70 words. Sign: Matt Stone | ST1 Sports | matt@st1sports.com`);
-    setDrafts(d=>({...d,[k]:t||""})); setDrafting(null);
-  };
-
-  const lastSync=s.invoiceLastSync
-    ? new Date(s.invoiceLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})
-    : null;
-
-  return (
-    <div style={{padding:"22px 26px"}}>
-      <PH title="INVOICES & AR" sub="Live from Zoho Books — all balances and statuses are authoritative from Zoho"
-        action={
-          <div style={{display:"flex",alignItems:"center",gap:9}}>
-            {lastSync&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Synced {lastSync}</span>}
-            <OBtn onClick={syncFromZoho} disabled={syncing} style={{minWidth:160}}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
-          </div>
-        }
-      />
-
-      {pool.length===0?(
-        <div style={{textAlign:"center",padding:"70px 0"}}>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.muted,marginBottom:8}}>No invoices synced yet</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:20}}>Connect Zoho Books and click Sync to pull your invoices</div>
-          <OBtn onClick={syncFromZoho} disabled={syncing}>{syncing?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
-        </div>
-      ):(
-        <>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:16}}>
-            <KCard l="Accounts Receivable" v={fmt$(ar)} c={B.orange}/>
-            <KCard l="Overdue" v={fmt$(overdueTot)} c={B.red}/>
-            <KCard l="Paid (this pull)" v={fmt$(paidTot)} c={B.green}/>
-          </div>
-          <div style={{display:"flex",gap:5,marginBottom:12,flexWrap:"wrap"}}>
-            {[["all","All"],["overdue","Overdue"],["unpaid","Unpaid"],["draft","Draft"],["paid","Paid"]].map(([v,l])=>(
-              <button key={v} onClick={()=>setFlt(v)} style={{background:flt===v?B.orange:B.white,color:flt===v?B.white:B.muted,border:`1px solid ${flt===v?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{l}</button>
-            ))}
-          </div>
-          {list.map(inv=>{
-            const st=ISC[inv.status]||{c:B.muted,bg:B.surface};
-            const isOD=inv.status==="overdue";
-            const dOD=isOD&&inv.dueDate?dAgo(inv.dueDate):0;
-            const ex=sel===inv.id;
-            return(
-              <div key={inv.id} className="card fu" style={{marginBottom:8,borderLeft:`3px solid ${st.c}`,padding:0,overflow:"hidden"}}>
-                <div style={{display:"flex",alignItems:"center",gap:11,padding:"9px 12px",cursor:"pointer",background:ex?B.surface:B.white}} onClick={()=>setSel(ex?null:inv.id)}>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:2,flexWrap:"wrap"}}>
-                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.customer}</span>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:st.c,background:st.bg,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{(inv.status||"").toUpperCase()}{isOD&&dOD>0?` · ${dOD}d`:""}</span>
-                    </div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.number} · Due {fmtD(inv.dueDate)}</div>
-                  </div>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$(inv.balance||inv.total)}</div>
-                </div>
-                {ex&&(
-                  <div style={{borderTop:`1px solid ${B.border}`,padding:"11px 12px",background:B.surface}}>
-                    {(inv.items||[]).length>0&&(
-                      <div style={{background:B.white,borderRadius:5,border:`1px solid ${B.border}`,marginBottom:9,overflow:"hidden"}}>
-                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                          <tbody>{inv.items.map((it,i)=>(
-                            <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2?B.surface:B.white}}>
-                              <td style={{padding:"5px 9px",fontWeight:500}}>{it.name}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{it.qty}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",color:B.muted}}>{fmt$(it.rate)}</td>
-                              <td style={{padding:"5px 9px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</td>
-                            </tr>
-                          ))}</tbody>
-                        </table>
-                      </div>
-                    )}
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:drafts[inv.id+"gentle"]||drafts[inv.id+"firm"]||drafts[inv.id+"final"]?9:0}}>
-                      {(isOD||["sent","viewed"].includes(inv.status))&&(
-                        <OBtn sm onClick={()=>draftRem(inv,"gentle")} disabled={!!drafting}>{drafting===inv.id+"gentle"?"...":"✦ DRAFT REMINDER"}</OBtn>
-                      )}
-                      {isOD&&dOD>21&&(
-                        <OBtn sm col={B.red} onClick={()=>draftRem(inv,dOD>35?"final":"firm")} disabled={!!drafting}>{dOD>35?"FINAL NOTICE":"2ND NOTICE"}</OBtn>
-                      )}
-                    </div>
-                    {["gentle","firm","final"].map(type=>{
-                      const k=inv.id+type; if(!drafts[k]) return null;
-                      const lc={gentle:B.orange,firm:B.yellow,final:B.red};
-                      return(
-                        <div key={type} style={{background:B.white,borderRadius:4,padding:9,border:`1px solid ${B.border}`,marginBottom:6}}>
-                          <Lbl c={lc[type]} s={{marginBottom:6}}>{type==="gentle"?"REMINDER":type==="firm"?"2ND NOTICE":"FINAL NOTICE"}</Lbl>
-                          <textarea value={drafts[k]} onChange={e=>setDrafts(d=>({...d,[k]:e.target.value}))} rows={5} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-                          <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[k])} style={{fontSize:10,padding:"3px 8px",marginTop:6}}>COPY</GBtn>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  REORDER — populated from Zoho Books paid invoices
 // ════════════════════════════════════════════════════════════════════════════
 function ModReorder() {
@@ -4449,29 +4112,82 @@ function ModReorder() {
   const [drafting,setDrafting]=useState(null);
   const [pulling,setPulling]=useState(false);
   const [showAdd,setShowAdd]=useState(false);
+  const [autoDrafting,setAutoDrafting]=useState(false);
+  const [dayFilter,setDayFilter]=useState("all");
   const [form,setForm]=useState({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
 
-  const active=(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()));
+  const now=Date.now();
+
+  // Enrich every pending reorder with daysSince + stage — memoized on reorders data
+  const withDays=useMemo(()=>(s.reorders||[])
+    .filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()))
+    .map(r=>{
+      const daysSince=r.lastOrderDate?Math.floor((now-new Date(r.lastOrderDate).getTime())/86400000):0;
+      const stage=daysSince>=365?"lapsed":daysSince>=270?"follow-up":daysSince>=180?"check-in":"early";
+      return{...r,daysSince,stage};
+    }),[s.reorders]);
+
+  // Bucket filter
+  const filtered=useMemo(()=>
+    dayFilter==="90"  ?withDays.filter(r=>r.daysSince>=90&&r.daysSince<180):
+    dayFilter==="180" ?withDays.filter(r=>r.daysSince>=180&&r.daysSince<270):
+    dayFilter==="270" ?withDays.filter(r=>r.daysSince>=270&&r.daysSince<365):
+    dayFilter==="365" ?withDays.filter(r=>r.daysSince>=365):
+    withDays,[withDays,dayFilter]);
+
+  // Top 5 by priority: follow-up > check-in > lapsed > early, then by value
+  const stageRank={lapsed:50,"follow-up":100,"check-in":80,early:20};
+  const top5=useMemo(()=>[...withDays]
+    .sort((a,b)=>((stageRank[b.stage]||0)+(b.lastOrderValue||0)/200)-((stageRank[a.stage]||0)+(a.lastOrderValue||0)/200))
+    .slice(0,5),[withDays]);
+
+  const STAGE={
+    "early":      {color:B.blue,  label:"EARLY",      dot:"·"},
+    "check-in":   {color:B.orange,label:"CHECK-IN",   dot:"·"},
+    "follow-up":  {color:B.red,   label:"FOLLOW-UP",  dot:"·"},
+    "lapsed":     {color:B.muted, label:"LAPSED",     dot:"·"},
+  };
+
+  const draftPrompt=(r)=>{
+    if(r.stage==="check-in")
+      return `This is a friendly 6-month check-in — keep it warm and low-pressure, ask if they're thinking about the upcoming season.`;
+    if(r.stage==="follow-up")
+      return `They haven't reordered in 9 months — be a bit more direct, mention limited stock or seasonal timing, and ask if they want the same items.`;
+    if(r.stage==="lapsed")
+      return `Over a year since their last order — acknowledge the time, share what's new at ST1, make it easy for them to re-engage.`;
+    return `Early seasonal check-in — light touch, mention new products or season prep.`;
+  };
 
   const draftReo=async(r)=>{
     setDrafting(r.id);
-    const t=await aiCall(`Write a short seasonal reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a short reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
-Last order: ${fmtD(r.lastOrderDate)} — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
-Under 80 words. Reference exact last order. Ask if they need to restock. Warm tone.`);
-    setDrafts(d=>({...d,[r.id]:t||""})); setDrafting(null);
+Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
+${draftPrompt(r)}
+Under 80 words. Reference the exact last order. Warm, direct tone. Sign off as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
+    setDrafts(d=>({...d,[r.id]:t||""}));
+    setDrafting(null);
   };
 
-  // Pull paid invoices from Zoho Books → build reorder queue
-  // Window: last ordered 45–365 days ago, skip if already queued
+  // Auto-draft all 180d check-ins that don't yet have a draft
+  const autoDraftCheckIns=async()=>{
+    const targets=withDays.filter(r=>r.stage==="check-in"&&!drafts[r.id]);
+    if(!targets.length){toast("No new 180d check-ins to draft","info");return;}
+    setAutoDrafting(true);
+    toast(`Auto-drafting ${targets.length} check-in${targets.length>1?"s":""}…`,"info");
+    for(const r of targets) await draftReo(r);
+    setAutoDrafting(false);
+    toast(`${targets.length} draft${targets.length>1?"s":""} ready — review and send`,"success");
+  };
+
+  // Pull paid invoices from Zoho Books → build reorder queue (75–550 days)
   const pullFromZoho=async()=>{
     setPulling(true);
-    try {
+    try{
       const res=await zohoCall("books","/invoices?filter_by=Status.Paid&per_page=200&sort_column=date&sort_order=D");
       const invoices=res.invoices||[];
       if(!invoices.length&&res.message) throw new Error(res.message);
 
-      // Keep only most recent paid invoice per customer
       const byCustomer={};
       for(const inv of invoices){
         const key=inv.customer_id||inv.customer_name;
@@ -4480,13 +4196,12 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       const existingIds=new Set((s.reorders||[]).map(r=>r.zohoInvoiceId).filter(Boolean));
-      const now=Date.now();
       let added=0;
 
       for(const inv of Object.values(byCustomer)){
         if(existingIds.has(inv.invoice_id)) continue;
         const daysSince=Math.floor((now-new Date(inv.date).getTime())/86400000);
-        if(daysSince<45||daysSince>365) continue; // outside reorder window
+        if(daysSince<75||daysSince>550) continue;
 
         dispatch("ADD_REORDER",{
           id:"reorder_"+inv.invoice_id,
@@ -4505,8 +4220,8 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       dispatch("LOG",{msg:`Reorder sync from Zoho Books — ${added} new accounts queued`});
-      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window (45–365 days since last order)`,"success");
-    } catch(e){
+      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window`,"success");
+    }catch(e){
       toast(`Zoho sync failed: ${e.message.slice(0,100)}`,"error");
     }
     setPulling(false);
@@ -4516,36 +4231,98 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
     if(!form.school.trim()) return toast("School name required","error");
     dispatch("ADD_REORDER",{
       id:mkId(),
-      school:form.school,
-      contact:form.contact,
-      state:form.state,
-      sport:form.sport,
+      school:form.school,contact:form.contact,state:form.state,sport:form.sport,
       lastOrderDate:form.lastOrderDate,
       lastItems:form.lastItems.split(",").map(x=>x.trim()).filter(Boolean),
       lastOrderValue:parseFloat(form.lastOrderValue)||0,
-      status:"pending",
-      source:"manual",
+      status:"pending",source:"manual",
     });
     setForm({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
     setShowAdd(false);
     toast("Added to reorder queue","success");
   };
 
+  const checkInCount=withDays.filter(r=>r.stage==="check-in").length;
+  const followUpCount=withDays.filter(r=>r.stage==="follow-up").length;
+
+  const FILTERS=[
+    ["all","ALL",null],
+    ["90","90D · EARLY",B.blue],
+    ["180","180D · CHECK-IN",B.orange],
+    ["270","270D · FOLLOW-UP",B.red],
+    ["365","365D · LAPSED",B.muted],
+  ];
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="REORDER ENGINE" sub={active.length>0?`${active.length} account${active.length!==1?"s":""} ready for seasonal outreach`:"All accounts up to date"}
+      <PH title="REORDER ENGINE"
+        sub={`${withDays.length} in window · ${checkInCount} check-in${checkInCount!==1?"s":""} ready · ${followUpCount} need follow-up`}
         action={
           <div style={{display:"flex",gap:7}}>
-            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD MANUALLY"}</GBtn>
-            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
+            <GBtn onClick={autoDraftCheckIns} disabled={autoDrafting} style={{fontSize:10,padding:"4px 10px"}}>
+              {autoDrafting?"DRAFTING…":"⚡ AUTO-DRAFT 180D"}
+            </GBtn>
+            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD"}</GBtn>
+            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING…":"↓ SYNC ZOHO"}</OBtn>
           </div>
         }
       />
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:18}}>
-        <KCard l="In Queue" v={active.length} c={B.orange}/>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:18}}>
+        <KCard l="Queue" v={withDays.length} c={B.text}/>
+        <KCard l="90d Early" v={withDays.filter(r=>r.stage==="early").length} c={B.blue}/>
+        <KCard l="180d Check-In" v={checkInCount} c={B.orange}/>
+        <KCard l="270d Follow-Up" v={followUpCount} c={B.red}/>
         <KCard l="Sent" v={(s.reorders||[]).filter(r=>r.status==="sent").length} c={B.green}/>
-        <KCard l="Snoozed" v={(s.reorders||[]).filter(r=>r.snoozedUntil&&new Date(r.snoozedUntil)>new Date()).length} c={B.muted}/>
+      </div>
+
+      {/* Top 5 priority panel */}
+      {top5.length>0&&(
+        <div style={{background:B.surface,borderRadius:8,padding:14,marginBottom:18,border:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:11}}>TOP 5 · REACH OUT NOW</div>
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {top5.map((r,i)=>{
+              const st=STAGE[r.stage]||STAGE.early;
+              return(
+                <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:B.white,borderRadius:6,border:`1px solid ${B.border}`,borderLeft:`3px solid ${st.color}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,minWidth:18}}>#{i+1}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{r.school}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.sport}{r.contact?` · ${r.contact}`:""}{r.state?`, ${r.state}`:""}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginRight:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,letterSpacing:.5,marginBottom:1}}>{st.label} · {r.daysSince}d AGO</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{fmt$(r.lastOrderValue)}</div>
+                  </div>
+                  <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Day-range filter tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+        {FILTERS.map(([v,label,col])=>{
+          const active=dayFilter===v;
+          const c=active?(col||B.orange):B.muted;
+          return(
+            <button key={v} onClick={()=>setDayFilter(v)}
+              style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,padding:"4px 11px",borderRadius:4,
+                border:`1px solid ${active?(col||B.orange):B.border}`,
+                background:active?(col||B.orange)+"22":"transparent",
+                color:active?(col||B.orange):B.muted,cursor:"pointer"}}>
+              {label}
+            </button>
+          );
+        })}
+        {dayFilter!=="all"&&(
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,alignSelf:"center",marginLeft:4}}>
+            {filtered.length} account{filtered.length!==1?"s":""}
+          </span>
+        )}
       </div>
 
       {/* Manual add form */}
@@ -4573,7 +4350,7 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Items (comma-sep)</Lbl>
-              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus..." style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Order Value</Lbl>
@@ -4584,39 +4361,49 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
         </div>
       )}
 
-      {active.length===0&&!showAdd&&(
+      {filtered.length===0&&!showAdd&&(
         <div style={{textAlign:"center",padding:"40px 0"}}>
           <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Sync Zoho Books to populate from paid invoices (45–365 days old), or add accounts manually</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+            {dayFilter==="all"?"Sync Zoho Books or add accounts manually to populate this queue.":"No accounts in this time window."}
+          </div>
         </div>
       )}
 
-      {active.map(r=>(
-        <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${B.orange}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
-            <div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:2}}>{r.school}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
-                Last order: {fmtD(r.lastOrderDate)} · {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+      {filtered.map(r=>{
+        const st=STAGE[r.stage]||STAGE.early;
+        return(
+          <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${st.color}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{r.school}</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,background:st.color+"18",padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{st.label}</span>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                  Last order: {fmtD(r.lastOrderDate)}&nbsp;
+                  <span style={{color:st.color,fontWeight:600}}>({r.daysSince}d ago)</span>
+                  &nbsp;· {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
+                <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(now+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
               </div>
             </div>
-            <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
-              <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"...":"✦ DRAFT"}</OBtn>
-              <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(Date.now()+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
-            </div>
+            {drafts[r.id]&&(
+              <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
+                <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
+                <div style={{display:"flex",gap:6,marginTop:6}}>
+                  <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
+                  <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
+                </div>
+              </div>
+            )}
           </div>
-          {drafts[r.id]&&(
-            <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
-              <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-              <div style={{display:"flex",gap:6,marginTop:6}}>
-                <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
-                <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -4690,6 +4477,7 @@ function ModProspecting() {
     bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
   };
   const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
+  const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
 
   const runScrape=async(area)=>{
     setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
@@ -5479,7 +5267,7 @@ function ModProspecting() {
                 })()}
                 {/* Hot leads leaderboard */}
                 {(()=>{
-                  const hot=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5);
+                  const hot=hotLeads;
                   if(!hot.length) return null;
                   return(
                     <div style={{marginBottom:14,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:7,padding:12}}>
@@ -5979,7 +5767,6 @@ function ModProspecting() {
               </div>
             )}
           </div>
-          <button onClick={()=>{setMod("emails");}} style={{background:"#ffffff20",color:B.white,border:"1px solid #ffffff30",borderRadius:4,padding:"6px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>BATCH EMAIL →</button>
           <button onClick={()=>{
             bulkSel.forEach(cid=>{
               const c=(s.contacts||[]).find(x=>x.id===cid);
@@ -6054,295 +5841,6 @@ Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
-// ════════════════════════════════════════════════════════════════════════════
-//  EMAILS — unified sent history, templates, and batch outreach
-// ════════════════════════════════════════════════════════════════════════════
-function ModEmails() {
-  const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("sent");
-
-  // ── SENT HISTORY ──────────────────────────────────────────────────────────
-  const sentItems = (s.contacts||[])
-    .flatMap(c=>(c.activity||[])
-      .filter(a=>a.type==="sent"||a.type==="replied"||a.type==="opened"||a.type==="clicked")
-      .map(a=>({...a,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),contactEmail:c.email,school:typeof c.school==="string"?c.school:c.school?.name||"",sport:c.sport||""}))
-    )
-    .sort((a,b)=>b.ts-a.ts);
-
-  const typeColor={sent:B.blue,replied:B.green,opened:B.purple,clicked:B.orange};
-
-  // ── TEMPLATES ─────────────────────────────────────────────────────────────
-  const allTemplates=[...DEFAULT_TEMPLATES,...(s.templates||[])];
-  const [sel,setSel]=useState(allTemplates[0]?.id||null);
-  const [editing,setEditing]=useState(false);
-  const [form,setForm]=useState({name:"",subject:"",body:"",tags:[]});
-  const [tagInput,setTagInput]=useState("");
-  const current=allTemplates.find(t=>t.id===sel);
-  const isDefault=DEFAULT_TEMPLATES.some(t=>t.id===sel);
-  const startNew=()=>{setForm({name:"",subject:"",body:"",tags:[]});setEditing(true);setSel(null);};
-  const startEdit=()=>{if(!current||isDefault)return;setForm({name:current.name,subject:current.subject,body:current.body,tags:current.tags||[]});setEditing(true);};
-  const cancelEdit=()=>{setEditing(false);if(allTemplates.length)setSel(allTemplates[0].id);};
-  const saveTemplate=()=>{
-    if(!form.name||!form.subject||!form.body){toast("Name, subject and body required","error");return;}
-    if(sel&&!isDefault){dispatch("UPDATE_TEMPLATE",{id:sel,...form});toast("Template updated","success");}
-    else{const t={id:mkId(),...form};dispatch("ADD_TEMPLATE",t);setSel(t.id);toast("Template saved","success");}
-    setEditing(false);
-  };
-
-  // ── BATCH SEND ────────────────────────────────────────────────────────────
-  const contacts=s.contacts||[];
-  const [sportFilter,setSportFilter]=useState("");
-  const [stateFilter,setStateFilter]=useState("");
-  const [scoreFilter,setScoreFilter]=useState(0);
-  const [selContacts,setSelContacts]=useState(new Set());
-  const [tplId,setTplId]=useState(allTemplates[0]?.id||"");
-  const [drafts,setDrafts]=useState([]);
-  const [writing,setWriting]=useState(false);
-  const [sending,setSending]=useState(false);
-  const [sentCount,setSentCount]=useState(0);
-  const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
-  const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
-  const filtered=contacts.filter(c=>{
-    if(!c.email)return false;
-    if(sportFilter&&c.sport!==sportFilter)return false;
-    if(stateFilter&&c.state!==stateFilter)return false;
-    if((c.score||0)<scoreFilter)return false;
-    return true;
-  });
-  const eligibleContacts=contacts.filter(c=>!c.optedOut);
-  const optedOutCount=contacts.length-eligibleContacts.length;
-  const togSel=(id)=>setSelContacts(ss=>{const n=new Set(ss);n.has(id)?n.delete(id):n.add(id);return n;});
-  const selAll=()=>setSelContacts(new Set(filtered.map(c=>c.id)));
-  const selNone=()=>setSelContacts(new Set());
-  const selectedList=filtered.filter(c=>selContacts.has(c.id)).filter(c=>!c.optedOut);
-  const buildDrafts=async()=>{
-    if(!selectedList.length){toast("Select contacts first","error");return;}
-    const tpl=allTemplates.find(t=>t.id===tplId);
-    if(!tpl){toast("Select a template","error");return;}
-    setWriting(true);setDrafts([]);
-    const useAI=selectedList.length<=20;
-    if(useAI){
-      const prompt=`You are writing personalized emails for ST1 Sports (athletic equipment) for ${selectedList.length} recipients.\n\nTemplate:\nSubject: ${tpl.subject}\nBody: ${tpl.body}\n\nRecipients:\n${selectedList.map((c,i)=>`${i+1}. ${c.fullName||[c.firstName,c.lastName].filter(Boolean).join(" ")} | ${c.title||"coach"} | ${c.school||""} | ${c.state||""} | Sport: ${c.sport||"general"}`).join("\n")}\n\nFor each recipient personalize the subject and body by filling in {{name}}, {{school}}, and adding 1 specific sentence relevant to their sport/role.\nReturn JSON array: [{"index":1,"subject":"...","body":"..."}] with index matching the list above.`;
-      const raw=await aiCall(prompt,{json:true,tokens:4000});
-      if(Array.isArray(raw)){setDrafts(raw.map((r,i)=>{const c=selectedList[i];return{id:mkId(),contactId:c.id,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),toEmail:c.email,subject:r.subject||tpl.subject,body:r.body||tpl.body,status:"draft"};}));}
-      else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
-    }else{setDrafts(selectedList.map(c=>{const name=c.fullName||c.firstName||"Coach";const school=c.school||"your school";return{id:mkId(),contactId:c.id,contactName:name,toEmail:c.email,subject:tpl.subject.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),body:tpl.body.replace(/\{\{name\}\}/g,name).replace(/\{\{school\}\}/g,school),status:"draft"};}));}
-    setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
-  };
-  const sendAll=async()=>{
-    const toSend=drafts.filter(d=>d.status==="draft");
-    if(!toSend.length){toast("No drafts to send","error");return;}
-    setSending(true);setSentCount(0);let sent=0;
-    for(const d of toSend){
-      try{
-        setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sending"}:x));
-        const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:d.toEmail,to_name:d.contactName,subject:d.subject,body:d.body})});
-        const res=await r.json();
-        if(res.sent){
-          setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"sent"}:x));
-          dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"contacted",lastOutreach:today()});
-          dispatch("SCORE_CONTACT",{contactId:d.contactId,type:"sent",note:`Batch email sent`,campaignId:"batch"});
-          const _bc=(s.contacts||[]).find(c=>c.id===d.contactId);if(_bc?.zohoId) pushActivityToZoho(_bc,`Batch email sent: ${d.subject}`);
-          sent++;setSentCount(sent);
-        }else{setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:res.error}:x));}
-        // 15-second gap between sends to avoid spam filters
-        if(sent<toSend.length) await new Promise(r=>setTimeout(r,15000));
-      }catch(e){setDrafts(ds=>ds.map(x=>x.id===d.id?{...x,status:"failed",error:e.message}:x));}
-    }
-    setSending(false);toast(`${sent}/${toSend.length} emails sent`,sent>0?"success":"error");
-  };
-  const updDraft=(id,field,val)=>setDrafts(ds=>ds.map(d=>d.id===id?{...d,[field]:val}:d));
-
-  return(
-    <div style={{padding:"22px 26px"}}>
-      <PH title="EMAILS" sub="Sent history · reusable templates · batch outreach"/>
-      <div style={{display:"flex",gap:5,marginBottom:18}}>
-        {[["sent","✉ SENT"],["templates","≈ TEMPLATES"],["batch","⟶ BATCH SEND"]].map(([id,l])=>(
-          <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
-        ))}
-      </div>
-
-      {/* ── SENT HISTORY ────────────────────────────────────────────────────── */}
-      {tab==="sent"&&(
-        <div>
-          {sentItems.length===0?(
-            <div className="card" style={{padding:40,textAlign:"center"}}>
-              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No emails sent yet</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Emails sent through campaigns or batch outreach will appear here.</div>
-              <div style={{display:"flex",gap:8,justifyContent:"center"}}>
-                <OBtn sm onClick={()=>setTab("batch")}>BATCH SEND →</OBtn>
-              </div>
-            </div>
-          ):(
-            <div>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>{sentItems.length} EVENTS</div>
-              <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                {sentItems.slice(0,150).map(a=>{
-                  const c=typeColor[a.type]||B.muted;
-                  return(
-                    <div key={a.id} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"8px 12px",background:B.white,border:`1px solid ${B.border}`,borderLeft:`3px solid ${c}`,borderRadius:5}}>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:`${c}14`,padding:"2px 6px",borderRadius:3,flexShrink:0,marginTop:1}}>{a.type?.toUpperCase()}</span>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{a.contactName}</div>
-                        {a.contactEmail&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{a.contactEmail}{a.school?` · ${a.school}`:""}</div>}
-                        {a.note&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,fontStyle:"italic"}}>{a.note}</div>}
-                      </div>
-                      <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{new Date(a.ts).toLocaleDateString()}</div>
-                        {a.campaignId&&a.campaignId!=="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,marginTop:2}}>CAMPAIGN</div>}
-                        {a.campaignId==="batch"&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,marginTop:2}}>BATCH</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ── TEMPLATES ────────────────────────────────────────────────────────── */}
-      {tab==="templates"&&(
-        <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:14,height:"calc(100vh - 200px)",overflow:"hidden"}}>
-          <div style={{overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-            <button onClick={startNew} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",marginBottom:6}}>+ NEW TEMPLATE</button>
-            {allTemplates.map(t=>(
-              <div key={t.id} onClick={()=>{setSel(t.id);setEditing(false);}} style={{padding:"9px 12px",borderRadius:6,cursor:"pointer",background:sel===t.id?B.orangeBg:B.white,border:`1px solid ${sel===t.id?B.orange:B.border}`,borderLeft:`3px solid ${sel===t.id?B.orange:B.border}`}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:sel===t.id?500:400,lineHeight:1.3}}>{t.name}</div>
-                {t.tags?.length>0&&<div style={{display:"flex",gap:3,flexWrap:"wrap",marginTop:4}}>{t.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:8}}>{tag}</span>)}</div>}
-              </div>
-            ))}
-          </div>
-          <div style={{overflowY:"auto"}}>
-            {editing?(
-              <div className="card" style={{padding:16}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                  <div><Lbl s={{marginBottom:4}}>TEMPLATE NAME</Lbl><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                  <div><Lbl s={{marginBottom:4}}>TAGS (comma-sep)</Lbl><input value={tagInput||form.tags.join(", ")} onChange={e=>{setTagInput(e.target.value);setForm(f=>({...f,tags:e.target.value.split(",").map(t=>t.trim()).filter(Boolean)}));}} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                </div>
-                <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>SUBJECT LINE</Lbl><input value={form.subject} onChange={e=>setForm(f=>({...f,subject:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-                <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>BODY — use {"{{name}}"}, {"{{school}}"} as placeholders</Lbl>
-                  <textarea value={form.body} onChange={e=>setForm(f=>({...f,body:e.target.value}))} rows={12} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.7}}/></div>
-                <div style={{display:"flex",gap:7}}><OBtn onClick={saveTemplate}>SAVE TEMPLATE</OBtn><GBtn onClick={cancelEdit}>CANCEL</GBtn></div>
-              </div>
-            ):current?(
-              <div className="card" style={{padding:16}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-                  <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginBottom:4}}>{current.name}</div>
-                    {current.tags?.length>0&&<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{current.tags.map(tag=><span key={tag} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:8}}>{tag}</span>)}</div>}
-                  </div>
-                  <div style={{display:"flex",gap:7}}>
-                    <button onClick={()=>navigator.clipboard?.writeText(`Subject: ${current.subject}\n\n${current.body}`).catch(()=>{}).then(()=>toast("Copied","success"))} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>📋 COPY</button>
-                    {!isDefault&&<button onClick={startEdit} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>EDIT</button>}
-                    {!isDefault&&<button onClick={()=>{dispatch("DEL_TEMPLATE",sel);setSel(allTemplates[0]?.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>DEL</button>}
-                  </div>
-                </div>
-                <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",marginBottom:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Subject: {current.subject}</div>
-                <pre style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.7,margin:0,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"12px 14px"}}>{current.body}</pre>
-                {isDefault&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Built-in template — create a custom copy to edit it.</div>}
-              </div>
-            ):<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Select a template</div>}
-          </div>
-        </div>
-      )}
-
-      {/* ── BATCH SEND ───────────────────────────────────────────────────────── */}
-      {tab==="batch"&&(
-        drafts.length===0?(
-          <div style={{display:"grid",gridTemplateColumns:"1fr 320px",gap:16}}>
-            <div>
-              <div className="card" style={{padding:14,marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>FILTER CONTACTS</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:9,marginBottom:10}}>
-                  <div><Lbl s={{marginBottom:3}}>SPORT</Lbl><select value={sportFilter} onChange={e=>setSportFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All sports</option>{sports.map(sp=><option key={sp}>{sp}</option>)}</select></div>
-                  <div><Lbl s={{marginBottom:3}}>STATE</Lbl><select value={stateFilter} onChange={e=>setStateFilter(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">All states</option>{states.map(st=><option key={st}>{st}</option>)}</select></div>
-                  <div><Lbl s={{marginBottom:3}}>MIN SCORE</Lbl><input type="number" min="0" max="200" value={scoreFilter} onChange={e=>setScoreFilter(Number(e.target.value)||0)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/></div>
-                </div>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{filtered.length} contacts match · {selContacts.size} selected</div>
-                  <div style={{display:"flex",gap:6}}>
-                    <button onClick={selAll} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>SELECT ALL</button>
-                    <button onClick={selNone} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLEAR</button>
-                  </div>
-                </div>
-              </div>
-              <div style={{maxHeight:360,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-                {filtered.slice(0,100).map(c=>(
-                  <div key={c.id} onClick={()=>togSel(c.id)} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 12px",borderRadius:6,cursor:"pointer",background:selContacts.has(c.id)?B.orangeBg:B.white,border:`1px solid ${selContacts.has(c.id)?B.orange:B.border}`}}>
-                    <div style={{width:16,height:16,borderRadius:3,border:`2px solid ${selContacts.has(c.id)?B.orange:B.border}`,background:selContacts.has(c.id)?B.orange:"none",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>{selContacts.has(c.id)&&<span style={{color:B.white,fontSize:10,lineHeight:1}}>✓</span>}</div>
-                    <div style={{flex:1}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof c.title==="string"?c.title:c.title?.name||""} · {typeof c.school==="string"?c.school:c.school?.name||""}</div>
-                    </div>
-                    <div style={{textAlign:"right",flexShrink:0}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{c.email}</div>
-                      {(c.score||0)>0&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>{c.score}pts</div>}
-                    </div>
-                  </div>
-                ))}
-                {filtered.length===0&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts match. Adjust filters or import contacts first.</div>}
-              </div>
-            </div>
-            <div>
-              <div className="card" style={{padding:14,marginBottom:12}}>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.2,marginBottom:10}}>SELECT TEMPLATE</div>
-                <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                  {allTemplates.map(t=>(
-                    <div key={t.id} onClick={()=>setTplId(t.id)} style={{padding:"8px 10px",borderRadius:5,cursor:"pointer",background:tplId===t.id?B.orangeBg:B.white,border:`1px solid ${tplId===t.id?B.orange:B.border}`}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:tplId===t.id?500:400}}>{t.name}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis"}}>{t.subject}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="card" style={{padding:14}}>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:8}}>{selectedList.length} contacts{optedOutCount>0?<span style={{color:B.red}}> ({optedOutCount} opted out — excluded)</span>:""}</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6,marginBottom:12}}>{selContacts.size} selected · AI will personalize each email with their name and school.</div>
-                <OBtn onClick={buildDrafts} disabled={writing||selectedList.length===0} style={{width:"100%",marginBottom:7}}>{writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}</OBtn>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
-              </div>
-            </div>
-          </div>
-        ):(
-          <div>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-                {drafts.length} drafts · {drafts.filter(d=>d.status==="sent").length} sent · {drafts.filter(d=>d.status==="failed").length} failed
-                {sending&&<span style={{color:B.orange,marginLeft:8}}>Sending {sentCount}...</span>}
-              </div>
-              <div style={{display:"flex",gap:7}}>
-                <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
-                <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>{sending?"SENDING...":"✉ SEND ALL DRAFTS"}</button>
-              </div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:8}}>
-              {drafts.map(d=>{
-                const STATUS_C={draft:B.muted,sending:B.orange,sent:B.green,failed:B.red};
-                return(
-                  <div key={d.id} className="card" style={{padding:14,borderLeft:`3px solid ${STATUS_C[d.status]||B.muted}`}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.contactName} <span style={{color:B.muted,fontWeight:400}}>· {d.toEmail}</span></div>
-                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:STATUS_C[d.status],background:`${STATUS_C[d.status]}18`,padding:"2px 7px",borderRadius:8,letterSpacing:.5,flexShrink:0}}>{d.status.toUpperCase()}</span>
-                    </div>
-                    {d.status==="draft"&&(
-                      <div>
-                        <input value={d.subject} onChange={e=>updDraft(d.id,"subject",e.target.value)} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:5}}/>
-                        <textarea value={d.body} onChange={e=>updDraft(d.id,"body",e.target.value)} rows={5} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
-                      </div>
-                    )}
-                    {d.status==="sent"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Sent successfully</div>}
-                    {d.status==="failed"&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>✗ {d.error||"Send failed"}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )
-      )}
-    </div>
-  );
-}
 
 function ModTemplates() {
   const {s,dispatch,toast}=useApp();
@@ -6776,12 +6274,12 @@ function ModMarketing() {
 
   const campaigns = s.campaigns || [];
   const strategies = s.strategies || [];
-  const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+  const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
   selCampIdRef.current = selCamp?.id || null;
   campaignsRef.current = campaigns;
   const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
-  const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
+  const allSports = useMemo(()=>[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort(),[s.contacts]);
 
   const CHANNELS = [
     {id:"email",icon:"✉",label:"Cold Email"},
@@ -7226,10 +6724,8 @@ function ModMarketing() {
       if(d.sent) return {ok:true};
       // Surface detailed error so it shows in the UI
       const reason=d.error||(d.raw?.error?.message)||"send failed";
-      console.error("[sendOneEmail] API error →",d);
       return {ok:false,reason};
     }catch(err){
-      console.error("[sendOneEmail] fetch error →",err);
       return {ok:false,reason:err.message};
     }
   };
@@ -7279,7 +6775,6 @@ function ModMarketing() {
         failed++;
         const failEmail=contactMap[enroll.contactId]?.email||"unknown";
         if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
-        console.warn("[campaign send] failed for",failEmail,"→",res.reason);
       }
     }
     dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
@@ -8697,7 +8192,6 @@ function ModMarketing() {
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
                 const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
-                  console.log("[sendOneBatch] camp=",camp?.id,"sending=",sending,"batch=",batchEnrollments.length,"noEmail=",noEmailEnrs.length);
                   if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
                   if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
                   setSending(true);
@@ -8754,7 +8248,6 @@ function ModMarketing() {
                   toast(msg,sent>0||skipped>0||noEmailAdv>0?"success":"error");
                   if(failed>0||sent===0&&skipped===0&&noEmailAdv===0) setLastSendErr(msg);
                   } catch(err) {
-                    console.error("[sendOneBatch]",err);
                     const errMsg=`Send crashed: ${err.message}`;
                     toast(errMsg,"error");
                     setLastSendErr(errMsg);
@@ -9749,15 +9242,25 @@ function ModCalendar() {
   // Build all events
   const allEvents=[];
   (s.campaigns||[]).forEach(camp=>{
-    // Email touches
+    // Projected email touch schedule (if campaign has a startDate)
     if(camp.startDate && (camp.touches||[]).length>0){
       (camp.touches||[]).forEach(touch=>{
-        const d=new Date(camp.startDate);
+        const d=new Date(camp.startDate+"T00:00:00");
         d.setDate(d.getDate()+(touch.dayOffset||0));
-        const dateStr=d.toISOString().slice(0,10);
-        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Day ${touch.dayOffset||0}`,campId:camp.id});
+        const dateStr=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        allEvents.push({date:dateStr,type:"email",label:touch.subject||"Email",color:"#f97316",campName:camp.name,subLabel:`Campaign · Day ${touch.dayOffset||0}`,campId:camp.id});
       });
     }
+    // Actual sent emails from enrollment step history
+    (camp.enrollments||[]).forEach(enr=>{
+      (enr.sentSteps||[]).forEach(step=>{
+        const dateStr=(step.sentAt||"").slice(0,10);
+        if(!dateStr)return;
+        const touch=(camp.touches||[]).find(t=>t.dayOffset===step.dayOffset);
+        const contact=(s.contacts||[]).find(c=>c.id===enr.contactId);
+        allEvents.push({date:dateStr,type:"email",label:touch?.subject||"Email",color:"#f97316",campName:camp.name,subLabel:contact?.school||contact?.fullName||"",campId:camp.id});
+      });
+    });
     // Social drafts
     (camp.socialDrafts||[]).forEach(p=>{
       const dateStr=(p.scheduledDate||p.date||"").slice(0,10);
@@ -9772,7 +9275,16 @@ function ModCalendar() {
   // Standalone social posts
   (s.socialPosts||[]).forEach(p=>{
     const dateStr=(p.date||"").slice(0,10);
-    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+    if(dateStr) allEvents.push({date:dateStr,type:"social",label:(p.caption||"Social Post").slice(0,40),color:"#9333ea",campName:(p.platforms||[]).join(", ")||"Standalone",subLabel:(p.platforms||[]).join(", ")||"Social",campId:null});
+  });
+  // Emails logged on individual contacts (touch history)
+  (s.contacts||[]).forEach(c=>{
+    const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||c.school||"Contact";
+    (c.touchHistory||[]).forEach(t=>{
+      if(t.type!=="email"||!t.date)return;
+      const dateStr=t.date.slice(0,10);
+      allEvents.push({date:dateStr,type:"email",label:t.note?.slice(0,50)||"Email",color:"#f97316",campName:name,subLabel:c.school||"",campId:null});
+    });
   });
 
   const filtered=allEvents.filter(ev=>{
@@ -10229,9 +9741,7 @@ function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
 
 function ModSocial() {
   const {s,dispatch,toast}=useApp();
-  const [tab,setTab]=useState("calendar");
-  const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
-  const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
+  const [tab,setTab]=useState("posts");
   // New post form
   const [caption,setCaption]=useState("");
   const [platforms,setPlatforms]=useState([]);
@@ -10248,6 +9758,19 @@ function ModSocial() {
   const [verboseDebugId,setVerboseDebugId]=useState(null);
   const [verboseResult,setVerboseResult]=useState(null);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
+  // Tone + topic/product for AI writing
+  const [tone,setTone]=useState("Professional");
+  const [topic,setTopic]=useState("");
+  const [product,setProduct]=useState("");
+  const [platformVariants,setPlatformVariants]=useState(null); // per-platform captions from AI
+  // AI image generator
+  const [imgUseCase,setImgUseCase]=useState("Social Post");
+  const [imgMood,setImgMood]=useState("Clean");
+  const [imgColors,setImgColors]=useState("");
+  const [imgGenerating,setImgGenerating]=useState(false);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgError,setImgError]=useState(null);
+  const [showImgGen,setShowImgGen]=useState(false);
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
@@ -10269,10 +9792,7 @@ function ModSocial() {
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
 
-  const getPostsForDay=(y,m,d)=>{
-    const dateStr=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-    return allPosts.filter(p=>(p.date||"").slice(0,10)===dateStr);
-  };
+  const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
 
   const generateCaption=async()=>{
     setGenRunning(true);
@@ -10283,13 +9803,48 @@ function ModSocial() {
     const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
     const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
     const direction=caption.trim();
+    const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
     const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
     const prompt=direction
-      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
+      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
     const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
+  };
+
+  // Generate separate per-platform captions with hashtags
+  const generatePerPlatform=async()=>{
+    if(!platforms.length) return;
+    setGenRunning(true); setPlatformVariants(null);
+    const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+    const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
+    const r=await aiCall(task,{tokens:900});
+    if(r){
+      try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
+    }
+    setGenRunning(false);
+  };
+
+  // AI image generator: topic+mood → AI prompt → Ideogram image
+  const generateAiImage=async()=>{
+    setImgGenerating(true); setImgError(null); setImgPrompt("");
+    const MOOD_STYLE={Bold:"DESIGN",Clean:"REALISTIC",Energetic:"REALISTIC"};
+    const CASE_SIZE={"Social Post":"square","Product Promo":"square","Email Banner":"landscape","Event Flyer":"story"};
+    try{
+      const featured=product.trim()||topic.trim()||"ST1 Sports athletic equipment";
+      const builtPrompt=await aiCall(`Create an image generation prompt for a "${imgUseCase}" for ST1 Sports athletic equipment brand. Featured: ${featured}. Visual mood: ${imgMood}. Brand colors: orange (#F37321) and black.${imgColors.trim()?` Additional colors: ${imgColors.trim()}.`:""} Athletic sports marketing. Professional commercial quality. Return ONLY the image prompt — no preamble.`,{tokens:200});
+      if(!builtPrompt) throw new Error("AI prompt generation failed");
+      setImgPrompt(builtPrompt);
+      const imgRes=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:builtPrompt,style:MOOD_STYLE[imgMood]||"REALISTIC",sizeKey:CASE_SIZE[imgUseCase]||"square"})});
+      const imgData=await imgRes.json();
+      if(!imgRes.ok) throw new Error(imgData.error||`Image API error ${imgRes.status}`);
+      setImageUrl(imgData.imageUrl);
+    }catch(e){setImgError(e.message);}
+    setImgGenerating(false);
   };
 
   // Poll Publer job status until done, then update post state with result
@@ -10372,11 +9927,6 @@ function ModSocial() {
     setPosting(false);
   };
 
-  const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-  const DAY_NAMES=["Su","Mo","Tu","We","Th","Fr","Sa"];
-  const daysInMonth=new Date(calYear,calMonth+1,0).getDate();
-  const firstDay=new Date(calYear,calMonth,1).getDay();
-
   const filtered=allPosts.filter(p=>{
     if(filterStatus!=="all"&&p.status!==filterStatus) return false;
     if(filterPlatform!=="all"&&!(p.platforms||[]).includes(filterPlatform)) return false;
@@ -10390,7 +9940,7 @@ function ModSocial() {
       <PH title="SOCIAL MEDIA" sub="Schedule, publish, and track posts across all platforms"/>
       <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap",alignItems:"center",justifyContent:"space-between"}}>
         <div style={{display:"flex",gap:5}}>
-          {[["calendar","📅 CALENDAR"],["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
+          {[["posts","📋 ALL POSTS"],["new","✦ NEW POST"]].map(([id,l])=>(
             <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
           ))}
         </div>
@@ -10400,57 +9950,6 @@ function ModSocial() {
         </div>
       </div>
 
-      {/* ── CALENDAR ──────────────────────────────────────────────────────── */}
-      {tab==="calendar"&&(
-        <div>
-          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:14}}>
-            <button onClick={()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>‹</button>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,flex:1,textAlign:"center",letterSpacing:.3}}>{MONTH_NAMES[calMonth]} {calYear}</div>
-            <button onClick={()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text}}>›</button>
-            <OBtn sm onClick={()=>setTab("new")}>+ POST</OBtn>
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,marginBottom:2}}>
-            {DAY_NAMES.map(d=><div key={d} style={{textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,padding:"5px 0",letterSpacing:.5}}>{d}</div>)}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
-            {Array(firstDay).fill(null).map((_,i)=><div key={`e${i}`} style={{background:B.surface,minHeight:90,borderRadius:4}}/>)}
-            {Array(daysInMonth).fill(null).map((_,i)=>{
-              const d=i+1;
-              const posts=getPostsForDay(calYear,calMonth,d);
-              const isToday=new Date().getFullYear()===calYear&&new Date().getMonth()===calMonth&&new Date().getDate()===d;
-              return(
-                <div key={d} style={{background:B.bg,border:`1px solid ${isToday?B.orange:B.border}`,borderRadius:4,padding:"5px 6px",minHeight:90,cursor:posts.length?"pointer":"default"}} onClick={()=>{if(posts.length)setTab("posts");}}>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
-                  {posts.slice(0,3).map((p,pi)=>{
-                    const col=PLATFORM_COLORS[(p.platforms||[])[0]]||B.purple;
-                    const isDraft=p._source==="campaign_draft";
-                    return(
-                      <div key={pi} style={{background:`${col}18`,borderLeft:`2px solid ${col}`,padding:"1px 5px",borderRadius:2,marginBottom:2,opacity:isDraft?.7:1}}>
-                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:col,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isDraft?"(draft) ":""}{(p.platforms||[]).join(", ")}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{(p.caption||"").slice(0,28)}</div>
-                      </div>
-                    );
-                  })}
-                  {posts.length>3&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,marginTop:2}}>+{posts.length-3}</div>}
-                </div>
-              );
-            })}
-          </div>
-          <div style={{display:"flex",gap:12,marginTop:14,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>PLATFORMS:</div>
-            {Object.entries(PLATFORM_COLORS).map(([pl,col])=>(
-              <div key={pl} style={{display:"flex",alignItems:"center",gap:4}}>
-                <div style={{width:10,height:10,borderRadius:2,background:col,flexShrink:0}}/>
-                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{pl}</span>
-              </div>
-            ))}
-            <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:12}}>
-              <div style={{width:10,height:10,borderRadius:2,background:B.purple,opacity:.5,flexShrink:0}}/>
-              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>campaign draft</span>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── ALL POSTS ─────────────────────────────────────────────────────── */}
       {tab==="posts"&&(
@@ -10637,25 +10136,122 @@ function ModSocial() {
                 ))}
               </div>
             </div>
+            {/* Tone */}
+            <div style={{marginBottom:16}}>
+              <Lbl s={{marginBottom:7}}>TONE</Lbl>
+              <div style={{display:"flex",gap:6}}>
+                {["Hype","Professional","Educational"].map(t=>(
+                  <button key={t} onClick={()=>setTone(t)} style={{background:tone===t?`${B.orange}14`:B.surface,color:tone===t?B.orange:B.muted,border:`1px solid ${tone===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>
+                ))}
+              </div>
+            </div>
+            {/* Topic + Product (help AI write better) */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              <div>
+                <Lbl s={{marginBottom:5}}>TOPIC (helps AI write)</Lbl>
+                <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="New track gear, baseball season…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+              <div>
+                <Lbl s={{marginBottom:5}}>PRODUCT (optional)</Lbl>
+                <input value={product} onChange={e=>setProduct(e.target.value)} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+            </div>
             {/* Caption */}
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
                   {["short","medium","long"].map(l=>(
                     <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
                   ))}
-                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?0.7:1}}>
+                    {genRunning?"✦ WRITING…":"✦ AI WRITE"}
+                  </button>
+                  <button onClick={generatePerPlatform} disabled={genRunning||!platforms.length} style={{background:"transparent",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",opacity:(genRunning||!platforms.length)?0.5:1}} title="Generate separate captions per platform">
+                    PER PLATFORM
                   </button>
                 </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
+              {/* Per-platform variants */}
+              {platformVariants&&(
+                <div style={{marginTop:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:7}}>PER-PLATFORM VARIANTS — click USE THIS to load into caption</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {platforms.map(pl=>{
+                      const key=pl.toLowerCase();
+                      const data=platformVariants[key];
+                      if(!data) return null;
+                      const col=PLATFORM_COLORS[pl]||B.blue;
+                      const tags=Array.isArray(data.hashtags)?data.hashtags:[];
+                      const full=data.caption+(tags.length?"\n\n"+tags.join(" "):"");
+                      return(
+                        <div key={pl} style={{background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`,padding:"9px 11px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:1.5}}>{pl.toUpperCase()}</span>
+                            <div style={{display:"flex",gap:5}}>
+                              <button onClick={()=>navigator.clipboard?.writeText(full)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>COPY</button>
+                              <button onClick={()=>setCaption(full)} style={{background:col,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>USE THIS ↑</button>
+                            </div>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,marginBottom:tags.length?6:0}}>{data.caption}</div>
+                          {tags.length>0&&(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                              {tags.map((tag,i)=><span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:col,background:`${col}12`,border:`1px solid ${col}30`,borderRadius:3,padding:"1px 6px"}}>{tag}</span>)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-            {/* Image */}
+            {/* Image — with AI generator panel */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <Lbl>IMAGE (optional)</Lbl>
+                <button onClick={()=>setShowImgGen(v=>!v)} style={{background:showImgGen?`${B.orange}14`:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>
+                  {showImgGen?"HIDE GENERATOR":"⚡ AI GENERATE"}
+                </button>
+              </div>
+              {showImgGen&&(
+                <div style={{background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,padding:14,marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>AI IMAGE GENERATOR — uses topic + product above</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>USE CASE</Lbl>
+                      <select value={imgUseCase} onChange={e=>setImgUseCase(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}>
+                        {["Social Post","Product Promo","Email Banner","Event Flyer"].map(u=><option key={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>MOOD</Lbl>
+                      <div style={{display:"flex",gap:5}}>
+                        {["Bold","Clean","Energetic"].map(m=>(
+                          <button key={m} onClick={()=>setImgMood(m)} style={{background:imgMood===m?`${B.orange}14`:B.white,color:imgMood===m?B.orange:B.muted,border:`1px solid ${imgMood===m?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{m}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <Lbl s={{marginBottom:4}}>ACCENT COLORS (optional)</Lbl>
+                    <input value={imgColors} onChange={e=>setImgColors(e.target.value)} placeholder="navy blue, gold, white…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <button onClick={generateAiImage} disabled={imgGenerating} style={{background:imgGenerating?B.border:B.orange,color:"#fff",border:"none",borderRadius:4,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:imgGenerating?"default":"pointer"}}>
+                    {imgGenerating?"GENERATING IMAGE…":"GENERATE IMAGE →"}
+                  </button>
+                  {imgError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:7}}>{imgError}</div>}
+                  {imgPrompt&&imgGenerating&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:7,lineHeight:1.5}}>{imgPrompt}</div>}
+                  {imageUrl&&!imgGenerating&&(
+                    <div style={{marginTop:10}}>
+                      <img src={imageUrl} alt="Generated" style={{width:"100%",borderRadius:6,display:"block",marginBottom:6}}/>
+                      <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.jpg`;a.click();}} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
+                    </div>
+                  )}
+                </div>
+              )}
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
             </div>
@@ -11964,70 +11560,154 @@ function AssetGallery({toast}) {
 //  COMPETE
 // ════════════════════════════════════════════════════════════════════════════
 function ModCompete() {
-  const {s,dispatch}=useApp();
-  const COMPS=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
+  const {s,dispatch,setMod}=useApp();
+  const HARDCODED=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
   const [sel,setSel]=useState(null);
   const intel=s.competeIntel||{};
   const bc=s.battlecards||{};
   const [running,setRunning]=useState(null);
   const [bcRunning,setBcRunning]=useState(null);
+  const [editingIntel,setEditingIntel]=useState(null); // competitor name being edited
+  const [editText,setEditText]=useState("");
+
+  const withIntel=useMemo(()=>Object.keys(intel).sort(),[intel]);
+  const noIntel=useMemo(()=>HARDCODED.filter(c=>!intel[c]),[intel]);
+
+  // Auto-select first with intel on mount
+  useEffect(()=>{if(!sel&&withIntel.length>0)setSel(withIntel[0]);},[withIntel]);
 
   const research=async(comp)=>{
-    setSel(comp);if(intel[comp])return;
+    setSel(comp);
     setRunning(comp);
     const t=await aiCall(`Research ${comp} as a competitor to ST1 Sports. ${ST1}. Provide: what they focus on, strengths, weaknesses vs ST1, pricing approach, strongest states, and how ST1 can counter them. Be specific and tactical.`,{search:true});
-    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});setRunning(null);
+    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});
+    setRunning(null);
   };
+
   const genBc=async(comp)=>{
     setBcRunning(comp);
     const r=await aiCall(`Sales battlecard for ST1 Sports vs ${comp}. ${ST1}. Return JSON: {"competitor":"","our_strengths":["3 items"],"their_strengths":["2 items"],"key_messages":["3 messages"],"objection_handlers":[{"objection":"","response":""}]}`,{json:true});
-    dispatch("SET_BATTLECARD",{[comp]:r});setBcRunning(null);
+    dispatch("SET_BATTLECARD",{[comp]:r});
+    setBcRunning(null);
   };
 
-  return (
-    <div style={{padding:"22px 26px"}}>
-      <PH title="COMPETITOR INTEL" sub="Research competitors · generate battlecards · counter strategies"/>
-      <div style={{display:"grid",gridTemplateColumns:"190px 1fr",gap:16}}>
-        <div>
-          <Lbl s={{marginBottom:9}}>Competitors</Lbl>
-          {COMPS.map(c=>(
-            <button key={c} onClick={()=>research(c)} style={{display:"block",width:"100%",background:sel===c?`${B.orange}10`:B.white,color:sel===c?B.orange:B.textMid,border:`1px solid ${sel===c?B.orange:B.border}`,borderRadius:5,padding:"8px 11px",fontSize:11,textAlign:"left",fontFamily:"'Lexend',sans-serif",marginBottom:5}}>
-              {c} {intel[c]?"✓":""}
-            </button>
-          ))}
+  const delIntel=(comp)=>{
+    if(!window.confirm(`Delete all intel for ${comp}?`)) return;
+    dispatch("DEL_COMPETE_INTEL",comp);
+    if(sel===comp) setSel(withIntel.find(c=>c!==comp)||null);
+  };
+
+  return(
+    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+      {/* LEFT RAIL */}
+      <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+        <div style={{padding:"14px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.text,letterSpacing:.5,marginBottom:6}}>COMPETITOR INTEL</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>Ask the home chat about any competitor to auto-save intel here.</div>
         </div>
-        <div>
-          {!sel&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Select a competitor to research</div>}
-          {sel&&running===sel&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12,padding:"20px 0"}}><Spin/>Researching {sel} with live web search...</div>}
-          {sel&&intel[sel]&&(
-            <div className="card fu" style={{padding:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.3}}>{sel}</div>
-                <OBtn sm onClick={()=>genBc(sel)} disabled={bcRunning===sel}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
-              </div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:bc[sel]?14:0}}>{intel[sel]}</div>
-              {bc[sel]&&(
-                <div style={{borderTop:`1px solid ${B.border}`,paddingTop:13}}>
-                  <Lbl c={B.orange} s={{marginBottom:11}}>BATTLECARD vs {bc[sel].competitor?.toUpperCase()}</Lbl>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:11}}>
-                    {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
-                      <div key={k} style={{background:bg,borderRadius:5,padding:10}}><Lbl c={c} s={{marginBottom:6}}>{l}</Lbl>{(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}</div>
-                    ))}
+        <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+          {withIntel.length>0&&(
+            <>
+              <div style={{padding:"5px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>INTEL SAVED</div>
+              {withIntel.map(c=>(
+                <div key={c} onClick={()=>setSel(c)} style={{padding:"8px 12px",cursor:"pointer",borderLeft:`3px solid ${sel===c?B.orange:"transparent"}`,background:sel===c?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:sel===c?B.orange:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{c}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginTop:1}}>{bc[c]?"✓ battlecard":""}</div>
                   </div>
-                  <div style={{background:B.surface,borderRadius:5,padding:10,marginBottom:10}}><Lbl s={{marginBottom:6}}>Key Messages</Lbl>{(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}</div>
-                  {(bc[sel].objection_handlers||[]).map((oh,i)=>(
-                    <div key={i} style={{marginBottom:7,padding:"9px 10px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:5}}>"{oh.objection}"</div>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:3}}>RESPONSE</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  <span style={{fontSize:9,color:B.green,flexShrink:0}}>✓</span>
+                </div>
+              ))}
+            </>
+          )}
+          {noIntel.length>0&&(
+            <>
+              <div style={{padding:"8px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>QUICK RESEARCH</div>
+              {noIntel.map(c=>(
+                <div key={c} style={{padding:"7px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${B.border}`}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{c}</span>
+                  <button onClick={()=>research(c)} disabled={!!running} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",flexShrink:0,letterSpacing:.3,opacity:running?.6:1}}>{running===c?"...":"RESEARCH"}</button>
+                </div>
+              ))}
+            </>
+          )}
+          {withIntel.length===0&&noIntel.length===0&&(
+            <div style={{padding:"20px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>No competitor data yet. Ask the home chat about a competitor to save intel here automatically.</div>
+          )}
+        </div>
+        <div style={{padding:"10px 12px",borderTop:`1px solid ${B.border}`,flexShrink:0}}>
+          <button onClick={()=>setMod("home")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:5,padding:"7px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>ASK HOME CHAT →</button>
+        </div>
+      </div>
+
+      {/* MAIN AREA */}
+      <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+        {!sel&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:12,opacity:.7}}>
+            <div style={{fontSize:32}}>⊗</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,textAlign:"center",maxWidth:280,lineHeight:1.6}}>Select a competitor from the left, or ask the home chat something like "Research BSN Sports as a competitor"</div>
+            <button onClick={()=>setMod("home")} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>GO TO HOME CHAT →</button>
+          </div>
+        )}
+        {sel&&running===sel&&(
+          <div style={{display:"flex",gap:10,alignItems:"center",padding:"40px 0",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:13}}>
+            <Spin/>Researching {sel} with live web search...
+          </div>
+        )}
+        {sel&&intel[sel]&&running!==sel&&(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.text,letterSpacing:.3,marginBottom:3}}>{sel}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>COMPETITOR INTEL</div>
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <OBtn sm onClick={()=>research(sel)} disabled={!!running}>REFRESH</OBtn>
+                <OBtn sm onClick={()=>genBc(sel)} disabled={!!bcRunning}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
+                <button onClick={()=>{setEditText(intel[sel]);setEditingIntel(sel);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>EDIT</button>
+                <button onClick={()=>delIntel(sel)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>DELETE</button>
+              </div>
+            </div>
+
+            {editingIntel===sel?(
+              <div style={{marginBottom:16}}>
+                <textarea value={editText} onChange={e=>setEditText(e.target.value)} rows={12} style={{width:"100%",padding:"10px 12px",border:`1px solid ${B.border}`,borderRadius:6,fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.7,resize:"vertical",color:B.text}}/>
+                <div style={{display:"flex",gap:7,marginTop:8}}>
+                  <OBtn onClick={()=>{dispatch("SET_COMPETE_INTEL",{[sel]:editText});setEditingIntel(null);}}>SAVE</OBtn>
+                  <GBtn onClick={()=>setEditingIntel(null)}>CANCEL</GBtn>
+                </div>
+              </div>
+            ):(
+              <div className="card" style={{padding:16,marginBottom:16,whiteSpace:"pre-wrap",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8}}>{intel[sel]}</div>
+            )}
+
+            {bc[sel]&&(
+              <div>
+                <Lbl c={B.orange} s={{marginBottom:12}}>BATTLECARD vs {(bc[sel].competitor||sel).toUpperCase()}</Lbl>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
+                    <div key={k} style={{background:bg,borderRadius:6,padding:12}}>
+                      <Lbl c={c} s={{marginBottom:8}}>{l}</Lbl>
+                      {(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12}}>
+                  <Lbl s={{marginBottom:8}}>Key Messages</Lbl>
+                  {(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}
+                </div>
+                {(bc[sel].objection_handlers||[]).map((oh,i)=>(
+                  <div key={i} style={{marginBottom:8,padding:"10px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>"{oh.objection}"</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>RESPONSE</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -12053,58 +11733,6 @@ function ModAgent() {
   useEffect(()=>{
     if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
   },[s.agentDraft]);
-
-  const buildContext=()=>{
-    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
-    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
-    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const recentActivity=(s.activity||[]).slice(-5);
-    const competitors=Object.keys(s.competeIntel||{});
-
-    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
-
-=== PIPELINE ===
-${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
-${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-=== TOP CONTACTS (by lead score) ===
-${topContacts.length===0?"No scored contacts":`${topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}`}
-${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
-
-=== ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
-
-=== OPEN RFPS ===
-${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
-
-=== AR ===
-${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
-=== ACTIONS YOU CAN TAKE ===
-Include an "actions" array when taking real action:
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· create_campaign: {type:"create_campaign",name,product,audience,channel}
-
-Also include "suggestions": 3 short follow-up questions the user might want to ask next.
-
-ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
-Be specific, tactical, use real names. Flag hot signals with 🔥.`;
-  };
 
   const copyEmail=(action)=>{
     const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
@@ -12281,12 +11909,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 
-  // Sidebar data
-  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
-  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
@@ -12556,10 +12184,10 @@ function ModActivity() {
       <PH title="ACTIVITY FEED" sub="Every action across deals, invoices, and outreach"/>
       {s.activity.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Activity appears as you use the platform</div>}
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-        {s.activity.map(a=>{const u=USERS.find(x=>x.id===a.userId);return(
+        {s.activity.map(a=>{const rep=(s.reps||[]).find(x=>x.id===a.userId);const ini=rep?(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase():null;return(
           <div key={a.id} className="card" style={{padding:"9px 12px",display:"flex",gap:9,alignItems:"flex-start"}}>
-            {u&&<div style={{width:26,height:26,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{u.initials}</span></div>}
-            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{u?.name} · {new Date(a.ts).toLocaleString()}</div></div>
+            {rep&&<div style={{width:26,height:26,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{ini}</span></div>}
+            <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.4}}>{a.msg}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{rep?.name} · {new Date(a.ts).toLocaleString()}</div></div>
           </div>
         );})}
       </div>
@@ -12906,6 +12534,640 @@ function ModAdmin() {
   );
 }
 
+// ─── PRICE LISTS (unified) ────────────────────────────────────────────────────
+const MARGIN_TARGET=20,MARGIN_WARN=15,MARGIN_CRITICAL=10;
+function getMarginStatus(cost,price){
+  const m=cost&&price?((price-cost)/price*100):0;
+  if(m<MARGIN_CRITICAL) return{color:"#C0392B",bg:"#FDECEA",label:"Critical"};
+  if(m<MARGIN_WARN)     return{color:"#C77800",bg:"#FFF8E6",label:"Low"};
+  if(m>=MARGIN_TARGET)  return{color:"#1E8F4E",bg:"#EAF7EE",label:"Good"};
+  return                      {color:"#1A5FA8",bg:"#E8F0FA",label:"OK"};
+}
+
+function ModPriceLists() {
+  const {s,dispatch,toast}=useApp();
+  const [selId,setSelId]=useState(null);
+  const [tab,setTab]=useState("own"); // "own" | "competitor"
+  const [showUpload,setShowUpload]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+  const [searchQ,setSearchQ]=useState("");
+
+  const allLists=s.priceLists||[];
+  const ownLists=useMemo(()=>allLists.filter(pl=>pl.type==="own"),[allLists]);
+  const compLists=useMemo(()=>allLists.filter(pl=>pl.type==="competitor"),[allLists]);
+  const lists=tab==="own"?ownLists:compLists;
+  const selected=useMemo(()=>selId?allLists.find(pl=>pl.id===selId):null,[allLists,selId]);
+
+  // Stats
+  const totalProducts=useMemo(()=>allLists.reduce((a,pl)=>a+(pl.items||[]).length,0),[allLists]);
+  const {avgMargin,lowCount}=useMemo(()=>{
+    let sum=0,cnt=0,low=0;
+    ownLists.forEach(pl=>(pl.items||[]).forEach(it=>{
+      if(it.cost>0&&it.price>0){
+        const m=(it.price-it.cost)/it.price*100;
+        sum+=m;cnt++;
+        if(m<MARGIN_WARN) low++;
+      }
+    }));
+    return{avgMargin:cnt?Math.round(sum/cnt):0,lowCount:low};
+  },[ownLists]);
+
+  // Auto-select first list when tab changes
+  useEffect(()=>{
+    const first=(tab==="own"?ownLists:compLists)[0];
+    setSelId(first?.id||null);
+    setSearchQ("");
+  },[tab]);
+
+  const filteredItems=useMemo(()=>{
+    const items=selected?.items||[];
+    if(!searchQ.trim()) return items;
+    const q=searchQ.toLowerCase();
+    return items.filter(it=>(it.name||"").toLowerCase().includes(q)||(it.sku||"").toLowerCase().includes(q)||(it.category||"").toLowerCase().includes(q));
+  },[selected,searchQ]);
+
+  const hasMAP=useMemo(()=>(selected?.items||[]).some(it=>it.map>0),[selected]);
+
+  const delList=(id)=>{
+    if(!window.confirm("Delete this price list?")) return;
+    dispatch("DEL_PRICE_LIST",id);
+    setSelId(null);
+    toast("Price list deleted","success");
+  };
+
+  const th={padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"};
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}}>
+      {/* TOP STATS BAR */}
+      <div style={{padding:"8px 16px",borderBottom:`1px solid ${B.border}`,background:B.surface,display:"flex",alignItems:"center",gap:16,flexShrink:0,flexWrap:"wrap"}}>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{ownLists.length} SUPPLIERS</span>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{totalProducts} PRODUCTS</span>
+        {ownLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{avgMargin}% AVG MARGIN</span>}
+        {lowCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#C77800",letterSpacing:.5,background:"#FFF8E6",borderRadius:3,padding:"1px 5px"}}>{lowCount} LOW MARGIN</span>}
+        {compLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5}}>{compLists.length} COMPETITOR SOURCES</span>}
+        <div style={{flex:1}}/>
+        <button onClick={()=>setShowUpload(true)} style={{padding:"6px 14px",background:B.orange,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD LIST</button>
+      </div>
+      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+        {/* LEFT RAIL */}
+        <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+          <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+            {/* OUR SUPPLIERS section */}
+            <div style={{padding:"8px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.8}}>OUR SUPPLIERS</div>
+            {ownLists.length===0&&(
+              <div style={{padding:"6px 12px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No supplier lists yet</div>
+            )}
+            {ownLists.map(pl=>{
+              const lowItems=(pl.items||[]).filter(it=>it.cost>0&&it.price>0&&(it.price-it.cost)/it.price*100<MARGIN_WARN).length;
+              return(
+                <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("own");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.orange:"transparent"}`,background:selId===pl.id?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.supplierName||pl.name}</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
+                    {lowItems>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#C77800",background:"#FFF8E6",borderRadius:2,padding:"0 4px",letterSpacing:.3}}>{lowItems} LOW</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {/* COMPETITOR PRICING section */}
+            <div style={{padding:"12px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.8}}>COMPETITOR PRICING</div>
+            {compLists.length===0&&(
+              <div style={{padding:"6px 12px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No competitor data yet</div>
+            )}
+            {compLists.map(pl=>(
+              <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("competitor");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.blue:"transparent"}`,background:selId===pl.id?`${B.blue}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.competitorName||pl.name}</div>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
+                  {pl.source&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{pl.source.slice(0,10).toUpperCase()}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{padding:"10px 12px",borderTop:`1px solid ${B.border}`}}>
+            <button onClick={()=>setShowUpload(true)} style={{width:"100%",padding:"7px 0",background:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD</button>
+          </div>
+        </div>
+
+        {/* MAIN AREA */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {!selected&&(
+            <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
+              <div style={{fontSize:32,opacity:.3}}>$</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>Select a price list or upload one to get started</div>
+              <button onClick={()=>setShowUpload(true)} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>UPLOAD PRICE LIST</button>
+            </div>
+          )}
+          {selected&&(
+            <>
+              {/* HEADER */}
+              <div style={{padding:"12px 18px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:6}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,fontWeight:500,color:B.text,marginBottom:3}}>{selected.name}</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      {selected.source&&<Pill v={selected.source} sc={B.blue} bc={B.blue}/>}
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(selected.items||[]).length} items · {new Date(selected.uploadedAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                  <button onClick={()=>delList(selected.id)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",flexShrink:0}}>DELETE</button>
+                </div>
+                {/* Rep info for own lists */}
+                {selected.type==="own"&&(selected.supplierName||selected.repName||selected.repEmail||selected.repPhone)&&(
+                  <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                    {selected.supplierName&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,fontWeight:500}}>{selected.supplierName}</span>}
+                    {selected.repName&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Rep: {selected.repName}</span>}
+                    {selected.repEmail&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{selected.repEmail}</span>}
+                    {selected.repPhone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{selected.repPhone}</span>}
+                  </div>
+                )}
+                {selected.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4,fontStyle:"italic"}}>{selected.notes}</div>}
+              </div>
+              {/* SEARCH */}
+              <div style={{padding:"8px 18px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+                <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search items by name, SKU, or category..." style={{width:"100%",padding:"6px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,background:B.surface}}/>
+              </div>
+              {/* ITEMS TABLE */}
+              <div style={{flex:1,overflowY:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{background:B.surface,position:"sticky",top:0,zIndex:1}}>
+                      <th style={{...th,textAlign:"left"}}>ITEM</th>
+                      <th style={{...th,textAlign:"left"}}>SKU</th>
+                      <th style={{...th,textAlign:"left"}}>CATEGORY</th>
+                      <th style={{...th,textAlign:"left"}}>UNIT</th>
+                      {selected.type==="own"?(
+                        <>
+                          <th style={{...th,textAlign:"right"}}>OUR COST</th>
+                          <th style={{...th,textAlign:"right"}}>OUR PRICE</th>
+                          <th style={{...th,textAlign:"center"}}>MARGIN</th>
+                          {hasMAP&&<th style={{...th,textAlign:"right"}}>MAP</th>}
+                        </>
+                      ):(
+                        <>
+                          <th style={{...th,textAlign:"right"}}>THEIR PRICE</th>
+                          <th style={{...th,textAlign:"left"}}>NOTES</th>
+                        </>
+                      )}
+                      <th style={{...th}}/>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map((it,i)=>{
+                      const ms=selected.type==="own"?getMarginStatus(it.cost,it.price):null;
+                      return(
+                        <tr key={it.id||i} style={{borderBottom:`1px solid ${B.border}`,background:i%2===0?"transparent":B.surface}}>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,maxWidth:220}}>
+                            <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</div>
+                            {it.notes&&selected.type!=="own"&&<div style={{fontSize:9,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.notes}</div>}
+                          </td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.sku||"—"}</td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.category||"—"}</td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.unit||"—"}</td>
+                          {selected.type==="own"?(
+                            <>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right"}}>{it.cost>0?`$${Number(it.cost).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",fontWeight:500}}>{it.price>0?`$${Number(it.price).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",textAlign:"center"}}>
+                                {ms&&it.cost>0&&it.price>0?<span style={{background:ms.bg,color:ms.color,borderRadius:4,padding:"2px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>{ms.label}</span>:"—"}
+                              </td>
+                              {hasMAP&&<td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{it.map>0?`$${Number(it.map).toFixed(2)}`:"—"}</td>}
+                            </>
+                          ):(
+                            <>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",fontWeight:500}}>{it.price>0?`$${Number(it.price).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.notes||"—"}</td>
+                            </>
+                          )}
+                          <td style={{padding:"7px 8px",textAlign:"right"}}>
+                            <button onClick={()=>setEditItem({listId:selected.id,item:{...it},listType:selected.type})} style={{background:"none",border:"none",color:B.blue,fontSize:10,cursor:"pointer",padding:"2px 4px"}}>✎</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {filteredItems.length===0&&searchQ&&(
+                  <div style={{padding:"28px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No items match "{searchQ}"</div>
+                )}
+                {filteredItems.length===0&&!searchQ&&selected&&(
+                  <div style={{padding:"28px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>This list has no items.</div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* UPLOAD MODAL */}
+      {showUpload&&<PLUploadModal onClose={()=>setShowUpload(false)} onSave={(pl)=>{dispatch("ADD_PRICE_LIST",pl);setSelId(pl.id);setTab(pl.type);setShowUpload(false);toast(`"${pl.name}" saved — ${pl.items.length} items`,"success");}} existingLists={allLists}/>}
+
+      {/* EDIT ITEM MODAL */}
+      {editItem&&<PLEditItemModal listType={editItem.listType} item={editItem.item} onSave={(updates)=>{dispatch("UPDATE_PRICE_LIST_ITEM",{listId:editItem.listId,itemId:editItem.item.id,updates});setEditItem(null);toast("Item updated","success");}} onClose={()=>setEditItem(null)}/>}
+    </div>
+  );
+}
+
+function PLEditItemModal({listType, item, onSave, onClose}) {
+  const [form,setForm]=useState({...item});
+  const f=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const commonFields=[["name","Item Name","text"],["sku","SKU","text"],["category","Category","text"],["unit","Unit","text"]];
+  const ownFields=[["cost","Our Cost (what we pay)","number"],["price","Our Price (what we charge)","number"],["map","MAP Price","number"]];
+  const compFields=[["price","Their Price","number"],["notes","Notes","text"]];
+  const fields=[...commonFields,...(listType==="own"?ownFields:compFields)];
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:10,boxShadow:"0 20px 60px rgba(0,0,0,.2)",width:440,padding:20}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,letterSpacing:.5,color:B.text,marginBottom:14}}>EDIT ITEM</div>
+        {fields.map(([k,lbl,type])=>(
+          <div key={k} style={{marginBottom:9}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{lbl.toUpperCase()}</div>
+            <input type={type} value={form[k]||""} onChange={e=>f(k,type==="number"?parseFloat(e.target.value)||0:e.target.value)} style={{width:"100%",padding:"6px 9px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          <OBtn onClick={()=>onSave(form)}>SAVE</OBtn>
+          <GBtn onClick={onClose}>CANCEL</GBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PLUploadModal({onClose, onSave, existingLists}) {
+  const [step,setStep]=useState(1); // 1=info, 2=file+mapping, 3=preview
+  const [name,setName]=useState("");
+  const [type,setType]=useState("own");
+  const [supplierName,setSupplierName]=useState("");
+  const [repName,setRepName]=useState("");
+  const [repEmail,setRepEmail]=useState("");
+  const [repPhone,setRepPhone]=useState("");
+  const [competitorName,setCompetitorName]=useState("");
+  const [source,setSource]=useState("Catalog");
+  const [notes,setNotes]=useState("");
+  const [rawRows,setRawRows]=useState(null);
+  const [headers,setHeaders]=useState([]);
+  const [mapping,setMapping]=useState({});
+  const [loading,setLoading]=useState(false);
+  const [loadMsg,setLoadMsg]=useState("");
+  const [error,setError]=useState("");
+  const fileRef=useRef(null);
+
+  const FIELDS=useMemo(()=>[
+    {key:"name",    label:"Item Name",   required:true},
+    {key:"sku",     label:"SKU",         required:false},
+    {key:"category",label:"Category",    required:false},
+    {key:"unit",    label:"Unit",        required:false},
+    {key:"cost",    label:type==="own"?"Our Cost (dealer price)":"(skip)",  required:false},
+    {key:"price",   label:type==="own"?"Our Price (sell price)":"Their Price", required:false},
+    {key:"map",     label:"MAP Price",   required:false},
+    {key:"notes",   label:"Notes",       required:false},
+  ],[type]);
+
+  const autoDetect=(hdrs)=>{
+    const m={};
+    const lc=hdrs.map(h=>(h||"").toLowerCase());
+    const guess=(terms)=>lc.findIndex(h=>terms.some(t=>h.includes(t)));
+    m.name     = guess(["item name","name","product","description","item"]);
+    m.sku      = guess(["sku","item code","code","part"]);
+    m.category = guess(["category","cat","type","group"]);
+    m.unit     = guess(["unit","uom","each","qty"]);
+    m.cost     = guess(["cost","dealer","wholesale","our cost"]);
+    m.price    = guess(["price","sell","our price","rate","unit price","competitor"]);
+    m.map      = guess(["map","minimum advertised"]);
+    m.notes    = guess(["note","comment","remark"]);
+    return m;
+  };
+
+  const parseCSVRows=(text)=>{
+    return text.split(/\r?\n/).filter(l=>l.trim()).map(l=>{
+      const res=[];let cur="",inQ=false;
+      for(let ci=0;ci<l.length;ci++){
+        const ch=l[ci];
+        if(ch==='"'){inQ=!inQ;}
+        else if(ch===","&&!inQ){res.push(cur.trim());cur="";}
+        else{cur+=ch;}
+      }
+      res.push(cur.trim());
+      return res;
+    });
+  };
+
+  const handleFile=async(f)=>{
+    if(!f) return;
+    setLoading(true);setError("");setLoadMsg("");
+    const isPdf=f.name.toLowerCase().endsWith(".pdf");
+    const isCsv=f.name.toLowerCase().endsWith(".csv");
+    try{
+      if(isPdf){
+        setLoadMsg("Reading PDF...");
+        const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
+        setLoadMsg("Extracting data with AI...");
+        const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          model:"claude-sonnet-4-6",max_tokens:8000,
+          system:"Return ONLY valid JSON, no markdown.",
+          messages:[{role:"user",content:[
+            {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+            {type:"text",text:`Extract this supplier price list. Return JSON:
+{"supplierName":"","repName":null,"repEmail":null,"repPhone":null,
+ "products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]}
+cost = dealer/wholesale price. price = suggested sell price or null. map = MAP price or null.`}
+          ]}]
+        })});
+        const data=await resp.json();
+        const txt=(data.content?.[0]?.text||"").trim();
+        const parsed=JSON.parse(txt);
+        if(!name&&parsed.supplierName) setName(parsed.supplierName);
+        if(!supplierName&&parsed.supplierName) setSupplierName(parsed.supplierName);
+        if(!repName&&parsed.repName) setRepName(parsed.repName||"");
+        if(!repEmail&&parsed.repEmail) setRepEmail(parsed.repEmail||"");
+        if(!repPhone&&parsed.repPhone) setRepPhone(parsed.repPhone||"");
+        const items=(parsed.products||[]).map(p=>({
+          id:mkId(),name:p.name||"",sku:p.sku||"",category:p.category||"",unit:p.unit||"each",
+          cost:parseFloat(p.cost)||0,price:parseFloat(p.price)||0,map:parseFloat(p.map)||0,notes:p.notes||""
+        }));
+        setRawRows(items.map(it=>[it.name,it.sku,it.category,it.unit,it.cost,it.price,it.map,it.notes]));
+        const syntheticHdrs=["name","sku","category","unit","cost","price","map","notes"];
+        setHeaders(syntheticHdrs);
+        setMapping({name:0,sku:1,category:2,unit:3,cost:4,price:5,map:6,notes:7});
+        setStep(3);
+      }else{
+        let rows;
+        if(isCsv){
+          rows=parseCSVRows(await f.text());
+        }else{
+          const {default:XLSX}=await import("xlsx");
+          const buf=await toBuffer(f);
+          const wb=XLSX.read(buf,{type:"array"});
+          const ws=wb.Sheets[wb.SheetNames[0]];
+          rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+        }
+        if(!rows||rows.length<2){setError("File appears empty or unreadable");setLoading(false);return;}
+        const hdrs=(rows[0]||[]).map(h=>String(h||"").trim());
+        setHeaders(hdrs);
+        setRawRows(rows.slice(1));
+        setMapping(autoDetect(hdrs));
+        if(!name) setName(f.name.replace(/\.[^.]+$/,""));
+        setStep(2);
+      }
+    }catch(err){setError("Could not parse file: "+err.message);}
+    setLoading(false);setLoadMsg("");
+  };
+
+  const handleDrop=async(e)=>{
+    e.preventDefault();
+    const f=e.dataTransfer.files?.[0];
+    if(f) await handleFile(f);
+  };
+
+  const buildItems=useCallback(()=>{
+    if(!rawRows) return[];
+    // If PDF path: rows are already structured arrays matching synth headers
+    if(headers[0]==="name"&&headers[1]==="sku"&&headers[3]==="unit"){
+      return rawRows.filter(r=>r[0]).map((r,i)=>({
+        id:mkId(),name:String(r[0]||`Item ${i+1}`),sku:String(r[1]||""),category:String(r[2]||""),
+        unit:String(r[3]||"each"),cost:parseFloat(r[4])||0,price:parseFloat(r[5])||0,
+        map:parseFloat(r[6])||0,notes:String(r[7]||""),
+      }));
+    }
+    return rawRows.filter(row=>row.some(c=>String(c||"").trim())).map((row,i)=>{
+      const g=(k)=>{const idx=mapping[k];return(idx!=null&&idx>=0)?String(row[idx]||"").trim():"";}
+      return{id:mkId(),name:g("name")||`Item ${i+1}`,sku:g("sku"),category:g("category"),
+        unit:g("unit")||"each",cost:parseFloat(g("cost"))||0,price:parseFloat(g("price"))||0,
+        map:parseFloat(g("map"))||0,notes:g("notes")};
+    }).filter(it=>it.name);
+  },[rawRows,mapping,headers]);
+
+  const previewItems=useMemo(()=>buildItems().slice(0,5),[buildItems]);
+
+  const handleSave=()=>{
+    if(!name.trim()){setError("Please enter a list name.");return;}
+    if(type==="competitor"&&!competitorName.trim()){setError("Please enter the competitor name.");return;}
+    const items=buildItems();
+    if(items.length===0){setError("No items could be parsed.");return;}
+    const dup=(existingLists||[]).find(pl=>pl.name.toLowerCase()===name.toLowerCase()&&pl.type===type);
+    if(dup&&!window.confirm(`A list named "${name}" already exists. Continue?`)) return;
+    onSave({id:mkId(),name:name.trim(),type,
+      supplierName:type==="own"?supplierName.trim():"",
+      repName:type==="own"?repName.trim():"",
+      repEmail:type==="own"?repEmail.trim():"",
+      repPhone:type==="own"?repPhone.trim():"",
+      competitorName:type==="competitor"?competitorName.trim():"",
+      source:source.trim()||"Upload",notes:notes.trim(),
+      uploadedAt:Date.now(),items});
+  };
+
+  const inp={width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"};
+  const lbl={fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4,display:"block"};
+
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:620,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        {/* Header */}
+        <div style={{padding:"16px 20px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5}}>UPLOAD PRICE LIST</div>
+            <div style={{display:"flex",gap:0,marginTop:6}}>
+              {["1 Info","2 File","3 Preview"].map((lbtext,idx)=>{
+                const sn=idx+1;
+                return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.3,padding:"2px 8px",borderRadius:3,background:step===sn?B.orange:"transparent",color:step===sn?"#fff":B.muted,marginRight:2}}>{lbtext}</span>);
+              })}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:20}}>
+          {error&&<div style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11}}>{error}</div>}
+
+          {/* STEP 1: INFO */}
+          {step===1&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div style={{gridColumn:"1/-1"}}>
+                <label style={lbl}>LIST NAME *</label>
+                <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Blazer Athletic 2025 Catalog" style={inp}/>
+              </div>
+              <div>
+                <label style={lbl}>TYPE *</label>
+                <select value={type} onChange={e=>setType(e.target.value)} style={{...inp,background:"#fff"}}>
+                  <option value="own">Our Prices (supplier)</option>
+                  <option value="competitor">Competitor Pricing</option>
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>SOURCE</label>
+                <select value={source} onChange={e=>setSource(e.target.value)} style={{...inp,background:"#fff"}}>
+                  <option>Catalog</option>
+                  <option>PDF Catalog</option>
+                  <option>RFP Result</option>
+                  <option>Quote</option>
+                  <option>Website</option>
+                  <option>Sales Rep</option>
+                  <option>CSV Upload</option>
+                  <option>Manual</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              {type==="own"&&(
+                <>
+                  <div>
+                    <label style={lbl}>SUPPLIER NAME</label>
+                    <input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="e.g. Blazer Athletic" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP NAME</label>
+                    <input value={repName} onChange={e=>setRepName(e.target.value)} placeholder="e.g. John Smith" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP EMAIL</label>
+                    <input value={repEmail} onChange={e=>setRepEmail(e.target.value)} placeholder="rep@supplier.com" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP PHONE</label>
+                    <input value={repPhone} onChange={e=>setRepPhone(e.target.value)} placeholder="555-000-0000" style={inp}/>
+                  </div>
+                </>
+              )}
+              {type==="competitor"&&(
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={lbl}>COMPETITOR NAME *</label>
+                  <input value={competitorName} onChange={e=>setCompetitorName(e.target.value)} placeholder="e.g. Track Supply Co" style={inp}/>
+                </div>
+              )}
+              <div style={{gridColumn:"1/-1"}}>
+                <label style={lbl}>NOTES (optional)</label>
+                <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Date range, discount terms, RFP context..." rows={2} style={{...inp,resize:"vertical"}}/>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: FILE + MAPPING */}
+          {step===2&&(
+            <div>
+              <div
+                onDragOver={e=>e.preventDefault()}
+                onDrop={handleDrop}
+                onClick={()=>fileRef.current?.click()}
+                style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:"center",marginBottom:14,cursor:"pointer",background:B.surface}}
+              >
+                <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={e=>handleFile(e.target.files?.[0])} style={{display:"none"}}/>
+                {loading?(
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+                    <Spin/>
+                    {loadMsg&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{loadMsg}</div>}
+                  </div>
+                ):(
+                  <>
+                    <div style={{fontSize:24,marginBottom:6,opacity:.5}}>📄</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Drop file here or click to browse</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>.pdf (AI extracts automatically) · .csv · .xlsx · .xls</div>
+                    {rawRows&&<div style={{marginTop:8,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5}}>✓ {rawRows.length} ROWS LOADED — ADJUST MAPPING BELOW</div>}
+                  </>
+                )}
+              </div>
+              {rawRows&&headers.length>0&&(
+                <>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>COLUMN MAPPING</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                    {FIELDS.filter(fl=>!(type==="competitor"&&fl.key==="cost")&&!(type==="competitor"&&fl.key==="map")).map(fl=>(
+                      <div key={fl.key}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>{fl.label.toUpperCase()}{fl.required?" *":""}</div>
+                        <select value={mapping[fl.key]??-1} onChange={e=>setMapping(p=>({...p,[fl.key]:parseInt(e.target.value)}))} style={{width:"100%",padding:"5px 8px",border:`1px solid ${B.border}`,borderRadius:4,fontSize:10,fontFamily:"'Lexend',sans-serif",background:"#fff"}}>
+                          <option value={-1}>— not mapped —</option>
+                          {headers.map((h,i)=><option key={i} value={i}>{h||`Col ${i+1}`}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  {previewItems.length>0&&(
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>PREVIEW ({previewItems.length} of {buildItems().length} items)</div>
+                      <div style={{overflowX:"auto"}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                          <thead>
+                            <tr style={{background:B.surface}}>
+                              {["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewItems.map((it,i)=>(
+                              <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+                                {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* STEP 3: PREVIEW / CONFIRM */}
+          {step===3&&(
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>PREVIEW — {buildItems().length} ITEMS READY TO SAVE</div>
+              <div style={{overflowX:"auto",marginBottom:14}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                  <thead>
+                    <tr style={{background:B.surface}}>
+                      {["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {buildItems().slice(0,5).map((it,i)=>(
+                      <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+                        {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {buildItems().length>5&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>...and {buildItems().length-5} more items</div>}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"12px 20px",borderTop:`1px solid ${B.border}`,display:"flex",gap:8,flexShrink:0}}>
+          {step===1&&(
+            <>
+              <OBtn onClick={()=>{setError("");setStep(2);}}>NEXT: ADD FILE</OBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+          {step===2&&(
+            <>
+              {rawRows&&buildItems().length>0&&<OBtn onClick={()=>{setError("");setStep(3);}}>REVIEW {buildItems().length} ITEMS</OBtn>}
+              <GBtn onClick={()=>setStep(1)}>BACK</GBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+          {step===3&&(
+            <>
+              <OBtn onClick={handleSave}>SAVE {buildItems().length} ITEMS</OBtn>
+              <GBtn onClick={()=>setStep(2)}>BACK</GBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModSettings() {
   const {s,dispatch,toast,setMod}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
@@ -12989,7 +13251,7 @@ function ModSettings() {
             <Lbl s={{marginBottom:3}}>Inbound Email Webhook Secret</Lbl>
             <input value={co.inboundEmailSecret||""} onChange={e=>setCo(c=>({...c,inboundEmailSecret:e.target.value}))}
               placeholder="Generate a random string here"
-              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontFamily:"monospace"}}/>
+              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"monospace"}}/>
             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Add this to your email provider's webhook URL as <code style={{color:B.orange}}>?secret=...</code></div>
           </div>
           <div>
@@ -13393,16 +13655,6 @@ function ModSettings() {
         <div style={{display:"flex",gap:7}}>
           <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
           <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>
-        </div>
-        <div style={{marginTop:13,paddingTop:11,borderTop:`1px solid ${B.border}`}}>
-          <Lbl s={{marginBottom:9}}>Team</Lbl>
-          {USERS.map(u=>(
-            <div key={u.id} style={{display:"flex",alignItems:"center",gap:9,padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
-              <div style={{width:30,height:30,borderRadius:"50%",background:u.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:10,color:B.white}}>{u.initials}</span></div>
-              <div style={{flex:1}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{u.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.email}</div></div>
-              <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:u.role==="owner"?B.orange:B.blue,background:u.role==="owner"?B.orangeBg:B.blueBg,padding:"2px 7px",borderRadius:3,letterSpacing:.5}}>{u.role.toUpperCase()}</span>
-            </div>
-          ))}
         </div>
       </div>
 

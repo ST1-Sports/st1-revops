@@ -133,6 +133,84 @@ const TOOLS = [
       required: ["deal_name", "note"],
     },
   },
+  {
+    name: "propose_create_quote",
+    description: "Build and create a Zoho Books estimate/quote for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin.",
+    input_schema: {
+      type: "object",
+      properties: {
+        customer_name:  { type: "string", description: "Customer or school name" },
+        contact_person: { type: "string", description: "Contact person's name" },
+        email:          { type: "string", description: "Email to send the quote to" },
+        line_items: {
+          type: "array",
+          description: "Products/services to quote",
+          items: {
+            type: "object",
+            properties: {
+              name:        { type: "string" },
+              description: { type: "string" },
+              quantity:    { type: "number" },
+              rate:        { type: "number", description: "Price per unit after margin" },
+            },
+            required: ["name", "quantity", "rate"],
+          },
+        },
+        notes:      { type: "string", description: "Notes visible on the quote" },
+        send_email: { type: "boolean", description: "Whether to email the quote to the customer" },
+      },
+      required: ["customer_name", "line_items"],
+    },
+  },
+  {
+    name: "propose_store_competitor_intel",
+    description: "Save competitor intelligence to the Competitors tab so it persists and the user can reference it. ALWAYS call this when you research or learn anything useful about a competitor — pricing, strengths, weaknesses, customer segments, tactics. This executes automatically (no user confirmation needed).",
+    input_schema: {
+      type: "object",
+      properties: {
+        competitor_name: { type: "string", description: "Company name exactly as it should appear (e.g. 'BSN Sports', 'VS Athletics', 'Track Supply Co')" },
+        intel: { type: "string", description: "All intelligence gathered — product focus, pricing approach, strengths, weaknesses vs ST1, key states/customers, counter-tactics. Be specific and comprehensive." },
+        source: { type: "string", description: "How gathered: 'web search', 'RFP document', 'user provided', 'price list upload'" },
+      },
+      required: ["competitor_name", "intel"],
+    },
+  },
+  {
+    name: "propose_create_campaign_sequence",
+    description: "Build a multi-email outreach sequence, match contacts from the CRM, and set it up ready to launch. Use when the user asks to build a campaign, send a sequence to a group, or automate outreach to a segment.",
+    input_schema: {
+      type: "object",
+      properties: {
+        campaign_name: { type: "string", description: "Short descriptive name for this campaign" },
+        product:       { type: "string", description: "Product or category being promoted" },
+        emails: {
+          type: "array",
+          description: "The email sequence — each is one touch",
+          items: {
+            type: "object",
+            properties: {
+              subject:    { type: "string" },
+              body:       { type: "string", description: "Full email body, personalized, signed by Matt Stone" },
+              delay_days: { type: "number", description: "Days after previous email (0 = send first)" },
+            },
+            required: ["subject", "body", "delay_days"],
+          },
+        },
+        contact_filters: {
+          type: "object",
+          description: "Filters to match the right contacts from CRM",
+          properties: {
+            sports:    { type: "array", items: { type: "string" }, description: "Sports to match (e.g. ['Baseball', 'Softball'])" },
+            states:    { type: "array", items: { type: "string" }, description: "State codes to match (e.g. ['IA', 'MN'])" },
+            titles:    { type: "array", items: { type: "string" }, description: "Title keywords to match (e.g. ['Athletic Director', 'Coach'])" },
+            min_score: { type: "number", description: "Minimum lead score (omit to include all)" },
+          },
+        },
+        notes: { type: "string", description: "Context or strategy notes for this campaign" },
+      },
+      required: ["campaign_name", "emails"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -157,13 +235,38 @@ async function fetchZohoContext() {
   }
 }
 
+// ── ZOHO BOOKS INVENTORY ──────────────────────────────────────────────────────
+async function fetchZohoInventory() {
+  try {
+    const orgId = process.env.ZOHO_ORG_ID;
+    if (!orgId) return [];
+    const token = await getZohoToken();
+    const res = await fetch(
+      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items || []).map(i => ({
+      name: i.name,
+      rate: parseFloat(i.rate || i.selling_price || 0),
+      sku:  i.sku  || "",
+      unit: i.unit || "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho) {
+function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
   const invoices = localCtx.invoices || [];
   const sequences = localCtx.sequences || [];
+  const priceLists = localCtx.priceLists || [];
+  const storedIntel = localCtx.competeIntel || [];
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -200,7 +303,52 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-=== YOUR CAPABILITIES ===
+${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books) ===
+${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
+(Use these rates as the base cost when building quotes — apply margin on top)
+` : ""}${(() => {
+  const own = priceLists.filter(pl => pl.type === "own");
+  const comp = priceLists.filter(pl => pl.type === "competitor");
+  let out = "";
+  if (own.length > 0) {
+    out += `\n=== OUR PRICE LISTS (${own.length} lists) ===\n`;
+    for (const pl of own) {
+      out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}${it.category ? " ("+it.category+")" : ""}`;
+        if (it.cost > 0) out += ` — Our Cost: $${Number(it.cost).toFixed(2)}`;
+        if (it.price > 0) {
+          out += ` — Our Price: $${Number(it.price).toFixed(2)}`;
+          if (it.cost > 0) out += ` (${Math.round((it.price - it.cost) / it.price * 100)}% margin)`;
+        }
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use these costs when answering pricing questions or building quotes. List price = what we charge customers.\n`;
+  }
+  if (comp.length > 0) {
+    out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
+    for (const pl of comp) {
+      out += `${pl.competitorName || pl.name}${pl.source ? " ["+pl.source+"]" : ""}${pl.notes ? " — "+pl.notes : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}`;
+        if (it.price > 0) out += ` — $${Number(it.price).toFixed(2)}`;
+        if (it.notes) out += ` (${it.notes})`;
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use competitor pricing to position ST1 competitively. When responding to RFPs, reference how ST1's pricing compares to known competitors — highlight our advantages (service, speed, quality) even when we're not cheapest.\n`;
+  }
+  return out;
+})()}
+${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
+${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
+(Use this when answering questions about competitors or building counter-strategies)
+` : ""}=== YOUR CAPABILITIES ===
 You have access to:
 1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
 2. propose_create_deal — suggest creating a deal (user confirms)
@@ -210,6 +358,9 @@ You have access to:
 6. propose_flag_deal — mark a deal as hot/warm priority
 7. propose_add_to_nurture — add cold leads to email nurture campaign
 8. propose_log_note — log notes on a deal
+9. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
+10. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
+11. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 
 IMPORTANT BEHAVIORS:
 - Use web_search proactively when asked about specific prospects, schools, competitors, or market data
@@ -225,10 +376,31 @@ AUTOMATION — ALWAYS DO THIS:
 - If asked "what's next" or "auto-execute", respond with propose_log_note + propose_schedule_followup right away.
 - Never end a conversation with just an email draft — always add the follow-up scaffolding.
 
+COMPETITOR INTEL — ALWAYS DO THIS:
+- Whenever you research, discuss, learn, or look up ANYTHING about a competitor (BSN Sports, VS Athletics, MF Athletic, School Specialty, Varsity Group, Gopher Sport, Anderson's, Epic Sports, or any other athletic equipment supplier), ALWAYS call propose_store_competitor_intel to save the intel.
+- This auto-executes silently — the user just sees a "✓ Saved" chip. It does not require confirmation.
+- Include: product/category focus, pricing approach (premium/value/volume), key states/markets, their strengths, their weaknesses vs ST1, and how Matt should counter them.
+- If the user mentions a competitor in passing ("BSN Sports bid lower on that RFP"), save that pricing intel too.
+- If new info about an already-stored competitor is found, update it with the combined/latest intel.
+
+PRICING & RFP STRATEGY:
+- When asked "how much should we charge", "what's our cost", or "what's the price" — reference OUR PRICE LISTS first, then fall back to the Zoho Books product catalog.
+- For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
+- When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
+- Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
+
+CAMPAIGN BUILDING:
+- When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.
+- Always write COMPLETE email bodies — not placeholders. Every email should be fully personalized and ready to send.
+- For contact_filters, be specific: if the user says "baseball coaches in Iowa" → sports:["Baseball","Baseball/Softball"], states:["IA"], titles:["Coach","Head Coach","Athletic Director"].
+- Each email in the sequence should be a distinct touch with its own angle: email 1 = intro/value, email 2 = follow-up with social proof or urgency, email 3 = final ask or offer.
+- delay_days: email 1 = 0, email 2 = 3–5 days, email 3 = 7–10 days.
+- Always sign emails: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+
 After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
-Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"`;
+Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -259,12 +431,22 @@ async function callClaude(messages, system, tools, apiKey) {
 
 // ── MAIN HANDLER ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // CORS headers first — guaranteed even if the function crashes below
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
+  try {
+    return await _handler(req, res);
+  } catch (err) {
+    console.error("[agent] unhandled crash:", err.message, err.stack);
+    if (!res.headersSent) res.status(500).json({ error: `Agent crashed: ${err.message}` });
+  }
+}
+
+async function _handler(req, res) {
   const apiKey = process.env.ANTHROPIC_KEY;
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_KEY not configured" });
 
@@ -273,10 +455,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "messages array required" });
   }
 
-  // Fetch fresh Zoho context in parallel with nothing blocking
-  const zoho = await fetchZohoContext();
+  // Fetch fresh Zoho context + inventory in parallel
+  const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system = buildSystemPrompt(localContext, zoho);
+  const system = buildSystemPrompt(localContext, zoho, inventory);
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({
@@ -345,6 +527,9 @@ export default async function handler(req, res) {
         propose_flag_deal:       "flag_deal",
         propose_add_to_nurture:  "add_to_nurture",
         propose_log_note:        "log_note",
+        propose_create_quote:             "create_quote",
+        propose_store_competitor_intel:   "store_competitor_intel",
+        propose_create_campaign_sequence: "create_campaign_sequence",
       };
       return { type: typeMap[t.name] || t.name, ...t.input };
     });
