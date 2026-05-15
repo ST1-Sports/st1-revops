@@ -252,6 +252,7 @@ function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const rfps     = localCtx.rfps     || [];
   const invoices = localCtx.invoices || [];
   const sequences = localCtx.sequences || [];
+  const priceLists = localCtx.priceLists || [];
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -291,7 +292,45 @@ $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="
 ${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books) ===
 ${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
 (Use these rates as the base cost when building quotes — apply margin on top)
-` : ""}
+` : ""}${(() => {
+  const own = priceLists.filter(pl => pl.type === "own");
+  const comp = priceLists.filter(pl => pl.type === "competitor");
+  let out = "";
+  if (own.length > 0) {
+    out += `\n=== OUR PRICE LISTS (${own.length} lists) ===\n`;
+    for (const pl of own) {
+      out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}${it.category ? " ("+it.category+")" : ""}`;
+        if (it.price > 0) out += ` — Cost: $${Number(it.price).toFixed(2)}`;
+        if (it.listPrice > 0) {
+          out += ` — List: $${Number(it.listPrice).toFixed(2)}`;
+          if (it.price > 0) out += ` (${Math.round((it.listPrice - it.price) / it.price * 100)}% margin)`;
+        }
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use these costs when answering pricing questions or building quotes. List price = what we charge customers.\n`;
+  }
+  if (comp.length > 0) {
+    out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
+    for (const pl of comp) {
+      out += `${pl.competitorName || pl.name}${pl.source ? " ["+pl.source+"]" : ""}${pl.notes ? " — "+pl.notes : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}`;
+        if (it.price > 0) out += ` — $${Number(it.price).toFixed(2)}`;
+        if (it.notes) out += ` (${it.notes})`;
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use competitor pricing to position ST1 competitively. When responding to RFPs, reference how ST1's pricing compares to known competitors — highlight our advantages (service, speed, quality) even when we're not cheapest.\n`;
+  }
+  return out;
+})()}
 === YOUR CAPABILITIES ===
 You have access to:
 1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
@@ -318,6 +357,12 @@ AUTOMATION — ALWAYS DO THIS:
 - Always propose the full next-step chain: email → follow-up in 3 days → "if no response" nurture add at 7 days.
 - If asked "what's next" or "auto-execute", respond with propose_log_note + propose_schedule_followup right away.
 - Never end a conversation with just an email draft — always add the follow-up scaffolding.
+
+PRICING & RFP STRATEGY:
+- When asked "how much should we charge", "what's our cost", or "what's the price" — reference OUR PRICE LISTS first, then fall back to the Zoho Books product catalog.
+- For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
+- When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
+- Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
 
 CAMPAIGN BUILDING:
 - When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.

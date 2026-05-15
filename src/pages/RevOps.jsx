@@ -118,6 +118,7 @@ const SEED = {
   savedAds: [],
   socialPosts: [],
   campaigns: [],
+  priceLists: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -164,6 +165,7 @@ function mergeServerState(base, server) {
     orders:       mergeById(base.orders,       server.orders),
     alerts:       mergeById(base.alerts,       server.alerts),
     activity:     mergeById(base.activity,     server.activity),
+    priceLists:   mergeById(base.priceLists,   server.priceLists),
   };
 }
 
@@ -205,6 +207,7 @@ function useStore() {
           pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
           appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
           contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
+          priceLists:   Array.isArray(p.priceLists)   ? p.priceLists   : [],
         };
       }
     } catch {}
@@ -477,6 +480,13 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
+    case "ADD_PRICE_LIST":  return {...prev, priceLists:[payload,...(prev.priceLists||[])]};
+    case "UPDATE_PRICE_LIST": return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id===payload.id?{...pl,...payload}:pl)};
+    case "DEL_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).filter(pl=>pl.id!==payload)};
+    case "UPDATE_PRICE_LIST_ITEM": {
+      const {listId, itemId, updates} = payload;
+      return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id!==listId?pl:{...pl,items:(pl.items||[]).map(it=>it.id===itemId?{...it,...updates}:it)})};
+    }
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
@@ -707,14 +717,14 @@ export default function App() {
     {id:"compete",     icon:"⊗", label:"Competitors"},
     // ── AI TOOLS (expandable) ───────────────────────────────────────────
     {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
       {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
       {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
       {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
     ]},
     // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
     {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"prices",     icon:"$",  label:"Price Manager"},
+      {id:"price-lists",icon:"$",  label:"Price Lists"},
+      {id:"prices",     icon:"◈",  label:"Price Manager"},
       {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
     ]},
     // ── SYSTEM ─────────────────────────────────────────────────────────
@@ -913,6 +923,7 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
+            {mod==="price-lists" &&<ModPriceLists/>}
             {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("home");}}/></Suspense>}
             {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
@@ -1789,6 +1800,15 @@ function ModHome() {
       rfps:(s.rfps||[]).slice(0,20),
       invoices:(s.invoices||[]).slice(0,20),
       sequences:(s.sequences||[]).slice(0,10),
+      priceLists:(s.priceLists||[]).map(pl=>({
+        id:pl.id,
+        name:pl.name,
+        type:pl.type,
+        competitorName:pl.competitorName||"",
+        source:pl.source||"",
+        itemCount:(pl.items||[]).length,
+        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",price:it.price||0,listPrice:it.listPrice||0})),
+      })),
     };
 
     try{
@@ -12415,6 +12435,400 @@ function ModAdmin() {
       </div>
       {tab==="questions"&&<AdminQuestions/>}
       {tab==="config"&&<AdminSponsorshipConfig/>}
+    </div>
+  );
+}
+
+// ─── PRICE LISTS ─────────────────────────────────────────────────────────────
+function ModPriceLists() {
+  const {s,dispatch,toast}=useApp();
+  const [tab,setTab]=useState("own");          // "own" | "competitor"
+  const [selId,setSelId]=useState(null);
+  const [showUpload,setShowUpload]=useState(false);
+  const [editItem,setEditItem]=useState(null); // {listId, item}
+  const [searchQ,setSearchQ]=useState("");
+
+  const lists=useMemo(()=>(s.priceLists||[]).filter(pl=>pl.type===tab),[s.priceLists,tab]);
+  const selected=useMemo(()=>selId?(s.priceLists||[]).find(pl=>pl.id===selId):null,[s.priceLists,selId]);
+
+  // Auto-select first list when tab changes
+  useEffect(()=>{
+    const first=(s.priceLists||[]).filter(pl=>pl.type===tab)[0];
+    setSelId(first?.id||null);
+  },[tab,s.priceLists]);
+
+  const filteredItems=useMemo(()=>{
+    const items=selected?.items||[];
+    if(!searchQ.trim()) return items;
+    const q=searchQ.toLowerCase();
+    return items.filter(it=>(it.name||"").toLowerCase().includes(q)||(it.sku||"").toLowerCase().includes(q)||(it.category||"").toLowerCase().includes(q));
+  },[selected,searchQ]);
+
+  const delList=(id)=>{
+    if(!window.confirm("Delete this price list?")) return;
+    dispatch("DEL_PRICE_LIST",id);
+    setSelId(null);
+    toast("Price list deleted","success");
+  };
+
+  return(
+    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+      {/* LEFT RAIL */}
+      <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+        <div style={{padding:"14px 12px 10px",borderBottom:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.text,letterSpacing:.5,marginBottom:10}}>PRICE LISTS</div>
+          <div style={{display:"flex",gap:4,marginBottom:10}}>
+            {["own","competitor"].map(t=>(
+              <button key={t} onClick={()=>setTab(t)} style={{flex:1,padding:"5px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,border:"none",borderRadius:4,cursor:"pointer",background:tab===t?B.orange:"transparent",color:tab===t?"#fff":B.muted}}>
+                {t==="own"?"OUR PRICES":"COMPETITOR"}
+              </button>
+            ))}
+          </div>
+          <button onClick={()=>setShowUpload(true)} style={{width:"100%",padding:"7px 0",background:B.orange,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD LIST</button>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+          {lists.length===0&&(
+            <div style={{padding:"24px 12px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>
+              No {tab==="own"?"price lists":"competitor data"} yet.<br/>Upload a CSV or Excel file to get started.
+            </div>
+          )}
+          {lists.map(pl=>(
+            <div key={pl.id} onClick={()=>setSelId(pl.id)} style={{padding:"8px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.orange:"transparent"}`,background:selId===pl.id?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.name}</div>
+              {tab==="competitor"&&pl.competitorName&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:2}}>{pl.competitorName.toUpperCase()}</div>}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
+                {pl.source&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{pl.source.slice(0,12).toUpperCase()}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* MAIN AREA */}
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {!selected&&(
+          <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
+            <div style={{fontSize:32,opacity:.3}}>$</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>Select a price list or upload one to get started</div>
+            <button onClick={()=>setShowUpload(true)} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>UPLOAD PRICE LIST</button>
+          </div>
+        )}
+        {selected&&(
+          <>
+            {/* HEADER */}
+            <div style={{padding:"14px 18px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,fontWeight:500,color:B.text,marginBottom:2}}>{selected.name}</div>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  {selected.type==="competitor"&&selected.competitorName&&<Pill v={selected.competitorName} sc={B.orange} bc={B.orange}/>}
+                  {selected.source&&<Pill v={selected.source} sc={B.blue} bc={B.blue}/>}
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(selected.items||[]).length} items · uploaded {new Date(selected.uploadedAt).toLocaleDateString()}</span>
+                </div>
+              </div>
+              <button onClick={()=>delList(selected.id)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>DELETE</button>
+            </div>
+            {/* SEARCH */}
+            <div style={{padding:"8px 18px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+              <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search items..." style={{width:"100%",padding:"6px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,background:B.surface}}/>
+            </div>
+            {/* ITEMS TABLE */}
+            <div style={{flex:1,overflowY:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <thead>
+                  <tr style={{background:B.surface,position:"sticky",top:0,zIndex:1}}>
+                    {["Item","SKU","Category","Unit",selected.type==="own"?"Your Price":"Competitor Price",selected.type==="own"?"List Price":"Notes"].map((h,i)=>(
+                      <th key={i} style={{padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,textAlign:i>=4?"right":"left",borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                    <th style={{padding:"7px 8px",borderBottom:`1px solid ${B.border}`}}/>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredItems.map((it,i)=>(
+                    <tr key={it.id||i} style={{borderBottom:`1px solid ${B.border}`,background:i%2===0?"transparent":B.surface}}>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,maxWidth:220}}>
+                        <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</div>
+                        {it.notes&&<div style={{fontSize:9,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.notes}</div>}
+                      </td>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.sku||"—"}</td>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.category||"—"}</td>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.unit||"—"}</td>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",fontWeight:500}}>
+                        {it.price!=null&&it.price>0?`$${Number(it.price).toFixed(2)}`:"—"}
+                      </td>
+                      <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"right"}}>
+                        {selected.type==="own"&&it.listPrice>0?(
+                          <span style={{color:B.green}}>
+                            ${Number(it.listPrice).toFixed(2)}
+                            {it.price>0&&<span style={{fontSize:9,color:B.muted,marginLeft:4}}>({Math.round((it.listPrice-it.price)/it.price*100)}% margin)</span>}
+                          </span>
+                        ):(it.notes||"—")}
+                      </td>
+                      <td style={{padding:"7px 8px",textAlign:"right"}}>
+                        <button onClick={()=>setEditItem({listId:selected.id,item:{...it}})} style={{background:"none",border:"none",color:B.blue,fontSize:10,cursor:"pointer",padding:"2px 4px"}}>✎</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredItems.length===0&&searchQ&&(
+                <div style={{padding:"28px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No items match "{searchQ}"</div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* UPLOAD MODAL */}
+      {showUpload&&<PLUploadModal onClose={()=>setShowUpload(false)} onSave={(pl)=>{dispatch("ADD_PRICE_LIST",pl);setSelId(pl.id);setTab(pl.type);setShowUpload(false);toast(`"${pl.name}" uploaded — ${pl.items.length} items`,"success");}} existingLists={s.priceLists||[]}/>}
+
+      {/* EDIT ITEM MODAL */}
+      {editItem&&<PLEditItemModal listId={editItem.listId} item={editItem.item} onSave={(updates)=>{dispatch("UPDATE_PRICE_LIST_ITEM",{listId:editItem.listId,itemId:editItem.item.id,updates});setEditItem(null);toast("Item updated","success");}} onClose={()=>setEditItem(null)}/>}
+    </div>
+  );
+}
+
+function PLEditItemModal({listId:_listId, item, onSave, onClose}) {
+  const [form,setForm]=useState({...item});
+  const f=(k,v)=>setForm(p=>({...p,[k]:v}));
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:10,boxShadow:"0 20px 60px rgba(0,0,0,.2)",width:440,padding:20}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,letterSpacing:.5,color:B.text,marginBottom:14}}>EDIT ITEM</div>
+        {[["name","Item Name","text"],["sku","SKU","text"],["category","Category","text"],["unit","Unit","text"],["price","Price","number"],["listPrice","List Price","number"],["notes","Notes","text"]].map(([k,lbl,type])=>(
+          <div key={k} style={{marginBottom:9}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{lbl.toUpperCase()}</div>
+            <input type={type} value={form[k]||""} onChange={e=>f(k,type==="number"?parseFloat(e.target.value)||0:e.target.value)} style={{width:"100%",padding:"6px 9px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          <OBtn onClick={()=>onSave(form)}>SAVE</OBtn>
+          <GBtn onClick={onClose}>CANCEL</GBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PLUploadModal({onClose, onSave, existingLists}) {
+  const [step,setStep]=useState("form"); // "form" | "mapping" | "preview"
+  const [name,setName]=useState("");
+  const [type,setType]=useState("own");
+  const [competitorName,setCompetitorName]=useState("");
+  const [source,setSource]=useState("Catalog");
+  const [rawRows,setRawRows]=useState(null); // array of header+rows
+  const [headers,setHeaders]=useState([]);
+  const [mapping,setMapping]=useState({});  // fieldKey → column index or -1
+  const [notes,setNotes]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState("");
+  const fileRef=useRef(null);
+
+  const FIELDS=[
+    {key:"name",    label:"Item Name",   required:true},
+    {key:"sku",     label:"SKU",         required:false},
+    {key:"category",label:"Category",    required:false},
+    {key:"unit",    label:"Unit",        required:false},
+    {key:"price",   label:type==="own"?"Your Price":"Competitor Price", required:false},
+    {key:"listPrice",label:type==="own"?"List / MSRP Price":"Notes",    required:false},
+    {key:"notes",   label:"Notes",       required:false},
+  ];
+
+  const autoDetect=(hdrs)=>{
+    const m={};
+    const lc=hdrs.map(h=>(h||"").toLowerCase());
+    const guess=(terms)=>lc.findIndex(h=>terms.some(t=>h.includes(t)));
+    m.name     = guess(["item name","name","product","description","item"]);
+    m.sku      = guess(["sku","item code","code","part"]);
+    m.category = guess(["category","cat","type","group"]);
+    m.unit     = guess(["unit","uom","each","qty"]);
+    m.price    = guess(["price","cost","rate","unit price","our price","competitor"]);
+    m.listPrice= guess(["list","msrp","retail","list price","notes"]);
+    m.notes    = guess(["note","comment","remark"]);
+    return m;
+  };
+
+  const handleFile=async(e)=>{
+    const file=e.target.files?.[0];
+    if(!file){return;}
+    setLoading(true);setError("");
+    try{
+      const isCsv=file.name.toLowerCase().endsWith(".csv");
+      let rows;
+      if(isCsv){
+        const text=await file.text();
+        rows=text.split(/\r?\n/).filter(l=>l.trim()).map(l=>{
+          // simple CSV parse (handles quoted fields)
+          const res=[];let cur="",inQ=false;
+          for(let ci=0;ci<l.length;ci++){
+            const ch=l[ci];
+            if(ch==='"'){inQ=!inQ;}
+            else if(ch===","&&!inQ){res.push(cur.trim());cur="";}
+            else{cur+=ch;}
+          }
+          res.push(cur.trim());
+          return res;
+        });
+      }else{
+        const {default:XLSX}=await import("xlsx");
+        const buf=await toBuffer(file);
+        const wb=XLSX.read(buf,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+      }
+      if(!rows||rows.length<2){setError("File appears empty or unreadable");setLoading(false);return;}
+      const hdrs=(rows[0]||[]).map(h=>String(h||"").trim());
+      setHeaders(hdrs);
+      setRawRows(rows.slice(1));
+      setMapping(autoDetect(hdrs));
+      if(!name) setName(file.name.replace(/\.[^.]+$/,""));
+      setStep("mapping");
+    }catch(err){setError("Could not parse file: "+err.message);}
+    setLoading(false);
+  };
+
+  const buildItems=()=>{
+    return (rawRows||[]).filter(row=>row.some(c=>String(c||"").trim())).map((row,i)=>{
+      const g=(k)=>{const idx=mapping[k];return(idx!=null&&idx>=0)?String(row[idx]||"").trim():"";}
+      const price=parseFloat(g("price"))||0;
+      const listPrice=parseFloat(g("listPrice"))||0;
+      return{id:mkId(),name:g("name")||`Item ${i+1}`,sku:g("sku"),category:g("category"),unit:g("unit"),price,listPrice,notes:g("notes")};
+    }).filter(it=>it.name&&it.name!=="Item "+(0+1));
+  };
+
+  const handleSave=()=>{
+    if(!name.trim()){setError("Please enter a name for this price list.");return;}
+    if(type==="competitor"&&!competitorName.trim()){setError("Please enter the competitor name.");return;}
+    const items=buildItems();
+    if(items.length===0){setError("No items could be parsed — check your column mapping.");return;}
+    // check for duplicate name/competitor combo
+    const dup=(existingLists||[]).find(pl=>pl.name.toLowerCase()===name.toLowerCase()&&pl.type===type);
+    if(dup&&!window.confirm(`A price list named "${name}" already exists. Continue anyway?`)) return;
+    const pl={
+      id:mkId(),name:name.trim(),type,
+      competitorName:type==="competitor"?competitorName.trim():"",
+      source:source.trim()||"Upload",
+      notes:notes.trim(),
+      uploadedAt:Date.now(),
+      items,
+    };
+    onSave(pl);
+  };
+
+  const previewItems=useMemo(()=>buildItems().slice(0,5),[rawRows,mapping]);
+
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:600,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        <div style={{padding:"16px 20px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5}}>UPLOAD PRICE LIST</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:20}}>
+          {error&&<div style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11}}>{error}</div>}
+
+          {/* Step 1: Form */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+            <div style={{gridColumn:"1/-1"}}>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME *</div>
+              <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. ST1 2025 Catalog, Track Supply Co Q1" style={{width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+            </div>
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>TYPE *</div>
+              <select value={type} onChange={e=>setType(e.target.value)} style={{width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",background:"#fff"}}>
+                <option value="own">Our Prices</option>
+                <option value="competitor">Competitor Pricing</option>
+              </select>
+            </div>
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>SOURCE</div>
+              <select value={source} onChange={e=>setSource(e.target.value)} style={{width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",background:"#fff"}}>
+                <option>Catalog</option>
+                <option>RFP Result</option>
+                <option>Quote</option>
+                <option>Website</option>
+                <option>Sales Rep</option>
+                <option>Other</option>
+              </select>
+            </div>
+            {type==="competitor"&&(
+              <div style={{gridColumn:"1/-1"}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>COMPETITOR NAME *</div>
+                <input value={competitorName} onChange={e=>setCompetitorName(e.target.value)} placeholder="e.g. Track Supply Co, School Specialty" style={{width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+            )}
+          </div>
+
+          {/* File upload */}
+          <div style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"20px",textAlign:"center",marginBottom:14,cursor:"pointer",background:B.surface}} onClick={()=>fileRef.current?.click()}>
+            <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleFile} style={{display:"none"}}/>
+            {loading?<Spin/>:(
+              <>
+                <div style={{fontSize:24,marginBottom:6,opacity:.5}}>📄</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Drop CSV or Excel file here, or click to browse</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>.csv · .xlsx · .xls — first row should be column headers</div>
+                {rawRows&&<div style={{marginTop:8,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5}}>✓ {rawRows.length} ROWS LOADED</div>}
+              </>
+            )}
+          </div>
+
+          {/* Column mapping */}
+          {step==="mapping"&&headers.length>0&&(
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>COLUMN MAPPING</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                {FIELDS.map(f=>(
+                  <div key={f.key}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>{f.label.toUpperCase()}{f.required?" *":""}</div>
+                    <select value={mapping[f.key]??-1} onChange={e=>setMapping(p=>({...p,[f.key]:parseInt(e.target.value)}))} style={{width:"100%",padding:"5px 8px",border:`1px solid ${B.border}`,borderRadius:4,fontSize:10,fontFamily:"'Lexend',sans-serif",background:"#fff"}}>
+                      <option value={-1}>— not mapped —</option>
+                      {headers.map((h,i)=><option key={i} value={i}>{h||`Column ${i+1}`}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              {/* Preview */}
+              {previewItems.length>0&&(
+                <div style={{marginBottom:8}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>PREVIEW (first {previewItems.length} rows)</div>
+                  <div style={{overflowX:"auto"}}>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                      <thead>
+                        <tr style={{background:B.surface}}>
+                          {["Name","SKU","Category","Price","List Price"].map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewItems.map((it,i)=>(
+                          <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                            <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:150,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+                            <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+                            <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+                            <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+                            <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.green}}>{it.listPrice>0?`$${it.listPrice.toFixed(2)}`:"—"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>NOTES (optional)</div>
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any context about this price list — date range, discount terms, RFP details..." rows={2} style={{width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+          </div>
+        </div>
+        <div style={{padding:"12px 20px",borderTop:`1px solid ${B.border}`,display:"flex",gap:8,flexShrink:0}}>
+          <OBtn onClick={handleSave} disabled={!rawRows||loading}>
+            {rawRows?`SAVE ${buildItems().length} ITEMS`:"SELECT FILE FIRST"}
+          </OBtn>
+          <GBtn onClick={onClose}>CANCEL</GBtn>
+        </div>
+      </div>
     </div>
   );
 }
