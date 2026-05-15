@@ -91,6 +91,44 @@ export default async function handler(req, res) {
         return res.json({ id: msg.id });
       }
 
+      if (body.action === 'find_similar') {
+        const { query, excludeUserId, limit = 3 } = body;
+        if (!query) return res.status(400).json({ error: 'query required' });
+
+        const STOP = new Set(['that','this','what','with','from','have','they','about','some','just','your','been','were','more','will','would','could','should','their','there','which','when','then','than','like','into','also','over','such','only','most','know','make','time','need','want','tell','said','does','done','same','take','them','even','back','good','each','well','many','very','much','those','other','after','these','first','never','think','still','before','every','always','another','through']);
+        const keywords = query.toLowerCase()
+          .split(/[\s,?.!;:]+/)
+          .filter(w => w.length > 3 && !STOP.has(w))
+          .slice(0, 6);
+
+        if (!keywords.length) return res.json({ matches: [] });
+
+        const msgs = await prisma.chatMessage.findMany({
+          where: {
+            role: 'user',
+            OR: keywords.map(kw => ({ content: { contains: kw, mode: 'insensitive' } })),
+            ...(excludeUserId ? { session: { userId: { not: excludeUserId } } } : {}),
+          },
+          include: { session: { select: { id: true, userId: true, userName: true, createdAt: true } } },
+          orderBy: { ts: 'desc' },
+          take: 20,
+        });
+
+        const seen = new Set();
+        const matches = [];
+        for (const m of msgs) {
+          if (seen.has(m.sessionId) || matches.length >= limit) break;
+          seen.add(m.sessionId);
+          matches.push({
+            sessionId:  m.sessionId,
+            userName:   m.session.userName || 'A teammate',
+            snippet:    m.content.slice(0, 80),
+            ts:         m.session.createdAt,
+          });
+        }
+        return res.json({ matches });
+      }
+
       return res.status(400).json({ error: 'Unknown action' });
     } catch (e) {
       console.error('[chat] POST error:', e.message);
