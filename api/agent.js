@@ -22,11 +22,6 @@ const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
 const TOOLS = [
-  // Web search — Anthropic executes this automatically server-side
-  {
-    type: "web_search_20250305",
-    name: "web_search",
-  },
   // CRM / action proposals — returned in actions[] for user to confirm
   {
     name: "propose_create_deal",
@@ -299,7 +294,7 @@ ${topContacts.length === 0 ? "No scored contacts yet" : topContacts.map(c=>`· $
 ${contacts.filter(c=>c.email).length} contacts with email
 
 === ACTIVE CAMPAIGNS ===
-${sequences.filter(s=>s.status==="active").length === 0 ? "None" : sequences.filter(s=>s.status==="active").map(s=>`· "${s.name}" — ${s.enrollments?.filter(e=>e.status==="active").length||0} active`).join("\n")}
+${sequences.filter(s=>s.status==="active").length === 0 ? "None" : sequences.filter(s=>s.status==="active").map(s=>`· "${s.name}" — ${s.activeCount||0} active`).join("\n")}
 
 === OPEN RFPs ===
 ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}
@@ -354,20 +349,18 @@ ${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
 (Use this when answering questions about competitors or building counter-strategies)
 ` : ""}=== YOUR CAPABILITIES ===
 You have access to:
-1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
-2. propose_create_deal — suggest creating a deal (user confirms)
-3. propose_add_contact — suggest adding a prospect (user confirms)
-4. propose_draft_email — compose a personalized email (user reviews + sends)
-5. propose_schedule_followup — set a follow-up date on a deal
-6. propose_flag_deal — mark a deal as hot/warm priority
-7. propose_add_to_nurture — add cold leads to email nurture campaign
-8. propose_log_note — log notes on a deal
-9. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
-10. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
-11. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
+1. propose_create_deal — suggest creating a deal (user confirms)
+2. propose_add_contact — suggest adding a prospect (user confirms)
+3. propose_draft_email — compose a personalized email (user reviews + sends)
+4. propose_schedule_followup — set a follow-up date on a deal
+5. propose_flag_deal — mark a deal as hot/warm priority
+6. propose_add_to_nurture — add cold leads to email nurture campaign
+7. propose_log_note — log notes on a deal
+8. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
+9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
+10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 
 IMPORTANT BEHAVIORS:
-- Use web_search proactively when asked about specific prospects, schools, competitors, or market data
 - Always personalize emails with real names, real school names, real products
 - Be specific and tactical — use actual deal names, contact names, dollar amounts from context
 - Flag 🔥 when you see genuine urgency or high value
@@ -410,7 +403,7 @@ Each tool proposal maps to an action in the actions array with the same fields f
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
 async function callClaude(messages, system, tools, apiKey) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 50_000);
+  const timer = setTimeout(() => ctrl.abort(), 18_000);
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -419,7 +412,6 @@ async function callClaude(messages, system, tools, apiKey) {
         "Content-Type":      "application/json",
         "x-api-key":         apiKey,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta":    "web-search-2025-03-05",
       },
       body: JSON.stringify({
         model:       "claude-sonnet-4-6",
@@ -477,8 +469,8 @@ async function _handler(req, res) {
     content: m.role === "user" ? m.content : (m.raw || m.content || ""),
   }));
 
-  // Tool call loop — max 4 iterations to handle web_search + proposals
-  const MAX_LOOPS = 4;
+  // Tool call loop — max 2 iterations (no web search, just proposal tools)
+  const MAX_LOOPS = 2;
   let allToolCalls = [];
   let loopCount   = 0;
   let finalText   = "";
@@ -499,8 +491,7 @@ async function _handler(req, res) {
 
     // Track tool usage
     for (const t of toolUseBlocks) {
-      if (t.name === "web_search") searchUsed = true;
-      else allToolCalls.push(t);
+      allToolCalls.push(t);
     }
 
     // Done when no tool calls or stop reason is end_turn
@@ -511,9 +502,7 @@ async function _handler(req, res) {
     const toolResults = toolUseBlocks.map(t => ({
       type:        "tool_result",
       tool_use_id: t.id,
-      content:     t.name === "web_search"
-        ? "Search completed."
-        : JSON.stringify({ proposed: true, ...t.input }),
+      content:     JSON.stringify({ proposed: true, ...t.input }),
     }));
     messages.push({ role: "user", content: toolResults });
     loopCount++;
@@ -528,7 +517,6 @@ async function _handler(req, res) {
 
   // Build actions from tool proposals + any in parsed.actions
   const proposedActions = allToolCalls
-    .filter(t => t.name !== "web_search")
     .map(t => {
       const typeMap = {
         propose_create_deal:     "create_deal",
