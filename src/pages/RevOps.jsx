@@ -719,11 +719,8 @@ export default function App() {
     {id:"_s_tools"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
-    {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"price-lists",icon:"$",  label:"Price Lists"},
-      {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
-    ]},
+    {id:"price-lists", icon:"$", label:"Price Lists"},
+    {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",      icon:"≡", label:"Activity"},
