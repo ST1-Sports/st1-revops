@@ -2513,6 +2513,14 @@ function TalkTrack({onClose,linkedContact}){
       scheduleSave({sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax,
         schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
         hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true});
+      // Sync back to Redux + Zoho CRM
+      if(linked?.id){
+        const full=(s.contacts||[]).find(c=>c.id===linked.id);
+        dispatch("UPDATE_CONTACT",{id:linked.id,schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true,sponsorshipMin:d.guaranteedMin,sponsorshipMax:d.upsideMax});
+        const zohoMod=(linked.module||full?.source==="zoho-crm"?"":"")+(full?.id?.startsWith("zoho_l_")?"Leads":"Contacts");
+        const zohoId=full?.zohoId;
+        if(zohoId) crmAddNote(zohoMod,zohoId,`Sponsorship Calc — Guaranteed Min: $${d.guaranteedMin?.toLocaleString()||0} / Upside Max: $${d.upsideMax?.toLocaleString()||0}\nSchool Class: ${schoolClass||"—"} | Athletes: ${numAthletes||"—"} | Sports: ${numSports||"—"} | Team Store: ${hasOnlineStore?"Yes":"No"} | Booster Club: ${hasBoosterClub?"Yes":"No"}`);
+      }
     }).catch(()=>setCalcLoading(false));
   };
 
@@ -2613,6 +2621,21 @@ function TalkTrack({onClose,linkedContact}){
             :<OBtn col={B.green} onClick={()=>{
               if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
               sessionStorage.removeItem("ttSessionId");
+              // Sync completion + pains back to Redux + Zoho CRM
+              if(linked?.id){
+                const now=new Date().toISOString();
+                const full=(s.contacts||[]).find(c=>c.id===linked.id);
+                dispatch("UPDATE_CONTACT",{id:linked.id,ttCompletedAt:now,confirmedPains:pains});
+                const zohoMod=full?.id?.startsWith("zoho_l_")?"Leads":"Contacts";
+                const zohoId=full?.zohoId;
+                if(zohoId){
+                  const painLabels=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title);
+                  const noteLines=["Talk Track COMPLETED — "+new Date(now).toLocaleDateString()];
+                  if(painLabels.length) noteLines.push("Pain Points: "+painLabels.join(", "));
+                  if(calcResult) noteLines.push(`Sponsorship: $${calcResult.guaranteedMin?.toLocaleString()||0} guaranteed / $${calcResult.upsideMax?.toLocaleString()||0} upside`);
+                  crmAddNote(zohoMod,zohoId,noteLines.join("\n"));
+                }
+              }
               toast("Talk Track complete!","success");
               onClose();
             }}>✓ COMPLETE</OBtn>
