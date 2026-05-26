@@ -411,6 +411,11 @@ function reducer(prev, action, payload) {
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
     case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "MERGE_CONTACTS": {
+      const updMap=new Map((payload.toUpdate||[]).map(c=>[c.id,c]));
+      const merged=(prev.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
+      return {...prev,contacts:[...(payload.toAdd||[]),...merged],contactsLastSync:payload.lastSync||Date.now()};
+    }
     case "SCORE_CONTACT": {
       const {contactId,type,note,campaignId} = payload;
       const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
@@ -667,9 +672,7 @@ export default function App() {
         const allZoho=[...contacts,...leads];
         const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
         const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
-        if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
-        toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{...c}));
-        dispatch("SET_CONTACTS_LAST_SYNC",now);
+        dispatch("MERGE_CONTACTS",{toAdd,toUpdate,lastSync:now});
         if(force) toast(`Zoho CRM: ${toAdd.length} added, ${toUpdate.length} updated (${allZoho.length} total)`, "success");
       } catch(e){
         console.error("CRM sync failed:",e);
@@ -677,9 +680,10 @@ export default function App() {
       }
     };
     crmSyncRef.current = syncContacts;
-    syncInvoices(); syncContacts();
+    // Delay initial sync so the UI is fully interactive before heavy network+dispatch work
+    const initTimer=setTimeout(()=>{syncInvoices();syncContacts();},8000);
     const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
-    return()=>clearInterval(iv);
+    return()=>{clearTimeout(initTimer);clearInterval(iv);};
   },[s.currentUserId]);
 
   useEffect(()=>{
@@ -715,11 +719,8 @@ export default function App() {
     {id:"_s_tools"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
-    {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"price-lists",icon:"$",  label:"Price Lists"},
-      {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
-    ]},
+    {id:"price-lists", icon:"$", label:"Price Lists"},
+    {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",      icon:"≡", label:"Activity"},
