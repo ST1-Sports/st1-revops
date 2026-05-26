@@ -2409,14 +2409,20 @@ function CrmLinker({linked,onLink,onUnlink}){
 }
 
 function TalkTrack({onClose,linkedContact}){
-  const {cu,toast}=useApp();
+  const {s,cu,toast}=useApp();
   const [sessionId,setSessionId]=useState(null);
   const [questions,setQuestions]=useState([]);
   const [phaseIdx,setPhaseIdx]=useState(0);
   const [answers,setAnswers]=useState({});
   const [pains,setPains]=useState([]);
   const [linked,setLinked]=useState(linkedContact||null);
-  const [calcInputs,setCalcInputs]=useState({schoolClass:"",numSports:"",numAthletes:"",hasOnlineStore:null,hasBoosterClub:null});
+  const [calcInputs,setCalcInputs]=useState(()=>({
+    schoolClass:linkedContact?.schoolClass||"",
+    numSports:String(linkedContact?.numSports||""),
+    numAthletes:String(linkedContact?.numAthletes||""),
+    hasOnlineStore:linkedContact?.hasOnlineStore!=null?linkedContact.hasOnlineStore:null,
+    hasBoosterClub:linkedContact?.hasBoosterClub!=null?linkedContact.hasBoosterClub:null,
+  }));
   const [calcResult,setCalcResult]=useState(null);
   const [calcLoading,setCalcLoading]=useState(false);
   const [draftEmail,setDraftEmail]=useState("");
@@ -2440,6 +2446,13 @@ function TalkTrack({onClose,linkedContact}){
             setAnswers(sess.answers||{});
             setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
             if(sess.sponsorshipGuaranteedMin!=null) setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax});
+            if(sess.schoolClass||sess.numAthletes||sess.numSports) setCalcInputs(ci=>({
+              schoolClass:sess.schoolClass||ci.schoolClass,
+              numSports:String(sess.numSports||ci.numSports||""),
+              numAthletes:String(sess.numAthletes||ci.numAthletes||""),
+              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:ci.hasOnlineStore,
+              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:ci.hasBoosterClub,
+            }));
             if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
               setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
             }
@@ -2472,7 +2485,19 @@ function TalkTrack({onClose,linkedContact}){
 
   const setAnswer=(qId,val)=>{const next={...answers,[qId]:val};setAnswers(next);scheduleSave({answers:next});};
   const togglePain=(painId)=>{const next=pains.includes(painId)?pains.filter(p=>p!==painId):[...pains,painId];setPains(next);scheduleSave({confirmedPains:next});};
-  const linkContact=(c)=>{setLinked(c);const patch=c.module==="Contact"?{crmContactId:c.id,crmModule:"Contact"}:{crmLeadId:c.id,crmModule:"Lead"};scheduleSave(patch);};
+  const linkContact=(c)=>{
+    setLinked(c);
+    const full=(s.contacts||[]).find(ct=>ct.id===c.id);
+    if(full) setCalcInputs(ci=>({
+      schoolClass:full.schoolClass||ci.schoolClass,
+      numSports:String(full.numSports||ci.numSports||""),
+      numAthletes:String(full.numAthletes||ci.numAthletes||""),
+      hasOnlineStore:full.hasOnlineStore!=null?full.hasOnlineStore:ci.hasOnlineStore,
+      hasBoosterClub:full.hasBoosterClub!=null?full.hasBoosterClub:ci.hasBoosterClub,
+    }));
+    const patch=c.module==="Contact"?{crmContactId:c.id,crmModule:"Contact"}:{crmLeadId:c.id,crmModule:"Lead"};
+    scheduleSave(patch);
+  };
   const unlinkContact=()=>{setLinked(null);scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});};
 
   const doCalc=()=>{
