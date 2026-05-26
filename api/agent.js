@@ -444,7 +444,7 @@ Each tool proposal maps to an action in the actions array with the same fields f
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
 async function callClaude(messages, system, tools, apiKey) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 18_000);
+  const timer = setTimeout(() => ctrl.abort(), 28_000);
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -482,8 +482,15 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
+  // Hard deadline — ensures we always send a response before Vercel can drop the connection
+  const deadline = new Promise(resolve =>
+    setTimeout(() => resolve("timeout"), 55_000)
+  );
   try {
-    return await _handler(req, res);
+    const result = await Promise.race([_handler(req, res), deadline]);
+    if (result === "timeout" && !res.headersSent) {
+      res.status(504).json({ error: "Agent timed out — try a shorter question" });
+    }
   } catch (err) {
     console.error("[agent] unhandled crash:", err.message, err.stack);
     if (!res.headersSent) res.status(500).json({ error: `Agent crashed: ${err.message}` });
