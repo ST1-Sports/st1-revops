@@ -2276,6 +2276,11 @@ function ModCRM() {
   const [draft,setDraft]=useState("");
   const [ttView,setTtView]=useState(false);
   const [ttContact,setTtContact]=useState(null);
+  const [dealValueInput,setDealValueInput]=useState("");
+  const [dealValueSaved,setDealValueSaved]=useState(false);
+  const [overviewEditDealId,setOverviewEditDealId]=useState(null);
+  const [overviewEditValue,setOverviewEditValue]=useState("");
+  const [quoteItems,setQuoteItems]=useState([]);
   const [showAddContact,setShowAddContact]=useState(false);
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
   const [leftMode,setLeftMode]=useState("contacts");
@@ -2331,6 +2336,10 @@ function ModCRM() {
     setCrmTab("overview");setDraft("");setDrafting(false);
     setQuoteNum(activeDeal?.quoteNumber||"");
     setTtView(false);setTtContact(null);
+    setDealValueInput(String(activeDeal?.value||0));
+    setDealValueSaved(false);
+    setQuoteItems(activeDeal?.quoteItems||[]);
+    setOverviewEditDealId(null);
   },[selId]);
 
   const logTouch=()=>{
@@ -2720,7 +2729,21 @@ function ModCRM() {
                         {selCD.cd.map(d=>(
                           <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
                             <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div><div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div></div>
-                            <div style={{textAlign:"right"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>{d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted,marginTop:1}}>Due {d.followUpDate}</div>}</div>
+                            <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                              {overviewEditDealId===d.id?(
+                                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                                  <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+                                  <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
+                                  <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:"2px 4px"}}>✕</button>
+                                </div>
+                              ):(
+                                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
+                                  <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} title="Edit value" style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",padding:"2px 3px",lineHeight:1}}>✎</button>
+                                </div>
+                              )}
+                              {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -2868,7 +2891,7 @@ function ModCRM() {
                     <div className="card" style={{padding:14,marginBottom:12,borderTop:`3px solid ${DSC[activeDeal.stage]||B.orange}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                         <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{activeDeal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{activeDeal.school}</div></div>
-                        <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><input type="number" defaultValue={activeDeal.value||0} onBlur={e=>{const v=Number(e.target.value||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/></div>
+                        <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><div style={{display:"flex",gap:4,alignItems:"center"}}><input type="number" value={dealValueInput} onChange={e=>{setDealValueInput(e.target.value);setDealValueSaved(false);}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>{dealValueSaved?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green}}>✓</span>:<OBtn sm onClick={()=>{const v=Number(dealValueInput||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});setDealValueSaved(true);setTimeout(()=>setDealValueSaved(false),2000);toast("Deal value updated","success");}}>SAVE</OBtn>}</div></div>
                       </div>
                       <Lbl s={{marginBottom:5}}>Stage</Lbl>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
@@ -2903,27 +2926,65 @@ function ModCRM() {
               </div>
             )}
 
-            {crmTab==="quote"&&(
+            {crmTab==="quote"&&(()=>{
+              const qSubtotal=quoteItems.reduce((a,i)=>a+(i.qty||0)*(i.rate||0),0);
+              const zohoCustomer=(s.invoices||[]).find(inv=>inv.customer&&sel&&(inv.customer.toLowerCase()===(sel.school||"").toLowerCase()||(activeDeal&&inv.customer.toLowerCase()===activeDeal.school?.toLowerCase())));
+              const zohoCustomerId=zohoCustomer?.customerId||null;
+              const zbUrl=zohoCustomerId?`https://books.zoho.com/app/#contacts/view/${zohoCustomerId}`:"https://books.zoho.com/app/";
+              const printPDF=()=>{
+                const rows=quoteItems.map(i=>`<tr><td>${i.name||""}</td><td style="text-align:center">${i.qty||0}</td><td style="text-align:right">$${Number(i.rate||0).toFixed(2)}</td><td style="text-align:right">$${((i.qty||0)*(i.rate||0)).toFixed(2)}</td></tr>`).join("");
+                const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote ${quoteNum||""}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:760px;margin:0 auto}h1{color:#f37321;font-size:28px;margin:0}h2{font-size:13px;font-weight:400;color:#666;margin:4px 0 0}table{width:100%;border-collapse:collapse;margin-top:28px}th{background:#f37321;color:#fff;padding:10px 12px;text-align:left;font-size:13px}td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}.total-row{font-weight:700;font-size:15px;color:#f37321}.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #f37321;padding-bottom:16px;margin-bottom:8px}.meta{font-size:12px;color:#444;margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:4px}.meta span{color:#666}footer{margin-top:40px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style></head><body><div class="header"><div><h1>ST1 SPORTS</h1><h2>Premium Athletic Equipment</h2></div><div style="text-align:right"><div style="font-size:22px;font-weight:700;color:#f37321">QUOTE</div><div style="font-size:13px;color:#666">#${quoteNum||"—"}</div><div style="font-size:12px;color:#999">${new Date().toLocaleDateString()}</div></div></div><div class="meta"><div><span>To:</span> <strong>${sel?sel.fullName||[sel.firstName,sel.lastName].filter(Boolean).join(" "):"—"}</strong></div><div><span>School/Org:</span> <strong>${activeDeal?.school||sel?.school||"—"}</strong></div><div><span>Email:</span> ${sel?.email||"—"}</div><div><span>Phone:</span> ${sel?.phone||"—"}</div></div><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}<tr class="total-row"><td colspan="3" style="text-align:right;padding-top:16px">TOTAL</td><td style="text-align:right;padding-top:16px">$${qSubtotal.toFixed(2)}</td></tr></tbody></table><div style="margin-top:20px;font-size:12px;color:#555">${activeDeal?.quoteNotes||""}</div><footer>ST1 Sports · matt@st1sports.com · 719-256-0275 · st1sports.com · This quote is valid for 30 days.</footer></body></html>`;
+                const w=window.open("","_blank","width=800,height=600");
+                if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),400);}
+              };
+              return (
               <div>
                 <div className="card" style={{padding:16,marginBottom:12}}>
-                  <Lbl s={{marginBottom:12}}>Quote</Lbl>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <Lbl>Quote</Lbl>
+                    {zohoCustomer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green}}>✓ Zoho account: {zohoCustomer.customer}</div>}
+                  </div>
                   {activeDeal?(
                     <>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-                        <div><Lbl s={{marginBottom:3}}>Quote Number</Lbl><input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/></div>
-                        <div><Lbl s={{marginBottom:3}}>Quote Amount ($)</Lbl><input type="number" defaultValue={activeDeal.quoteAmount||activeDeal.value||0} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteAmount:Number(e.target.value||0)})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/></div>
+                      <div style={{marginBottom:12}}>
+                        <Lbl s={{marginBottom:3}}>Quote Number</Lbl>
+                        <input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/>
                       </div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-                        <a href="https://admin.st1sports.com" target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,borderRadius:6,padding:"9px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",display:"inline-block"}}>OPEN ZOHO BOOKS ↗</a>
-                        {activeDeal.stage!=="Quoted"&&<OBtn col={B.blue} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
+                      <Lbl s={{marginBottom:6}}>Line Items</Lbl>
+                      {quoteItems.length>0&&(
+                        <div style={{marginBottom:8}}>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4}}>
+                            {["ITEM","QTY","UNIT PRICE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+                          </div>
+                          {quoteItems.map((item,idx)=>(
+                            <div key={item.id} style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
+                              <input value={item.name} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,name:e.target.value}:q))} placeholder="Item name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+                              <input type="number" min="1" value={item.qty} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,qty:Number(e.target.value||1)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"center"}}/>
+                              <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,rate:Number(e.target.value||0)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"right"}}/>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+                              <button onClick={()=>setQuoteItems(qi=>qi.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1,textAlign:"center"}}>✕</button>
+                            </div>
+                          ))}
+                          <div style={{display:"flex",justifyContent:"flex-end",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`}}>
+                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.orange}}>Total: {fmt$(qSubtotal)}</div>
+                          </div>
+                        </div>
+                      )}
+                      <button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
+                      <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+                      <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
+                        <OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal});toast("Quote saved","success");}}>SAVE QUOTE</OBtn>
+                        <OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
+                        <a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
+                        {activeDeal.stage!=="Quoted"&&<OBtn col={B.green} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
                       </div>
-                      {activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file</div>}
-                      <div style={{marginTop:12}}><Lbl s={{marginBottom:4}}>Quote Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+                      {activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file{activeDeal.quoteAmount?` — ${fmt$(activeDeal.quoteAmount)}`:""}</div>}
                     </>
                   ):<div style={{textAlign:"center",padding:"20px 0",color:B.muted,fontSize:11}}><OBtn onClick={()=>setCrmTab("deal")}>Create a deal first →</OBtn></div>}
                 </div>
               </div>
-            )}
+              );
+            })()}
 
             {crmTab==="order"&&(
               <div>
