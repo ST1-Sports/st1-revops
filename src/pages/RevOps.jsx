@@ -6411,6 +6411,7 @@ function ModBatchOutreach() {
   const [writing,setWriting]=useState(false);
   const [sending,setSending]=useState(false);
   const [sentCount,setSentCount]=useState(0);
+  const [addingInst,setAddingInst]=useState(false);
 
   const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
   const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
@@ -6472,6 +6473,25 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
       }));
     }
     setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
+  };
+
+  const addAllToInstantly=async()=>{
+    const leads=drafts.length?drafts:selectedList.map(c=>({toEmail:c.email,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),contactId:c.id,school:c.school||""}));
+    if(!leads.length){toast("No contacts to add","error");return;}
+    setAddingInst(true);
+    let added=0;
+    for(const d of leads){
+      try{
+        const nameParts=(d.contactName||"").split(" ");
+        const r=await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"add_lead",email:d.toEmail,firstName:nameParts[0]||"",lastName:nameParts.slice(1).join(" ")||"",company:d.school||""
+        })});
+        const res=await r.json();
+        if(!res.error){added++;dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"nurture"});}
+      }catch{}
+    }
+    setAddingInst(false);
+    toast(`${added} leads added to Instantly nurture campaign`,"success");
   };
 
   const sendAll=async()=>{
@@ -6577,7 +6597,10 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
               <OBtn onClick={buildDrafts} disabled={writing||selContacts.size===0} style={{width:"100%",marginBottom:7}}>
                 {writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}
               </OBtn>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
+              <button onClick={addAllToInstantly} disabled={addingInst||selContacts.size===0} style={{width:"100%",background:"#1a1a2e",color:B.white,border:"none",borderRadius:5,padding:"8px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",marginBottom:7,opacity:addingInst||selContacts.size===0?.6:1}}>
+                {addingInst?"ADDING TO INSTANTLY...":"⚡ ADD TO INSTANTLY NURTURE"}
+              </button>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Send one-off emails via Gmail, or add to Instantly for drip sequences.</div>
             </div>
           </div>
         </div>
@@ -6591,6 +6614,9 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
             </div>
             <div style={{display:"flex",gap:7}}>
               <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
+              <button onClick={addAllToInstantly} disabled={addingInst||sending} style={{background:"#1a1a2e",color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:addingInst?.6:1}}>
+                {addingInst?"ADDING...":"⚡ ADD TO INSTANTLY"}
+              </button>
               <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>
                 {sending?"SENDING...":"✉ SEND ALL DRAFTS"}
               </button>
@@ -12259,10 +12285,12 @@ function ModAgent() {
     if(action.type==="add_to_nurture"){
       if(!action.email){toast("No email — can't add to nurture","error");return;}
       try{
-        await fetch("/api/zoho-campaigns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          action:"add_subscribers",listKey:"cold_leads",subscribers:[{email:action.email,firstName:action.firstName||"",lastName:action.lastName||"",company:action.company||""}]
+        const r=await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"add_lead",email:action.email,firstName:action.firstName||"",lastName:action.lastName||"",company:action.company||""
         })});
-        toast(`${action.email} added to nurture sequence`,"success");
+        const d=await r.json();
+        if(d.error) throw new Error(d.error);
+        toast(`${action.email} added to Instantly nurture sequence`,"success");
       }catch(e){toast(`Nurture add failed: ${e.message}`,"error");}
       return;
     }
