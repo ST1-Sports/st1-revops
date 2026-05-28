@@ -451,6 +451,7 @@ function reducer(prev, action, payload) {
     case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next[payload];return {...prev,competeIntel:next};}
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
+    case "SET_CRM_NAV":         return {...prev, crmNav:payload}; // {id, school} — consumed by ModCRM on mount
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
     case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
     case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
@@ -955,7 +956,7 @@ export default function App() {
                 ):null;
                 return(
                   <div style={{maxHeight:400,overflowY:"auto"}}>
-                    <Grp title="CONTACTS" items={contacts} go={()=>setMod("prospecting")} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
+                    <Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
                     <Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
                     <Grp title="CAMPAIGNS" items={campaigns} go={()=>setMod("marketing")} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
                     <Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
@@ -2705,6 +2706,15 @@ function ModCRM() {
   const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 
   const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
+
+  // Navigate to a specific contact when coming from another module (e.g. Prospecting)
+  useEffect(()=>{
+    if(!s.crmNav) return;
+    const {id,school}=s.crmNav;
+    if(id){setLeftMode("contacts");setSelId(id);setSelSchool(null);setCrmTab("overview");}
+    else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
+    dispatch("SET_CRM_NAV",null);
+  },[s.crmNav]);
 
   const filtered=useMemo(()=>{
     const q=search.toLowerCase();
@@ -5745,7 +5755,7 @@ function ModProspecting() {
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
   const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 
-  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -6269,14 +6279,17 @@ function ModProspecting() {
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                           {((typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{(typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
-                          <button onClick={()=>{
-                            const school=typeof c.school==="string"?c.school:c.school?.name||"";
-                            const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                            const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-                            const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
-                            dispatch("SET_AGENT_DRAFT",draft);
-                            setMod("agent");
-                          }} style={{marginTop:5,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",display:"block",width:"100%",textAlign:"center"}}>→ AGENT</button>
+                          <div style={{display:"flex",gap:4,marginTop:5}}>
+                            <button onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} style={{flex:1,background:B.surface,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ CRM</button>
+                            <button onClick={()=>{
+                              const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                              const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                              const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+                              const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
+                              dispatch("SET_AGENT_DRAFT",draft);
+                              setMod("agent");
+                            }} style={{flex:1,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ AGENT</button>
+                          </div>
                           <div style={{marginTop:5,position:"relative"}}>
                             {flaggingContact===c.id?(
                               <div style={{position:"absolute",right:0,top:"100%",zIndex:20,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:160,padding:6}}>
