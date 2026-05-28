@@ -1810,7 +1810,7 @@ function ModHome() {
         items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
-      brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "I'm Matt, I pick up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, first-person, short sentences, athlete-aware. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
+      brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
     };
 
     try{
@@ -2529,7 +2529,7 @@ function TalkTrack({onClose,linkedContact}){
   const doDraftEmail=async()=>{
     setDrafting(true);
     const activePains=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title).join(", ");
-    const prompt=`Write a follow-up sales email from Matt Stone at ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Conversational, not salesy.`;
+    const prompt=`Write a follow-up sales email from ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Warm, direct, conversational — not salesy. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`;
     const t=await aiCall(prompt);
     setDraftEmail(t||"");setDrafting(false);
     if(t&&sessRef.current){
@@ -2786,7 +2786,7 @@ function ModCRM() {
   const doDraftEmail=async()=>{
     if(!sel||!activeDeal) return;
     setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as "— Matt" or full sig.`);
+    const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
 
@@ -4206,11 +4206,11 @@ function ModDeals() {
   };
   const draftEmail=async()=>{
     if(!sel_d) return;setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a follow-up email from ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 Deal: ${sel_d.name} | Contact: ${sel_d.contact} at ${sel_d.school}, ${sel_d.state}
 Stage: ${sel_d.stage} | Value: ${fmt$(sel_d.value)} | Notes: ${sel_d.notes}
 Recent touches: ${(sel_d.touchHistory||[]).slice(-2).map(t=>t.note).join("; ")}
-Under 80 words. Include subject line. Brand voice: warm, direct, relationship-first — lead with the person or their program, not the product. No "hope this finds you well", no efficiency-first hooks ("2 weeks", "no minimums"). Athlete-aware tone. Sign as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
+Under 80 words. Include subject line. Brand voice: warm, direct, relationship-first — lead with the person or their program, not the product. No "hope this finds you well", no efficiency-first hooks ("2 weeks", "no minimums"). Athlete-aware tone. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
   const pipe=pool.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
@@ -5006,7 +5006,7 @@ function ModReorder() {
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
 Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
 ${draftPrompt(r)}
-Under 80 words. Reference the exact last order. Brand voice: warm, direct, athlete-aware — reference the sport, the team, or the season coming up. No "hope this finds you well", no efficiency-first hooks. Lead with the relationship, then the reorder reason. Sign as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
+Under 80 words. Reference the exact last order. Brand voice: warm, direct, athlete-aware — reference the sport, the team, or the season coming up. No "hope this finds you well", no efficiency-first hooks. Lead with the relationship, then the reorder reason. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275`);
     setDrafts(d=>({...d,[r.id]:t||""}));
     setDrafting(null);
   };
@@ -6635,14 +6635,12 @@ function ModProspecting() {
 const DEFAULT_TEMPLATES=[
   {id:"tpl_intro",name:"Cold Intro — Track & Field",tags:["cold","t&f"],subject:"ST1 Sports — Equipment for {{school}} T&F Program",body:`Hi {{name}},
 
-I wanted to reach out about ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
+Reaching out from ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
 
-We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and I personally handle every order.
+We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and every order gets personal attention.
 
 Would it be worth a quick 10-minute call to see if we can help {{school}} this season?
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
   {id:"tpl_fu1",name:"Follow-Up 1 — After Quote",tags:["followup","quote"],subject:"Re: ST1 Sports Quote — {{school}}",body:`Hi {{name}},
 
@@ -6650,17 +6648,13 @@ Just following up on the quote I sent over. Did you get a chance to review it?
 
 Happy to adjust quantities, add items, or answer any questions. We can also split the order across two POs if that's easier for your budget cycle.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275`},
   {id:"tpl_fu2",name:"Follow-Up 2 — Final Check-in",tags:["followup"],subject:"Quick check-in — {{school}} equipment",body:`Hi {{name}},
 
 I don't want to be a pest, so this will be my last follow-up for now. If the timing isn't right or you've gone a different direction, no worries at all — just let me know so I can close this out on my end.
 
-If you're still interested, I can hold current pricing for one more week.
+If you're still interested, we can hold current pricing for one more week.
 
-Best,
-Matt Stone
 ST1 Sports | 719-256-0275`},
   {id:"tpl_po",name:"PO Confirmation",tags:["order","confirmation"],subject:"ST1 Sports — Order Confirmation for {{school}}",body:`Hi {{name}},
 
@@ -6671,18 +6665,15 @@ Thank you for your order! Here's a summary:
 Estimated ship date: {{ship_date}}
 Tracking will be emailed once shipped.
 
-Questions? Reply here or call me directly at 719-256-0275.
+Questions? Reply here or call us directly at 719-256-0275.
 
-Matt Stone
 ST1 Sports | matt@st1sports.com | st1sports.com`},
   {id:"tpl_winback",name:"Win-Back — Lapsed Customer",tags:["winback","cold"],subject:"It's been a while — new equipment for {{school}}?",body:`Hi {{name}},
 
-It's Matt from ST1 Sports — it's been a while since we last worked together, and I wanted to check in.
+ST1 Sports here — it's been a while since we last worked together, and we wanted to check in.
 
-We've added some new items this season, and I'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
+We've added some new items this season, and we'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
