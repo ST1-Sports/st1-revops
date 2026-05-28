@@ -565,7 +565,7 @@ const RSC = {
 };
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
-const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
+const STATES_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const US_REGIONS = {
   "Midwest":       {states:["IA","MN","WI","MO","IL","IN","MI","OH","ND","SD","NE","KS"],color:"#1A5FA8"},
   "Southeast":     {states:["FL","GA","TN","AL","MS","SC","NC","VA","KY","AR","LA"],color:"#1E8F4E"},
@@ -2905,57 +2905,171 @@ function ModCRM() {
         const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
         const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
         const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
-        const schoolOrgType=schoolContacts[0]?.orgType||"";
-        const schoolClass=schoolContacts[0]?.schoolClass||"";
-        const numAthletes=schoolContacts[0]?.numAthletes||"";
-        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
-        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
+        const allDeals=schoolDeals;
+        const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
+        const primaryC=schoolContacts[0]||null;
+        const schoolOrgType=primaryC?.orgType||"";
+        const schoolClass=primaryC?.schoolClass||"";
+        const numAthletes=primaryC?.numAthletes||"";
+        const numSports=primaryC?.numSports||"";
+        const state=primaryC?.state||"";
+        const city=primaryC?.city||"";
+        const sponsorshipMin=primaryC?.sponsorshipMin||null;
+        const sponsorshipMax=primaryC?.sponsorshipMax||null;
+        const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
+        const sponsorshipConfirmed=primaryC?.sponsorshipConfirmedAmount||null;
+        const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
+        const hasOnlineStore=primaryC?.hasOnlineStore||false;
+        const hasBoosterClub=primaryC?.hasBoosterClub||false;
+        // Invoices / payments
+        const schoolInvoices=(s.invoices||[]).filter(inv=>{
+          const cust=(inv.customer||"").toLowerCase();
+          const school=(selSchool||"").toLowerCase();
+          return cust.includes(school.slice(0,6))||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
+        });
+        const totalInvoiced=schoolInvoices.reduce((a,i)=>a+(i.total||0),0);
+        const totalPaid=schoolInvoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
+        const totalOwed=schoolInvoices.filter(i=>i.status!=="paid").reduce((a,i)=>a+(i.balance||i.total||0),0);
+        // All line items ever purchased
+        const allItems=schoolInvoices.flatMap(inv=>(inv.items||[]).map(it=>({...it,invoiceNum:inv.number,date:inv.date})));
+        const itemMap={};
+        allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
+        const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
+        // School orders
+        const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===(selSchool||"").toLowerCase());
+        // Expansion opportunities
+        const expandOps=[];
+        if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
+        if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
+        if(sponsorshipMin&&!sponsorshipStatus) expandOps.push({icon:"★",title:"Sponsorship",desc:`Estimated sponsorship potential ${fmt$(sponsorshipMin)}${sponsorshipMax?` – ${fmt$(sponsorshipMax)}`:""}`});
+        if(numSports&&Number(numSports)>0&&closedWon.length>0){
+          const sportsWithOrders=new Set(closedWon.map(d=>d.sport||"").filter(Boolean)).size;
+          if(sportsWithOrders<Number(numSports)) expandOps.push({icon:"🏆",title:"More Sports",desc:`${numSports} sports on file, orders only tracked for ${sportsWithOrders} — expand to other programs`});
+        }
+        if(schoolInvoices.length>0&&closedWon.length>0) expandOps.push({icon:"🔄",title:"Reorder Timing",desc:`Last order ${schoolInvoices[0]?.date||"on file"} — check if next season procurement is open`});
+        const SectionHdr=({children,sub})=>(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,marginTop:20,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5}}>{children}</div>
+            {sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sub}</div>}
+          </div>
+        );
         return(
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            {/* School header */}
+            {/* Header */}
             <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
-                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                     {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
                     {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
-                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                    {numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
+                    {hasOnlineStore&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>}
+                    {hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
                   </div>
                 </div>
-                {sponsorshipMin&&(
-                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
-                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
-                  </div>
-                )}
+                {/* Revenue summary */}
+                <div style={{display:"flex",gap:8,flexShrink:0}}>
+                  {totalWon>0&&(
+                    <div style={{textAlign:"right",background:B.greenBg||`${B.green}10`,border:`1px solid ${B.green}30`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,letterSpacing:1}}>WON</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(totalWon)}</div>
+                    </div>
+                  )}
+                  {totalOpen>0&&(
+                    <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>PIPELINE</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(totalOpen)}</div>
+                    </div>
+                  )}
+                  {sponsorshipMin&&(
+                    <div style={{textAlign:"right",background:"#7c3aed08",border:"1px solid #7c3aed25",borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#7c3aed",letterSpacing:1}}>SPONS. EST.</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin)}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+            <div style={{flex:1,overflowY:"auto",padding:"12px 22px 30px"}}>
               {/* Action bar */}
-              <div style={{display:"flex",gap:8,marginBottom:18}}>
+              <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6}}>
                 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
                 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
               </div>
 
-              {/* Contacts (coaches) list */}
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
-              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
-              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+              {/* ── KPI STRIP ── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
+                <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
+                <KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
+                <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
+                <KCard l="Open Deals" v={openDeals.length} c={B.blue} sub={fmt$K(totalOpen)}/>
+                <KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
+              </div>
+
+              {/* ── ACCOUNT INFO ── */}
+              <SectionHdr>ACCOUNT INFO</SectionHdr>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+                {[
+                  ["School Class",schoolClass||"—"],
+                  ["Location",[city,state].filter(Boolean).join(", ")||"—"],
+                  ["Org Type",schoolOrgType||"—"],
+                  ["# Athletes",numAthletes||"—"],
+                  ["# Sports",numSports||"—"],
+                  ["Team Store",hasOnlineStore?"Yes":"No"],
+                  ["Booster Club",hasBoosterClub?"Yes":"No"],
+                  ["Contacts",schoolContacts.length],
+                  ["Open Deals",openDeals.length],
+                ].map(([k,v])=>(
+                  <div key={k}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>{k}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── SPONSORSHIP ── */}
+              {(sponsorshipMin||sponsorshipStatus)&&(
+                <>
+                  <SectionHdr sub={sponsorshipStatus?sponsorshipStatus.toUpperCase():""}>SPONSORSHIP</SectionHdr>
+                  <div style={{background:sponsorshipPaid?B.greenBg||`${B.green}10`:sponsorshipStatus==="confirmed"?`${B.orange}08`:`#7c3aed08`,border:`1px solid ${sponsorshipPaid?B.green:sponsorshipStatus==="confirmed"?B.orange:"#7c3aed"}30`,borderRadius:6,padding:14}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>ESTIMATED MIN</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin||0)}</div>
+                      </div>
+                      {sponsorshipMax&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>UPSIDE MAX</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(sponsorshipMax)}</div>
+                      </div>}
+                      {sponsorshipConfirmed&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>CONFIRMED AMT</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(sponsorshipConfirmed)}</div>
+                      </div>}
+                    </div>
+                    {sponsorshipPaid&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:8}}>✓ PAID</div>}
+                  </div>
+                </>
+              )}
+
+              {/* ── CONTACTS ── */}
+              <SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {schoolContacts.map(c=>{
                   const {cd,phase}=getCD(c);
                   const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
                   const pc=PCOL[phase];
                   return(
                     <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                         {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
@@ -2966,19 +3080,96 @@ function ModCRM() {
                 })}
               </div>
 
-              {/* Open deals for this school */}
-              {openDeals.length>0&&(<>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+              {/* ── ALL DEALS ── */}
+              {allDeals.length>0&&(<>
+                <SectionHdr sub={`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}>DEALS</SectionHdr>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {openDeals.map(d=>(
-                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                  {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}{d.quoteNumber?` · Quote #${d.quoteNumber}`:""}</div>
                       </div>
-                      <div style={{textAlign:"right"}}>
+                      <div style={{textAlign:"right",flexShrink:0}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── INVOICES & PAYMENTS ── */}
+              {schoolInvoices.length>0&&(<>
+                <SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolInvoices.map(inv=>(
+                    <div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
+                      </div>
+                      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
+                          {inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ITEMS PURCHASED ── */}
+              {purchasedItems.length>0&&(<>
+                <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0}}>
+                    {["ITEM","QTY","TOTAL","LAST"].map(h=>(
+                      <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>{h}</div>
+                    ))}
+                  </div>
+                  {purchasedItems.map((it,i)=>(
+                    <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0,borderBottom:i<purchasedItems.length-1?`1px solid ${B.border}`:"none"}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"7px 12px"}}>{it.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"7px 12px",textAlign:"center"}}>{it.qty}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,padding:"7px 12px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"7px 12px"}}>{it.lastDate||"—"}</div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ORDERS ── */}
+              {schoolOrders.length>0&&(<>
+                <SectionHdr sub={`${schoolOrders.length} order${schoolOrders.length!==1?"s":""}`}>ORDERS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolOrders.map(o=>(
+                    <div key={o.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{o.name||"Order"}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{o.contact||""}{o.createdAt?` · ${new Date(o.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`:""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{o.stage||o.status||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── EXPANSION OPPORTUNITIES ── */}
+              {expandOps.length>0&&(<>
+                <SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {expandOps.map((op,i)=>(
+                    <div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                      <span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
                       </div>
                     </div>
                   ))}
@@ -3181,7 +3372,7 @@ function ModCRM() {
                   {/* School + State + City */}
                   <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8,marginBottom:8}}>
                     <div><Lbl s={{marginBottom:3,fontSize:8}}>School / Organization</Lbl><input value={profileForm.school||""} onChange={e=>setPF("school",e.target.value)} style={iS}/></div>
-                    <div><Lbl s={{marginBottom:3,fontSize:8}}>State</Lbl><input value={profileForm.state||""} onChange={e=>setPF("state",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>State</Lbl><select value={profileForm.state||""} onChange={e=>setPF("state",e.target.value)} style={iS}><option value="">—</option>{STATES_LIST.map(st=><option key={st}>{st}</option>)}</select></div>
                     <div><Lbl s={{marginBottom:3,fontSize:8}}>City</Lbl><input value={profileForm.city||""} onChange={e=>setPF("city",e.target.value)} style={iS}/></div>
                   </div>
 
@@ -3197,7 +3388,7 @@ function ModCRM() {
                       <Lbl s={{marginBottom:3,fontSize:8}}>School Class</Lbl>
                       <select value={profileForm.schoolClass||""} onChange={e=>setPF("schoolClass",e.target.value)} style={iS}>
                         <option value="">—</option>
-                        {["1A","2A","3A","4A","5A","6A","7A","Other"].map(c=><option key={c}>{c}</option>)}
+                        {["1A","2A","3A","4A","5A","6A","7A","College","Other"].map(c=><option key={c}>{c}</option>)}
                       </select>
                     </div>
                     <div><Lbl s={{marginBottom:3,fontSize:8}}># Athletes</Lbl><input type="number" value={profileForm.numAthletes||""} onChange={e=>setPF("numAthletes",e.target.value)} style={iS}/></div>
