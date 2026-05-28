@@ -2675,11 +2675,16 @@ function ModCRM() {
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
   const [leftMode,setLeftMode]=useState("contacts");
   const [selSchool,setSelSchool]=useState(null);
+  const [profileForm,setProfileForm]=useState({});
+  const [profileDirty,setProfileDirty]=useState(false);
+  const [zohoSyncing,setZohoSyncing]=useState(false);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
 
   const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
+  const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 
   // Build phase map once per deals/orders change — O(n) instead of O(n*m) per render
   const cdMap=useMemo(()=>{
@@ -2730,6 +2735,9 @@ function ModCRM() {
     setDealValueSaved(false);
     setQuoteItems(activeDeal?.quoteItems||[]);
     setOverviewEditDealId(null);
+    const c=selId?(contacts.find(x=>x.id===selId)||null):null;
+    if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
+    setProfileDirty(false);
   },[selId]);
 
   const logTouch=()=>{
@@ -2737,6 +2745,31 @@ function ModCRM() {
     dispatch("UPDATE_DEAL",{id:activeDeal.id,touchHistory:[...(activeDeal.touchHistory||[]),{id:mkId(),type:"note",date:today(),note:touchNote,author:cu?.id}]});
     crmAddNote("Deals",activeDeal.zohoId,touchNote);
     setTouchNote("");toast("Touch logged","success");
+  };
+
+  const saveProfile=async()=>{
+    if(!sel)return;
+    const pf=profileForm;
+    const patch={...pf,numAthletes:pf.numAthletes?Number(pf.numAthletes)||pf.numAthletes:undefined,numSports:pf.numSports?Number(pf.numSports)||pf.numSports:undefined};
+    if(patch.firstName||patch.lastName) patch.fullName=`${patch.firstName||""} ${patch.lastName||""}`.trim();
+    dispatch("UPDATE_CONTACT",{id:sel.id,...patch});
+    setProfileDirty(false);
+    if(sel.zohoId){
+      setZohoSyncing(true);
+      const isLead=sel.id?.startsWith("zoho_l_");
+      const mod=isLead?"Leads":"Contacts";
+      try{
+        const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,Account_Name:pf.school,Mailing_State:pf.state,Mailing_City:pf.city};
+        await crmUpdate(mod,sel.zohoId,fields);
+        if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,sel.zohoId,`Sport / primary contact sport: ${pf.sport}`);
+        toast("Profile saved + synced to Zoho","success");
+      }catch(e){
+        toast("Saved locally (Zoho sync failed)","info");
+      }
+      setZohoSyncing(false);
+    } else {
+      toast("Profile saved","success");
+    }
   };
 
   const doDraftEmail=async()=>{
@@ -3040,10 +3073,22 @@ function ModCRM() {
               <div>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>{cName(sel)}</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{sel.title}{sel.title&&sel.school?" · ":""}{sel.school}{sel.state?` · ${sel.state}`:""}</div>
-                <div style={{display:"flex",gap:12,marginTop:5,flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                   {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
                   {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
-                  {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
+                  <select
+                    value={sel.sport||""}
+                    onChange={e=>{
+                      const sp=e.target.value;
+                      dispatch("UPDATE_CONTACT",{id:sel.id,sport:sp});
+                      setPF("sport",sp);
+                      if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,`Sport: ${sp}`);}
+                    }}
+                    style={{background:sel.sport?B.purpleBg:B.surface,border:`1px solid ${sel.sport?B.purple:B.border}30`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:sel.sport?B.purple:B.muted,letterSpacing:.5,cursor:"pointer"}}
+                  >
+                    <option value="">+ SET SPORT</option>
+                    {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                  </select>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
                   <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Owner:</span>
@@ -3088,7 +3133,7 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+            {[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"]].map(([id,label])=>(
               <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
                 {label}
                 {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
@@ -3098,61 +3143,136 @@ function ModCRM() {
           {/* Tab content */}
           <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
 
-            {crmTab==="overview"&&(
+            {crmTab==="overview"&&(()=>{
+              const iS={width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"};
+              return(
               <div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:11,marginBottom:18}}>
-                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
-                  <KCard l="Pipeline" v={fmt$(selCD.cd.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+(d.value||0),0))} c={B.orange}/>
-                  <KCard l="Deals" v={selCD.cd.length} c={B.blue}/>
-                  <KCard l="Orders" v={selCD.co.length} c={B.green}/>
+                {/* ── CONTACT PROFILE ── */}
+                <div className="card" style={{padding:14,marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <Lbl>CONTACT PROFILE</Lbl>
+                    <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                      {profileDirty&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Unsaved changes</span>}
+                      <OBtn sm onClick={saveProfile} disabled={zohoSyncing||!profileDirty}>
+                        {zohoSyncing?"SYNCING…":sel.zohoId?"SAVE + SYNC TO ZOHO":"SAVE"}
+                      </OBtn>
+                    </div>
+                  </div>
+
+                  {/* Name */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>First Name</Lbl><input value={profileForm.firstName||""} onChange={e=>setPF("firstName",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Last Name</Lbl><input value={profileForm.lastName||""} onChange={e=>setPF("lastName",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Title + Sport (prominent) */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8,color:B.purple,letterSpacing:1}}>★ SPORT</Lbl>
+                      <select value={profileForm.sport||""} onChange={e=>setPF("sport",e.target.value)}
+                        style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:profileForm.sport?B.purple:B.muted,fontWeight:profileForm.sport?600:400}}>
+                        <option value="">— Select sport —</option>
+                        {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* School + State + City */}
+                  <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>School / Organization</Lbl><input value={profileForm.school||""} onChange={e=>setPF("school",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>State</Lbl><input value={profileForm.state||""} onChange={e=>setPF("state",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>City</Lbl><input value={profileForm.city||""} onChange={e=>setPF("city",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Email + Phone */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Email</Lbl><input type="email" value={profileForm.email||""} onChange={e=>setPF("email",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Phone</Lbl><input type="tel" value={profileForm.phone||""} onChange={e=>setPF("phone",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Org details */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>School Class</Lbl>
+                      <select value={profileForm.schoolClass||""} onChange={e=>setPF("schoolClass",e.target.value)} style={iS}>
+                        <option value="">—</option>
+                        {["1A","2A","3A","4A","5A","6A","7A","Other"].map(c=><option key={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Athletes</Lbl><input type="number" value={profileForm.numAthletes||""} onChange={e=>setPF("numAthletes",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Sports</Lbl><input type="number" value={profileForm.numSports||""} onChange={e=>setPF("numSports",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>Priority</Lbl>
+                      <select value={profileForm.priority||"medium"} onChange={e=>setPF("priority",e.target.value)} style={iS}>
+                        {["hot","warm","medium","cold"].map(p=><option key={p}>{p}</option>)}
+                      </select>
+                    </div>
+                  </div>
                 </div>
-                {selCD.cd.length===0&&selCD.co.length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0"}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No deals or orders yet</div>
-                    <OBtn onClick={()=>{setCrmTab("deal");setShowNewDeal(true);}}>+ START A DEAL</OBtn>
+
+                {/* ── ACTIVITY SUMMARY ── */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+                  <KCard l="Score" v={sel.score||0} c={B.orange}/>
+                  <KCard l="Status" v={(sel.outreachStatus||"new").toUpperCase()} c={B.blue}/>
+                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
+                </div>
+
+                {/* Source + last contact */}
+                {(sel.source||sel.lastOutreach||sel.importedAt)&&(
+                  <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+                    {sel.source&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Source: <strong>{sel.source}</strong></span>}
+                    {sel.lastOutreach&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Last contacted: <strong>{sel.lastOutreach}</strong></span>}
+                    {sel.importedAt&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Added: <strong>{new Date(sel.importedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</strong></span>}
+                  </div>
+                )}
+
+                {/* ── PIPELINE SUMMARY ── */}
+                {(selCD.cd.length>0||selCD.co.length>0)?(
+                  <div className="card" style={{padding:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <Lbl>PIPELINE</Lbl>
+                      <OBtn sm onClick={()=>setCrmTab("deal")}>+ NEW DEAL</OBtn>
+                    </div>
+                    {selCD.cd.map(d=>(
+                      <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                          <div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
+                        </div>
+                        <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                          {overviewEditDealId===d.id?(
+                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                              <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+                              <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
+                              <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer"}}>✕</button>
+                            </div>
+                          ):(
+                            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
+                              <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer"}}>✎</button>
+                            </div>
+                          )}
+                          {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    {selCD.co.map(o=>(
+                      <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>ORDER</span></div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    ))}
                   </div>
                 ):(
-                  <>
-                    {selCD.cd.length>0&&(
-                      <div className="card" style={{padding:14,marginBottom:12}}>
-                        <Lbl s={{marginBottom:10}}>Deals</Lbl>
-                        {selCD.cd.map(d=>(
-                          <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div><div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div></div>
-                            <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                              {overviewEditDealId===d.id?(
-                                <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                                  <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
-                                  <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
-                                  <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:"2px 4px"}}>✕</button>
-                                </div>
-                              ):(
-                                <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
-                                  <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} title="Edit value" style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",padding:"2px 3px",lineHeight:1}}>✎</button>
-                                </div>
-                              )}
-                              {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {selCD.co.length>0&&(
-                      <div className="card" style={{padding:14}}>
-                        <Lbl s={{marginBottom:10}}>Orders</Lbl>
-                        {selCD.co.map(o=>(
-                          <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{o.stage}</span></div>
-                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
+                  <div style={{background:B.surface,borderRadius:6,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${B.border}`}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals or orders yet</span>
+                    <OBtn sm onClick={()=>setCrmTab("deal")}>+ START DEAL</OBtn>
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {crmTab==="discovery"&&(
               <div>
@@ -3372,6 +3492,28 @@ function ModCRM() {
                     </>
                   ):<div style={{textAlign:"center",padding:"20px 0",color:B.muted,fontSize:11}}><OBtn onClick={()=>setCrmTab("deal")}>Create a deal first →</OBtn></div>}
                 </div>
+                {/* Past quotes across all deals */}
+                {(()=>{
+                  const pastDeals=(s.deals||[]).filter(d=>d.contactId===sel.id&&d.quoteNumber);
+                  if(pastDeals.length===0) return null;
+                  return(
+                    <div className="card" style={{padding:14}}>
+                      <Lbl s={{marginBottom:10}}>Quote History</Lbl>
+                      {pastDeals.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).map(d=>(
+                        <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{d.quoteNumber||"—"}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.stage||""}{d.quoteAmount?` · ${fmt$(d.quoteAmount)}`:""}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:d.stage==="Closed Won"?B.green:d.stage==="Closed Lost"?"#ef4444":B.orange,fontWeight:600}}>{d.quoteAmount?fmt$(d.quoteAmount):""}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.updatedAt?new Date(d.updatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):""}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               );
             })()}
@@ -3410,40 +3552,80 @@ function ModCRM() {
               </div>
             )}
 
-            {crmTab==="notes"&&(
+            {crmTab==="history"&&(()=>{
+              const srcMeta={
+                note:{label:"NOTE",color:B.orange,icon:"📝"},
+                deal:{label:"DEAL NOTE",color:B.blue,icon:"💼"},
+                touch:{label:"TOUCH",color:B.green,icon:"🤝"},
+                email:{label:"EMAIL",color:B.purple||"#7c3aed",icon:"✉️"},
+                campaign:{label:"CAMPAIGN",color:"#0ea5e9",icon:"⚡"},
+                quote:{label:"QUOTE",color:"#f59e0b",icon:"📄"},
+                order:{label:"ORDER",color:"#10b981",icon:"🏆"},
+              };
+              const allEvents=[
+                ...(sel.notes||[]).map(n=>({...n,src:"note"})),
+                ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
+                ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note||t.type,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
+                ...(sel.activity||[]).filter(a=>a.type==="email"||a.type==="email_sent"||a.type==="email_opened").map(a=>({id:a.id||mkId(),text:a.subject||a.text||"Email sent",ts:a.ts||a.sentAt||Date.now(),author:a.author||a.from||"",src:"email",meta:a.status})),
+                ...(sel.campaigns||[]).map(c=>({id:c.id||mkId(),text:`Added to campaign: ${c.name||c.campaignId||""}`,ts:c.addedAt||Date.now(),author:"System",src:"campaign"})),
+                ...(activeDeal?.quotes||[]).map(q=>({id:q.id,text:`Quote sent — ${q.title||"Untitled"} (${q.status||"draft"})`,ts:q.createdAt||Date.now(),author:q.author||"",src:"quote"})),
+                ...(s.orders||[]).filter(o=>o.contactId===sel.id).map(o=>({id:o.id,text:`Order ${o.status||"placed"} — ${o.title||"Order"}`,ts:o.createdAt||Date.now(),author:"",src:"order"})),
+              ].sort((a,b)=>b.ts-a.ts);
+              return(
               <div>
-                <div style={{display:"flex",gap:6,marginBottom:14}}>
-                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                {/* Add note */}
+                <div style={{display:"flex",gap:6,marginBottom:16}}>
+                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note about this contact…" rows={2}
+                    style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
                   <OBtn sm col={B.orange} onClick={()=>{
                     if(!noteText.trim()) return;
                     const nt=noteText.trim();
                     dispatch("UPDATE_CONTACT",{id:sel.id,notes:[...(sel.notes||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
                     if(activeDeal) dispatch("UPDATE_DEAL",{id:activeDeal.id,notes_list:[...(activeDeal.notes_list||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
-                    crmAddNote("Leads",sel.zohoId,nt);
+                    if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,nt);}
                     setNoteText("");toast("Note added","success");
                   }}>ADD</OBtn>
                 </div>
-                {[
-                  ...(sel.notes||[]).map(n=>({...n,src:"contact"})),
-                  ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
-                  ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
-                ].sort((a,b)=>b.ts-a.ts).map(n=>(
-                  <div key={n.id} style={{display:"flex",gap:10,padding:"9px 0",borderBottom:`1px solid ${B.border}`}}>
-                    <div style={{width:7,height:7,borderRadius:"50%",background:{contact:B.orange,deal:B.blue,touch:B.green}[n.src]||B.muted,marginTop:4,flexShrink:0}}/>
-                    <div style={{flex:1}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{n.text}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>
-                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:{contact:B.orange,deal:B.blue,touch:B.green}[n.src],marginRight:6}}>{n.src.toUpperCase()}</span>
-                        {new Date(n.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} · {n.author}
-                      </div>
-                    </div>
+                {/* Timeline */}
+                {allEvents.length===0?(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>📋</div>
+                    No history yet — add a note or send a quote to get started
                   </div>
-                ))}
-                {(sel.notes||[]).length===0&&(activeDeal?.notes_list||[]).length===0&&(activeDeal?.touchHistory||[]).length===0&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"30px 0"}}>No notes yet</div>
+                ):(
+                  <div style={{position:"relative"}}>
+                    <div style={{position:"absolute",left:11,top:0,bottom:0,width:2,background:B.border,borderRadius:2}}/>
+                    {allEvents.map((ev,i)=>{
+                      const sm=srcMeta[ev.src]||{label:ev.src.toUpperCase(),color:B.muted,icon:"•"};
+                      return(
+                      <div key={ev.id||i} style={{display:"flex",gap:14,paddingBottom:16,position:"relative"}}>
+                        <div style={{width:24,height:24,borderRadius:"50%",background:B.white,border:`2px solid ${sm.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0,zIndex:1}}>
+                          {sm.icon}
+                        </div>
+                        <div style={{flex:1,background:B.surface,borderRadius:6,padding:"8px 12px",border:`1px solid ${B.border}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:3}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sm.color,letterSpacing:1,fontWeight:700}}>{sm.label}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,whiteSpace:"nowrap"}}>
+                              {new Date(ev.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                            </span>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{ev.text}</div>
+                          {(ev.author||ev.meta)&&(
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>
+                              {ev.author&&<span>{ev.author}</span>}
+                              {ev.author&&ev.meta&&<span> · </span>}
+                              {ev.meta&&<span style={{color:ev.meta==="opened"?B.green:B.muted}}>{ev.meta}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
