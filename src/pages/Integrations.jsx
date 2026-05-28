@@ -134,6 +134,9 @@ export default function IntegrationsHub() {
   const [adsLoading, setAdsLoading] = useState(false);
   const [instStatus, setInstStatus] = useState(null);
   const [instCampaigns, setInstCampaigns] = useState([]);
+  const [lsEmbedUrl, setLsEmbedUrl]   = useState(() => { try { return localStorage.getItem("st1_ls_embed")||""; } catch { return ""; } });
+  const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
+  const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
 
   // Zoho Social
   const [socialPortals, setSocialPortals] = useState([]);
@@ -1775,218 +1778,13 @@ Channel: ${slackChannelName}`);
           )}
 
           {/* ── ADS ── */}
-          {tab==="ads"&&(()=>{
-            if(!adsLoading&&!adsStatus.ts&&Object.keys(adsStatus).length<2) loadAdsStatus();
-            const AD_PLATFORMS = [
-              {
-                key:"meta", label:"Meta Ads", icon:"📘", color:"#1877F2",
-                desc:"Facebook & Instagram campaigns, retargeting, lookalike audiences",
-                envVars:[
-                  ["META_ACCESS_TOKEN","Long-lived access token from Meta Business Manager → System Users"],
-                  ["META_AD_ACCOUNT_ID","Your ad account ID — found in Meta Ads Manager URL (act_XXXXXXXX)"],
-                ],
-                setup:[
-                  "Go to business.facebook.com → Settings → System Users → Add",
-                  "Grant the system user 'Advertiser' access to your ad account",
-                  "Generate a token with ads_management + ads_read permissions",
-                  "Add META_ACCESS_TOKEN and META_AD_ACCOUNT_ID to Vercel env vars",
-                ],
-              },
-              {
-                key:"google", label:"Google Ads", icon:"🔍", color:"#4285F4",
-                desc:"Search, Display, Shopping, YouTube ads + Performance Max campaigns",
-                envVars:[
-                  ["GOOGLE_ADS_CLIENT_ID","OAuth 2.0 client ID from console.cloud.google.com"],
-                  ["GOOGLE_ADS_CLIENT_SECRET","OAuth 2.0 client secret"],
-                  ["GOOGLE_ADS_REFRESH_TOKEN","Refresh token from Google OAuth flow"],
-                  ["GOOGLE_ADS_DEVELOPER_TOKEN","From Google Ads API Center → apply for basic access"],
-                  ["GOOGLE_ADS_CUSTOMER_ID","Your 10-digit Google Ads customer ID (xxx-xxx-xxxx)"],
-                ],
-                setup:[
-                  "Enable Google Ads API in console.cloud.google.com → APIs & Services",
-                  "Create OAuth 2.0 credentials → Web application → add your domain",
-                  "Apply for developer token: Google Ads account → Tools → API Center",
-                  "Run OAuth flow to get refresh token; add all 5 env vars to Vercel",
-                ],
-              },
-              {
-                key:"linkedin", label:"LinkedIn Ads", icon:"💼", color:"#0A66C2",
-                desc:"B2B targeting by job title, company, seniority — great for athletic directors",
-                envVars:[
-                  ["LINKEDIN_ACCESS_TOKEN","Access token from LinkedIn Campaign Manager → Advertise → API"],
-                  ["LINKEDIN_AD_ACCOUNT_ID","Your Campaign Manager account ID (found in URL)"],
-                  ["LINKEDIN_CLIENT_ID","Optional: for OAuth refresh flow"],
-                  ["LINKEDIN_CLIENT_SECRET","Optional: for OAuth refresh flow"],
-                  ["LINKEDIN_REFRESH_TOKEN","Optional: for token auto-refresh"],
-                ],
-                setup:[
-                  "Go to LinkedIn Marketing Developer Platform — create an app",
-                  "Request Marketing Developer Platform access for your app",
-                  "Generate an access token with r_ads + rw_ads permissions",
-                  "Find your account ID in Campaign Manager (URL: /campaignmanager/accounts/XXXXXXXXX)",
-                ],
-              },
-              {
-                key:"tiktok", label:"TikTok Ads", icon:"🎵", color:"#010101",
-                desc:"Short-form video ads via TikTok for Business — awareness + product demos",
-                envVars:[
-                  ["TIKTOK_ACCESS_TOKEN","Access token from TikTok Business Center → Developer Portal"],
-                  ["TIKTOK_ADVERTISER_ID","Your advertiser account ID from TikTok Ads Manager"],
-                ],
-                setup:[
-                  "Go to ads.tiktok.com → Tools → Developer Portal → Create App",
-                  "Get APP_ID and SECRET, complete business verification",
-                  "Generate access token with ad_manager:read + ad_manager:write scopes",
-                  "Find advertiser ID in TikTok Ads Manager URL",
-                ],
-              },
-              {
-                key:"microsoft", label:"Microsoft Ads", icon:"🔷", color:"#00A4EF",
-                desc:"Bing Search, Microsoft Audience Network — often lower CPC than Google",
-                envVars:[
-                  ["MICROSOFT_ADS_CLIENT_ID","OAuth app client ID from apps.dev.microsoft.com"],
-                  ["MICROSOFT_ADS_CLIENT_SECRET","OAuth app client secret"],
-                  ["MICROSOFT_ADS_REFRESH_TOKEN","Refresh token from Microsoft OAuth flow"],
-                  ["MICROSOFT_ADS_DEVELOPER_TOKEN","From Microsoft Advertising → Tools → API Access"],
-                  ["MICROSOFT_ADS_CUSTOMER_ID","Your customer ID (found in Microsoft Ads UI → top right)"],
-                  ["MICROSOFT_ADS_ACCOUNT_ID","Your account ID (found in Microsoft Ads URL)"],
-                ],
-                setup:[
-                  "Register an app at apps.dev.microsoft.com → Add a platform → Web",
-                  "Request developer token at ads.microsoft.com → Tools → API Access",
-                  "Run OAuth flow (scope: https://ads.microsoft.com/msads.manage) for refresh token",
-                  "Add all 6 env vars to Vercel and redeploy",
-                ],
-              },
-              {
-                key:"ga4", label:"Google Analytics 4", icon:"📊", color:"#E37400",
-                desc:"Website analytics, conversion tracking, attribution — reuses Google Ads OAuth",
-                envVars:[
-                  ["GA4_PROPERTY_ID","Your GA4 property ID — found in GA4 → Admin → Property Details"],
-                  ["GOOGLE_ANALYTICS_CLIENT_ID","GA-specific OAuth client (or reuses GOOGLE_ADS_CLIENT_ID)"],
-                  ["GOOGLE_ANALYTICS_CLIENT_SECRET","GA-specific OAuth secret (or reuses GOOGLE_ADS_CLIENT_SECRET)"],
-                  ["GOOGLE_ANALYTICS_REFRESH_TOKEN","GA-specific refresh token (or reuses GOOGLE_ADS_REFRESH_TOKEN)"],
-                ],
-                setup:[
-                  "Enable Google Analytics Data API in console.cloud.google.com",
-                  "Add GA4_PROPERTY_ID to Vercel (find in GA4 → Admin → Property Settings)",
-                  "If Google Ads OAuth is already set up, those credentials will reuse automatically",
-                  "Otherwise create separate OAuth credentials and add the 3 GOOGLE_ANALYTICS_* vars",
-                ],
-              },
-            ];
-            return (
-              <div className="fu">
-                <div style={{marginBottom:20}}>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>AD PLATFORMS</div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Connect paid advertising accounts — Meta, Google, LinkedIn, TikTok, Microsoft, GA4</div>
-                  <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
-                </div>
-
-                {/* Status summary */}
-                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
-                    {AD_PLATFORMS.map(p=>{
-                      const s = adsStatus[p.key];
-                      const ok = s?.status==="connected";
-                      const missing = !s||s.status==="missing_key";
-                      const err = s?.status==="error";
-                      return (
-                        <div key={p.key} style={{display:"flex",alignItems:"center",gap:5}}>
-                          <div style={{width:8,height:8,borderRadius:"50%",background:ok?B.green:err?"#f97316":B.muted,flexShrink:0}}/>
-                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:ok?B.green:err?"#f97316":B.muted}}>{p.label}</span>
-                          {ok&&s.name&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>· {s.name}</span>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <OBtn sm onClick={loadAdsStatus} disabled={adsLoading}>{adsLoading?"CHECKING...":"↻ CHECK ALL"}</OBtn>
-                </div>
-
-                {/* Platform cards */}
-                <div style={{display:"flex",flexDirection:"column",gap:14}}>
-                  {AD_PLATFORMS.map(p=>{
-                    const s = adsStatus[p.key];
-                    const ok = s?.status==="connected";
-                    const err = s?.status==="error";
-                    const missing = !s||s.status==="missing_key";
-                    return (
-                      <div key={p.key} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${ok?B.green:err?"#f97316":p.color}`}}>
-                        {/* Header */}
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
-                          <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                            <div style={{width:36,height:36,background:`${p.color}14`,borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>{p.icon}</div>
-                            <div>
-                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>{p.label}</div>
-                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{p.desc}</div>
-                            </div>
-                          </div>
-                          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0}}>
-                            {ok&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:10,letterSpacing:.5}}>✓ CONNECTED{s.name?` · ${s.name}`:""}</span>}
-                            {err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#f97316",background:"#fff7ed",padding:"3px 8px",borderRadius:10,letterSpacing:.5}}>⚠ ERROR</span>}
-                            {missing&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:10,letterSpacing:.5}}>NOT CONFIGURED</span>}
-                          </div>
-                        </div>
-
-                        {/* Error message */}
-                        {err&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#f97316",background:"#fff7ed",borderRadius:5,padding:"7px 11px",marginBottom:10}}>
-                          {s.message?.slice(0,160)}
-                        </div>}
-
-                        {/* Env vars */}
-                        <div style={{background:B.surface,borderRadius:6,padding:11,marginBottom:10,border:`1px solid ${B.border}`}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>VERCEL ENV VARS REQUIRED</div>
-                          {p.envVars.map(([k,hint])=>(
-                            <div key={k} style={{display:"flex",gap:10,padding:"3px 0",borderBottom:`1px solid ${B.border}`,alignItems:"baseline",flexWrap:"wrap"}}>
-                              <span style={{fontFamily:"monospace",fontSize:10,color:p.color,minWidth:260,flexShrink:0}}>{k}</span>
-                              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{hint}</span>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Setup steps (collapsed by default) */}
-                        {missing&&(
-                          <details style={{marginBottom:4}}>
-                            <summary style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:1.5,cursor:"pointer",listStyle:"none",display:"flex",alignItems:"center",gap:6}}>
-                              <span>▸</span> SETUP GUIDE
-                            </summary>
-                            <div style={{marginTop:8,paddingLeft:4}}>
-                              {p.setup.map((step,i)=>(
-                                <div key={i} style={{display:"flex",gap:9,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
-                                  <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,minWidth:16,flexShrink:0}}>{i+1}</span>
-                                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{step}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </details>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Attribution + Alerts note */}
-                <div style={{marginTop:16,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:8,padding:14}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:8}}>WHAT'S AVAILABLE ONCE CONNECTED</div>
-                  {[
-                    ["Performance dashboard","Revenue, ROAS, spend, CTR, impressions across all platforms in one view (RevOps → Ads section)"],
-                    ["Budget alerts","Automatic Slack alerts when a campaign overspends or ROAS drops below target"],
-                    ["Pause/resume campaigns","Control campaign status directly from RevOps without logging into each platform"],
-                    ["Attribution","Match ad spend to closed deals — see which campaigns drive actual B2B revenue"],
-                    ["UTM tracking","Auto-generate and track UTM parameters across all campaigns"],
-                  ].map(([label,desc])=>(
-                    <div key={label} style={{display:"flex",gap:8,padding:"5px 0",borderBottom:`1px solid ${B.orange}20`}}>
-                      <span style={{color:B.orange,flexShrink:0,marginTop:1}}>✦</span>
-                      <div>
-                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{label}</span>
-                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:6}}>{desc}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+          {tab==="ads"&&<AdsTab
+            adsStatus={adsStatus} adsLoading={adsLoading} loadAdsStatus={loadAdsStatus}
+            lsEmbedUrl={lsEmbedUrl} setLsEmbedUrl={v=>{setLsEmbedUrl(v);try{localStorage.setItem("st1_ls_embed",v);}catch{}}}
+            adLinks={adLinks} setAdLinks={v=>{setAdLinks(v);try{localStorage.setItem("st1_ad_links",JSON.stringify(v));}catch{}}}
+            adMetrics={adMetrics} setAdMetrics={v=>{setAdMetrics(v);try{localStorage.setItem("st1_ad_metrics",JSON.stringify(v));}catch{}}}
+            B={B} OBtn={OBtn}
+          />}
 
           {/* ── AI TOOLS ── */}
           {tab==="tools"&&(
@@ -2069,6 +1867,242 @@ Channel: ${slackChannelName}`);
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── AD PLATFORMS TAB ────────────────────────────────────────────────────────
+function AdsTab({adsStatus,adsLoading,loadAdsStatus,lsEmbedUrl,setLsEmbedUrl,adLinks,setAdLinks,adMetrics,setAdMetrics,B,OBtn}) {
+  const PLATFORMS = [
+    {key:"meta",     label:"Meta Ads",       icon:"📘", color:"#1877F2", defaultUrl:"https://adsmanager.facebook.com/adsmanager/reporting/view", desc:"Facebook & Instagram"},
+    {key:"google",   label:"Google Ads",     icon:"🔍", color:"#4285F4", defaultUrl:"https://ads.google.com/aw/overview", desc:"Search, Display, Shopping"},
+    {key:"linkedin", label:"LinkedIn Ads",   icon:"💼", color:"#0A66C2", defaultUrl:"https://www.linkedin.com/campaignmanager/", desc:"B2B audience targeting"},
+    {key:"tiktok",   label:"TikTok Ads",     icon:"🎵", color:"#010101", defaultUrl:"https://ads.tiktok.com/i18n/dashboard", desc:"Short-form video ads"},
+    {key:"microsoft",label:"Microsoft Ads",  icon:"🔷", color:"#00A4EF", defaultUrl:"https://ui.ads.microsoft.com/campaign/vnext/overview", desc:"Bing Search"},
+    {key:"ga4",      label:"Google Analytics",icon:"📊",color:"#E37400", defaultUrl:"https://analytics.google.com/", desc:"Website analytics & attribution"},
+  ];
+  const METRIC_FIELDS = [
+    {k:"spend",  label:"Spend",   prefix:"$", suffix:""},
+    {k:"roas",   label:"ROAS",    prefix:"",  suffix:"x"},
+    {k:"leads",  label:"Leads",   prefix:"",  suffix:""},
+    {k:"clicks", label:"Clicks",  prefix:"",  suffix:""},
+  ];
+  const [editMetrics, setEditMetrics] = useState(null);
+  const [apiOpen, setApiOpen]         = useState(false);
+
+  const API_VARS = [
+    {key:"meta",      color:"#1877F2", vars:["META_ACCESS_TOKEN","META_AD_ACCOUNT_ID"], note:"Requires Meta developer app + System User. See developers.facebook.com."},
+    {key:"google",    color:"#4285F4", vars:["GOOGLE_ADS_CLIENT_ID","GOOGLE_ADS_CLIENT_SECRET","GOOGLE_ADS_REFRESH_TOKEN","GOOGLE_ADS_DEVELOPER_TOKEN","GOOGLE_ADS_CUSTOMER_ID"], note:"Apply for developer token at ads.google.com → Tools → API Center."},
+    {key:"linkedin",  color:"#0A66C2", vars:["LINKEDIN_ACCESS_TOKEN","LINKEDIN_AD_ACCOUNT_ID"], note:"Create LinkedIn Marketing Developer Platform app at developer.linkedin.com."},
+    {key:"tiktok",    color:"#010101", vars:["TIKTOK_ACCESS_TOKEN","TIKTOK_ADVERTISER_ID"], note:"Create TikTok for Business app at ads.tiktok.com → Tools → Developer Portal."},
+    {key:"microsoft", color:"#00A4EF", vars:["MICROSOFT_ADS_CLIENT_ID","MICROSOFT_ADS_CLIENT_SECRET","MICROSOFT_ADS_REFRESH_TOKEN","MICROSOFT_ADS_DEVELOPER_TOKEN","MICROSOFT_ADS_CUSTOMER_ID","MICROSOFT_ADS_ACCOUNT_ID"], note:"Register app at apps.dev.microsoft.com; request developer token at ads.microsoft.com."},
+    {key:"ga4",       color:"#E37400", vars:["GA4_PROPERTY_ID","GOOGLE_ANALYTICS_REFRESH_TOKEN"], note:"Enable Analytics Data API in console.cloud.google.com. Reuses Google Ads OAuth creds if already set."},
+  ];
+
+  return (
+    <div className="fu">
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>AD PLATFORMS</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Quick access to your ad dashboards · report embed · manual KPI tracking</div>
+        <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
+      </div>
+
+      {/* ── SECTION 1: PLATFORM QUICK LINKS ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>QUICK LINKS — OPEN YOUR AD DASHBOARDS</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+          Paste in your account-specific URLs (or use the defaults). Opens the platform's native reporting in a new tab — no API setup needed.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
+          {PLATFORMS.map(p=>{
+            const apiOk = adsStatus[p.key]?.status==="connected";
+            const url = adLinks[p.key]||p.defaultUrl;
+            return (
+              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:16}}>{p.icon}</span>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.desc}</div>
+                    </div>
+                  </div>
+                  {apiOk&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:8,flexShrink:0}}>API ✓</span>}
+                </div>
+                <input
+                  value={adLinks[p.key]||""}
+                  onChange={e=>setAdLinks({...adLinks,[p.key]:e.target.value})}
+                  placeholder={p.defaultUrl}
+                  style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:10,fontFamily:"monospace",marginBottom:8}}
+                />
+                <a href={url} target="_blank" rel="noreferrer"
+                  style={{display:"block",background:p.color,color:"#fff",textDecoration:"none",textAlign:"center",borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5}}>
+                  OPEN {p.label.toUpperCase()} →
+                </a>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── SECTION 2: LOOKER STUDIO EMBED ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #4285F4"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>LOOKER STUDIO REPORT EMBED</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Free · No developer account needed · Connects Meta, Google, LinkedIn and more via built-in connectors</div>
+          </div>
+          <a href="https://lookerstudio.google.com" target="_blank" rel="noreferrer"
+            style={{background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",flexShrink:0}}>
+            OPEN LOOKER STUDIO ↗
+          </a>
+        </div>
+
+        <div style={{background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"10px 12px",marginBottom:12}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1.5,marginBottom:5}}>WHY LOOKER STUDIO</div>
+          <div style={{display:"flex",flexDirection:"column",gap:3,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
+            <div>→ <strong>No developer app needed</strong> — connects with your normal Google/Meta/LinkedIn login</div>
+            <div>→ Free Google product — create reports that pull live data from every ad platform</div>
+            <div>→ Paste the share URL below and the report embeds directly here</div>
+          </div>
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>LOOKER STUDIO REPORT EMBED URL</div>
+          <div style={{display:"flex",gap:8}}>
+            <input
+              value={lsEmbedUrl}
+              onChange={e=>setLsEmbedUrl(e.target.value)}
+              placeholder="https://lookerstudio.google.com/embed/reporting/XXXXXXXX/page/XXXXXXXX"
+              style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"monospace"}}
+            />
+            {lsEmbedUrl&&<button onClick={()=>setLsEmbedUrl("")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"0 10px",fontSize:11,cursor:"pointer"}}>✕</button>}
+          </div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>
+            In Looker Studio: File → Share → Embed report → copy the <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>src</code> URL from the iframe code
+          </div>
+        </div>
+
+        {lsEmbedUrl ? (
+          <div style={{borderRadius:6,overflow:"hidden",border:`1px solid ${B.border}`,background:B.surface}}>
+            <iframe src={lsEmbedUrl} width="100%" height="600" frameBorder="0" allowFullScreen
+              style={{display:"block"}}
+              sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"/>
+          </div>
+        ) : (
+          <div style={{background:B.surface,borderRadius:6,padding:"30px 0",textAlign:"center",border:`1px solid ${B.border}`}}>
+            <div style={{fontSize:28,marginBottom:8}}>📊</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Paste your Looker Studio embed URL above to show the report here</div>
+          </div>
+        )}
+      </div>
+
+      {/* ── SECTION 3: MANUAL KPI TRACKING ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:4}}>MANUAL KPI TRACKING</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14}}>
+          Copy numbers from each platform and paste them here for a quick weekly snapshot.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {PLATFORMS.filter(p=>p.key!=="ga4").map(p=>{
+            const m = adMetrics[p.key]||{};
+            const isEditing = editMetrics===p.key;
+            return (
+              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isEditing?10:0}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span>{p.icon}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</span>
+                  </div>
+                  {!isEditing&&(
+                    <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                      {METRIC_FIELDS.filter(f=>m[f.k]).map(f=>(
+                        <div key={f.k} style={{textAlign:"right"}}>
+                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:p.color}}>{f.prefix}{m[f.k]}{f.suffix}</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{f.label.toUpperCase()}</div>
+                        </div>
+                      ))}
+                      <button onClick={()=>setEditMetrics(p.key)}
+                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>
+                        {Object.keys(m).length?"EDIT":"+ ADD"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {isEditing&&(
+                  <div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
+                      {METRIC_FIELDS.map(f=>(
+                        <div key={f.k}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:3}}>{f.label.toUpperCase()}</div>
+                          <input
+                            value={m[f.k]||""}
+                            onChange={e=>setAdMetrics({...adMetrics,[p.key]:{...m,[f.k]:e.target.value}})}
+                            placeholder={f.prefix+"0"+f.suffix}
+                            style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:7}}>
+                      <OBtn sm onClick={()=>setEditMetrics(null)}>SAVE</OBtn>
+                      <button onClick={()=>{const n={...adMetrics};delete n[p.key];setAdMetrics(n);setEditMetrics(null);}}
+                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
+                        clear
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── SECTION 4: API INTEGRATION (ADVANCED) ── */}
+      <details style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8}}>
+        <summary style={{padding:16,cursor:"pointer",listStyle:"none",display:"flex",justifyContent:"space-between",alignItems:"center"}}
+          onClick={()=>setApiOpen(o=>!o)}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>API INTEGRATION (ADVANCED)</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>For automated data pulls, budget control, and Slack alerts — requires developer app setup per platform</div>
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <OBtn sm onClick={e=>{e.stopPropagation();loadAdsStatus();}} disabled={adsLoading}>{adsLoading?"...":"↻ TEST ALL"}</OBtn>
+            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{apiOpen?"▲ COLLAPSE":"▸ EXPAND"}</span>
+          </div>
+        </summary>
+        <div style={{padding:"0 16px 16px"}}>
+          <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"9px 12px",marginBottom:14,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+            <strong>Note:</strong> Meta requires creating a Facebook developer app (free at developers.facebook.com) and getting a System User token — typically takes 15–30 min. Other platforms have similar requirements. For read-only results, the Looker Studio embed above is easier.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {API_VARS.map(p=>{
+              const s=adsStatus[p.key];
+              const ok=s?.status==="connected";
+              const err=s?.status==="error";
+              return (
+                <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,borderLeft:`3px solid ${ok?B.green:err?"#f97316":p.color}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>
+                      {PLATFORMS.find(pl=>pl.key===p.key)?.icon} {PLATFORMS.find(pl=>pl.key===p.key)?.label}
+                    </span>
+                    {ok&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:8}}>✓ CONNECTED{s.name?` · ${s.name}`:""}</span>}
+                    {err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#f97316",background:"#fff7ed",padding:"2px 7px",borderRadius:8}}>⚠ {s.message?.slice(0,60)}</span>}
+                    {!ok&&!err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"2px 7px",borderRadius:8,border:`1px solid ${B.border}`}}>NOT SET</span>}
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
+                    {p.vars.map(v=>(
+                      <code key={v} style={{fontFamily:"monospace",fontSize:9,color:p.color,background:`${p.color}10`,padding:"2px 6px",borderRadius:3,border:`1px solid ${p.color}30`}}>{v}</code>
+                    ))}
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{p.note}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
