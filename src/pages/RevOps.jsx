@@ -564,7 +564,7 @@ const RSC = {
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
+const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches. Brand voice: warm/direct, athlete-first, relationship before product. Owns: Human Contact ("I pick up the phone"), All-Sport Breadth, Exclusive Culture (graphic tee drops). Avoid efficiency-first hooks, corporate tone, generic inspiration.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
 const STATES_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const US_REGIONS = {
@@ -1810,6 +1810,7 @@ function ModHome() {
         items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
+      brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "I'm Matt, I pick up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, first-person, short sentences, athlete-aware. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
     };
 
     try{
@@ -2785,7 +2786,7 @@ function ModCRM() {
   const doDraftEmail=async()=>{
     if(!sel||!activeDeal) return;
     setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line.`);
+    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as "— Matt" or full sig.`);
     setDraft(t||"");setDrafting(false);
   };
 
@@ -4209,7 +4210,7 @@ function ModDeals() {
 Deal: ${sel_d.name} | Contact: ${sel_d.contact} at ${sel_d.school}, ${sel_d.state}
 Stage: ${sel_d.stage} | Value: ${fmt$(sel_d.value)} | Notes: ${sel_d.notes}
 Recent touches: ${(sel_d.touchHistory||[]).slice(-2).map(t=>t.note).join("; ")}
-Under 80 words. Include subject line. Warm tone.`);
+Under 80 words. Include subject line. Brand voice: warm, direct, relationship-first — lead with the person or their program, not the product. No "hope this finds you well", no efficiency-first hooks ("2 weeks", "no minimums"). Athlete-aware tone. Sign as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
   const pipe=pool.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
@@ -5005,7 +5006,7 @@ function ModReorder() {
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
 Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
 ${draftPrompt(r)}
-Under 80 words. Reference the exact last order. Warm, direct tone. Sign off as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
+Under 80 words. Reference the exact last order. Brand voice: warm, direct, athlete-aware — reference the sport, the team, or the season coming up. No "hope this finds you well", no efficiency-first hooks. Lead with the relationship, then the reorder reason. Sign as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
     setDrafts(d=>({...d,[r.id]:t||""}));
     setDrafting(null);
   };

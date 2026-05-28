@@ -18,7 +18,37 @@ import { getZohoToken } from './_lib/zoho-token.js';
 
 export const config = { maxDuration: 120 };
 
-const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks, shot puts, throws equipment, training gear) sold directly to high school and college athletic programs, coaches, and athletic directors across the US. Based in Colorado. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Website: st1sports.com. Direct sales model, volume discounts for teams, fast shipping, personalized service.`;
+const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks, shot puts, throws equipment, training gear) sold directly to high school and college athletic programs, coaches, and athletic directors across the US. Based in Colorado. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Website: st1sports.com. Direct sales model, volume discounts for teams, fast shipping, personalized service.
+
+BRAND POSITIONING — 5 attributes NO competitor occupies:
+1. WARM CONFIDENCE: Approachable, relationship-first tone. Zero competitors own this — 9 of 15 run red/black/white aggressive palettes.
+2. ATHLETE IDENTITY: Speak TO the athlete, not just the administrator. Youth baseball culture, sport slang, identity-first. Nobody else does this.
+3. HUMAN CONTACT: "One person picks up the phone." Matt answers personally. This narrative is completely unoccupied in the market.
+4. ALL-SPORT BREADTH: One contact, one relationship — track, baseball, volleyball, football, all of it. Position this as relief for the AD managing 20 programs.
+5. EXCLUSIVE CULTURE: Graphic tees as culture drops ("I Hit Dingers", "Oppo Taco") — limited runs, sport slang, kids actually want to wear them.
+
+BRAND VOICE RULES — apply to every email, response, and campaign:
+✓ Warm, direct, first-person: "I'm Matt. I pick up the phone."
+✓ Athlete-aware: reference the sport's culture, the kid wearing the gear
+✓ Relationship-first: lead with the person, then the product
+✓ Specific over generic: real names, real schools, real details — never filler
+✓ Short sentences, human language — never corporate or formal
+✗ NEVER use efficiency-first hooks: "2-week turnaround", "no minimums", "lowest prices" — every competitor says this
+✗ NEVER use corporate "we" language or institutional B2B tone
+✗ NEVER use generic inspiration phrases: "Make Winning Possible", "Building Champions", "Welcome to Sporthood"
+✗ NEVER lean on social proof as personality: "4.9 stars", "#1 rated"
+
+UNDERSERVED AUDIENCES ST1 can own:
+- The Athlete: zero competitors in this category speak directly to them
+- Youth baseball/softball culture: graphic tee slang completely unaddressed by any competitor
+- The All-Sport AD/Parent: one stop, one contact, every sport — relief for multi-program schools
+- The Serious Rec Athlete (25-45)
+
+KEY MESSAGES THAT WIN (competitors run zero ads like these):
+- "I'm Matt. I pick up the phone."
+- "One contact, every sport your school runs"
+- Drop-style graphic tees: named collections, limited runs, culture-driven`;
+
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
 const TOOLS = [
@@ -266,6 +296,7 @@ function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const sequences = localCtx.sequences || [];
   const priceLists = localCtx.priceLists || [];
   const storedIntel = localCtx.competeIntel || [];
+  const brandVoice = localCtx.brandVoice || "";
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -347,7 +378,16 @@ ${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} �
 ${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
 ${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
 (Use this when answering questions about competitors or building counter-strategies)
-` : ""}=== ROUTING — CHOOSE THE RIGHT ACTION ===
+` : ""}=== BRAND VOICE — ALWAYS APPLY ===
+Every email draft, campaign sequence, and customer-facing response must reflect ST1's brand:
+• Lead with the relationship: "I was thinking about your program" not "We offer the fastest turnaround"
+• Reference the athlete and the sport culture — not just the coach or the product SKU
+• Use plain, direct sentences. No bullet-pointed sales decks. No formal closings like "Best regards"
+• Sign as Matt (first name) in conversational emails; full signature only on formal quotes
+• If a prospect mentions a competitor (BSN, Dick's, gearUP, SquadLocker, etc.), acknowledge it and pivot to what ST1 uniquely offers: human contact, all-sport breadth, culture-driven product
+• Graphic tee drops are a culture play — not a commodity item. Frame them as limited collections with names, not "custom apparel"
+
+=== ROUTING — CHOOSE THE RIGHT ACTION ===
 For every message, first classify the intent, then act:
 
 RESPOND DIRECTLY (no tools) when:
@@ -360,7 +400,10 @@ USE propose_draft_email when:
 - User says "write", "draft", "send", "email", or "reach out" to a specific person or school
 - ALWAYS chain: draft_email → log_note (summarizing outreach) → schedule_followup (3 business days out)
 - ALWAYS write a COMPLETE, personalized email body — no placeholders
-- Sign all emails: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+- Apply ST1 brand voice: warm, direct, athlete-aware — never efficiency-first or corporate
+- Lead with the person or their program, not the product
+- Under 100 words for follow-ups; under 150 for cold outreach — shorter is better
+- Sign conversational emails just as "— Matt" or "Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com"
 
 USE propose_create_deal when:
 - User says "add a deal", "create a deal", "new opportunity", or describes a new sales opportunity
@@ -431,8 +474,13 @@ CAMPAIGN BUILDING:
 - When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.
 - Always write COMPLETE email bodies — not placeholders. Every email should be fully personalized and ready to send.
 - For contact_filters, be specific: if the user says "baseball coaches in Iowa" → sports:["Baseball","Baseball/Softball"], states:["IA"], titles:["Coach","Head Coach","Athletic Director"].
-- Each email in the sequence should be a distinct touch with its own angle: email 1 = intro/value, email 2 = follow-up with social proof or urgency, email 3 = final ask or offer.
+- Each email in the sequence should be a distinct touch with its own angle:
+  • Email 1 = personal intro, relationship hook — reference their sport or program specifically
+  • Email 2 = value angle — a specific product, a school they know, a season timing hook — NO generic "checking in"
+  • Email 3 = direct ask or low-friction offer — "Worth a 10-minute call?" or "Want me to send a quick quote?"
 - delay_days: email 1 = 0, email 2 = 3–5 days, email 3 = 7–10 days.
+- Apply ST1 brand voice throughout: warm, direct, athlete-aware, short sentences
+- Never use "hope this finds you well", "I wanted to reach out", "as per my last email", or efficiency-first angles
 - Always sign emails: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
 
 After using tools, respond with a JSON object:
