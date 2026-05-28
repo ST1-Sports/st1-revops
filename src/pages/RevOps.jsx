@@ -13807,19 +13807,37 @@ function PLUploadModal({onClose, onSave, existingLists}) {
         const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
         setLoadMsg("Extracting data with AI...");
         const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          model:"claude-sonnet-4-6",max_tokens:8000,
-          system:"Return ONLY valid JSON, no markdown.",
+          model:"claude-sonnet-4-6",max_tokens:16000,
+          system:"Return ONLY valid JSON, no markdown, no code fences.",
           messages:[{role:"user",content:[
             {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
             {type:"text",text:`Extract this supplier price list. Return JSON:
 {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,
  "products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]}
-cost = dealer/wholesale price. price = suggested sell price or null. map = MAP price or null.`}
+cost = dealer/wholesale price. price = suggested sell price or null. map = MAP price or null.
+Return ONLY the raw JSON object. No markdown. No explanation.`}
           ]}]
         })});
         const data=await resp.json();
-        const txt=(data.content?.[0]?.text||"").trim();
-        const parsed=JSON.parse(txt);
+        let txt=(data.content?.[0]?.text||"").trim();
+        // Strip markdown code fences if present
+        txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"").trim();
+        // If JSON is truncated, attempt to salvage by closing open arrays/objects
+        let parsed;
+        try{
+          parsed=JSON.parse(txt);
+        }catch{
+          // Find the last complete product entry and close the JSON
+          const lastComma=txt.lastIndexOf("},");
+          if(lastComma>0) txt=txt.slice(0,lastComma+1)+"]}`";
+          // Remove trailing comma before closing bracket if present
+          txt=txt.replace(/,\s*\]/, "]").replace(/,\s*\}/, "}");
+          // Try to close unclosed structure
+          const opens=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
+          const openb=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
+          txt+="]".repeat(Math.max(0,opens))+"}".repeat(Math.max(0,openb));
+          parsed=JSON.parse(txt);
+        }
         if(!name&&parsed.supplierName) setName(parsed.supplierName);
         if(!supplierName&&parsed.supplierName) setSupplierName(parsed.supplierName);
         if(!repName&&parsed.repName) setRepName(parsed.repName||"");
