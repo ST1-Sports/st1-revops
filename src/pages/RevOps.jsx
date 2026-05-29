@@ -13811,31 +13811,29 @@ function PLUploadModal({onClose, onSave, existingLists}) {
           system:"Return ONLY valid JSON, no markdown, no code fences.",
           messages:[{role:"user",content:[
             {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-            {type:"text",text:`Extract this supplier price list. Return JSON:
-{"supplierName":"","repName":null,"repEmail":null,"repPhone":null,
- "products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]}
-cost = dealer/wholesale price. price = suggested sell price or null. map = MAP price or null.
-Return ONLY the raw JSON object. No markdown. No explanation.`}
+            {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
           ]}]
         })});
         const data=await resp.json();
+        if(data.error) throw new Error(data.error);
         let txt=(data.content?.[0]?.text||"").trim();
+        if(!txt) throw new Error("AI returned empty response");
         // Strip markdown code fences if present
-        txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"").trim();
-        // If JSON is truncated, attempt to salvage by closing open arrays/objects
+        txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/,"").trim();
+        // Parse — if truncated, salvage complete entries
         let parsed;
         try{
           parsed=JSON.parse(txt);
         }catch{
-          // Find the last complete product entry and close the JSON
-          const lastComma=txt.lastIndexOf("},");
-          if(lastComma>0) txt=txt.slice(0,lastComma+1)+"]}`";
-          // Remove trailing comma before closing bracket if present
-          txt=txt.replace(/,\s*\]/, "]").replace(/,\s*\}/, "}");
-          // Try to close unclosed structure
-          const opens=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
-          const openb=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
-          txt+="]".repeat(Math.max(0,opens))+"}".repeat(Math.max(0,openb));
+          // Trim to the last fully-closed product object
+          const lastBrace=txt.lastIndexOf("}");
+          if(lastBrace>0) txt=txt.slice(0,lastBrace+1);
+          // Remove trailing comma before any bracket
+          txt=txt.replace(/,(\s*[}\]])/g,"$1");
+          // Close any unclosed arrays/objects
+          const openBrackets=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
+          const openBraces=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
+          txt+="]".repeat(Math.max(0,openBrackets))+"}".repeat(Math.max(0,openBraces));
           parsed=JSON.parse(txt);
         }
         if(!name&&parsed.supplierName) setName(parsed.supplierName);
