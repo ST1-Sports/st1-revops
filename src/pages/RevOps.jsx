@@ -13807,17 +13807,36 @@ function PLUploadModal({onClose, onSave, existingLists}) {
         const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
         setLoadMsg("Extracting data with AI...");
         const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          model:"claude-sonnet-4-6",max_tokens:16000,
+          model:"claude-sonnet-4-6",max_tokens:16000,stream:true,
           system:"Return ONLY valid JSON, no markdown, no code fences.",
           messages:[{role:"user",content:[
             {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
             {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
           ]}]
         })});
-        const data=await resp.json();
-        if(data.error) throw new Error(data.error);
-        let txt=(data.content?.[0]?.text||"").trim();
-        if(!txt) throw new Error("AI returned empty response");
+        if(!resp.ok){let e="API error";try{const j=await resp.json();e=j.error||e;}catch{}throw new Error(e);}
+        // Stream the SSE response and accumulate text
+        setLoadMsg("Extracting data with AI (this may take a minute for large files)...");
+        const reader=resp.body.getReader();const decoder=new TextDecoder();
+        let accumulated="";let buf="";
+        while(true){
+          const{done,value}=await reader.read();
+          if(done) break;
+          buf+=decoder.decode(value,{stream:true});
+          const lines=buf.split("\n");
+          buf=lines.pop()||"";
+          for(const line of lines){
+            if(!line.startsWith("data: ")) continue;
+            const raw=line.slice(6).trim();
+            if(!raw||raw==="[DONE]") continue;
+            try{
+              const ev=JSON.parse(raw);
+              if(ev.type==="content_block_delta"&&ev.delta?.type==="text_delta") accumulated+=ev.delta.text;
+            }catch{}
+          }
+        }
+        let txt=accumulated.trim();
+        if(!txt) throw new Error("AI returned empty response — the PDF may be too large or unsupported");
         // Strip markdown code fences if present
         txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/,"").trim();
         // Parse — if truncated, salvage complete entries
@@ -13825,12 +13844,9 @@ function PLUploadModal({onClose, onSave, existingLists}) {
         try{
           parsed=JSON.parse(txt);
         }catch{
-          // Trim to the last fully-closed product object
           const lastBrace=txt.lastIndexOf("}");
           if(lastBrace>0) txt=txt.slice(0,lastBrace+1);
-          // Remove trailing comma before any bracket
           txt=txt.replace(/,(\s*[}\]])/g,"$1");
-          // Close any unclosed arrays/objects
           const openBrackets=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
           const openBraces=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
           txt+="]".repeat(Math.max(0,openBrackets))+"}".repeat(Math.max(0,openBraces));

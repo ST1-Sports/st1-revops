@@ -2,6 +2,7 @@
  * Vercel Serverless Function: /api/claude
  *
  * Proxies requests to the Anthropic API.
+ * Supports both regular and streaming (stream:true) responses.
  * Uses Node.js runtime (not edge) so it can handle large PDF payloads.
  * Body size limit is set to 20MB to support base64-encoded PDFs.
  *
@@ -14,6 +15,7 @@ export const config = {
       sizeLimit: '20mb',
     },
   },
+  maxDuration: 120,
 }
 
 export default async function handler(req, res) {
@@ -29,28 +31,54 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'ANTHROPIC_KEY not configured in Vercel environment variables' })
   }
 
+  const body = req.body || {}
+  const isStream = body.stream === true
+
   try {
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type':    'application/json',
-        'x-api-key':       apiKey,
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
         'anthropic-version': '2023-06-01',
-        'anthropic-beta':  'mcp-client-2025-04-04,pdfs-2024-09-25',
+        'anthropic-beta':    'pdfs-2024-09-25',
       },
-      body: JSON.stringify(req.body),
+      body: JSON.stringify(body),
     })
 
-    const text = await upstream.text()
+    if (isStream) {
+      // Forward SSE stream directly to client — keeps connection alive during long generations
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('X-Accel-Buffering', 'no')
+      res.status(upstream.status)
 
+      if (!upstream.body) {
+        res.end()
+        return
+      }
+
+      const reader = upstream.body.getReader()
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          res.write(value)
+        }
+      } finally {
+        res.end()
+      }
+      return
+    }
+
+    // Non-streaming path (existing behaviour)
+    const text = await upstream.text()
     let data
     try {
       data = JSON.parse(text)
     } catch {
-      // Anthropic returned non-JSON — surface it clearly
       return res.status(upstream.status).json({ error: `Anthropic returned non-JSON: ${text.slice(0, 300)}` })
     }
-
     return res.status(upstream.status).json(data)
 
   } catch (err) {
