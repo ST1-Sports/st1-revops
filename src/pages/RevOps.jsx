@@ -7243,7 +7243,7 @@ function ModMarketing() {
       const listName=f.name.replace(/\.[^.]+$/,"");
       const newList={id:mkId(),name:listName,contactIds:contacts.map(c=>c.id),createdAt:Date.now(),source:"import"};
       dispatch("ADD_CONTACT_LIST",newList);
-      setCampDraft(c=>({...c,audienceListId:newList.id}));
+      setCampDraft(c=>({...c,audienceListId:newList.id,audienceMode:"list"}));
       toast(`Imported ${contacts.length} contacts as "${listName}"  `,"success");
     }catch(err){toast("Upload failed: "+err.message,"error");}
     setCampListUploading(false);
@@ -7453,10 +7453,13 @@ function ModMarketing() {
   };
 
   const saveCampaign = () => {
-    const types = campDraft?.assetTypes||[];
-    const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
     if(!campDraft) return;
-    if(types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching","error");return;}
+    const audienceModeCheck = campDraft.audienceMode||"ai";
+    const hasListSelected = audienceModeCheck==="list"&&campDraft.audienceListId;
+    const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
+    const types = campDraft?.assetTypes||[];
+    // Only block if no list and selected asset types but generated nothing — if they have a list, let them proceed and add email templates later
+    if(!hasListSelected&&types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching, or switch to FROM LIST mode to launch and add email templates later.","error");return;}
     const contacts = s.contacts||[];
     const todayStr = today();
     const startDate = campDraft.startDate||todayStr;
