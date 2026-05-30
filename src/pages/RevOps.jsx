@@ -11629,17 +11629,12 @@ function ModAlerts() {
   const sendToSlack=async(msg)=>{
     const ch=channel||"C0AQ7CMB01X";
     try{
-      const r=await fetch("/api/claude",{
+      const r=await fetch("/api/slack-message",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-6",max_tokens:200,
-          mcp_servers:[{type:"url",url:"https://mcp.slack.com/mcp",name:"slack"}],
-          messages:[{role:"user",content:`Send this exact message to Slack channel ${ch}:\n\n${msg}\n\nUse the slack_send_message tool with channel_id="${ch}". Reply with just "sent" when done.`}]
-        })
+        body:JSON.stringify({channel:ch,text:msg})
       });
       const d=await r.json();
-      const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").toLowerCase();
-      return text.includes("sent")||d.content?.some(b=>b.type==="tool_use");
+      return d.ok===true;
     }catch{return false;}
   };
 

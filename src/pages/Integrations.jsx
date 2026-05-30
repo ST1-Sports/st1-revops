@@ -407,34 +407,23 @@ export default function IntegrationsHub() {
     setTesting(null);
   };
 
-  // ── SLACK: SEND REAL MESSAGE via MCP ────────────────────────────────────────
-  // This calls the Anthropic API which uses the Slack MCP under the hood
+  // ── SLACK: SEND REAL MESSAGE via bot token ──────────────────────────────────
   const sendSlackAlert = async (msg, isTest=false) => {
     addLog(`Sending to ${slackChannelName}...`);
     try {
-      // Use Claude to actually send via Slack MCP
-      const r = await fetch("/api/claude",{
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-20250514", max_tokens:300,
-          mcp_servers:[{type:"url",url:"https://mcp.slack.com/mcp",name:"slack"}],
-          messages:[{role:"user",content:`Send this exact message to Slack channel ${slackChannel}:
-
-${msg}
-
-Use the slack_send_message tool with channel_id="${slackChannel}". Reply with just "sent" when done.`}]
-        })
+      const r = await fetch("/api/slack-message", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ channel: slackChannel, text: msg })
       });
       const d = await r.json();
-      const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-      if(text.toLowerCase().includes("sent")||d.content?.some(b=>b.type==="tool_use")) {
-        addLog(`✓ Message delivered to ${slackChannelName}`,"success");
+      if (d.ok) {
+        addLog(`✓ Message delivered to ${slackChannelName}`, "success");
         return true;
       }
-      addLog("Slack: message queued (check channel)","warn");
-      return true;
+      addLog(`Slack error: ${d.error || "unknown"}`, "error");
+      return false;
     } catch(e) {
-      addLog(`Slack error: ${e.message.slice(0,60)}`,"error");
+      addLog(`Slack error: ${e.message.slice(0,60)}`, "error");
       return false;
     }
   };
@@ -934,7 +923,7 @@ Channel: ${slackChannelName}`);
             <div className="fu">
               <div style={{marginBottom:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>SLACK</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Connected as Matt Stone · ST1 Sports workspace · No token needed — live via MCP</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>ST1 Sports workspace · Connected via SLACK_BOT_TOKEN</div>
                 <div style={{width:32,height:3,background:"#4A154B",marginTop:7,borderRadius:2}}/>
               </div>
 
