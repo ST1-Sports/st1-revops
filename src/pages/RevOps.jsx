@@ -8834,6 +8834,24 @@ function ModMarketing() {
               {campStep===5&&(
               <div className="card" style={{padding:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>5 — LAUNCH</div>
+                {/* Send-from rep selector */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — who does this campaign send as?</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {(s.reps||[]).map(r=>{const sel=campDraft?.repId===r.id;return(
+                      <button key={r.id} onClick={()=>setCampDraft(c=>({...c,repId:r.id}))}
+                        style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:sel?`${B.orange}10`:B.white,border:`2px solid ${sel?B.orange:B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:sel?B.orange:B.text}}>
+                        <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                        <div>
+                          <div style={{fontWeight:sel?700:500}}>{r.name}</div>
+                          {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                        </div>
+                        {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3}}>GMAIL ✓</span>}
+                      </button>
+                    );})}
+                    {!(s.reps||[]).length&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No reps configured — <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>add in Settings</a>.</span>}
+                  </div>
+                </div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
@@ -9225,18 +9243,37 @@ function ModMarketing() {
                   {/* Always-visible Gmail connectivity check — auto-runs on mount */}
                   <GmailStatusBanner repKey={rep?.gmailEnvKey||""} />
 
-                  {/* Rep + Gmail status */}
-                  {rep&&(
+                  {/* Rep sender selector */}
+                  {rep?(
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:8}}>
                       <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
-                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail account ({rep.gmailEnvKey})</span>
-                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from your account with their signature. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Sales Reps → Edit → set Gmail Key</a>.</span>
+                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail ({rep.email||rep.gmailEnvKey})</span>
+                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from the shared account with their name. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Reps → set Gmail Key</a>.</span>
                         }
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
-                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
+                    </div>
+                  ):(
+                    <div style={{padding:"10px 12px",background:B.surface,border:`1px solid ${B.orange}40`,borderRadius:5,marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — select who this campaign sends as</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {(s.reps||[]).length===0?(
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No sales reps configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Add reps in Settings.</a></span>
+                        ):(s.reps||[]).map(r=>(
+                          <button key={r.id} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:r.id})}
+                            style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                            <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <div>
+                              <div style={{fontWeight:600}}>{r.name}</div>
+                              {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                            </div>
+                            {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3,marginLeft:2}}>GMAIL ✓</span>}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
