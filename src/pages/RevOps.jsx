@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef, createContext, useContext, Component, lazy, Suspense } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
-const PriceToolPage  = lazy(() => import('./PriceTool.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
@@ -13,7 +12,6 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 function usePrefetchPanels() {
   useEffect(() => {
     import('./CommandCenter.jsx');
-    import('./PriceTool.jsx');
   }, []);
 }
 
@@ -118,6 +116,7 @@ const SEED = {
   savedAds: [],
   socialPosts: [],
   campaigns: [],
+  priceLists: [],
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -164,6 +163,7 @@ function mergeServerState(base, server) {
     orders:       mergeById(base.orders,       server.orders),
     alerts:       mergeById(base.alerts,       server.alerts),
     activity:     mergeById(base.activity,     server.activity),
+    priceLists:   mergeById(base.priceLists,   server.priceLists),
   };
 }
 
@@ -205,6 +205,7 @@ function useStore() {
           pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
           appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
           contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
+          priceLists:   Array.isArray(p.priceLists)   ? p.priceLists   : [],
         };
       }
     } catch {}
@@ -410,6 +411,11 @@ function reducer(prev, action, payload) {
     case "SET_CONTACTS":      return {...prev, contacts:payload};
     case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
     case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
+    case "MERGE_CONTACTS": {
+      const updMap=new Map((payload.toUpdate||[]).map(c=>[c.id,c]));
+      const merged=(prev.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
+      return {...prev,contacts:[...(payload.toAdd||[]),...merged],contactsLastSync:payload.lastSync||Date.now()};
+    }
     case "SCORE_CONTACT": {
       const {contactId,type,note,campaignId} = payload;
       const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
@@ -442,8 +448,10 @@ function reducer(prev, action, payload) {
     case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
     case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "SET_COMPETE_INTEL":   return {...prev, competeIntel:{...(prev.competeIntel||{}),...payload}};
+    case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next[payload];return {...prev,competeIntel:next};}
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
+    case "SET_CRM_NAV":         return {...prev, crmNav:payload}; // {id, school} — consumed by ModCRM on mount
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
     case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
     case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
@@ -477,6 +485,13 @@ function reducer(prev, action, payload) {
     case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
     case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
     case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
+    case "ADD_PRICE_LIST":  return {...prev, priceLists:[payload,...(prev.priceLists||[])]};
+    case "UPDATE_PRICE_LIST": return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id===payload.id?{...pl,...payload}:pl)};
+    case "DEL_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).filter(pl=>pl.id!==payload)};
+    case "UPDATE_PRICE_LIST_ITEM": {
+      const {listId, itemId, updates} = payload;
+      return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id!==listId?pl:{...pl,items:(pl.items||[]).map(it=>it.id===itemId?{...it,...updates}:it)})};
+    }
     case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
     default:                  return prev;
   }
@@ -549,9 +564,9 @@ const RSC = {
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
+const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches. Brand voice: warm/direct, athlete-first, relationship before product. Owns: Human Contact ("I pick up the phone"), All-Sport Breadth, Exclusive Culture (graphic tee drops). Avoid efficiency-first hooks, corporate tone, generic inspiration.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
-const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
+const STATES_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const US_REGIONS = {
   "Midwest":       {states:["IA","MN","WI","MO","IL","IN","MI","OH","ND","SD","NE","KS"],color:"#1A5FA8"},
   "Southeast":     {states:["FL","GA","TN","AL","MS","SC","NC","VA","KY","AR","LA"],color:"#1E8F4E"},
@@ -658,9 +673,7 @@ export default function App() {
         const allZoho=[...contacts,...leads];
         const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
         const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
-        if(toAdd.length) dispatch("ADD_CONTACTS",toAdd);
-        toUpdate.forEach(c=>dispatch("UPDATE_CONTACT",{...c}));
-        dispatch("SET_CONTACTS_LAST_SYNC",now);
+        dispatch("MERGE_CONTACTS",{toAdd,toUpdate,lastSync:now});
         if(force) toast(`Zoho CRM: ${toAdd.length} added, ${toUpdate.length} updated (${allZoho.length} total)`, "success");
       } catch(e){
         console.error("CRM sync failed:",e);
@@ -668,9 +681,10 @@ export default function App() {
       }
     };
     crmSyncRef.current = syncContacts;
-    syncInvoices(); syncContacts();
+    // Delay initial sync so the UI is fully interactive before heavy network+dispatch work
+    const initTimer=setTimeout(()=>{syncInvoices();syncContacts();},8000);
     const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
-    return()=>clearInterval(iv);
+    return()=>{clearTimeout(initTimer);clearInterval(iv);};
   },[s.currentUserId]);
 
   useEffect(()=>{
@@ -686,7 +700,7 @@ export default function App() {
 
   if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
-  const NAV = [
+  const NAV = useMemo(()=>[
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
     {id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
@@ -701,35 +715,21 @@ export default function App() {
     {id:"marketing",   icon:"✦", label:"Campaigns"},
     {id:"calendar",    icon:"▦", label:"Content Calendar"},
     {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
+    {id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
     // ── TOOLS ──────────────────────────────────────────────────────────
     {id:"_s_tools"},
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
-    // ── AI TOOLS (expandable) ───────────────────────────────────────────
-    {id:"_g_ai", icon:"⌘", label:"AI Tools", group:true, children:[
-      {id:"cc-sales-copy",  icon:"✍", label:"Sales Copywriter"},
-      {id:"cc-social",      icon:"📱", label:"Social Media"},
-      {id:"cc-image",       icon:"🖼", label:"Image Generator"},
-      {id:"cc-quote",       icon:"▤", label:"Smart Quote Builder"},
-      {id:"cc-price-intel", icon:"$",  label:"Price List Intel"},
-      {id:"cc-research",    icon:"⊕", label:"Research & Intel"},
-      {id:"cc-finance",     icon:"↑", label:"Financial Summaries"},
-      {id:"cc-ad-hub",      icon:"📊", label:"Ad Hub"},
-      {id:"cc-analytics",   icon:"📈", label:"Analytics"},
-      {id:"cc-tools",       icon:"⚙", label:"Tool Manager"},
-    ]},
-    // ── BUSINESS TOOLS (expandable) ─────────────────────────────────────
-    {id:"_g_biz", icon:"◉", label:"Business Tools", group:true, children:[
-      {id:"prices",     icon:"$",  label:"Price Manager"},
-      {id:"expansion",  icon:"◉",  label:"Expansion Playbook"},
-    ]},
+    {id:"price-lists", icon:"$", label:"Price Lists"},
+    {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
     ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-  ];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
   // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
@@ -893,10 +893,7 @@ export default function App() {
                 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
               </button>
               <div style={{width:1,height:14,background:B.border}}/>
-              <button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:(s.alerts||[]).filter(a=>!a.sent).length?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>
-                ◎
-                {(s.alerts||[]).filter(a=>!a.sent).length>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{(s.alerts||[]).filter(a=>!a.sent).length}</span>}
-              </button>
+              {(()=>{const unread=(s.alerts||[]).filter(a=>!a.sent).length;return(<button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:unread?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>◎{unread>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{unread}</span>}</button>);})()}
             </div>
           </header>
 
@@ -921,8 +918,8 @@ export default function App() {
             {/* ── Inline tools (formerly separate pages) ── */}
             {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
             {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
-            {mod==="prices"      &&<Suspense fallback={<PanelLoader/>}><PriceToolPage onMakeQuote={(q)=>{sessionStorage.setItem("st1_quote_prefill",q);setMod("cc-quote");}}/></Suspense>}
-            {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage/></Suspense>}
+            {mod==="price-lists" &&<ModPriceLists/>}
+            {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
             {/* ── AI Tools (Command Center modules embedded) ── */}
             {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
             </ErrBound>
@@ -959,7 +956,7 @@ export default function App() {
                 ):null;
                 return(
                   <div style={{maxHeight:400,overflowY:"auto"}}>
-                    <Grp title="CONTACTS" items={contacts} go={()=>setMod("prospecting")} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
+                    <Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
                     <Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
                     <Grp title="CAMPAIGNS" items={campaigns} go={()=>setMod("marketing")} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
                     <Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
@@ -1066,16 +1063,16 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 }
 
 // ─── SHARED UI ────────────────────────────────────────────────────────────────
-function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;}
-function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;}
-function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;}
-function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;}
-function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;}
-function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;}
-function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;}
+const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
+const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
+const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
+const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
+const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
+const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
 
 // ─── KPI CARD ─────────────────────────────────────────────────────────────────
-function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;}
+const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 
 // ════════════════════════════════════════════════════════════════════════════
 //  BRIEFING
@@ -1092,31 +1089,29 @@ function ModAnalytics() {
   const contacts=s.contacts||[];
   const reps=s.reps||[];
 
-  const closedStages=["Closed Won","Closed Lost","PO Received"];
-  const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
-  const won=deals.filter(d=>d.stage==="Closed Won");
-  const lost=deals.filter(d=>d.stage==="Closed Lost");
-  const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
-  const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
-  const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-  const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-  const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
-  const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
-  const totalClosed=won.length+lost.length;
-  const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-  const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
-
-  // Won by month (last 6)
-  const now=new Date();
-  const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
-  const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
-  const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
-
-  // Pipeline by stage (for Revenue tab)
-  const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
-
-  // Top products (won + open)
-  const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const {openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts}=useMemo(()=>{
+    const closedStages=["Closed Won","Closed Lost","PO Received"];
+    const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
+    const won=deals.filter(d=>d.stage==="Closed Won");
+    const lost=deals.filter(d=>d.stage==="Closed Lost");
+    const totalRevenue=invoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||i.amount||0),0);
+    const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
+    const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
+    const arTotal=invoices.filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
+    const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
+    const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
+    const totalClosed=won.length+lost.length;
+    const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
+    const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
+    const now=new Date();
+    const months=Array.from({length:6},(_,i)=>{const d=new Date(now.getFullYear(),now.getMonth()-5+i,1);return{label:d.toLocaleString("en-US",{month:"short",year:"2-digit"}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`};});
+    const wonByMonth=months.map(m=>{const mw=won.filter(d=>(d.closedDate||d.createdAt||"").startsWith(m.key));return{...m,count:mw.length,value:mw.reduce((a,d)=>a+(d.value||0),0)};});
+    const maxMonthVal=Math.max(...wonByMonth.map(m=>m.value),1);
+    const stageSummary=Object.entries(openDeals.reduce((acc,d)=>{acc[d.stage]=acc[d.stage]||{count:0,value:0};acc[d.stage].count++;acc[d.stage].value+=(d.value||0);return acc;},{})).map(([stage,v])=>({stage,...v})).sort((a,b)=>b.value-a.value);
+    const topProducts=Object.entries([...won,...openDeals].reduce((acc,d)=>{if(d.product){acc[d.product]=(acc[d.product]||0)+(d.value||0);}return acc;},{})).sort((a,b)=>b[1]-a[1]).slice(0,6);
+    const campaignDeals=deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0));
+    return{openDeals,won,lost,totalRevenue,openPipeline,wonTotal,arTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,wonByMonth,maxMonthVal,stageSummary,topProducts,campaignDeals};
+  },[deals,invoices,campaigns,contacts]);
 
 
 
@@ -1145,7 +1140,7 @@ function ModAnalytics() {
             <div className="card" style={{padding:14}}>
               <Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {[...deals].sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
+                {deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
                   <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
@@ -1409,7 +1404,7 @@ function ModAnalytics() {
               <div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
             ):(
               <div style={{display:"flex",flexDirection:"column",gap:7}}>
-                {deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0)).map(d=>{
+                {campaignDeals.map(d=>{
                   const camp=campaigns.find(c=>c.id===d.campaignId);
                   return(
                     <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
@@ -1451,7 +1446,7 @@ function ModAnalytics() {
                   </div>
                   <div style={{display:"flex",flexDirection:"column",gap:7}}>
                     {group.map(c=>{
-                      const lastAct=(c.activity||[]).sort((a,b)=>b.ts-a.ts)[0];
+                      const lastAct=(c.activity||[]).reduce((best,a)=>(!best||a.ts>best.ts)?a:best,null);
                       const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
                       const school=typeof c.school==="string"?c.school:c.school?.name||"";
                       const title=typeof c.title==="string"?c.title:c.title?.name||"";
@@ -1558,9 +1553,14 @@ function ModHome() {
   const [input,setInput]=useState("");
   const [running,setRunning]=useState(false);
   const [expandedEmail,setExpandedEmail]=useState(null);
+  const [expandedQuote,setExpandedQuote]=useState(null);
+  const [expandedCampaign,setExpandedCampaign]=useState(null);
   const [agentStatus,setAgentStatus]=useState(null);
   const [lastMeta,setLastMeta]=useState(null);
   const [sendingEmail,setSendingEmail]=useState(null);
+  const [sendingQuote,setSendingQuote]=useState(null);
+  const [launchingCampaign,setLaunchingCampaign]=useState(null);
+  const [campaignSendTime,setCampaignSendTime]=useState({});
 
   // Session management
   const [sessions,setSessions]=useState([]);
@@ -1639,56 +1639,6 @@ function ModHome() {
     setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
   };
 
-  // Rich context
-  const buildContext=()=>{
-    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
-    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
-    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const recentActivity=(s.activity||[]).slice(-5);
-    const competitors=Object.keys(s.competeIntel||{});
-    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
-
-=== PIPELINE ===
-${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
-${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-=== TOP CONTACTS (by lead score) ===
-${topContacts.length===0?"No scored contacts":topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}
-${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
-
-=== ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"None":activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}
-
-=== OPEN RFPS ===
-${activeRfps.length===0?"None":activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}
-
-=== AR ===
-${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
-=== ACTIONS YOU CAN TAKE ===
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· create_campaign: {type:"create_campaign",name,product,audience,channel}
-· navigate: {type:"navigate",target:"deals"|"crm"|"marketing"|"prices"|"prospecting"|"sponsorships"}
-Also include "suggestions": 3 short follow-up questions.
-ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
-Be specific, tactical, use real names. Flag hot signals with 🔥.`;
-  };
-
   const copyEmail=(action)=>{
     const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
     try{navigator.clipboard.writeText(text);}catch{}
@@ -1729,6 +1679,57 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
       return;
     }
     if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
+    if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
+    if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
+  };
+
+  const createQuoteNow=async(action,key)=>{
+    setSendingQuote(key);
+    try{
+      const r=await fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        action:"create_quote",
+        customer_name:action.customer_name,
+        contact_person:action.contact_person||"",
+        email:action.email||"",
+        line_items:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0})),
+        notes:action.notes||"",
+        send_email:!!(action.send_email&&action.email),
+      })});
+      const d=await r.json();
+      if(d.quote_id||d.estimate_number){
+        toast(`Quote created: ${d.estimate_number||d.quote_id}${d.emailed?" · emailed":""}!`,"success");
+        dispatch("LOG",{msg:`Quote ${d.estimate_number} created for ${action.customer_name}`});
+        const matchDeal=(s.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
+        if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.estimate_number} created`});
+      }else{toast(d.error||"Quote creation failed","error");}
+    }catch(e){toast(`Quote error: ${e.message}`,"error");}
+    setSendingQuote(null);
+  };
+
+  const launchCampaignNow=async(action,key,matchedContacts)=>{
+    setLaunchingCampaign(key);
+    try{
+      const sendAt=campaignSendTime[key]||"";
+      const touches=(action.emails||[]).map((e,i)=>({id:mkId(),step:i,subject:e.subject,body:e.body,delay:e.delay_days||0,channel:"email"}));
+      const enrollments=matchedContacts.map(c=>({contactId:c.id,email:c.email,name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),status:"active",step:0,enrolledAt:Date.now()}));
+      const camp={
+        id:mkId(),
+        name:action.campaign_name,
+        product:action.product||"",
+        status:"active",
+        createdAt:new Date().toISOString().slice(0,10),
+        touches,
+        enrollments,
+        scheduledSendAt:sendAt||null,
+        notes:action.notes||"",
+        source:"agent",
+      };
+      dispatch("ADD_CAMPAIGN",camp);
+      dispatch("LOG",{msg:`Campaign "${camp.name}" created with ${enrollments.length} contacts via agent`});
+      toast(`✓ "${camp.name}" created — ${enrollments.length} contacts enrolled${sendAt?`, scheduled ${sendAt}`:""}. Go to Campaigns to send.`,"success");
+      setTimeout(()=>setMod("marketing"),1200);
+    }catch(e){toast(`Campaign error: ${e.message}`,"error");}
+    setLaunchingCampaign(null);
   };
 
   const sendEmailNow=async(action,key)=>{
@@ -1782,12 +1783,44 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
     setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
       ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
 
-    const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
-    const localContext={deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],invoices:s.invoices||[],sequences:s.sequences||[]};
+    // Keep last 20 turns — full history grows unbounded and can exceed Vercel's body limit
+    const apiMsgs=nextHistory.slice(-20).map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
+    // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
+    const allContacts=s.contacts||[];
+    const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
+    const unscoredContacts=allContacts.filter(c=>!(c.score||0)).slice(0,20);
+    const localContext={
+      deals:(s.deals||[]).slice(0,60),
+      contacts:[...scoredContacts,...unscoredContacts],
+      rfps:(s.rfps||[]).slice(0,20),
+      invoices:(s.invoices||[]).slice(0,20),
+      sequences:(s.sequences||[]).slice(0,10).map(seq=>({
+        id:seq.id,name:seq.name,status:seq.status,
+        enrollmentCount:(seq.enrollments||[]).length,
+        activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
+      })),
+      priceLists:(s.priceLists||[]).map(pl=>({
+        id:pl.id,
+        name:pl.name,
+        type:pl.type,
+        competitorName:pl.competitorName||"",
+        source:pl.source||"",
+        itemCount:(pl.items||[]).length,
+        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
+      })),
+      competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
+      brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
+    };
 
     try{
-      const r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext})});
-      if(!r.ok){const e=await r.json();throw new Error(e.error||`HTTP ${r.status}`);}
+      const ctrl=new AbortController();
+      const timeout=setTimeout(()=>ctrl.abort(),90000);
+      let r;
+      try{
+        r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({messages:apiMsgs,localContext}),signal:ctrl.signal});
+      }finally{clearTimeout(timeout);}
+      if(!r.ok){let errMsg=`HTTP ${r.status}`;try{const e=await r.json();errMsg=e.error||errMsg;}catch{}throw new Error(errMsg);}
       const raw=await r.json();
       const message=raw?.message||"Sorry, something went wrong.";
       const actions=Array.isArray(raw?.actions)?raw.actions:[];
@@ -1815,6 +1848,10 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
           if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});toast(`📝 Auto: note logged — ${d.name}`,"info");
             try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}}
         }
+        if(a.type==="store_competitor_intel"&&a.competitor_name&&a.intel){
+          dispatch("SET_COMPETE_INTEL",{[a.competitor_name]:a.intel});
+          toast(`⊗ Intel saved: ${a.competitor_name}`,"info");
+        }
       });
 
       // Fire-and-forget: look for similar questions from other team members
@@ -1835,24 +1872,24 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);setInsights({});toast("Conversation cleared","info");};
 
-  // Sidebar data
-  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
-  const hotDeals=openDeals.filter(d=>d.priority==="hot").slice(0,3);
-  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
-  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
-  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE"};
+  const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg}};
+  const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED"};
 
   const STARTERS=[
     "Who should I call or email today?",
     "Draft outreach for my highest-priority contact",
+    "Build a 3-email sequence for Baseball coaches in Iowa and enroll them",
+    "Build a quote for 10 hurdles and 2 starting blocks",
     "Which deals are most at risk right now?",
     "How do I counter BSN Sports on pricing?",
-    "Build a 3-touch sequence for Baseball coaches in Iowa",
-    "Analyze my open RFPs — what should I prioritize?",
     "What product should I push hardest this season?",
     "Who hasn't heard from us in 30+ days?",
   ];
@@ -1944,6 +1981,154 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
                             </div>
                           </div>
                           {expanded&&<div style={{padding:"10px 12px"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>To: {a.to_name}{a.to_email?` <${a.to_email}>`:" — (find email)"}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{a.body}</div></div>}
+                        </div>
+                      );
+                    }
+                    if(a.type==="create_quote"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedQuote===key;
+                      const lineItems=a.line_items||[];
+                      const total=lineItems.reduce((sum,li)=>sum+(Number(li.rate)||0)*(Number(li.quantity)||1),0);
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.blue}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.blueBg,borderBottom:expanded?`1px solid ${B.blue}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>▤</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,fontWeight:600}}>{a.customer_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{lineItems.length} item{lineItems.length!==1?"s":""} · ${total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,flexShrink:0}}>
+                              <button onClick={()=>createQuoteNow(a,key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"CREATING...":"▤ CREATE IN ZOHO"}</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              {a.contact_person&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:4}}>Contact: {a.contact_person}{a.email?` · ${a.email}`:""}</div>}
+                              <table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
+                                <thead>
+                                  <tr style={{borderBottom:`1px solid ${B.border}`}}>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>ITEM</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>RATE</th>
+                                    <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {lineItems.map((li,i)=>(
+                                    <tr key={i} style={{borderBottom:`1px solid ${B.border}20`}}>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>{li.name}{li.description?<span style={{color:B.muted,display:"block",fontSize:9}}>{li.description}</span>:null}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>${Number(li.rate).toFixed(2)}</td>
+                                      <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0",fontWeight:600}}>${(Number(li.rate)*Number(li.quantity)).toFixed(2)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr>
+                                    <td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
+                                    <td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.blue,textAlign:"right",paddingTop:6,fontWeight:700}}>${total.toFixed(2)}</td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                              {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>{a.notes}</div>}
+                              {a.send_email&&a.email&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginTop:4,letterSpacing:.3}}>✉ Quote will be emailed to {a.email}</div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="create_campaign_sequence"){
+                      const key=`${msgIdx}_${ai}`;const expanded=expandedCampaign===key;
+                      const filters=a.contact_filters||{};
+                      const matched=(s.contacts||[]).filter(c=>{
+                        if(c.deadStatus||!c.email) return false;
+                        const sport=(c.sport||"").toLowerCase();
+                        const state=(c.state||"").toLowerCase();
+                        const title=(c.title||"").toLowerCase();
+                        const score=c.score||0;
+                        if(filters.sports?.length&&!filters.sports.some(sp=>sport.includes(sp.toLowerCase()))) return false;
+                        if(filters.states?.length&&!filters.states.some(st=>state===st.toLowerCase()||state.includes(st.toLowerCase()))) return false;
+                        if(filters.titles?.length&&!filters.titles.some(t=>title.includes(t.toLowerCase()))) return false;
+                        if(filters.min_score&&score<filters.min_score) return false;
+                        return true;
+                      });
+                      const emails=a.emails||[];
+                      const ck=key;
+                      return(
+                        <div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg,borderBottom:expanded?`1px solid ${B.purple}20`:"none"}}>
+                            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                              <span style={{fontSize:14}}>✦</span>
+                              <div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{a.campaign_name}</div>
+                                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{emails.length} emails · {matched.length} contacts matched</div>
+                              </div>
+                            </div>
+                            <div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+                              <input type="datetime-local" value={campaignSendTime[ck]||""} onChange={e=>setCampaignSendTime(prev=>({...prev,[ck]:e.target.value}))}
+                                style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 5px",color:B.text,background:B.white}}/>
+                              <button onClick={()=>{if(!matched.length){toast("No contacts match these filters","error");return;}launchCampaignNow(a,ck,matched);}} disabled={launchingCampaign===ck} style={{background:B.purple,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:launchingCampaign===ck?.6:1,whiteSpace:"nowrap"}}>{launchingCampaign===ck?"CREATING...":"✦ CREATE & ENROLL"}</button>
+                              <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+                            </div>
+                          </div>
+                          {expanded&&(
+                            <div style={{padding:"10px 12px"}}>
+                              {/* Contact filters summary */}
+                              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                                {filters.sports?.map(sp=><span key={sp} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,background:B.purpleBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{sp}</span>)}
+                                {filters.states?.map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{st}</span>)}
+                                {filters.titles?.map(t=><span key={t} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,background:B.tealBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>{t}</span>)}
+                                {filters.min_score&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:B.orangeBg,padding:"2px 7px",borderRadius:10,letterSpacing:.3}}>score ≥ {filters.min_score}</span>}
+                              </div>
+                              {/* Matched contacts */}
+                              <div style={{marginBottom:10}}>
+                                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:5}}>{matched.length} CONTACTS MATCHED</div>
+                                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                                  {matched.slice(0,12).map(c=>(
+                                    <div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"2px 7px"}}>
+                                      {c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}
+                                      {c.school&&<span style={{color:B.muted}}> · {typeof c.school==="string"?c.school:c.school?.name||""}</span>}
+                                    </div>
+                                  ))}
+                                  {matched.length>12&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"2px 7px"}}>+{matched.length-12} more</div>}
+                                </div>
+                                {matched.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>No contacts match — adjust filters or add contacts first.</div>}
+                              </div>
+                              {/* Email sequence */}
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>EMAIL SEQUENCE</div>
+                              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                                {emails.map((e,i)=>(
+                                  <div key={i} style={{border:`1px solid ${B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                    <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>
+                                      <div style={{width:18,height:18,borderRadius:"50%",background:B.purple,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{i+1}</span></div>
+                                      <div style={{flex:1,minWidth:0}}>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.subject}</div>
+                                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{i===0?"Send immediately":`+${e.delay_days} day${e.delay_days!==1?"s":""} after previous`}</div>
+                                      </div>
+                                    </div>
+                                    <div style={{padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.6,maxHeight:120,overflow:"hidden"}}>{e.body}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    if(a.type==="store_competitor_intel"){
+                      return(
+                        <div key={ai} style={{background:`${B.orange}08`,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"6px 11px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                          <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                            <span style={{fontSize:13,color:B.orange}}>⊗</span>
+                            <div>
+                              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>COMPETITOR INTEL SAVED</div>
+                              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{a.competitor_name}</div>
+                            </div>
+                          </div>
+                          <button onClick={()=>setMod("compete")} style={{background:"none",border:`1px solid ${B.orange}40`,color:B.orange,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>VIEW →</button>
                         </div>
                       );
                     }
@@ -2074,6 +2259,396 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  TALK TRACK — guided sales call script + CRM linker
+// ════════════════════════════════════════════════════════════════════════════
+const TT_PHASES=[
+  {id:"RAPPORT",   label:"Rapport",    script:"Start by building genuine rapport. Ask about their season, recent wins, or team achievements. Listen actively and find common ground before moving to business."},
+  {id:"INTRO",     label:"ST1 Intro",  script:"ST1 Sports is a full-service athletic supplier serving 200+ schools across the region. We go beyond equipment — we're a partner for team stores, sponsorship revenue, and streamlined procurement. Our goal is to make your program stronger and take work off your plate."},
+  {id:"DISCOVERY", label:"Discovery",  script:"Now let's understand your program. These questions help us build a custom value model and show exactly what a partnership looks like for your school."},
+  {id:"PAIN",      label:"Pain Points",script:"Let's identify where your program has the biggest opportunities. Walk through each challenge below and confirm any that apply."},
+  {id:"SOLUTION",  label:"Solution",   script:"Based on what you've shared, here's what partnering with ST1 means for your program. Let me walk you through the numbers."},
+];
+
+const PAIN_CARDS=[
+  {id:"budget",      title:"Equipment Budget Constraints",     body:"School struggles to buy quality gear within tight budget limits. Coaches spend too much time hunting for deals."},
+  {id:"nostore",     title:"No Online Team Store",             body:"Manual collection of payments and orders overwhelms coaches during uniform season. Parents are frustrated."},
+  {id:"booster",     title:"Weak Booster / Community Support", body:"Fundraising is disorganized, participation is low, and the booster club isn't generating meaningful program revenue."},
+  {id:"vendors",     title:"Multiple Vendor Headaches",        body:"Dealing with 5+ vendors for different sports. No consolidated ordering, inconsistent quality, no single point of contact."},
+  {id:"sponsorship", title:"No Sponsorship Revenue",           body:"Program hasn't tapped brand partnership or giveback opportunities — leaving thousands on the table each year."},
+];
+
+function QuestionInput({question,value,onChange}){
+  const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
+  return(
+    <div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:3,fontWeight:500}}>
+        {question.questionText}{question.isRequired&&<span style={{color:B.orange,marginLeft:3}}>*</span>}
+      </div>
+      {question.helpText&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5}}>{question.helpText}</div>}
+      {question.inputType==="TEXT"&&<input value={value||""} onChange={e=>onChange(e.target.value)} style={inp}/>}
+      {question.inputType==="TEXTAREA"&&<textarea value={value||""} onChange={e=>onChange(e.target.value)} rows={3} style={{...inp,resize:"vertical"}}/>}
+      {question.inputType==="NUMBER"&&<input type="number" value={value==null?"":value} onChange={e=>onChange(e.target.value===""?null:Number(e.target.value))} style={{...inp,width:140}}/>}
+      {question.inputType==="SELECT"&&(
+        <select value={value||""} onChange={e=>onChange(e.target.value)} style={inp}>
+          <option value="">— Select —</option>
+          {(Array.isArray(question.selectOptions)?question.selectOptions:[]).map(o=><option key={o} value={o}>{o}</option>)}
+        </select>
+      )}
+      {question.inputType==="BOOLEAN"&&(
+        <div style={{display:"flex",gap:6}}>
+          {["Yes","No"].map(opt=>(
+            <button key={opt} onClick={()=>onChange(opt==="Yes")} style={{background:(opt==="Yes"?value===true:value===false)?B.orange:B.surface,color:(opt==="Yes"?value===true:value===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?value===true:value===false)?B.orange:B.border}`,borderRadius:5,padding:"5px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer"}}>{opt}</button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PainCards({selected,onToggle}){
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:16}}>
+      {PAIN_CARDS.map(c=>{
+        const on=selected.includes(c.id);
+        return(
+          <button key={c.id} onClick={()=>onToggle(c.id)} style={{textAlign:"left",background:on?`${B.orange}10`:B.surface,border:`1px solid ${on?B.orange:B.border}`,borderRadius:6,padding:"10px 13px",cursor:"pointer",width:"100%"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+              <div style={{flex:1}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:on?B.orange:B.text}}>{c.title}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:3,lineHeight:1.5}}>{c.body}</div>
+              </div>
+              <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${on?B.orange:B.border}`,background:on?B.orange:"transparent",flexShrink:0,marginTop:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {on&&<span style={{color:B.white,fontSize:10}}>✓</span>}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function CrmLinker({linked,onLink,onUnlink}){
+  const [q,setQ]=useState("");
+  const [results,setResults]=useState([]);
+  const [loading,setLoading]=useState(false);
+  const [showCreate,setShowCreate]=useState(false);
+  const [form,setForm]=useState({firstName:"",lastName:"",school:"",phone:"",email:""});
+  const [creating,setCreating]=useState(false);
+  const searchTimer=useRef(null);
+
+  const doSearch=(val)=>{
+    clearTimeout(searchTimer.current);
+    if(!val.trim()){setResults([]);return;}
+    searchTimer.current=setTimeout(()=>{
+      setLoading(true);
+      fetch(`/api/crm/search?q=${encodeURIComponent(val)}`)
+        .then(r=>r.json()).then(d=>{setResults(d.results||[]);setLoading(false);})
+        .catch(()=>setLoading(false));
+    },400);
+  };
+
+  const createLead=()=>{
+    if(!form.lastName)return;
+    setCreating(true);
+    fetch("/api/crm/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(form)})
+      .then(r=>r.json()).then(d=>{
+        setCreating(false);
+        onLink({id:d.zohoId||d.id||"new",name:`${form.firstName} ${form.lastName}`.trim(),module:"Lead"});
+        setShowCreate(false);
+      }).catch(()=>setCreating(false));
+  };
+
+  if(linked){
+    return(
+      <div style={{padding:"8px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.green}08`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:10}}>🔗</span>
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{linked.name||linked.id}</span>
+          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>{(linked.module||"").toUpperCase()}</span>
+        </div>
+        <button onClick={onUnlink} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>unlink</button>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{padding:"10px 22px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}06`,flexShrink:0}}>
+      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:6}}>LINK TO CRM CONTACT</div>
+      {!showCreate?(
+        <div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+          <div style={{flex:1,position:"relative"}}>
+            <input value={q} onChange={e=>{setQ(e.target.value);doSearch(e.target.value);}} placeholder="Search by name, school, or email…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,boxSizing:"border-box"}}/>
+            {loading&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",fontSize:9,color:B.muted}}>…</span>}
+            {results.length>0&&(
+              <div style={{position:"absolute",top:"calc(100% + 2px)",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",zIndex:20,maxHeight:160,overflowY:"auto"}}>
+                {results.map(r=>(
+                  <button key={`${r.module}-${r.id}`} onClick={()=>{onLink({id:r.id,name:r.name,module:r.module});setResults([]);setQ(r.name);}} style={{width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"8px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,flex:1}}>{r.name}</span>
+                    {r.company&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{r.company}</span>}
+                    <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,flexShrink:0}}>{(r.module||"").toUpperCase()}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <GBtn sm onClick={()=>setShowCreate(true)}>+ NEW LEAD</GBtn>
+        </div>
+      ):(
+        <div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:8}}>
+            <input value={form.firstName} onChange={e=>setForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
+            <input value={form.lastName} onChange={e=>setForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
+            <input value={form.school} onChange={e=>setForm(f=>({...f,school:e.target.value}))} placeholder="School" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
+            <input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text}}/>
+            <input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:11,color:B.text,gridColumn:"1/-1"}}/>
+          </div>
+          <div style={{display:"flex",gap:6}}><OBtn onClick={createLead} disabled={creating||!form.lastName}>{creating?"CREATING…":"CREATE LEAD"}</OBtn><GBtn onClick={()=>setShowCreate(false)}>Cancel</GBtn></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TalkTrack({onClose,linkedContact}){
+  const {s,cu,toast}=useApp();
+  const [sessionId,setSessionId]=useState(null);
+  const [questions,setQuestions]=useState([]);
+  const [phaseIdx,setPhaseIdx]=useState(0);
+  const [answers,setAnswers]=useState({});
+  const [pains,setPains]=useState([]);
+  const [linked,setLinked]=useState(linkedContact||null);
+  const [calcInputs,setCalcInputs]=useState(()=>({
+    schoolClass:linkedContact?.schoolClass||"",
+    numSports:String(linkedContact?.numSports||""),
+    numAthletes:String(linkedContact?.numAthletes||""),
+    hasOnlineStore:linkedContact?.hasOnlineStore!=null?linkedContact.hasOnlineStore:null,
+    hasBoosterClub:linkedContact?.hasBoosterClub!=null?linkedContact.hasBoosterClub:null,
+  }));
+  const [calcResult,setCalcResult]=useState(null);
+  const [calcLoading,setCalcLoading]=useState(false);
+  const [draftEmail,setDraftEmail]=useState("");
+  const [drafting,setDrafting]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const saveTimer=useRef(null);
+  const sessRef=useRef(null);
+
+  useEffect(()=>{
+    fetch("/api/admin/questions")
+      .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
+      .catch(()=>{});
+    const existing=sessionStorage.getItem("ttSessionId");
+    if(existing){
+      fetch(`/api/sessions/${existing}?repId=${cu?.id||""}`)
+        .then(r=>r.ok?r.json():null)
+        .then(d=>{
+          if(d?.session){
+            const sess=d.session;
+            setSessionId(sess.id);sessRef.current=sess.id;
+            setAnswers(sess.answers||{});
+            setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
+            if(sess.sponsorshipGuaranteedMin!=null) setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax});
+            if(sess.schoolClass||sess.numAthletes||sess.numSports) setCalcInputs(ci=>({
+              schoolClass:sess.schoolClass||ci.schoolClass,
+              numSports:String(sess.numSports||ci.numSports||""),
+              numAthletes:String(sess.numAthletes||ci.numAthletes||""),
+              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:ci.hasOnlineStore,
+              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:ci.hasBoosterClub,
+            }));
+            if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
+              setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
+            }
+          } else {
+            doCreateSession();
+          }
+        }).catch(()=>doCreateSession());
+    } else {
+      doCreateSession();
+    }
+  },[]);
+
+  const doCreateSession=()=>{
+    fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
+      .then(r=>r.json()).then(d=>{
+        setSessionId(d.session.id);sessRef.current=d.session.id;
+        sessionStorage.setItem("ttSessionId",d.session.id);
+      }).catch(()=>{});
+  };
+
+  const scheduleSave=(patch)=>{
+    if(!sessRef.current)return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current=setTimeout(()=>{
+      setSaving(true);
+      fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",...patch})})
+        .then(()=>setSaving(false)).catch(()=>setSaving(false));
+    },800);
+  };
+
+  const setAnswer=(qId,val)=>{const next={...answers,[qId]:val};setAnswers(next);scheduleSave({answers:next});};
+  const togglePain=(painId)=>{const next=pains.includes(painId)?pains.filter(p=>p!==painId):[...pains,painId];setPains(next);scheduleSave({confirmedPains:next});};
+  const linkContact=(c)=>{
+    setLinked(c);
+    const full=(s.contacts||[]).find(ct=>ct.id===c.id);
+    if(full) setCalcInputs(ci=>({
+      schoolClass:full.schoolClass||ci.schoolClass,
+      numSports:String(full.numSports||ci.numSports||""),
+      numAthletes:String(full.numAthletes||ci.numAthletes||""),
+      hasOnlineStore:full.hasOnlineStore!=null?full.hasOnlineStore:ci.hasOnlineStore,
+      hasBoosterClub:full.hasBoosterClub!=null?full.hasBoosterClub:ci.hasBoosterClub,
+    }));
+    const patch=c.module==="Contact"?{crmContactId:c.id,crmModule:"Contact"}:{crmLeadId:c.id,crmModule:"Lead"};
+    scheduleSave(patch);
+  };
+  const unlinkContact=()=>{setLinked(null);scheduleSave({crmContactId:null,crmLeadId:null,crmModule:null});};
+
+  const doCalc=()=>{
+    const {schoolClass,numSports,numAthletes,hasOnlineStore,hasBoosterClub}=calcInputs;
+    if(!numAthletes&&!numSports)return;
+    setCalcLoading(true);
+    fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
+      hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true,
+    })})
+    .then(r=>r.json()).then(d=>{
+      setCalcResult(d);setCalcLoading(false);
+      scheduleSave({sponsorshipGuaranteedMin:d.guaranteedMin,sponsorshipUpsideMax:d.upsideMax,
+        schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
+        hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true});
+      // Sync back to Redux + Zoho CRM
+      if(linked?.id){
+        const full=(s.contacts||[]).find(c=>c.id===linked.id);
+        dispatch("UPDATE_CONTACT",{id:linked.id,schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),hasOnlineStore:hasOnlineStore===true,hasBoosterClub:hasBoosterClub===true,sponsorshipMin:d.guaranteedMin,sponsorshipMax:d.upsideMax});
+        const zohoMod=(linked.module||full?.source==="zoho-crm"?"":"")+(full?.id?.startsWith("zoho_l_")?"Leads":"Contacts");
+        const zohoId=full?.zohoId;
+        if(zohoId) crmAddNote(zohoMod,zohoId,`Sponsorship Calc — Guaranteed Min: $${d.guaranteedMin?.toLocaleString()||0} / Upside Max: $${d.upsideMax?.toLocaleString()||0}\nSchool Class: ${schoolClass||"—"} | Athletes: ${numAthletes||"—"} | Sports: ${numSports||"—"} | Team Store: ${hasOnlineStore?"Yes":"No"} | Booster Club: ${hasBoosterClub?"Yes":"No"}`);
+      }
+    }).catch(()=>setCalcLoading(false));
+  };
+
+  const doDraftEmail=async()=>{
+    setDrafting(true);
+    const activePains=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title).join(", ");
+    const prompt=`Write a follow-up sales email from ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Warm, direct, conversational — not salesy. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`;
+    const t=await aiCall(prompt);
+    setDraftEmail(t||"");setDrafting(false);
+    if(t&&sessRef.current){
+      const lines=t.split("\n");
+      const subj=lines.find(l=>l.toLowerCase().startsWith("subject:"))?.replace(/^subject:\s*/i,"")||"";
+      const body=lines.filter(l=>!l.toLowerCase().startsWith("subject:")).join("\n").trim();
+      scheduleSave({draftEmailSubject:subj,draftEmailBody:body,status:"COMPLETE"});
+    }
+  };
+
+  const currentPhase=TT_PHASES[phaseIdx];
+  const phaseQs=questions.filter(q=>q.phase===currentPhase.id).sort((a,b)=>a.order-b.order);
+
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{padding:"14px 22px 10px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5}}>TALK TRACK</div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,marginTop:1}}>{linked?.name||"New Session"}</div>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {saving&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>saving…</span>}
+            <GBtn sm onClick={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}>✕ EXIT</GBtn>
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center"}}>
+          {TT_PHASES.map((p,i)=>{
+            const done=i<phaseIdx;const active=i===phaseIdx;
+            const col=done?B.green:active?B.orange:B.border;
+            return(
+              <React.Fragment key={p.id}>
+                <button onClick={()=>setPhaseIdx(i)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
+                  <div style={{width:22,height:22,borderRadius:"50%",background:done?B.green:active?B.orange:B.surface,border:`2px solid ${col}`,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {done?<span style={{color:B.white,fontSize:9}}>✓</span>:<span style={{width:6,height:6,borderRadius:"50%",background:active?B.white:B.border,display:"block"}}/>}
+                  </div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:.5,whiteSpace:"nowrap"}}>{p.label.toUpperCase()}</div>
+                </button>
+                {i<TT_PHASES.length-1&&<div style={{flex:1,height:2,background:done?B.green:B.border,margin:"0 4px",marginBottom:16}}/>}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+      <CrmLinker linked={linked} onLink={linkContact} onUnlink={unlinkContact}/>
+      <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+        <blockquote style={{margin:"0 0 16px",padding:"10px 14px",borderLeft:`3px solid ${B.orange}`,background:`${B.orange}08`,borderRadius:"0 4px 4px 0"}}>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,fontStyle:"italic"}}>{currentPhase.script}</div>
+        </blockquote>
+        {currentPhase.id==="PAIN"&&<PainCards selected={pains} onToggle={togglePain}/>}
+        {currentPhase.id==="SOLUTION"&&(
+          <div style={{marginBottom:16}}>
+            <div className="card" style={{padding:14,marginBottom:10}}>
+              <Lbl s={{marginBottom:10}}>Sponsorship Value Calculator</Lbl>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+                <div><Lbl s={{marginBottom:3}}>School Class</Lbl><select value={calcInputs.schoolClass} onChange={e=>setCalcInputs(c=>({...c,schoolClass:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">— Select —</option>{["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}</select></div>
+                <div><Lbl s={{marginBottom:3}}># Sports</Lbl><input type="number" value={calcInputs.numSports} onChange={e=>setCalcInputs(c=>({...c,numSports:e.target.value}))} placeholder="0" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+                <div><Lbl s={{marginBottom:3}}># Athletes</Lbl><input type="number" value={calcInputs.numAthletes} onChange={e=>setCalcInputs(c=>({...c,numAthletes:e.target.value}))} placeholder="0" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+                <div><Lbl s={{marginBottom:3}}>Team Store?</Lbl><div style={{display:"flex",gap:5}}>{["Yes","No"].map(opt=>(<button key={opt} onClick={()=>setCalcInputs(c=>({...c,hasOnlineStore:opt==="Yes"}))} style={{flex:1,background:(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.green:B.surface,color:(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?calcInputs.hasOnlineStore===true:calcInputs.hasOnlineStore===false)?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>))}</div></div>
+                <div><Lbl s={{marginBottom:3}}>Booster Club?</Lbl><div style={{display:"flex",gap:5}}>{["Yes","No"].map(opt=>(<button key={opt} onClick={()=>setCalcInputs(c=>({...c,hasBoosterClub:opt==="Yes"}))} style={{flex:1,background:(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.green:B.surface,color:(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.white:B.muted,border:`1px solid ${(opt==="Yes"?calcInputs.hasBoosterClub===true:calcInputs.hasBoosterClub===false)?B.green:B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>))}</div></div>
+              </div>
+              <OBtn onClick={doCalc} disabled={calcLoading} style={{width:"100%"}}>{calcLoading?"CALCULATING…":"✦ CALCULATE SPONSORSHIP VALUE"}</OBtn>
+            </div>
+            {calcResult&&(
+              <div className="card" style={{padding:14,marginBottom:10,borderTop:`3px solid ${B.orange}`}}>
+                <Lbl s={{marginBottom:8}}>Sponsorship Potential</Lbl>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:6}}>
+                  <div style={{background:`${B.green}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>GUARANTEED MIN</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green}}>{fmt$(calcResult.guaranteedMin||0)}</div></div>
+                  <div style={{background:`${B.orange}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:4}}>UPSIDE MAX</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(calcResult.upsideMax||0)}</div></div>
+                </div>
+              </div>
+            )}
+            <OBtn onClick={doDraftEmail} disabled={drafting} style={{width:"100%",marginBottom:8}}>{drafting?"WRITING…":"✦ DRAFT FOLLOW-UP EMAIL"}</OBtn>
+            {draftEmail&&(
+              <div style={{background:B.surface,borderRadius:4,padding:10}}>
+                <textarea value={draftEmail} onChange={e=>setDraftEmail(e.target.value)} rows={8} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",fontFamily:"'Lexend',sans-serif"}}/>
+                <GBtn onClick={()=>navigator.clipboard?.writeText(draftEmail)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
+              </div>
+            )}
+          </div>
+        )}
+        {phaseQs.length>0&&(
+          <div style={{display:"flex",flexDirection:"column",gap:14,marginBottom:8}}>
+            {phaseQs.map(q=>(<QuestionInput key={q.id} question={q} value={answers[q.id]} onChange={val=>setAnswer(q.id,val)}/>))}
+          </div>
+        )}
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:24,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+          <GBtn onClick={()=>setPhaseIdx(i=>Math.max(0,i-1))} disabled={phaseIdx===0}>← PREV</GBtn>
+          {phaseIdx<TT_PHASES.length-1
+            ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)}>NEXT →</OBtn>
+            :<OBtn col={B.green} onClick={()=>{
+              if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
+              sessionStorage.removeItem("ttSessionId");
+              // Sync completion + pains back to Redux + Zoho CRM
+              if(linked?.id){
+                const now=new Date().toISOString();
+                const full=(s.contacts||[]).find(c=>c.id===linked.id);
+                dispatch("UPDATE_CONTACT",{id:linked.id,ttCompletedAt:now,confirmedPains:pains});
+                const zohoMod=full?.id?.startsWith("zoho_l_")?"Leads":"Contacts";
+                const zohoId=full?.zohoId;
+                if(zohoId){
+                  const painLabels=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title);
+                  const noteLines=["Talk Track COMPLETED — "+new Date(now).toLocaleDateString()];
+                  if(painLabels.length) noteLines.push("Pain Points: "+painLabels.join(", "));
+                  if(calcResult) noteLines.push(`Sponsorship: $${calcResult.guaranteedMin?.toLocaleString()||0} guaranteed / $${calcResult.upsideMax?.toLocaleString()||0} upside`);
+                  crmAddNote(zohoMod,zohoId,noteLines.join("\n"));
+                }
+              }
+              toast("Talk Track complete!","success");
+              onClose();
+            }}>✓ COMPLETE</OBtn>
+          }
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  CRM — unified contact → deal → quote → order hub
 // ════════════════════════════════════════════════════════════════════════════
 function ModCRM() {
@@ -2093,43 +2668,71 @@ function ModCRM() {
   const [draft,setDraft]=useState("");
   const [ttView,setTtView]=useState(false);
   const [ttContact,setTtContact]=useState(null);
+  const [dealValueInput,setDealValueInput]=useState("");
+  const [dealValueSaved,setDealValueSaved]=useState(false);
+  const [overviewEditDealId,setOverviewEditDealId]=useState(null);
+  const [overviewEditValue,setOverviewEditValue]=useState("");
+  const [quoteItems,setQuoteItems]=useState([]);
   const [showAddContact,setShowAddContact]=useState(false);
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
   const [leftMode,setLeftMode]=useState("contacts");
   const [selSchool,setSelSchool]=useState(null);
+  const [profileForm,setProfileForm]=useState({});
+  const [profileDirty,setProfileDirty]=useState(false);
+  const [zohoSyncing,setZohoSyncing]=useState(false);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
 
   const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
+  const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 
-  const getCD=(c)=>{
-    const nm=cName(c).toLowerCase();
-    const sch=(c.school||"").toLowerCase();
-    const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
-    const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
-    let phase="lead";
-    if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
-    else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
-    else if(cd.length>0) phase="deal";
-    return{cd,co,phase};
-  };
+  // Build phase map once per deals/orders change — O(n) instead of O(n*m) per render
+  const cdMap=useMemo(()=>{
+    const m=new Map();
+    for(const c of contacts){
+      const nm=cName(c).toLowerCase();
+      const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
+      const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
+      let phase="lead";
+      if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
+      else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
+      else if(cd.length>0) phase="deal";
+      m.set(c.id,{cd,co,phase});
+    }
+    return m;
+  },[contacts,deals,orders]);
+
+  const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 
   const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
 
-  const filtered=[...contacts].filter(c=>{
-    if(c.deadStatus) return false;
+  // Navigate to a specific contact when coming from another module (e.g. Prospecting)
+  useEffect(()=>{
+    if(!s.crmNav) return;
+    const {id,school}=s.crmNav;
+    if(id){setLeftMode("contacts");setSelId(id);setSelSchool(null);setCrmTab("overview");}
+    else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
+    dispatch("SET_CRM_NAV",null);
+  },[s.crmNav]);
+
+  const filtered=useMemo(()=>{
     const q=search.toLowerCase();
-    if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
-    if(filter==="all") return true;
-    if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
-    return getCD(c).phase===filter;
-  }).sort((a,b)=>{
     const po={order:0,quote:1,deal:2,lead:3};
-    const pa=getCD(a).phase, pb=getCD(b).phase;
-    if(po[pa]!==po[pb]) return po[pa]-po[pb];
-    return cName(a).localeCompare(cName(b));
-  });
+    return contacts.filter(c=>{
+      if(c.deadStatus) return false;
+      if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
+      if(filter==="all") return true;
+      if(filter==="mine") return (c.ownerId===cu?.id)||(!c.ownerId);
+      return (cdMap.get(c.id)||{phase:"lead"}).phase===filter;
+    }).sort((a,b)=>{
+      const pa=(cdMap.get(a.id)||{phase:"lead"}).phase;
+      const pb=(cdMap.get(b.id)||{phase:"lead"}).phase;
+      if(po[pa]!==po[pb]) return po[pa]-po[pb];
+      return cName(a).localeCompare(cName(b));
+    });
+  },[contacts,cdMap,search,filter,cu?.id]);
 
   const sel=selId?contacts.find(c=>c.id===selId):null;
   const selCD=sel?getCD(sel):null;
@@ -2139,6 +2742,13 @@ function ModCRM() {
     setCrmTab("overview");setDraft("");setDrafting(false);
     setQuoteNum(activeDeal?.quoteNumber||"");
     setTtView(false);setTtContact(null);
+    setDealValueInput(String(activeDeal?.value||0));
+    setDealValueSaved(false);
+    setQuoteItems(activeDeal?.quoteItems||[]);
+    setOverviewEditDealId(null);
+    const c=selId?(contacts.find(x=>x.id===selId)||null):null;
+    if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
+    setProfileDirty(false);
   },[selId]);
 
   const logTouch=()=>{
@@ -2148,10 +2758,35 @@ function ModCRM() {
     setTouchNote("");toast("Touch logged","success");
   };
 
+  const saveProfile=async()=>{
+    if(!sel)return;
+    const pf=profileForm;
+    const patch={...pf,numAthletes:pf.numAthletes?Number(pf.numAthletes)||pf.numAthletes:undefined,numSports:pf.numSports?Number(pf.numSports)||pf.numSports:undefined};
+    if(patch.firstName||patch.lastName) patch.fullName=`${patch.firstName||""} ${patch.lastName||""}`.trim();
+    dispatch("UPDATE_CONTACT",{id:sel.id,...patch});
+    setProfileDirty(false);
+    if(sel.zohoId){
+      setZohoSyncing(true);
+      const isLead=sel.id?.startsWith("zoho_l_");
+      const mod=isLead?"Leads":"Contacts";
+      try{
+        const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,Account_Name:pf.school,Mailing_State:pf.state,Mailing_City:pf.city};
+        await crmUpdate(mod,sel.zohoId,fields);
+        if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,sel.zohoId,`Sport / primary contact sport: ${pf.sport}`);
+        toast("Profile saved + synced to Zoho","success");
+      }catch(e){
+        toast("Saved locally (Zoho sync failed)","info");
+      }
+      setZohoSyncing(false);
+    } else {
+      toast("Profile saved","success");
+    }
+  };
+
   const doDraftEmail=async()=>{
     if(!sel||!activeDeal) return;
     setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line.`);
+    const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
 
@@ -2281,57 +2916,171 @@ function ModCRM() {
         const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
         const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
         const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
-        const schoolOrgType=schoolContacts[0]?.orgType||"";
-        const schoolClass=schoolContacts[0]?.schoolClass||"";
-        const numAthletes=schoolContacts[0]?.numAthletes||"";
-        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
-        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
+        const allDeals=schoolDeals;
+        const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
+        const primaryC=schoolContacts[0]||null;
+        const schoolOrgType=primaryC?.orgType||"";
+        const schoolClass=primaryC?.schoolClass||"";
+        const numAthletes=primaryC?.numAthletes||"";
+        const numSports=primaryC?.numSports||"";
+        const state=primaryC?.state||"";
+        const city=primaryC?.city||"";
+        const sponsorshipMin=primaryC?.sponsorshipMin||null;
+        const sponsorshipMax=primaryC?.sponsorshipMax||null;
+        const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
+        const sponsorshipConfirmed=primaryC?.sponsorshipConfirmedAmount||null;
+        const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
+        const hasOnlineStore=primaryC?.hasOnlineStore||false;
+        const hasBoosterClub=primaryC?.hasBoosterClub||false;
+        // Invoices / payments
+        const schoolInvoices=(s.invoices||[]).filter(inv=>{
+          const cust=(inv.customer||"").toLowerCase();
+          const school=(selSchool||"").toLowerCase();
+          return cust.includes(school.slice(0,6))||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
+        });
+        const totalInvoiced=schoolInvoices.reduce((a,i)=>a+(i.total||0),0);
+        const totalPaid=schoolInvoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
+        const totalOwed=schoolInvoices.filter(i=>i.status!=="paid").reduce((a,i)=>a+(i.balance||i.total||0),0);
+        // All line items ever purchased
+        const allItems=schoolInvoices.flatMap(inv=>(inv.items||[]).map(it=>({...it,invoiceNum:inv.number,date:inv.date})));
+        const itemMap={};
+        allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
+        const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
+        // School orders
+        const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===(selSchool||"").toLowerCase());
+        // Expansion opportunities
+        const expandOps=[];
+        if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
+        if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
+        if(sponsorshipMin&&!sponsorshipStatus) expandOps.push({icon:"★",title:"Sponsorship",desc:`Estimated sponsorship potential ${fmt$(sponsorshipMin)}${sponsorshipMax?` – ${fmt$(sponsorshipMax)}`:""}`});
+        if(numSports&&Number(numSports)>0&&closedWon.length>0){
+          const sportsWithOrders=new Set(closedWon.map(d=>d.sport||"").filter(Boolean)).size;
+          if(sportsWithOrders<Number(numSports)) expandOps.push({icon:"🏆",title:"More Sports",desc:`${numSports} sports on file, orders only tracked for ${sportsWithOrders} — expand to other programs`});
+        }
+        if(schoolInvoices.length>0&&closedWon.length>0) expandOps.push({icon:"🔄",title:"Reorder Timing",desc:`Last order ${schoolInvoices[0]?.date||"on file"} — check if next season procurement is open`});
+        const SectionHdr=({children,sub})=>(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,marginTop:20,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5}}>{children}</div>
+            {sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sub}</div>}
+          </div>
+        );
         return(
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            {/* School header */}
+            {/* Header */}
             <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
-                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                     {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
                     {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
-                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                    {numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
+                    {hasOnlineStore&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>}
+                    {hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
                   </div>
                 </div>
-                {sponsorshipMin&&(
-                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
-                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
-                  </div>
-                )}
+                {/* Revenue summary */}
+                <div style={{display:"flex",gap:8,flexShrink:0}}>
+                  {totalWon>0&&(
+                    <div style={{textAlign:"right",background:B.greenBg||`${B.green}10`,border:`1px solid ${B.green}30`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,letterSpacing:1}}>WON</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(totalWon)}</div>
+                    </div>
+                  )}
+                  {totalOpen>0&&(
+                    <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>PIPELINE</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(totalOpen)}</div>
+                    </div>
+                  )}
+                  {sponsorshipMin&&(
+                    <div style={{textAlign:"right",background:"#7c3aed08",border:"1px solid #7c3aed25",borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#7c3aed",letterSpacing:1}}>SPONS. EST.</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin)}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+            <div style={{flex:1,overflowY:"auto",padding:"12px 22px 30px"}}>
               {/* Action bar */}
-              <div style={{display:"flex",gap:8,marginBottom:18}}>
+              <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6}}>
                 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
                 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
               </div>
 
-              {/* Contacts (coaches) list */}
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
-              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
-              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+              {/* ── KPI STRIP ── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
+                <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
+                <KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
+                <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
+                <KCard l="Open Deals" v={openDeals.length} c={B.blue} sub={fmt$K(totalOpen)}/>
+                <KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
+              </div>
+
+              {/* ── ACCOUNT INFO ── */}
+              <SectionHdr>ACCOUNT INFO</SectionHdr>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+                {[
+                  ["School Class",schoolClass||"—"],
+                  ["Location",[city,state].filter(Boolean).join(", ")||"—"],
+                  ["Org Type",schoolOrgType||"—"],
+                  ["# Athletes",numAthletes||"—"],
+                  ["# Sports",numSports||"—"],
+                  ["Team Store",hasOnlineStore?"Yes":"No"],
+                  ["Booster Club",hasBoosterClub?"Yes":"No"],
+                  ["Contacts",schoolContacts.length],
+                  ["Open Deals",openDeals.length],
+                ].map(([k,v])=>(
+                  <div key={k}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>{k}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── SPONSORSHIP ── */}
+              {(sponsorshipMin||sponsorshipStatus)&&(
+                <>
+                  <SectionHdr sub={sponsorshipStatus?sponsorshipStatus.toUpperCase():""}>SPONSORSHIP</SectionHdr>
+                  <div style={{background:sponsorshipPaid?B.greenBg||`${B.green}10`:sponsorshipStatus==="confirmed"?`${B.orange}08`:`#7c3aed08`,border:`1px solid ${sponsorshipPaid?B.green:sponsorshipStatus==="confirmed"?B.orange:"#7c3aed"}30`,borderRadius:6,padding:14}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>ESTIMATED MIN</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin||0)}</div>
+                      </div>
+                      {sponsorshipMax&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>UPSIDE MAX</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(sponsorshipMax)}</div>
+                      </div>}
+                      {sponsorshipConfirmed&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>CONFIRMED AMT</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(sponsorshipConfirmed)}</div>
+                      </div>}
+                    </div>
+                    {sponsorshipPaid&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:8}}>✓ PAID</div>}
+                  </div>
+                </>
+              )}
+
+              {/* ── CONTACTS ── */}
+              <SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {schoolContacts.map(c=>{
                   const {cd,phase}=getCD(c);
                   const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
                   const pc=PCOL[phase];
                   return(
                     <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                         {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
@@ -2342,19 +3091,96 @@ function ModCRM() {
                 })}
               </div>
 
-              {/* Open deals for this school */}
-              {openDeals.length>0&&(<>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+              {/* ── ALL DEALS ── */}
+              {allDeals.length>0&&(<>
+                <SectionHdr sub={`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}>DEALS</SectionHdr>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {openDeals.map(d=>(
-                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                  {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}{d.quoteNumber?` · Quote #${d.quoteNumber}`:""}</div>
                       </div>
-                      <div style={{textAlign:"right"}}>
+                      <div style={{textAlign:"right",flexShrink:0}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── INVOICES & PAYMENTS ── */}
+              {schoolInvoices.length>0&&(<>
+                <SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolInvoices.map(inv=>(
+                    <div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
+                      </div>
+                      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
+                          {inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ITEMS PURCHASED ── */}
+              {purchasedItems.length>0&&(<>
+                <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0}}>
+                    {["ITEM","QTY","TOTAL","LAST"].map(h=>(
+                      <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>{h}</div>
+                    ))}
+                  </div>
+                  {purchasedItems.map((it,i)=>(
+                    <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0,borderBottom:i<purchasedItems.length-1?`1px solid ${B.border}`:"none"}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"7px 12px"}}>{it.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"7px 12px",textAlign:"center"}}>{it.qty}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,padding:"7px 12px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"7px 12px"}}>{it.lastDate||"—"}</div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ORDERS ── */}
+              {schoolOrders.length>0&&(<>
+                <SectionHdr sub={`${schoolOrders.length} order${schoolOrders.length!==1?"s":""}`}>ORDERS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolOrders.map(o=>(
+                    <div key={o.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{o.name||"Order"}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{o.contact||""}{o.createdAt?` · ${new Date(o.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`:""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{o.stage||o.status||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── EXPANSION OPPORTUNITIES ── */}
+              {expandOps.length>0&&(<>
+                <SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {expandOps.map((op,i)=>(
+                    <div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                      <span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
                       </div>
                     </div>
                   ))}
@@ -2449,10 +3275,22 @@ function ModCRM() {
               <div>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>{cName(sel)}</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{sel.title}{sel.title&&sel.school?" · ":""}{sel.school}{sel.state?` · ${sel.state}`:""}</div>
-                <div style={{display:"flex",gap:12,marginTop:5,flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                   {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
                   {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
-                  {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
+                  <select
+                    value={sel.sport||""}
+                    onChange={e=>{
+                      const sp=e.target.value;
+                      dispatch("UPDATE_CONTACT",{id:sel.id,sport:sp});
+                      setPF("sport",sp);
+                      if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,`Sport: ${sp}`);}
+                    }}
+                    style={{background:sel.sport?B.purpleBg:B.surface,border:`1px solid ${sel.sport?B.purple:B.border}30`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:sel.sport?B.purple:B.muted,letterSpacing:.5,cursor:"pointer"}}
+                  >
+                    <option value="">+ SET SPORT</option>
+                    {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                  </select>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
                   <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Owner:</span>
@@ -2497,7 +3335,7 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+            {[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"]].map(([id,label])=>(
               <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
                 {label}
                 {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
@@ -2507,47 +3345,136 @@ function ModCRM() {
           {/* Tab content */}
           <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
 
-            {crmTab==="overview"&&(
+            {crmTab==="overview"&&(()=>{
+              const iS={width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"};
+              return(
               <div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:11,marginBottom:18}}>
-                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
-                  <KCard l="Pipeline" v={fmt$(selCD.cd.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+(d.value||0),0))} c={B.orange}/>
-                  <KCard l="Deals" v={selCD.cd.length} c={B.blue}/>
-                  <KCard l="Orders" v={selCD.co.length} c={B.green}/>
+                {/* ── CONTACT PROFILE ── */}
+                <div className="card" style={{padding:14,marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <Lbl>CONTACT PROFILE</Lbl>
+                    <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                      {profileDirty&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Unsaved changes</span>}
+                      <OBtn sm onClick={saveProfile} disabled={zohoSyncing||!profileDirty}>
+                        {zohoSyncing?"SYNCING…":sel.zohoId?"SAVE + SYNC TO ZOHO":"SAVE"}
+                      </OBtn>
+                    </div>
+                  </div>
+
+                  {/* Name */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>First Name</Lbl><input value={profileForm.firstName||""} onChange={e=>setPF("firstName",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Last Name</Lbl><input value={profileForm.lastName||""} onChange={e=>setPF("lastName",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Title + Sport (prominent) */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8,color:B.purple,letterSpacing:1}}>★ SPORT</Lbl>
+                      <select value={profileForm.sport||""} onChange={e=>setPF("sport",e.target.value)}
+                        style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:profileForm.sport?B.purple:B.muted,fontWeight:profileForm.sport?600:400}}>
+                        <option value="">— Select sport —</option>
+                        {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* School + State + City */}
+                  <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>School / Organization</Lbl><input value={profileForm.school||""} onChange={e=>setPF("school",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>State</Lbl><select value={profileForm.state||""} onChange={e=>setPF("state",e.target.value)} style={iS}><option value="">—</option>{STATES_LIST.map(st=><option key={st}>{st}</option>)}</select></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>City</Lbl><input value={profileForm.city||""} onChange={e=>setPF("city",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Email + Phone */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Email</Lbl><input type="email" value={profileForm.email||""} onChange={e=>setPF("email",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Phone</Lbl><input type="tel" value={profileForm.phone||""} onChange={e=>setPF("phone",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Org details */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>School Class</Lbl>
+                      <select value={profileForm.schoolClass||""} onChange={e=>setPF("schoolClass",e.target.value)} style={iS}>
+                        <option value="">—</option>
+                        {["1A","2A","3A","4A","5A","6A","7A","College","Other"].map(c=><option key={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Athletes</Lbl><input type="number" value={profileForm.numAthletes||""} onChange={e=>setPF("numAthletes",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Sports</Lbl><input type="number" value={profileForm.numSports||""} onChange={e=>setPF("numSports",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>Priority</Lbl>
+                      <select value={profileForm.priority||"medium"} onChange={e=>setPF("priority",e.target.value)} style={iS}>
+                        {["hot","warm","medium","cold"].map(p=><option key={p}>{p}</option>)}
+                      </select>
+                    </div>
+                  </div>
                 </div>
-                {selCD.cd.length===0&&selCD.co.length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0"}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No deals or orders yet</div>
-                    <OBtn onClick={()=>{setCrmTab("deal");setShowNewDeal(true);}}>+ START A DEAL</OBtn>
+
+                {/* ── ACTIVITY SUMMARY ── */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+                  <KCard l="Score" v={sel.score||0} c={B.orange}/>
+                  <KCard l="Status" v={(sel.outreachStatus||"new").toUpperCase()} c={B.blue}/>
+                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
+                </div>
+
+                {/* Source + last contact */}
+                {(sel.source||sel.lastOutreach||sel.importedAt)&&(
+                  <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+                    {sel.source&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Source: <strong>{sel.source}</strong></span>}
+                    {sel.lastOutreach&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Last contacted: <strong>{sel.lastOutreach}</strong></span>}
+                    {sel.importedAt&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Added: <strong>{new Date(sel.importedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</strong></span>}
+                  </div>
+                )}
+
+                {/* ── PIPELINE SUMMARY ── */}
+                {(selCD.cd.length>0||selCD.co.length>0)?(
+                  <div className="card" style={{padding:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <Lbl>PIPELINE</Lbl>
+                      <OBtn sm onClick={()=>setCrmTab("deal")}>+ NEW DEAL</OBtn>
+                    </div>
+                    {selCD.cd.map(d=>(
+                      <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                          <div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
+                        </div>
+                        <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                          {overviewEditDealId===d.id?(
+                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                              <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+                              <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
+                              <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer"}}>✕</button>
+                            </div>
+                          ):(
+                            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
+                              <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer"}}>✎</button>
+                            </div>
+                          )}
+                          {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    {selCD.co.map(o=>(
+                      <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>ORDER</span></div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    ))}
                   </div>
                 ):(
-                  <>
-                    {selCD.cd.length>0&&(
-                      <div className="card" style={{padding:14,marginBottom:12}}>
-                        <Lbl s={{marginBottom:10}}>Deals</Lbl>
-                        {selCD.cd.map(d=>(
-                          <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div><div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div></div>
-                            <div style={{textAlign:"right"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>{d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted,marginTop:1}}>Due {d.followUpDate}</div>}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {selCD.co.length>0&&(
-                      <div className="card" style={{padding:14}}>
-                        <Lbl s={{marginBottom:10}}>Orders</Lbl>
-                        {selCD.co.map(o=>(
-                          <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{o.stage}</span></div>
-                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
+                  <div style={{background:B.surface,borderRadius:6,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${B.border}`}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals or orders yet</span>
+                    <OBtn sm onClick={()=>setCrmTab("deal")}>+ START DEAL</OBtn>
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {crmTab==="discovery"&&(
               <div>
@@ -2676,7 +3603,7 @@ function ModCRM() {
                     <div className="card" style={{padding:14,marginBottom:12,borderTop:`3px solid ${DSC[activeDeal.stage]||B.orange}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
                         <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{activeDeal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{activeDeal.school}</div></div>
-                        <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><input type="number" defaultValue={activeDeal.value||0} onBlur={e=>{const v=Number(e.target.value||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/></div>
+                        <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><div style={{display:"flex",gap:4,alignItems:"center"}}><input type="number" value={dealValueInput} onChange={e=>{setDealValueInput(e.target.value);setDealValueSaved(false);}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>{dealValueSaved?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green}}>✓</span>:<OBtn sm onClick={()=>{const v=Number(dealValueInput||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});setDealValueSaved(true);setTimeout(()=>setDealValueSaved(false),2000);toast("Deal value updated","success");}}>SAVE</OBtn>}</div></div>
                       </div>
                       <Lbl s={{marginBottom:5}}>Stage</Lbl>
                       <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
@@ -2711,27 +3638,87 @@ function ModCRM() {
               </div>
             )}
 
-            {crmTab==="quote"&&(
+            {crmTab==="quote"&&(()=>{
+              const qSubtotal=quoteItems.reduce((a,i)=>a+(i.qty||0)*(i.rate||0),0);
+              const zohoCustomer=(s.invoices||[]).find(inv=>inv.customer&&sel&&(inv.customer.toLowerCase()===(sel.school||"").toLowerCase()||(activeDeal&&inv.customer.toLowerCase()===activeDeal.school?.toLowerCase())));
+              const zohoCustomerId=zohoCustomer?.customerId||null;
+              const zbUrl=zohoCustomerId?`https://books.zoho.com/app/#contacts/view/${zohoCustomerId}`:"https://books.zoho.com/app/";
+              const printPDF=()=>{
+                const rows=quoteItems.map(i=>`<tr><td>${i.name||""}</td><td style="text-align:center">${i.qty||0}</td><td style="text-align:right">$${Number(i.rate||0).toFixed(2)}</td><td style="text-align:right">$${((i.qty||0)*(i.rate||0)).toFixed(2)}</td></tr>`).join("");
+                const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote ${quoteNum||""}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:760px;margin:0 auto}h1{color:#f37321;font-size:28px;margin:0}h2{font-size:13px;font-weight:400;color:#666;margin:4px 0 0}table{width:100%;border-collapse:collapse;margin-top:28px}th{background:#f37321;color:#fff;padding:10px 12px;text-align:left;font-size:13px}td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}.total-row{font-weight:700;font-size:15px;color:#f37321}.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #f37321;padding-bottom:16px;margin-bottom:8px}.meta{font-size:12px;color:#444;margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:4px}.meta span{color:#666}footer{margin-top:40px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style></head><body><div class="header"><div><h1>ST1 SPORTS</h1><h2>Premium Athletic Equipment</h2></div><div style="text-align:right"><div style="font-size:22px;font-weight:700;color:#f37321">QUOTE</div><div style="font-size:13px;color:#666">#${quoteNum||"—"}</div><div style="font-size:12px;color:#999">${new Date().toLocaleDateString()}</div></div></div><div class="meta"><div><span>To:</span> <strong>${sel?sel.fullName||[sel.firstName,sel.lastName].filter(Boolean).join(" "):"—"}</strong></div><div><span>School/Org:</span> <strong>${activeDeal?.school||sel?.school||"—"}</strong></div><div><span>Email:</span> ${sel?.email||"—"}</div><div><span>Phone:</span> ${sel?.phone||"—"}</div></div><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}<tr class="total-row"><td colspan="3" style="text-align:right;padding-top:16px">TOTAL</td><td style="text-align:right;padding-top:16px">$${qSubtotal.toFixed(2)}</td></tr></tbody></table><div style="margin-top:20px;font-size:12px;color:#555">${activeDeal?.quoteNotes||""}</div><footer>ST1 Sports · matt@st1sports.com · 719-256-0275 · st1sports.com · This quote is valid for 30 days.</footer></body></html>`;
+                const w=window.open("","_blank","width=800,height=600");
+                if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),400);}
+              };
+              return (
               <div>
                 <div className="card" style={{padding:16,marginBottom:12}}>
-                  <Lbl s={{marginBottom:12}}>Quote</Lbl>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <Lbl>Quote</Lbl>
+                    {zohoCustomer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green}}>✓ Zoho account: {zohoCustomer.customer}</div>}
+                  </div>
                   {activeDeal?(
                     <>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-                        <div><Lbl s={{marginBottom:3}}>Quote Number</Lbl><input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/></div>
-                        <div><Lbl s={{marginBottom:3}}>Quote Amount ($)</Lbl><input type="number" defaultValue={activeDeal.quoteAmount||activeDeal.value||0} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteAmount:Number(e.target.value||0)})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/></div>
+                      <div style={{marginBottom:12}}>
+                        <Lbl s={{marginBottom:3}}>Quote Number</Lbl>
+                        <input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/>
                       </div>
-                      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
-                        <a href="https://admin.st1sports.com" target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,borderRadius:6,padding:"9px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",display:"inline-block"}}>OPEN ZOHO BOOKS ↗</a>
-                        {activeDeal.stage!=="Quoted"&&<OBtn col={B.blue} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
+                      <Lbl s={{marginBottom:6}}>Line Items</Lbl>
+                      {quoteItems.length>0&&(
+                        <div style={{marginBottom:8}}>
+                          <div style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4}}>
+                            {["ITEM","QTY","UNIT PRICE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+                          </div>
+                          {quoteItems.map((item,idx)=>(
+                            <div key={item.id} style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
+                              <input value={item.name} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,name:e.target.value}:q))} placeholder="Item name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+                              <input type="number" min="1" value={item.qty} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,qty:Number(e.target.value||1)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"center"}}/>
+                              <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,rate:Number(e.target.value||0)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"right"}}/>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+                              <button onClick={()=>setQuoteItems(qi=>qi.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1,textAlign:"center"}}>✕</button>
+                            </div>
+                          ))}
+                          <div style={{display:"flex",justifyContent:"flex-end",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`}}>
+                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.orange}}>Total: {fmt$(qSubtotal)}</div>
+                          </div>
+                        </div>
+                      )}
+                      <button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
+                      <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+                      <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
+                        <OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal});toast("Quote saved","success");}}>SAVE QUOTE</OBtn>
+                        <OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
+                        <a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
+                        {activeDeal.stage!=="Quoted"&&<OBtn col={B.green} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
                       </div>
-                      {activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file</div>}
-                      <div style={{marginTop:12}}><Lbl s={{marginBottom:4}}>Quote Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+                      {activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file{activeDeal.quoteAmount?` — ${fmt$(activeDeal.quoteAmount)}`:""}</div>}
                     </>
                   ):<div style={{textAlign:"center",padding:"20px 0",color:B.muted,fontSize:11}}><OBtn onClick={()=>setCrmTab("deal")}>Create a deal first →</OBtn></div>}
                 </div>
+                {/* Past quotes across all deals */}
+                {(()=>{
+                  const pastDeals=(s.deals||[]).filter(d=>d.contactId===sel.id&&d.quoteNumber);
+                  if(pastDeals.length===0) return null;
+                  return(
+                    <div className="card" style={{padding:14}}>
+                      <Lbl s={{marginBottom:10}}>Quote History</Lbl>
+                      {pastDeals.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).map(d=>(
+                        <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{d.quoteNumber||"—"}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.stage||""}{d.quoteAmount?` · ${fmt$(d.quoteAmount)}`:""}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:d.stage==="Closed Won"?B.green:d.stage==="Closed Lost"?"#ef4444":B.orange,fontWeight:600}}>{d.quoteAmount?fmt$(d.quoteAmount):""}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.updatedAt?new Date(d.updatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):""}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
-            )}
+              );
+            })()}
 
             {crmTab==="order"&&(
               <div>
@@ -2767,40 +3754,80 @@ function ModCRM() {
               </div>
             )}
 
-            {crmTab==="notes"&&(
+            {crmTab==="history"&&(()=>{
+              const srcMeta={
+                note:{label:"NOTE",color:B.orange,icon:"📝"},
+                deal:{label:"DEAL NOTE",color:B.blue,icon:"💼"},
+                touch:{label:"TOUCH",color:B.green,icon:"🤝"},
+                email:{label:"EMAIL",color:B.purple||"#7c3aed",icon:"✉️"},
+                campaign:{label:"CAMPAIGN",color:"#0ea5e9",icon:"⚡"},
+                quote:{label:"QUOTE",color:"#f59e0b",icon:"📄"},
+                order:{label:"ORDER",color:"#10b981",icon:"🏆"},
+              };
+              const allEvents=[
+                ...(sel.notes||[]).map(n=>({...n,src:"note"})),
+                ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
+                ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note||t.type,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
+                ...(sel.activity||[]).filter(a=>a.type==="email"||a.type==="email_sent"||a.type==="email_opened").map(a=>({id:a.id||mkId(),text:a.subject||a.text||"Email sent",ts:a.ts||a.sentAt||Date.now(),author:a.author||a.from||"",src:"email",meta:a.status})),
+                ...(sel.campaigns||[]).map(c=>({id:c.id||mkId(),text:`Added to campaign: ${c.name||c.campaignId||""}`,ts:c.addedAt||Date.now(),author:"System",src:"campaign"})),
+                ...(activeDeal?.quotes||[]).map(q=>({id:q.id,text:`Quote sent — ${q.title||"Untitled"} (${q.status||"draft"})`,ts:q.createdAt||Date.now(),author:q.author||"",src:"quote"})),
+                ...(s.orders||[]).filter(o=>o.contactId===sel.id).map(o=>({id:o.id,text:`Order ${o.status||"placed"} — ${o.title||"Order"}`,ts:o.createdAt||Date.now(),author:"",src:"order"})),
+              ].sort((a,b)=>b.ts-a.ts);
+              return(
               <div>
-                <div style={{display:"flex",gap:6,marginBottom:14}}>
-                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                {/* Add note */}
+                <div style={{display:"flex",gap:6,marginBottom:16}}>
+                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note about this contact…" rows={2}
+                    style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
                   <OBtn sm col={B.orange} onClick={()=>{
                     if(!noteText.trim()) return;
                     const nt=noteText.trim();
                     dispatch("UPDATE_CONTACT",{id:sel.id,notes:[...(sel.notes||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
                     if(activeDeal) dispatch("UPDATE_DEAL",{id:activeDeal.id,notes_list:[...(activeDeal.notes_list||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
-                    crmAddNote("Leads",sel.zohoId,nt);
+                    if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,nt);}
                     setNoteText("");toast("Note added","success");
                   }}>ADD</OBtn>
                 </div>
-                {[
-                  ...(sel.notes||[]).map(n=>({...n,src:"contact"})),
-                  ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
-                  ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
-                ].sort((a,b)=>b.ts-a.ts).map(n=>(
-                  <div key={n.id} style={{display:"flex",gap:10,padding:"9px 0",borderBottom:`1px solid ${B.border}`}}>
-                    <div style={{width:7,height:7,borderRadius:"50%",background:{contact:B.orange,deal:B.blue,touch:B.green}[n.src]||B.muted,marginTop:4,flexShrink:0}}/>
-                    <div style={{flex:1}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{n.text}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>
-                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:{contact:B.orange,deal:B.blue,touch:B.green}[n.src],marginRight:6}}>{n.src.toUpperCase()}</span>
-                        {new Date(n.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} · {n.author}
-                      </div>
-                    </div>
+                {/* Timeline */}
+                {allEvents.length===0?(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>📋</div>
+                    No history yet — add a note or send a quote to get started
                   </div>
-                ))}
-                {(sel.notes||[]).length===0&&(activeDeal?.notes_list||[]).length===0&&(activeDeal?.touchHistory||[]).length===0&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"30px 0"}}>No notes yet</div>
+                ):(
+                  <div style={{position:"relative"}}>
+                    <div style={{position:"absolute",left:11,top:0,bottom:0,width:2,background:B.border,borderRadius:2}}/>
+                    {allEvents.map((ev,i)=>{
+                      const sm=srcMeta[ev.src]||{label:ev.src.toUpperCase(),color:B.muted,icon:"•"};
+                      return(
+                      <div key={ev.id||i} style={{display:"flex",gap:14,paddingBottom:16,position:"relative"}}>
+                        <div style={{width:24,height:24,borderRadius:"50%",background:B.white,border:`2px solid ${sm.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0,zIndex:1}}>
+                          {sm.icon}
+                        </div>
+                        <div style={{flex:1,background:B.surface,borderRadius:6,padding:"8px 12px",border:`1px solid ${B.border}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:3}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sm.color,letterSpacing:1,fontWeight:700}}>{sm.label}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,whiteSpace:"nowrap"}}>
+                              {new Date(ev.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                            </span>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{ev.text}</div>
+                          {(ev.author||ev.meta)&&(
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>
+                              {ev.author&&<span>{ev.author}</span>}
+                              {ev.author&&ev.meta&&<span> · </span>}
+                              {ev.meta&&<span style={{color:ev.meta==="opened"?B.green:B.muted}}>{ev.meta}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
@@ -3147,20 +4174,19 @@ function ModDeals() {
   };
   const [form,setForm]=useState({name:"",contact:"",school:"",state:"IA",stage:"Quoted",value:"",product:"Track & Field Equipment",assignee:cu?.id||"matt",quoteDate:today(),followUpDate:"",notes:"",campaignId:""});
   const isOwner=cu?.role==="owner";
-  const pool=isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id);
-  const list=pool.filter(d=>{
+  const pool=useMemo(()=>isOwner?(s.deals||[]):(s.deals||[]).filter(d=>d.assignee===cu?.id),[s.deals,isOwner,cu?.id]);
+  const list=useMemo(()=>pool.filter(d=>{
     if(flt==="active") return !["Closed Won","Closed Lost","On Hold"].includes(d.stage);
     if(flt==="overdue") return d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received"].includes(d.stage);
     if(flt==="won") return d.stage==="Closed Won";
     if(flt==="all") return true;
     return d.stage===flt;
   }).sort((a,b)=>{
-    // Closed Lost always sinks to the bottom; within groups sort by value desc
     const aLost=a.stage==="Closed Lost"?1:0;
     const bLost=b.stage==="Closed Lost"?1:0;
     if(aLost!==bLost) return aLost-bLost;
     return b.value-a.value;
-  });
+  }),[pool,flt]);
   const sel_d=sel?(s.deals||[]).find(d=>d.id===sel):null;
 
   const addDeal=()=>{
@@ -3180,11 +4206,11 @@ function ModDeals() {
   };
   const draftEmail=async()=>{
     if(!sel_d) return;setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a follow-up email from ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 Deal: ${sel_d.name} | Contact: ${sel_d.contact} at ${sel_d.school}, ${sel_d.state}
 Stage: ${sel_d.stage} | Value: ${fmt$(sel_d.value)} | Notes: ${sel_d.notes}
 Recent touches: ${(sel_d.touchHistory||[]).slice(-2).map(t=>t.note).join("; ")}
-Under 80 words. Include subject line. Warm tone.`);
+Under 80 words. Include subject line. Brand voice: warm, direct, relationship-first — lead with the person or their program, not the product. No "hope this finds you well", no efficiency-first hooks ("2 weeks", "no minimums"). Athlete-aware tone. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
   const pipe=pool.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
@@ -3928,29 +4954,82 @@ function ModReorder() {
   const [drafting,setDrafting]=useState(null);
   const [pulling,setPulling]=useState(false);
   const [showAdd,setShowAdd]=useState(false);
+  const [autoDrafting,setAutoDrafting]=useState(false);
+  const [dayFilter,setDayFilter]=useState("all");
   const [form,setForm]=useState({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
 
-  const active=(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()));
+  const now=Date.now();
+
+  // Enrich every pending reorder with daysSince + stage — memoized on reorders data
+  const withDays=useMemo(()=>(s.reorders||[])
+    .filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date()))
+    .map(r=>{
+      const daysSince=r.lastOrderDate?Math.floor((now-new Date(r.lastOrderDate).getTime())/86400000):0;
+      const stage=daysSince>=365?"lapsed":daysSince>=270?"follow-up":daysSince>=180?"check-in":"early";
+      return{...r,daysSince,stage};
+    }),[s.reorders]);
+
+  // Bucket filter
+  const filtered=useMemo(()=>
+    dayFilter==="90"  ?withDays.filter(r=>r.daysSince>=90&&r.daysSince<180):
+    dayFilter==="180" ?withDays.filter(r=>r.daysSince>=180&&r.daysSince<270):
+    dayFilter==="270" ?withDays.filter(r=>r.daysSince>=270&&r.daysSince<365):
+    dayFilter==="365" ?withDays.filter(r=>r.daysSince>=365):
+    withDays,[withDays,dayFilter]);
+
+  // Top 5 by priority: follow-up > check-in > lapsed > early, then by value
+  const stageRank={lapsed:50,"follow-up":100,"check-in":80,early:20};
+  const top5=useMemo(()=>[...withDays]
+    .sort((a,b)=>((stageRank[b.stage]||0)+(b.lastOrderValue||0)/200)-((stageRank[a.stage]||0)+(a.lastOrderValue||0)/200))
+    .slice(0,5),[withDays]);
+
+  const STAGE={
+    "early":      {color:B.blue,  label:"EARLY",      dot:"·"},
+    "check-in":   {color:B.orange,label:"CHECK-IN",   dot:"·"},
+    "follow-up":  {color:B.red,   label:"FOLLOW-UP",  dot:"·"},
+    "lapsed":     {color:B.muted, label:"LAPSED",     dot:"·"},
+  };
+
+  const draftPrompt=(r)=>{
+    if(r.stage==="check-in")
+      return `This is a friendly 6-month check-in — keep it warm and low-pressure, ask if they're thinking about the upcoming season.`;
+    if(r.stage==="follow-up")
+      return `They haven't reordered in 9 months — be a bit more direct, mention limited stock or seasonal timing, and ask if they want the same items.`;
+    if(r.stage==="lapsed")
+      return `Over a year since their last order — acknowledge the time, share what's new at ST1, make it easy for them to re-engage.`;
+    return `Early seasonal check-in — light touch, mention new products or season prep.`;
+  };
 
   const draftReo=async(r)=>{
     setDrafting(r.id);
-    const t=await aiCall(`Write a short seasonal reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a short reorder email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
-Last order: ${fmtD(r.lastOrderDate)} — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
-Under 80 words. Reference exact last order. Ask if they need to restock. Warm tone.`);
-    setDrafts(d=>({...d,[r.id]:t||""})); setDrafting(null);
+Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
+${draftPrompt(r)}
+Under 80 words. Reference the exact last order. Brand voice: warm, direct, athlete-aware — reference the sport, the team, or the season coming up. No "hope this finds you well", no efficiency-first hooks. Lead with the relationship, then the reorder reason. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275`);
+    setDrafts(d=>({...d,[r.id]:t||""}));
+    setDrafting(null);
   };
 
-  // Pull paid invoices from Zoho Books → build reorder queue
-  // Window: last ordered 45–365 days ago, skip if already queued
+  // Auto-draft all 180d check-ins that don't yet have a draft
+  const autoDraftCheckIns=async()=>{
+    const targets=withDays.filter(r=>r.stage==="check-in"&&!drafts[r.id]);
+    if(!targets.length){toast("No new 180d check-ins to draft","info");return;}
+    setAutoDrafting(true);
+    toast(`Auto-drafting ${targets.length} check-in${targets.length>1?"s":""}…`,"info");
+    for(const r of targets) await draftReo(r);
+    setAutoDrafting(false);
+    toast(`${targets.length} draft${targets.length>1?"s":""} ready — review and send`,"success");
+  };
+
+  // Pull paid invoices from Zoho Books → build reorder queue (75–550 days)
   const pullFromZoho=async()=>{
     setPulling(true);
-    try {
+    try{
       const res=await zohoCall("books","/invoices?filter_by=Status.Paid&per_page=200&sort_column=date&sort_order=D");
       const invoices=res.invoices||[];
       if(!invoices.length&&res.message) throw new Error(res.message);
 
-      // Keep only most recent paid invoice per customer
       const byCustomer={};
       for(const inv of invoices){
         const key=inv.customer_id||inv.customer_name;
@@ -3959,13 +5038,12 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       const existingIds=new Set((s.reorders||[]).map(r=>r.zohoInvoiceId).filter(Boolean));
-      const now=Date.now();
       let added=0;
 
       for(const inv of Object.values(byCustomer)){
         if(existingIds.has(inv.invoice_id)) continue;
         const daysSince=Math.floor((now-new Date(inv.date).getTime())/86400000);
-        if(daysSince<45||daysSince>365) continue; // outside reorder window
+        if(daysSince<75||daysSince>550) continue;
 
         dispatch("ADD_REORDER",{
           id:"reorder_"+inv.invoice_id,
@@ -3984,8 +5062,8 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
       }
 
       dispatch("LOG",{msg:`Reorder sync from Zoho Books — ${added} new accounts queued`});
-      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window (45–365 days since last order)`,"success");
-    } catch(e){
+      toast(added>0?`${added} accounts added to reorder queue`:`No new accounts in reorder window`,"success");
+    }catch(e){
       toast(`Zoho sync failed: ${e.message.slice(0,100)}`,"error");
     }
     setPulling(false);
@@ -3995,36 +5073,98 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
     if(!form.school.trim()) return toast("School name required","error");
     dispatch("ADD_REORDER",{
       id:mkId(),
-      school:form.school,
-      contact:form.contact,
-      state:form.state,
-      sport:form.sport,
+      school:form.school,contact:form.contact,state:form.state,sport:form.sport,
       lastOrderDate:form.lastOrderDate,
       lastItems:form.lastItems.split(",").map(x=>x.trim()).filter(Boolean),
       lastOrderValue:parseFloat(form.lastOrderValue)||0,
-      status:"pending",
-      source:"manual",
+      status:"pending",source:"manual",
     });
     setForm({school:"",contact:"",state:"",sport:"Track & Field",lastOrderDate:"",lastItems:"",lastOrderValue:""});
     setShowAdd(false);
     toast("Added to reorder queue","success");
   };
 
+  const checkInCount=withDays.filter(r=>r.stage==="check-in").length;
+  const followUpCount=withDays.filter(r=>r.stage==="follow-up").length;
+
+  const FILTERS=[
+    ["all","ALL",null],
+    ["90","90D · EARLY",B.blue],
+    ["180","180D · CHECK-IN",B.orange],
+    ["270","270D · FOLLOW-UP",B.red],
+    ["365","365D · LAPSED",B.muted],
+  ];
+
   return (
     <div style={{padding:"22px 26px"}}>
-      <PH title="REORDER ENGINE" sub={active.length>0?`${active.length} account${active.length!==1?"s":""} ready for seasonal outreach`:"All accounts up to date"}
+      <PH title="REORDER ENGINE"
+        sub={`${withDays.length} in window · ${checkInCount} check-in${checkInCount!==1?"s":""} ready · ${followUpCount} need follow-up`}
         action={
           <div style={{display:"flex",gap:7}}>
-            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD MANUALLY"}</GBtn>
-            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING...":"↓ SYNC ZOHO BOOKS"}</OBtn>
+            <GBtn onClick={autoDraftCheckIns} disabled={autoDrafting} style={{fontSize:10,padding:"4px 10px"}}>
+              {autoDrafting?"DRAFTING…":"⚡ AUTO-DRAFT 180D"}
+            </GBtn>
+            <GBtn onClick={()=>setShowAdd(v=>!v)} style={{fontSize:10,padding:"4px 10px"}}>{showAdd?"CANCEL":"+ ADD"}</GBtn>
+            <OBtn onClick={pullFromZoho} disabled={pulling}>{pulling?"SYNCING…":"↓ SYNC ZOHO"}</OBtn>
           </div>
         }
       />
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:11,marginBottom:18}}>
-        <KCard l="In Queue" v={active.length} c={B.orange}/>
+      {/* Stats */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:18}}>
+        <KCard l="Queue" v={withDays.length} c={B.text}/>
+        <KCard l="90d Early" v={withDays.filter(r=>r.stage==="early").length} c={B.blue}/>
+        <KCard l="180d Check-In" v={checkInCount} c={B.orange}/>
+        <KCard l="270d Follow-Up" v={followUpCount} c={B.red}/>
         <KCard l="Sent" v={(s.reorders||[]).filter(r=>r.status==="sent").length} c={B.green}/>
-        <KCard l="Snoozed" v={(s.reorders||[]).filter(r=>r.snoozedUntil&&new Date(r.snoozedUntil)>new Date()).length} c={B.muted}/>
+      </div>
+
+      {/* Top 5 priority panel */}
+      {top5.length>0&&(
+        <div style={{background:B.surface,borderRadius:8,padding:14,marginBottom:18,border:`1px solid ${B.border}`}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:11}}>TOP 5 · REACH OUT NOW</div>
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {top5.map((r,i)=>{
+              const st=STAGE[r.stage]||STAGE.early;
+              return(
+                <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:B.white,borderRadius:6,border:`1px solid ${B.border}`,borderLeft:`3px solid ${st.color}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,minWidth:18}}>#{i+1}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{r.school}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.sport}{r.contact?` · ${r.contact}`:""}{r.state?`, ${r.state}`:""}</div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginRight:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,letterSpacing:.5,marginBottom:1}}>{st.label} · {r.daysSince}d AGO</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{fmt$(r.lastOrderValue)}</div>
+                  </div>
+                  <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Day-range filter tabs */}
+      <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+        {FILTERS.map(([v,label,col])=>{
+          const active=dayFilter===v;
+          const c=active?(col||B.orange):B.muted;
+          return(
+            <button key={v} onClick={()=>setDayFilter(v)}
+              style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,padding:"4px 11px",borderRadius:4,
+                border:`1px solid ${active?(col||B.orange):B.border}`,
+                background:active?(col||B.orange)+"22":"transparent",
+                color:active?(col||B.orange):B.muted,cursor:"pointer"}}>
+              {label}
+            </button>
+          );
+        })}
+        {dayFilter!=="all"&&(
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,alignSelf:"center",marginLeft:4}}>
+            {filtered.length} account{filtered.length!==1?"s":""}
+          </span>
+        )}
       </div>
 
       {/* Manual add form */}
@@ -4052,7 +5192,7 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Items (comma-sep)</Lbl>
-              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus..." style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
+              <input value={form.lastItems} onChange={e=>setForm(f=>({...f,lastItems:e.target.value}))} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/>
             </div>
             <div>
               <Lbl s={{marginBottom:3}}>Order Value</Lbl>
@@ -4063,39 +5203,49 @@ Under 80 words. Reference exact last order. Ask if they need to restock. Warm to
         </div>
       )}
 
-      {active.length===0&&!showAdd&&(
+      {filtered.length===0&&!showAdd&&(
         <div style={{textAlign:"center",padding:"40px 0"}}>
           <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.border,marginBottom:6}}>ALL CLEAR</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Sync Zoho Books to populate from paid invoices (45–365 days old), or add accounts manually</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+            {dayFilter==="all"?"Sync Zoho Books or add accounts manually to populate this queue.":"No accounts in this time window."}
+          </div>
         </div>
       )}
 
-      {active.map(r=>(
-        <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${B.orange}`}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
-            <div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500,marginBottom:2}}>{r.school}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
-                Last order: {fmtD(r.lastOrderDate)} · {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+      {filtered.map(r=>{
+        const st=STAGE[r.stage]||STAGE.early;
+        return(
+          <div key={r.id} className="card fu" style={{padding:"11px 13px",marginBottom:10,borderLeft:`3px solid ${st.color}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{r.school}</span>
+                  <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,background:st.color+"18",padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{st.label}</span>
+                </div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>
+                  Last order: {fmtD(r.lastOrderDate)}&nbsp;
+                  <span style={{color:st.color,fontWeight:600}}>({r.daysSince}d ago)</span>
+                  &nbsp;· {(r.lastItems||[]).slice(0,2).join(", ")||"—"} · {fmt$(r.lastOrderValue)}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
+                <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"…":"✦ DRAFT"}</OBtn>
+                <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(now+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
               </div>
             </div>
-            <div style={{display:"flex",gap:6,flexShrink:0,marginLeft:11}}>
-              <OBtn sm onClick={()=>draftReo(r)} disabled={drafting===r.id}>{drafting===r.id?"...":"✦ DRAFT"}</OBtn>
-              <GBtn onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,snoozedUntil:new Date(Date.now()+86400000*30).toISOString().slice(0,10)});toast("Snoozed 30 days");}} style={{fontSize:10,padding:"4px 8px"}}>Snooze 30d</GBtn>
-            </div>
+            {drafts[r.id]&&(
+              <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
+                <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
+                <div style={{display:"flex",gap:6,marginTop:6}}>
+                  <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
+                  <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
+                </div>
+              </div>
+            )}
           </div>
-          {drafts[r.id]&&(
-            <div style={{background:B.surface,borderRadius:4,padding:9,border:`1px solid ${B.border}`}}>
-              <textarea value={drafts[r.id]} onChange={e=>setDrafts(d=>({...d,[r.id]:e.target.value}))} rows={6} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
-              <div style={{display:"flex",gap:6,marginTop:6}}>
-                <GBtn onClick={()=>navigator.clipboard?.writeText(drafts[r.id])} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
-                <OBtn sm col={B.green} onClick={()=>{dispatch("UPDATE_REORDER",{id:r.id,status:"sent"});dispatch("LOG",{msg:`Reorder email sent to ${r.school} for ${r.sport}`});toast("Marked sent","success");}}>MARK SENT ✓</OBtn>
-              </div>
-            </div>
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -4169,6 +5319,7 @@ function ModProspecting() {
     bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
   };
   const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
+  const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
 
   const runScrape=async(area)=>{
     setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
@@ -4605,7 +5756,7 @@ function ModProspecting() {
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
   const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 
-  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -4958,7 +6109,7 @@ function ModProspecting() {
                 })()}
                 {/* Hot leads leaderboard */}
                 {(()=>{
-                  const hot=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5);
+                  const hot=hotLeads;
                   if(!hot.length) return null;
                   return(
                     <div style={{marginBottom:14,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:7,padding:12}}>
@@ -5129,14 +6280,17 @@ function ModProspecting() {
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                           {((typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{(typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
-                          <button onClick={()=>{
-                            const school=typeof c.school==="string"?c.school:c.school?.name||"";
-                            const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                            const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-                            const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
-                            dispatch("SET_AGENT_DRAFT",draft);
-                            setMod("agent");
-                          }} style={{marginTop:5,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",display:"block",width:"100%",textAlign:"center"}}>→ AGENT</button>
+                          <div style={{display:"flex",gap:4,marginTop:5}}>
+                            <button onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} style={{flex:1,background:B.surface,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ CRM</button>
+                            <button onClick={()=>{
+                              const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                              const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                              const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+                              const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
+                              dispatch("SET_AGENT_DRAFT",draft);
+                              setMod("agent");
+                            }} style={{flex:1,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ AGENT</button>
+                          </div>
                           <div style={{marginTop:5,position:"relative"}}>
                             {flaggingContact===c.id?(
                               <div style={{position:"absolute",right:0,top:"100%",zIndex:20,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:160,padding:6}}>
@@ -5481,14 +6635,12 @@ function ModProspecting() {
 const DEFAULT_TEMPLATES=[
   {id:"tpl_intro",name:"Cold Intro — Track & Field",tags:["cold","t&f"],subject:"ST1 Sports — Equipment for {{school}} T&F Program",body:`Hi {{name}},
 
-I wanted to reach out about ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
+Reaching out from ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
 
-We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and I personally handle every order.
+We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and every order gets personal attention.
 
 Would it be worth a quick 10-minute call to see if we can help {{school}} this season?
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
   {id:"tpl_fu1",name:"Follow-Up 1 — After Quote",tags:["followup","quote"],subject:"Re: ST1 Sports Quote — {{school}}",body:`Hi {{name}},
 
@@ -5496,17 +6648,13 @@ Just following up on the quote I sent over. Did you get a chance to review it?
 
 Happy to adjust quantities, add items, or answer any questions. We can also split the order across two POs if that's easier for your budget cycle.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275`},
   {id:"tpl_fu2",name:"Follow-Up 2 — Final Check-in",tags:["followup"],subject:"Quick check-in — {{school}} equipment",body:`Hi {{name}},
 
 I don't want to be a pest, so this will be my last follow-up for now. If the timing isn't right or you've gone a different direction, no worries at all — just let me know so I can close this out on my end.
 
-If you're still interested, I can hold current pricing for one more week.
+If you're still interested, we can hold current pricing for one more week.
 
-Best,
-Matt Stone
 ST1 Sports | 719-256-0275`},
   {id:"tpl_po",name:"PO Confirmation",tags:["order","confirmation"],subject:"ST1 Sports — Order Confirmation for {{school}}",body:`Hi {{name}},
 
@@ -5517,18 +6665,15 @@ Thank you for your order! Here's a summary:
 Estimated ship date: {{ship_date}}
 Tracking will be emailed once shipped.
 
-Questions? Reply here or call me directly at 719-256-0275.
+Questions? Reply here or call us directly at 719-256-0275.
 
-Matt Stone
 ST1 Sports | matt@st1sports.com | st1sports.com`},
   {id:"tpl_winback",name:"Win-Back — Lapsed Customer",tags:["winback","cold"],subject:"It's been a while — new equipment for {{school}}?",body:`Hi {{name}},
 
-It's Matt from ST1 Sports — it's been a while since we last worked together, and I wanted to check in.
+ST1 Sports here — it's been a while since we last worked together, and we wanted to check in.
 
-We've added some new items this season, and I'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
+We've added some new items this season, and we'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
@@ -5644,6 +6789,7 @@ function ModBatchOutreach() {
   const [writing,setWriting]=useState(false);
   const [sending,setSending]=useState(false);
   const [sentCount,setSentCount]=useState(0);
+  const [addingInst,setAddingInst]=useState(false);
 
   const sports=[...new Set(contacts.map(c=>c.sport).filter(Boolean))].sort();
   const states=[...new Set(contacts.map(c=>c.state).filter(Boolean))].sort();
@@ -5705,6 +6851,25 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
       }));
     }
     setWriting(false);toast(`${selectedList.length} drafts ready — review before sending`,"success");
+  };
+
+  const addAllToInstantly=async()=>{
+    const leads=drafts.length?drafts:selectedList.map(c=>({toEmail:c.email,contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),contactId:c.id,school:c.school||""}));
+    if(!leads.length){toast("No contacts to add","error");return;}
+    setAddingInst(true);
+    let added=0;
+    for(const d of leads){
+      try{
+        const nameParts=(d.contactName||"").split(" ");
+        const r=await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"add_lead",email:d.toEmail,firstName:nameParts[0]||"",lastName:nameParts.slice(1).join(" ")||"",company:d.school||""
+        })});
+        const res=await r.json();
+        if(!res.error){added++;dispatch("UPDATE_CONTACT",{id:d.contactId,outreachStatus:"nurture"});}
+      }catch{}
+    }
+    setAddingInst(false);
+    toast(`${added} leads added to Instantly nurture campaign`,"success");
   };
 
   const sendAll=async()=>{
@@ -5810,7 +6975,10 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
               <OBtn onClick={buildDrafts} disabled={writing||selContacts.size===0} style={{width:"100%",marginBottom:7}}>
                 {writing?"✦ WRITING...":"✦ AI WRITE & PREVIEW DRAFTS"}
               </OBtn>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Review all emails before sending. Gmail must be connected.</div>
+              <button onClick={addAllToInstantly} disabled={addingInst||selContacts.size===0} style={{width:"100%",background:"#1a1a2e",color:B.white,border:"none",borderRadius:5,padding:"8px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",marginBottom:7,opacity:addingInst||selContacts.size===0?.6:1}}>
+                {addingInst?"ADDING TO INSTANTLY...":"⚡ ADD TO INSTANTLY NURTURE"}
+              </button>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Send one-off emails via Gmail, or add to Instantly for drip sequences.</div>
             </div>
           </div>
         </div>
@@ -5824,6 +6992,9 @@ Return JSON array: [{"index":1,"subject":"...","body":"..."}] with index matchin
             </div>
             <div style={{display:"flex",gap:7}}>
               <button onClick={()=>setDrafts([])} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:5,padding:"6px 13px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>← START OVER</button>
+              <button onClick={addAllToInstantly} disabled={addingInst||sending} style={{background:"#1a1a2e",color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:addingInst?.6:1}}>
+                {addingInst?"ADDING...":"⚡ ADD TO INSTANTLY"}
+              </button>
               <button onClick={sendAll} disabled={sending||!drafts.some(d=>d.status==="draft")} style={{background:B.green,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:sending?.6:1}}>
                 {sending?"SENDING...":"✉ SEND ALL DRAFTS"}
               </button>
@@ -5890,6 +7061,7 @@ function ModMarketing() {
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [showTemplateSelect,setShowTemplateSelect]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
+  const [campListUploading,setCampListUploading]=useState(false);
   // Campaign detail sub-tabs: strategy | assets | execute | report
   const [campSubTab,setCampSubTab]=useState("strategy");
   // Wizard steps: 1=define 2=icp 3=assets_checklist 4=build_assets 5=launch
@@ -5956,7 +7128,7 @@ function ModMarketing() {
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
-  const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+  const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
   // Matching contacts (ICP filter)
   const [matchingContacts,setMatchingContacts]=useState(null);
   // Flighting (plan detail multi-select)
@@ -5965,12 +7137,12 @@ function ModMarketing() {
 
   const campaigns = s.campaigns || [];
   const strategies = s.strategies || [];
-  const contactMap = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+  const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
   const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
   selCampIdRef.current = selCamp?.id || null;
   campaignsRef.current = campaigns;
   const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
-  const allSports = [...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort();
+  const allSports = useMemo(()=>[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort(),[s.contacts]);
 
   const CHANNELS = [
     {id:"email",icon:"✉",label:"Cold Email"},
@@ -6028,6 +7200,54 @@ function ModMarketing() {
     setCampStep(1);
     setShowNewCampForm(true);
     setShowTemplateSelect(false);
+  };
+
+  const handleCampListUpload=async(e)=>{
+    const f=e.target.files?.[0];
+    if(!f) return;
+    setCampListUploading(true);
+    try{
+      const isCsv=f.name.toLowerCase().endsWith(".csv");
+      let rows;
+      if(isCsv){
+        const text=await f.text();
+        // Simple CSV parse
+        const lines=text.split(/\r?\n/).filter(l=>l.trim());
+        const hdrs=lines[0].split(",").map(h=>h.replace(/^"|"$/g,"").trim().toLowerCase());
+        rows=lines.slice(1).map(l=>{const cells=l.split(",").map(c=>c.replace(/^"|"$/g,"").trim());return Object.fromEntries(hdrs.map((h,i)=>[h,cells[i]||""]));});
+      }else{
+        const {default:XLSX}=await import("xlsx");
+        const buf=await new Promise((res)=>{const r=new FileReader();r.onload=ev=>res(new Uint8Array(ev.target.result));r.readAsArrayBuffer(f);});
+        const wb=XLSX.read(buf,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json(ws,{defval:""});
+        rows=raw.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k.toLowerCase().trim(),String(v).trim()])));
+      }
+      const g=(row,...keys)=>{for(const k of keys){const v=row[k]||row[k.replace(/_/," ")]||"";if(v) return String(v).trim();}return"";};
+      const contacts=rows.filter(r=>Object.values(r).some(v=>v)).map(r=>({
+        id:mkId(),
+        firstName:g(r,"first name","firstname","first_name"),
+        lastName:g(r,"last name","lastname","last_name"),
+        fullName:(g(r,"full name","fullname","name")||[g(r,"first name","firstname","first_name"),g(r,"last name","lastname","last_name")].filter(Boolean).join(" ")).trim(),
+        email:g(r,"email","email address"),
+        phone:g(r,"phone","phone number","mobile"),
+        title:g(r,"title","job title","role","position"),
+        school:g(r,"school","organization","company","org","account"),
+        state:g(r,"state","st"),
+        city:g(r,"city"),
+        sport:g(r,"sport","sports"),
+        source:"import",confidence:"medium",outreachStatus:"new",importedAt:Date.now(),
+      }));
+      if(contacts.length===0){toast("No contacts found in file","error");return;}
+      dispatch("ADD_CONTACTS",contacts);
+      const listName=f.name.replace(/\.[^.]+$/,"");
+      const newList={id:mkId(),name:listName,contactIds:contacts.map(c=>c.id),createdAt:Date.now(),source:"import"};
+      dispatch("ADD_CONTACT_LIST",newList);
+      setCampDraft(c=>({...c,audienceListId:newList.id}));
+      toast(`Imported ${contacts.length} contacts as "${listName}"  `,"success");
+    }catch(err){toast("Upload failed: "+err.message,"error");}
+    setCampListUploading(false);
+    e.target.value="";
   };
 
   const findMatchingContacts = (icp) => {
@@ -6566,9 +7786,9 @@ function ModMarketing() {
     if(!postDraft.caption.trim()) return;
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
-    const post = {id:mkId(),...postDraft,campId,createdAt:today()};
+    const post = {id:mkId(),...postDraft,campId,createdAt:today(),scheduledDate:postDraft.date||""};
     dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-    setPostDraft({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+    setPostDraft({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
     setShowAddPost(false);
     toast("Post added to campaign","success");
   };
@@ -7447,25 +8667,31 @@ function ModMarketing() {
                         <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                           {["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
                         </div>
-                        {/* Image generation */}
+                        {/* Image */}
                         <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE GENERATION</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE</div>
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="Image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="AI image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                             <button onClick={async()=>{
                               const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
-                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true}:x)}));
+                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true,imageError:""}:x)}));
                               try{
-                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"lifestyle",sizeKey:"square"})});
+                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"REALISTIC",sizeKey:"square"})});
                                 const d=await r.json();
-                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl||"",imageGenerating:false}:x)}));
-                              }catch(err){setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false}:x)}));}
+                                if(!r.ok||!d.imageUrl){const errMsg=d.error||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:errMsg}:x)}));toast(errMsg,"error");return;}
+                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl,imageGenerating:false,imageError:""}:x)}));
+                              }catch(err){const msg=err.message||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:msg}:x)}));toast(msg,"error");}
                             }} disabled={p.imageGenerating} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,opacity:p.imageGenerating?.7:1}}>
-                              {p.imageGenerating?"GENERATING...":"🎨 GENERATE IMAGE"}
+                              {p.imageGenerating?"GENERATING...":"🎨 AI IMAGE"}
                             </button>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:ev.target.result,imageError:""}:x)}));r.readAsDataURL(f);}}/>
+                            </label>
                           </div>
                           {p.imageGenerating&&<div style={{display:"flex",gap:6,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.purple}}><Spin/>Generating image…</div>}
-                          {p.imageUrl&&<img src={p.imageUrl} alt="Generated social post visual" style={{maxWidth:200,borderRadius:5,marginTop:4,border:`1px solid ${B.border}`}}/>}
+                          {p.imageError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:4}}>{p.imageError}</div>}
+                          {p.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={p.imageUrl} alt="Post visual" style={{maxWidth:200,borderRadius:5,border:`1px solid ${B.border}`,display:"block"}}/><button onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:""}:x)}))} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"2px 6px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
                         </div>
                       </div>
                     ))}
@@ -7608,6 +8834,24 @@ function ModMarketing() {
               {campStep===5&&(
               <div className="card" style={{padding:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>5 — LAUNCH</div>
+                {/* Send-from rep selector */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — who does this campaign send as?</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {(s.reps||[]).map(r=>{const sel=campDraft?.repId===r.id;return(
+                      <button key={r.id} onClick={()=>setCampDraft(c=>({...c,repId:r.id}))}
+                        style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:sel?`${B.orange}10`:B.white,border:`2px solid ${sel?B.orange:B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:sel?B.orange:B.text}}>
+                        <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                        <div>
+                          <div style={{fontWeight:sel?700:500}}>{r.name}</div>
+                          {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                        </div>
+                        {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3}}>GMAIL ✓</span>}
+                      </button>
+                    );})}
+                    {!(s.reps||[]).length&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No reps configured — <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>add in Settings</a>.</span>}
+                  </div>
+                </div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
@@ -7676,9 +8920,7 @@ function ModMarketing() {
                   </div>
                   {(campDraft.audienceMode||"ai")==="list"&&(
                     <div>
-                      {(s.contactLists||[]).length===0?(
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>No contact lists found — create lists in the Contacts section first.</div>
-                      ):(
+                      {(s.contactLists||[]).length>0&&(
                         <select value={campDraft.audienceListId||""} onChange={e=>setCampDraft(c=>({...c,audienceListId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:campDraft.audienceListId?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",marginBottom:8}}>
                           <option value="">— select a contact list —</option>
                           {(s.contactLists||[]).map(list=>(
@@ -7686,6 +8928,10 @@ function ModMarketing() {
                           ))}
                         </select>
                       )}
+                      <label style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,width:"100%",background:B.surface,border:`1px dashed ${B.orange}60`,borderRadius:4,padding:"8px 12px",cursor:"pointer",boxSizing:"border-box",opacity:campListUploading?.6:1}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.4}}>{campListUploading?"IMPORTING…":"⬆ UPLOAD NEW LIST (.csv / .xlsx)"}</span>
+                        <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} disabled={campListUploading} onChange={handleCampListUpload}/>
+                      </label>
                     </div>
                   )}
                 </div>
@@ -7997,18 +9243,37 @@ function ModMarketing() {
                   {/* Always-visible Gmail connectivity check — auto-runs on mount */}
                   <GmailStatusBanner repKey={rep?.gmailEnvKey||""} />
 
-                  {/* Rep + Gmail status */}
-                  {rep&&(
+                  {/* Rep sender selector */}
+                  {rep?(
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:8}}>
                       <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
-                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail account ({rep.gmailEnvKey})</span>
-                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from your account with their signature. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Sales Reps → Edit → set Gmail Key</a>.</span>
+                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail ({rep.email||rep.gmailEnvKey})</span>
+                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from the shared account with their name. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Reps → set Gmail Key</a>.</span>
                         }
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
-                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
+                    </div>
+                  ):(
+                    <div style={{padding:"10px 12px",background:B.surface,border:`1px solid ${B.orange}40`,borderRadius:5,marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — select who this campaign sends as</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {(s.reps||[]).length===0?(
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No sales reps configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Add reps in Settings.</a></span>
+                        ):(s.reps||[]).map(r=>(
+                          <button key={r.id} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:r.id})}
+                            style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                            <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <div>
+                              <div style={{fontWeight:600}}>{r.name}</div>
+                              {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                            </div>
+                            {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3,marginLeft:2}}>GMAIL ✓</span>}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -8537,7 +9802,21 @@ function ModMarketing() {
                           </div>
                         </div>
                         <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-                        <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                        <div style={{marginBottom:10}}>
+                          <Lbl s={{marginBottom:4}}>Image (optional)</Lbl>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                            <input value={typeof postDraft.imageUrl==="string"&&!postDraft.imageUrl.startsWith("data:")?postDraft.imageUrl:""} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://... or upload →" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPostDraft(d=>({...d,imageUrl:ev.target.result}));r.readAsDataURL(f);}}/>
+                            </label>
+                          </div>
+                          {postDraft.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={postDraft.imageUrl} alt="" style={{maxHeight:80,borderRadius:4,border:`1px solid ${B.border}`}}/><button onClick={()=>setPostDraft(d=>({...d,imageUrl:""}))} style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"1px 5px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
+                        </div>
+                        <div style={{marginBottom:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                          <div><Lbl s={{marginBottom:4}}>Schedule Date</Lbl><input type="date" value={postDraft.date} min={new Date().toISOString().slice(0,10)} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                          <div><Lbl s={{marginBottom:4}}>Time</Lbl><input type="time" value={postDraft.time||"09:00"} onChange={e=>setPostDraft(d=>({...d,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                        </div>
                         <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
                       </div>
                     )}
@@ -9449,6 +10728,19 @@ function ModSocial() {
   const [verboseDebugId,setVerboseDebugId]=useState(null);
   const [verboseResult,setVerboseResult]=useState(null);
   const [postLength,setPostLength]=useState("medium"); // "short" | "medium" | "long"
+  // Tone + topic/product for AI writing
+  const [tone,setTone]=useState("Professional");
+  const [topic,setTopic]=useState("");
+  const [product,setProduct]=useState("");
+  const [platformVariants,setPlatformVariants]=useState(null); // per-platform captions from AI
+  // AI image generator
+  const [imgUseCase,setImgUseCase]=useState("Social Post");
+  const [imgMood,setImgMood]=useState("Clean");
+  const [imgColors,setImgColors]=useState("");
+  const [imgGenerating,setImgGenerating]=useState(false);
+  const [imgPrompt,setImgPrompt]=useState("");
+  const [imgError,setImgError]=useState(null);
+  const [showImgGen,setShowImgGen]=useState(false);
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
@@ -9470,6 +10762,8 @@ function ModSocial() {
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
 
+  const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
+
   const generateCaption=async()=>{
     setGenRunning(true);
     const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
@@ -9479,13 +10773,48 @@ function ModSocial() {
     const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
     const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
     const direction=caption.trim();
+    const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
     const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
     const prompt=direction
-      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: professional but engaging.\nLength: ${lengthGuide}.${strict}`;
+      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
     const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
     if(r) setCaption(r);
     setGenRunning(false);
+  };
+
+  // Generate separate per-platform captions with hashtags
+  const generatePerPlatform=async()=>{
+    if(!platforms.length) return;
+    setGenRunning(true); setPlatformVariants(null);
+    const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
+    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+    const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
+    const r=await aiCall(task,{tokens:900});
+    if(r){
+      try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
+    }
+    setGenRunning(false);
+  };
+
+  // AI image generator: topic+mood → AI prompt → Ideogram image
+  const generateAiImage=async()=>{
+    setImgGenerating(true); setImgError(null); setImgPrompt("");
+    const MOOD_STYLE={Bold:"DESIGN",Clean:"REALISTIC",Energetic:"REALISTIC"};
+    const CASE_SIZE={"Social Post":"square","Product Promo":"square","Email Banner":"landscape","Event Flyer":"story"};
+    try{
+      const featured=product.trim()||topic.trim()||"ST1 Sports athletic equipment";
+      const builtPrompt=await aiCall(`Create an image generation prompt for a "${imgUseCase}" for ST1 Sports athletic equipment brand. Featured: ${featured}. Visual mood: ${imgMood}. Brand colors: orange (#F37321) and black.${imgColors.trim()?` Additional colors: ${imgColors.trim()}.`:""} Athletic sports marketing. Professional commercial quality. Return ONLY the image prompt — no preamble.`,{tokens:200});
+      if(!builtPrompt) throw new Error("AI prompt generation failed");
+      setImgPrompt(builtPrompt);
+      const imgRes=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({prompt:builtPrompt,style:MOOD_STYLE[imgMood]||"REALISTIC",sizeKey:CASE_SIZE[imgUseCase]||"square"})});
+      const imgData=await imgRes.json();
+      if(!imgRes.ok) throw new Error(imgData.error||`Image API error ${imgRes.status}`);
+      setImageUrl(imgData.imageUrl);
+    }catch(e){setImgError(e.message);}
+    setImgGenerating(false);
   };
 
   // Poll Publer job status until done, then update post state with result
@@ -9777,25 +11106,122 @@ function ModSocial() {
                 ))}
               </div>
             </div>
+            {/* Tone */}
+            <div style={{marginBottom:16}}>
+              <Lbl s={{marginBottom:7}}>TONE</Lbl>
+              <div style={{display:"flex",gap:6}}>
+                {["Hype","Professional","Educational"].map(t=>(
+                  <button key={t} onClick={()=>setTone(t)} style={{background:tone===t?`${B.orange}14`:B.surface,color:tone===t?B.orange:B.muted,border:`1px solid ${tone===t?B.orange:B.border}`,borderRadius:3,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>
+                ))}
+              </div>
+            </div>
+            {/* Topic + Product (help AI write better) */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+              <div>
+                <Lbl s={{marginBottom:5}}>TOPIC (helps AI write)</Lbl>
+                <input value={topic} onChange={e=>setTopic(e.target.value)} placeholder="New track gear, baseball season…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+              <div>
+                <Lbl s={{marginBottom:5}}>PRODUCT (optional)</Lbl>
+                <input value={product} onChange={e=>setProduct(e.target.value)} placeholder="Blazer blocks, Gill discus…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+              </div>
+            </div>
             {/* Caption */}
             <div style={{marginBottom:16}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
                 <Lbl>CAPTION</Lbl>
-                <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
                   {["short","medium","long"].map(l=>(
                     <button key={l} onClick={()=>setPostLength(l)} style={{background:postLength===l?`${B.purple}18`:B.surface,color:postLength===l?B.purple:B.muted,border:`1px solid ${postLength===l?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{l.toUpperCase()}</button>
                   ))}
-                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?.7:1}}>
-                    {genRunning?"✦ WRITING...":"✦ AI WRITE"}
+                  <button onClick={generateCaption} disabled={genRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",opacity:genRunning?0.7:1}}>
+                    {genRunning?"✦ WRITING…":"✦ AI WRITE"}
+                  </button>
+                  <button onClick={generatePerPlatform} disabled={genRunning||!platforms.length} style={{background:"transparent",color:B.blue,border:`1px solid ${B.blue}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",opacity:(genRunning||!platforms.length)?0.5:1}} title="Generate separate captions per platform">
+                    PER PLATFORM
                   </button>
                 </div>
               </div>
               <textarea value={caption} onChange={e=>setCaption(e.target.value)} rows={5} placeholder="Write your caption… or let AI draft it" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.6}}/>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3,textAlign:"right"}}>{caption.length} chars</div>
+              {/* Per-platform variants */}
+              {platformVariants&&(
+                <div style={{marginTop:10}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:7}}>PER-PLATFORM VARIANTS — click USE THIS to load into caption</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:7}}>
+                    {platforms.map(pl=>{
+                      const key=pl.toLowerCase();
+                      const data=platformVariants[key];
+                      if(!data) return null;
+                      const col=PLATFORM_COLORS[pl]||B.blue;
+                      const tags=Array.isArray(data.hashtags)?data.hashtags:[];
+                      const full=data.caption+(tags.length?"\n\n"+tags.join(" "):"");
+                      return(
+                        <div key={pl} style={{background:B.surface,borderRadius:5,border:`1px solid ${B.border}`,borderLeft:`3px solid ${col}`,padding:"9px 11px"}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:col,letterSpacing:1.5}}>{pl.toUpperCase()}</span>
+                            <div style={{display:"flex",gap:5}}>
+                              <button onClick={()=>navigator.clipboard?.writeText(full)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.muted,borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>COPY</button>
+                              <button onClick={()=>setCaption(full)} style={{background:col,color:"#fff",border:"none",borderRadius:3,padding:"2px 8px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>USE THIS ↑</button>
+                            </div>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,marginBottom:tags.length?6:0}}>{data.caption}</div>
+                          {tags.length>0&&(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                              {tags.map((tag,i)=><span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:col,background:`${col}12`,border:`1px solid ${col}30`,borderRadius:3,padding:"1px 6px"}}>{tag}</span>)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-            {/* Image */}
+            {/* Image — with AI generator panel */}
             <div style={{marginBottom:14}}>
-              <Lbl s={{marginBottom:8}}>IMAGE (optional)</Lbl>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <Lbl>IMAGE (optional)</Lbl>
+                <button onClick={()=>setShowImgGen(v=>!v)} style={{background:showImgGen?`${B.orange}14`:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 10px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>
+                  {showImgGen?"HIDE GENERATOR":"⚡ AI GENERATE"}
+                </button>
+              </div>
+              {showImgGen&&(
+                <div style={{background:B.surface,borderRadius:6,border:`1px solid ${B.border}`,padding:14,marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>AI IMAGE GENERATOR — uses topic + product above</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9,marginBottom:9}}>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>USE CASE</Lbl>
+                      <select value={imgUseCase} onChange={e=>setImgUseCase(e.target.value)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11}}>
+                        {["Social Post","Product Promo","Email Banner","Event Flyer"].map(u=><option key={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <Lbl s={{marginBottom:4}}>MOOD</Lbl>
+                      <div style={{display:"flex",gap:5}}>
+                        {["Bold","Clean","Energetic"].map(m=>(
+                          <button key={m} onClick={()=>setImgMood(m)} style={{background:imgMood===m?`${B.orange}14`:B.white,color:imgMood===m?B.orange:B.muted,border:`1px solid ${imgMood===m?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{m}</button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <Lbl s={{marginBottom:4}}>ACCENT COLORS (optional)</Lbl>
+                    <input value={imgColors} onChange={e=>setImgColors(e.target.value)} placeholder="navy blue, gold, white…" style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                  </div>
+                  <button onClick={generateAiImage} disabled={imgGenerating} style={{background:imgGenerating?B.border:B.orange,color:"#fff",border:"none",borderRadius:4,padding:"7px 16px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:imgGenerating?"default":"pointer"}}>
+                    {imgGenerating?"GENERATING IMAGE…":"GENERATE IMAGE →"}
+                  </button>
+                  {imgError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:7}}>{imgError}</div>}
+                  {imgPrompt&&imgGenerating&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:7,lineHeight:1.5}}>{imgPrompt}</div>}
+                  {imageUrl&&!imgGenerating&&(
+                    <div style={{marginTop:10}}>
+                      <img src={imageUrl} alt="Generated" style={{width:"100%",borderRadius:6,display:"block",marginBottom:6}}/>
+                      <button onClick={()=>{const a=document.createElement("a");a.href=imageUrl;a.download=`st1-social-${Date.now()}.jpg`;a.click();}} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>↓ DOWNLOAD</button>
+                    </div>
+                  )}
+                </div>
+              )}
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
             </div>
@@ -11103,71 +12529,233 @@ function AssetGallery({toast}) {
 // ════════════════════════════════════════════════════════════════════════════
 //  COMPETE
 // ════════════════════════════════════════════════════════════════════════════
+const COMPETE_SEED={
+intel:{
+"Dick's Sporting Goods":`OVERVIEW: $14.1B revenue, 850+ stores nationwide (NYSE: DKS). Largest US sporting goods retailer. Founded 1948, Coraopolis PA.\n\nTARGET MARKET: Active families (25–50yo, HHI $100k+), youth sports orgs, schools, clubs.\n\nPOSITIONING: "Every Season Starts at DICK'S" — Experiential lifestyle hub moving from retailer to community destination via House of Sport and GameChanger ecosystem.\n\nSTRENGTHS:\n• Unmatched physical footprint — 850+ stores nationwide\n• GameChanger app = direct pipeline to 6.5M+ youth team users\n• House of Sport experiential retail (batting cages, climbing walls, simulators)\n• ScoreCard loyalty in 70% of transactions\n• Deep brand portfolio: Nike, Under Armour, Adidas, DeMarini, Rawlings, Wilson\n• 40 new House of Sport + 60 Field House locations planned by 2028\n• PROLOOK custom uniforms (~2-week turnaround)\n\nWEAKNESSES:\n• Trustpilot/Yelp avg 1.7–2.6 stars — poor customer service, unhelpful staff\n• Strict no-retroactive price adjustment policy frustrates customers\n• Big box impersonal feel — not relationship-based\n• Coaches routed to call centers, not dedicated program reps\n• PROLOOK custom uniform partnership still maturing\n\nPRICING: Competitive retail with Best Price Guarantee (matches Amazon/Walmart/Nike). Private labels for budget tier.\n\nSALES MODEL: Hybrid — retail stores, e-commerce, dedicated Team Sales Reps, Team Sports HQ self-serve platform.\n\nAD INTELLIGENCE (April 2026): ~780 active Meta ads — highest volume in competitive set. Heavy video (reels) + static product shots. Vibrant brand colors, punchy urgency copy ("before they're sold out"). Celebrity/influencer-driven, aspirational Gen Z energy. "The Scouts Are Out" cinematic campaign (Jordan Brand/Wieden+Kennedy). ST1 OPPORTUNITY: Dick's is so big it has lost all human warmth — zero 'real person who knows your kid' energy.`,
+
+"gearUP":`OVERVIEW: Hillsboro OR. Regional growing national. Nike & Under Armour authorized youth team dealer.\n\nTARGET MARKET: Youth club sports, travel teams, K-12 schools, leagues.\n\nPOSITIONING: "Remove every time-wasting hurdle to getting the best uniforms" — Premium uniform and apparel experience without administrative headache.\n\nSTRENGTHS:\n• Nike Team Dealer authorization — rare national credential\n• 24/7 always-open stores with direct-to-athlete shipping\n• Premium brand access: Nike, Under Armour, Momentec, Carhartt\n• ArmourFuse sublimation via Under Armour\n• Direct shipping removes coach logistics burden\n\nWEAKNESSES:\n• Serious BBB and Yelp CS complaints — inaccurate sizing, poor communication\n• Hard to reach support when issues arise — multiple documented complaint threads\n• Limited equipment depth — primarily apparel and uniform focused\n• Regional roots limit national credibility and service coverage\n\nPRICING: Premium positioning, quote-based.\n\nSALES MODEL: Hybrid — dedicated sales team + self-serve 24/7 store platform.`,
+
+"Anthem Sports":`OVERVIEW: Founded 2002, Pawcatuck CT. Family-owned (Mark Ferrara). National online distributor. Wilson 2018 Dealer of the Year (NE). Newsweek Top 4 online retailer.\n\nTARGET MARKET: Coaches, Athletic Directors, schools, youth leagues, clubs, municipalities, rec teams.\n\nPOSITIONING: "Building Champions™ — Brand names you trust. The value you expect." Best customer service in industry, same-day shipping, budget-friendly.\n\nSTRENGTHS:\n• Exceptional CS — 4.8/5 on Trustpilot with 4,000+ reviews\n• Same-day shipping on in-stock items placed by 2pm EST\n• Deep equipment catalog including hard-to-find institutional equipment\n• Accepts school POs — critical for institutional purchasing\n• Wilson-authorized dealer with 20+ top-brand relationships\n• 10% coach/AD discount on orders $100+\n\nWEAKNESSES:\n• Limited custom apparel depth — mostly branded accessories, not uniforms\n• Items damaged in transit with limited recourse\n• Not a full uniform/custom gear provider — can't outfit a team head to toe\n• No exclusive product lines\n\nPRICING: Retail + quantity discounts; 10% coach/AD discount; accepts school/municipal POs.\n\nSALES MODEL: Hybrid — self-serve e-commerce + Team Sales department for bulk/custom quotes.\n\nAD INTELLIGENCE (April 2026): ~110 active Meta ads — most active advertiser per-volume in category. Almost entirely white-background product shots (benches, bleachers, bases, fencing, gloves). No lifestyle, no athletes, no energy — pure B2B equipment catalog. A/B testing taglines: "Building Champions" / "Trusted Brands" / "Top Brands" / "Free Returns". ST1 OPPORTUNITY: Anthem is invisible as a brand — 110 ads running and you still wouldn't recognize their brand.`,
+
+"BSN Sports":`OVERVIEW: Founded 1972, Dallas TX. Subsidiary of Varsity Brands (KKR-backed private equity). ~$1B+ revenue. 3,000+ sales reps. Largest team sports dealer in the US, 38+ states.\n\nTARGET MARKET: K-12 athletic departments, coaches, ADs, league directors, youth clubs.\n\nPOSITIONING: "Be Seen. Be Heard. Belong." America's #1 team sports dealer — unmatched rep network, broadest catalog, deepest institutional relationships.\n\nSTRENGTHS:\n• Largest team sports dealer network in the US — 3,000+ sales reps\n• Broadest catalog: all sports, all categories, all price points\n• Deep institutional relationships with K-12 ADs across the country\n• Full-service capability: equipment + apparel + team stores\n• Varsity Brands ecosystem (Varsity Spirit + Herff Jones) amplifies reach\n• My Team Shop+ dashboard, Sideline Stores, SPRINT rapid fulfillment (1–2 day)\n• Club Direct division launched 2025 targeting youth clubs\n• Fundraising via Snap! Raise partnership\n\nWEAKNESSES:\n• Shipping delays of 5+ weeks — consistent complaint, uniforms arriving after season\n• Customer service rated poor: unresponsive reps, hard to escalate\n• BSN-branded apparel runs significantly smaller than standard US sizing\n• Custom items classified as non-returnable even when BSN fulfills incorrectly\n• Extremely high rep turnover — coaches lose dedicated contacts repeatedly\n• Large bureaucratic structure — schools feel like accounts, not relationships\n• KKR private equity ownership drives margin pressure and service cuts\n• Antitrust/legal issues at Varsity Brands parent level create reputational drag\n\nPRICING: Quote-based, volume-driven institutional pricing. School PO accepted. Annual contracts with ADs.\n\nSALES MODEL: Field-based B2B — local rep network is primary channel, supported by inside sales and e-commerce.\n\nAD INTELLIGENCE (April 2026): ~42 active Meta ads. #ClubDirect B2B targeting club volleyball, softball, lacrosse coaches. Standout: "NO MORE LATE UNIFORMS" — dark background, orange player, bold white text. Short punchy coach-directed copy ("Lock In Your Club's Shop"). Dark navy + white + brand partner colors. ST1 OPPORTUNITY: BSN's creative is cold and transactional. The coach sees another vendor, not a partner.`,
+
+"Game One":`OVERVIEW: 2022 rebrand (legacy companies dating to 1970s). Formed from 8 merged regional dealers (Athletic Supply, Barcelona Sports, Bumblebee, Cardinal Sports, Team Sports, The Graphic Edge, Universal Athletic, Williams). 13,000+ customers, 38 states, 180+ field sales reps. 30%+ growth since rebrand.\n\nTARGET MARKET: High school athletic departments, youth leagues, club sports, community rec programs.\n\nPOSITIONING: "The Brand Behind Your Brand" — National scale with local roots. Claims only national dealer authorized to carry Nike, Adidas, AND Under Armour simultaneously.\n\nSTRENGTHS:\n• Local rep relationships — coaches get a person, not a 1-800 number\n• Full service: equipment + apparel + team stores\n• Only national dealer with Nike + Adidas + Under Armour simultaneously\n• Faster turnaround on quotes vs BSN bureaucracy\n• Smaller feel — programs feel like more than a revenue number\n\nWEAKNESSES:\n• Limited geographic coverage vs BSN's national footprint\n• Smaller brand portfolio and catalog depth vs major dealers\n• Less institutional buying power — pricing may not match BSN volume contracts\n• Less known brand — ADs default to BSN for familiarity\n\nPRICING: Quote-based institutional pricing. School PO accepted. Volume discounts for multi-sport programs.\n\nSALES MODEL: Field-based B2B rep model — local sales reps for school and league accounts.`,
+
+"SquadLocker":`OVERVIEW: Founded 2013, Providence RI (Gary Goldberg). Raised $50M+. National tech-forward team store platform.\n\nTARGET MARKET: Coaches, league directors, school ADs, club managers — anyone running team stores.\n\nPOSITIONING: "The easiest way to get your team's gear" — Technology-first platform. Free team store in minutes. No inventory. No minimums. Direct-to-athlete shipping.\n\nSTRENGTHS:\n• Best-in-class team store UX — genuinely easy for coaches to set up\n• No inventory, no minimums, no money collection by coaches\n• Direct-to-athlete shipping eliminates distribution headaches\n• Wide product catalog: 70+ major brands + 16,000+ products\n• 100,000+ team shops opened in the last year alone\n\nWEAKNESSES:\n• Primarily apparel/spirit wear — limited equipment catalog\n• No custom sublimated performance uniforms at meaningful quality\n• Customer service complaints about late deliveries during peak seasons\n• No dedicated rep — tech-first means relationship is with the platform\n\nPRICING: Free store setup. Products priced at retail; SquadLocker keeps margin.\n\nSALES MODEL: Primarily self-serve digital — coaches launch stores online; customer success for larger accounts.\n\nAD INTELLIGENCE (April 2026): ~5 active Meta ads, hyper-focused enterprise team store pitch. Static hero: navy bg, bold "NO FEES. NO MINIMUMS." + green checkmarks. Video: UGC/talking head style, warehouse walkthroughs. Hook: objection crusher ("Her AAU team waited HOW LONG?"). ST1 OPPORTUNITY: SquadLocker's creative is smart but cold — it sells logistics, not a relationship.`,
+
+"Team Sports Planet":`OVERVIEW: National e-commerce dealer. Mid-tier online dealer — institutional and consumer focus.\n\nTARGET MARKET: Schools, leagues, clubs, athletic directors, coaches, individual athletes.\n\nPOSITIONING: "Your one-stop team sports source" — Online-first, broad catalog, competitive pricing.\n\nSTRENGTHS:\n• Wide catalog across equipment and apparel categories\n• Accepts school POs — institutional procurement-friendly\n• Competitive pricing with volume breaks\n• Accessible to small programs with no minimums on most items\n\nWEAKNESSES:\n• Generic online catalog feel — no specialized expertise or consultation\n• Limited custom apparel depth vs dedicated custom dealers\n• No exclusive product lines or differentiating merchandise\n• No local rep — purely transactional online relationship\n\nPRICING: Competitive retail + volume discounts. School PO accepted. Quantity break pricing.\n\nSALES MODEL: Primarily online self-serve + phone-based sales team for institutional accounts.`,
+
+"Boombah":`OVERVIEW: Founded 2003, Yorkville IL. 250,000 sq ft facility + factory in Dominican Republic. Vertically integrated manufacturing. Official NFCA Sponsor.\n\nTARGET MARKET: Youth leagues, travel baseball/softball, HS athletic departments, club sports, adult rec.\n\nPOSITIONING: "Be what no one else is and give what no one else will." High-quality gear at affordable prices via direct-to-consumer; own factory for speed and cost advantage.\n\nSTRENGTHS:\n• Vertically integrated = 2-week custom turnaround (industry-leading speed)\n• Direct pricing by eliminating distributor markup\n• Massive style variety — 3D online builder with hundreds of combinations\n• Strong brand recognition in travel baseball/softball community\n• NFCA and Perfect Game partnerships\n• Boombah Sports Complex #1 youth baseball complex (Newsweek 2025)\n\nWEAKNESSES:\n• PissedConsumer 1.9 stars — poor CS responsiveness, difficult returns\n• Strict return policy makes sizing errors painful and costly\n• Durability issues reported with rolling bat bags and cleats\n• Sizing inconsistencies across multiple complaint threads\n• Own-brand only equipment — no Rawlings, Marucci, Wilson, or Easton\n\nPRICING: Direct-to-consumer. 5% off $2,500+, up to 15% off $15,000+. Free ground shipping over $99.99.\n\nSALES MODEL: Hybrid — primarily self-serve e-commerce with 3D builder + CS/Sales for org-level support.\n\nINSTAGRAM INTELLIGENCE (April 2026): 46K followers, 2,852 posts. Strongest visual brand in the category. Themed novelty collection drops: Graffiti Drip, Fruit Collection, Ice Cream Turfs — treated like streetwear drops with hype launches. National team flag-colorway collabs (Colombia, Dominican Republic, Nicaragua). Speaks to the ATHLETE not the coach. Only competitor with a genuine brand personality people follow for fun. ST1 LESSON: Graphic tee drops ('I Hit Dingers', 'Oppo Taco') should be marketed EXACTLY like Boombah's novelty collections — named drops, launch posts, limited runs.`,
+
+"Smash It Sports":`OVERVIEW: Founded 2013/2014, Rochester NY (Rick Schiffhauer, family-owned). National — flagship store + major warehouse + e-commerce. Official Uniform Provider for USA Softball Slow Pitch National Teams (2025).\n\nTARGET MARKET: Youth rec leagues, travel ball, high schools, colleges, adult slowpitch leagues, individual athletes.\n\nPOSITIONING: "Your Baseball and Softball Super Store — by players, for players." Largest online bat selection. Price match guarantee.\n\nSTRENGTHS:\n• Unrivaled bat selection — BBCOR, USSSA, USA, Senior; nation's largest softball retailer\n• 'Ridiculously fast' shipping consistently praised by reviewers\n• Strong brand relationships with exclusive limited-edition bat drops\n• USA Softball Slow Pitch National Team partnership 2025\n• Smash Cash loyalty program drives repeat purchases\n\nWEAKNESSES:\n• Customer service described as 'rude' or 'unprofessional' in disputes\n• Strict return policy — 15–20% restocking fee + no return shipping covered\n• Warranty friction — refers bat damage to manufacturer instead of resolving\n• Custom jersey color quality consistency issues\n• Primarily diamond sports only — no multi-sport capability\n\nPRICING: Competitive retail + Lowest Price Guarantee. Bats $100–$500+. Custom uniforms up to 50% off retail.\n\nSALES MODEL: Hybrid — high-volume B2C e-commerce, SIS Rep network, Team Sales dept, physical retail.`,
+
+"Extra Innings Direct":`OVERVIEW: Founded 1996, Middleton MA. 400+ travel programs and facilities as members. $4M+ inventory on partner site.\n\nTARGET MARKET: Travel baseball/softball organizations, youth leagues, indoor training facilities, high school programs.\n\nPOSITIONING: "The Exclusive Diamond Sports Benefits Group" — Cuts out the dealer entirely. Clubs become their own dealer at wholesale pricing. No minimums, no inventory.\n\nSTRENGTHS:\n• Truly unique model — eliminates the middleman for diamond sports orgs\n• Collective buying power of 400+ programs at genuine wholesale pricing\n• No minimums — access to 40+ manufacturers without carrying inventory\n• Launch Nike/UA/Adidas stores without being an authorized dealer\n• Ancillary value: insurance and payment processing discounts for members\n\nWEAKNESSES:\n• BBB complaints about wholesale prices sometimes exceeding retail\n• Baseball/softball only — zero coverage for other sports\n• Requires membership commitment — not free to access\n• BSN dependence means BSN's shipping delays become your members' problems\n\nPRICING: Membership-based (fees not public, risk-free trial available). Members set their own retail prices.\n\nSALES MODEL: Hybrid — in-house support/design team + self-serve 24/7 live dashboard.`,
+
+"GoBallistic Sports":`OVERVIEW: Founded 2012, East Hanover NJ (Kathy and Scott Gorski — advertising industry veterans). Regional NJ focus with national clients.\n\nTARGET MARKET: HS and middle schools, youth sports orgs (rec and travel), AAU teams, clubs.\n\nPOSITIONING: "Change YOUR Game — Go Big — no templates, no cookie-cutter graphics." Completely original custom designs. In-house production for quality control.\n\nSTRENGTHS:\n• Strong design pedigree from advertising background — truly unique custom designs\n• No templates — completely original graphics that differentiate programs\n• In-house printing and production for quality control\n• Broad sport coverage across 18+ sports\n• Turn-key online team stores eliminate manual form collection\n\nWEAKNESSES:\n• 4–5 week production times — supply chain issues acknowledged\n• Regional NJ focus limits credibility and coverage outside the area\n• Limited equipment catalog — apparel and uniform focused only\n• 25-piece minimum for sublimation limits very small teams\n\nPRICING: Quote-based. Tees $18–21, Performance Shirts $21–44, Hoodies $41–58. 50% deposit. 25-piece minimum for sublimation.`,
+
+"Wooter Apparel":`OVERVIEW: Founded 2014, Staten Island NY (Alex Aleksandrovski, David Kleyman, Alex Kagan). 40+ countries. Clients include AAU, NFL Alumni, DoD, YMCA, MTV, JetBlue, FDNY.\n\nTARGET MARKET: AAU teams, youth leagues, schools K-12 and collegiate, rec teams, sports facilities.\n\nPOSITIONING: "The #1 Shop for Custom Team Gear — professional quality at unbeatable prices." Lowest Price Guarantee + Name Your Own Price budget tool.\n\nSTRENGTHS:\n• Competitive pricing — among the lowest for custom sublimated uniforms (basketball sets from $39.99)\n• High-quality sublimation designs praised by initial buyers\n• Global scale — 40+ countries, wide sport coverage\n• Free fan shop with 10–50% commission\n• Accepts cryptocurrency\n\nWEAKNESSES:\n• Post-payment customer service described as 'ghosting' across multiple platforms\n• Significant delivery delays causing teams to miss season starts\n• Sizing runs small — consistent complaint\n• Difficult refund process — high complaint volume on BBB and Trustpilot\n• No major brand licensing — own-brand sublimation only\n• Zero hard equipment — apparel-only\n\nPRICING: Tiered/package deals. Basketball sets from $39.99, Football from $59.99, Soccer from $27.99. Lowest Price Guarantee.\n\nAD INTELLIGENCE (April 2026): ~21 active Meta ads, all UGC talking head videos (0:12–0:54). Sponsorship program focused (wooter.com/sponsorships). Core hook: "Custom Sports Uniforms Sponsorships. Please note this is NOT free apparel." 21 variants of one concept — testing video length and presenter. ST1 OPPORTUNITY: Wooter's creative screams 'scrappy startup.' ST1 can own the premium, relationship-first alternative.`,
+
+"Sports Gear Swag":`OVERVIEW: Founded 2018, Sugar Land TX. 140,000+ orders completed, 170,000+ athletes outfitted globally.\n\nTARGET MARKET: Youth/adult sports leagues, K-12 schools, colleges, corporate teams, non-profits.\n\nPOSITIONING: "Experts in Custom Sports Jerseys, Uniforms & Gear — Lowest Price Guaranteed." No minimums, fast rush options, free design assist.\n\nSTRENGTHS:\n• Fast rush options — Super Rush 3-day delivery available\n• No order minimums — accessible to smallest programs\n• User-friendly online design tool with quick digital proofs\n• Broad 60+ sport coverage\n• Pay-after-proof-approval option\n\nWEAKNESSES:\n• Sizing inaccuracy complaints — runs small, odd fits consistently reported\n• Non-stretchy material complaints for performance athletic use\n• Shipping delays despite paying for expedited options\n• Difficult customer service for refunds and remakes\n• No major brand licensing — own-brand templates only\n• Apparel-only at meaningful depth, no equipment\n\nPRICING: Tiered bulk discounts: 10% off 1+, up to 20% off 100+. Base jerseys ~$15.99–$25.99.`,
+
+"Custom Ink":`OVERVIEW: Founded 2000, Fairfax VA. Major consumer brand. Very large scale — household name.\n\nTARGET MARKET: Individuals, families, friend groups, corporate teams, non-profits, schools — any group wanting custom apparel. Not sport-specific.\n\nPOSITIONING: "Bringing people together through custom apparel." Easy design tool, group order coordination, 100% quality guarantee.\n\nSTRENGTHS:\n• Extremely user-friendly design tool — accessible to anyone\n• Massive brand recognition — every parent and coach knows Custom Ink\n• 100% satisfaction guarantee with no-hassle remake/refund\n• Fast turnaround options for spirit wear and casual apparel\n• FundraisingHub for organizations\n\nWEAKNESSES:\n• Cotton/fashion apparel only — not moisture-wicking performance gear\n• No sports equipment whatsoever — fundamentally different business\n• No team store infrastructure for ongoing season-long sales\n• No sport-specific expertise in uniforms, sizing, or performance needs\n• No sublimated uniforms — printed apparel peels/cracks over seasons\n\nPRICING: Per-item pricing decreasing with volume. T-shirts start ~$16+ for small quantities. No setup fees.\n\nNOTE: Custom Ink is NOT a sports dealer — it's a t-shirt printer that coaches sometimes use for casual spirit wear. Not a real competitive threat for uniforms or equipment.`,
+
+"Trigon Sports":`OVERVIEW: Founded 2007 (business since 2001), Memphis TN. Family-owned. National distribution. Acquired Proper Pitch Inc. (pitching mounds) November 2025.\n\nTARGET MARKET: ADs and coaches at high schools and colleges, facility managers, youth league organizers.\n\nPOSITIONING: "Make Winning Possible™" — Premier source for durable professional-grade athletic training and facility equipment.\n\nSTRENGTHS:\n• A+ BBB rating — outstanding customer service reputation\n• 98% Facebook recommendation rate — very high satisfaction\n• ProCage batting cage line highly praised for durability\n• Deep facility equipment expertise: bleachers, batting cages, field covers\n• Acquired Proper Pitch Inc. (pitching mounds) 2025 — expands product line\n• Same-day shipping on in-stock orders\n\nWEAKNESSES:\n• Virtually zero apparel capability — pure equipment play\n• No team stores, no custom uniforms — can't outfit a team\n• Niche facility/training equipment positioning limits overall breadth\n\nPRICING: Multi-tier — retail from $0.80/sq ft (netting) to $8,000+ (batting cages). Wholesale/dealer via quote.\n\nSALES MODEL: Hybrid — DTC online, national catalog, authorized dealer network (B2B).`,
+
+"Gopher Sport":`OVERVIEW: Founded 1947, Owatonna MN. Privately held (The Prophet Corporation). $31–51M annual revenue, 150–500 employees. 75+ years in operation.\n\nTARGET MARKET: K-12 PE teachers, athletic directors, school coaches, YMCAs, recreation centers, government agencies.\n\nPOSITIONING: "Unconditional 100% Satisfaction Guarantee" — Premier PE/athletics partner for educational institutions — easiest company to work with for teachers and coaches.\n\nSTRENGTHS:\n• A+ BBB rating — 75+ years of institutional trust\n• Unconditional satisfaction guarantee — any time, any reason, no questions\n• Same-day shipping 99%+ of in-stock orders\n• Deep PE/rec equipment expertise unavailable at general retailers\n• Government contract access: GSA, DoDEA, Sourcewell, OMNIA Partners\n• 75+ year catalog covering archery, badminton, floor hockey, and more\n\nWEAKNESSES:\n• Custom apparel limited to spirit wear — no performance uniforms\n• No team store platform for individual parent/fan ordering\n• Institution-focused — limited flexibility for youth clubs and travel teams\n• Occasional complaints about guarantee requiring original receipts\n\nPRICING: Catalog-based tiered pricing. Contract pricing via Sourcewell and OMNIA Partners. $5.95 (whistles) to $1,699+ (archery packs).\n\nSALES MODEL: Multi-channel — e-commerce, direct-mail catalog, outside sales force, government cooperative purchasing contracts.`
+},
+battlecards:{
+"Dick's Sporting Goods":{competitor:"Dick's Sporting Goods",category:"Do It All",our_strengths:["Personal relationship vs account number — we know your program and athletes by name","Direct access to a rep who responds same day — no call center routing","Exclusive ST1 graphic tee designs coaches and athletes actually want","Equipment expertise without retail commission-floor upsell pressure","When something goes wrong, you reach a human who fixes it — not a 1-800 number"],their_strengths:["Unmatched 850+ store physical footprint nationwide","GameChanger app reaches 6.5M+ youth team users directly","House of Sport experiential retail (batting cages, simulators, climbing walls)","ScoreCard loyalty in 70% of all transactions","Deep brand relationships with every major manufacturer"],key_messages:["Dick's is a mall experience. We're a team experience.","GameChanger gets them to the parents. It doesn't serve the coach.","850 stores and 1.7 stars on Trustpilot — big doesn't mean good."],objection_handlers:[{objection:"Dick's has GameChanger and every parent already shops there",response:"GameChanger is how they find parents — it's not how they serve teams. A coach who needs customized gear, accurate sizing, and someone to answer the phone gets none of that at Dick's. We give you a person, not a platform."},{objection:"Dick's has every brand",response:"So do we — and we don't make you drive to a store and hunt through aisles. We bring the right product to you and stand behind it."},{objection:"Dick's prices are hard to beat",response:"Their retail prices are competitive on commodity items. On custom gear, team stores, and equipment bundles, we compete directly — and we don't charge you for the relationship."},{objection:"They have House of Sport with batting cages and simulators",response:"A batting cage at a retail store doesn't set up your team store, source your helmets, or design your uniforms. We do all three."}],discovery_landmines:["Have you ever had a coach issue at Dick's that required a human to solve?","Do you get a dedicated rep from Dick's or do you start over every call?","Have your athletes used GameChanger — and does Dick's follow up with your program?","How long does it take to get custom uniforms through their PROLOOK program?"]},
+"gearUP":{competitor:"gearUP",category:"Do It All",our_strengths:["We pick up the phone — gearUP's CS reviews are consistently brutal","Full equipment catalog alongside apparel — gearUP can't source bats and helmets","Proven track record without the CS nightmare plaguing gearUP accounts","Local-style relationship with actual accountability when orders go wrong"],their_strengths:["Nike Team Dealer authorization — rare national credential","24/7 always-open stores with direct-to-athlete shipping","Premium brand access: Nike, Under Armour, Momentec"],key_messages:["gearUP can get you Nike. We can get you Nike AND actually answer the phone.","Their stores are always open. Their support isn't.","Being authorized doesn't mean being accountable."],objection_handlers:[{objection:"gearUP is a Nike authorized dealer",response:"So is ST1 — and we actually answer the phone when your order has an issue. Check their BBB reviews before committing a full season's uniforms."},{objection:"Their stores are always open 24/7",response:"So are ours. The difference is when something goes wrong, we have a process to fix it. They have a voicemail."}],discovery_landmines:["Have you had to contact gearUP support for an issue — how was the experience?","What happens with your store when a sizing error comes in for 30 jerseys?","Do you have a direct rep or do you use a general support inbox?"]},
+"Anthem Sports":{competitor:"Anthem Sports",category:"Do It All",our_strengths:["We do equipment AND full custom uniforms + team stores — Anthem can't outfit your team head to toe","Relationship-based vs pure transactional online catalog experience","Our exclusive graphic tee line gives teams identity beyond just equipment","We handle the full program — not just the gear closet"],their_strengths:["Exceptional CS — 4.8/5 on Trustpilot with 4,000+ reviews","Same-day shipping on in-stock items placed by 2pm EST","Deep equipment catalog including hard-to-find institutional items","Accepts school POs","Wilson-authorized dealer with 20+ top-brand relationships"],key_messages:["Anthem ships fast. They can't dress your team.","4.8 stars on equipment. Zero stars on custom uniforms — they don't offer them.","We're Anthem plus everything Anthem can't do."],objection_handlers:[{objection:"Anthem has everything we need for equipment",response:"For a gear closet, yes. But when the coach wants custom uniforms, team stores, and spirit wear, they're calling someone else. We handle it all so you're not juggling vendors."},{objection:"Anthem ships same-day",response:"So can we on in-stock items. And when you need something custom, you get a person who knows your sport — not a search bar."}],discovery_landmines:["Do you need custom uniforms or apparel in addition to equipment?","When something arrives damaged, how easy is it to get resolution from Anthem?","Does Anthem have a rep who knows your program, or do you start fresh every time?"]},
+"BSN Sports":{competitor:"BSN Sports",category:"Do It All",our_strengths:["We don't have rep turnover — you get the same person year after year","No minimum orders — we serve small leagues and large schools equally","Your order doesn't disappear into a 3,000-rep corporate machine","We're accountable to you directly — not to a KKR earnings call","Youth-first focus: we know baseball and softball at the grassroots level"],their_strengths:["Largest team sports dealer network in the US — 3,000+ sales reps","Broadest catalog: all sports, all categories, all price points","Deep institutional relationships with K-12 ADs","Full-service capability: equipment + apparel + team stores","SPRINT service: custom gear in 1–2 days"],key_messages:["BSN has 3,000 reps. You can't reach any of them.","The largest team sports dealer has a 5-week shipping problem.","Contracts renew. Relationships don't have to."],objection_handlers:[{objection:"BSN has a rep in our area and knows our school",response:"Until that rep leaves — and BSN rep turnover is notoriously high. With ST1, the relationship is with the company, not a transient salesperson."},{objection:"BSN is the biggest — they must be the best",response:"Size creates complexity. BSN's complaints are about late shipments and reps who disappear. We're big enough to carry everything you need, small enough to actually care."},{objection:"Our AD has a BSN contract",response:"Contracts renew. When your AD is frustrated with late gear and a revolving-door rep, that's the moment to have this conversation. We're ready."},{objection:"They have Nike and Under Armour contracts we can't get",response:"True — but brand names don't score runs. Our custom sublimation and graphic tees are higher quality per dollar, and we don't disappear after the sale. Ask to see BSN's Trustpilot reviews."}],discovery_landmines:["How many different BSN reps have you had in the past 3 years?","Has a BSN order ever arrived late for a game or season opener?","Do small programs at your school get the same attention as football or basketball?","What happens when you call BSN with an urgent in-season need?","When did you last receive an order on time from your current supplier?"]},
+"Game One":{competitor:"Game One",category:"Do It All",our_strengths:["ST1 is a complete sporting goods company — equipment, custom apparel, team stores, graphic tees, all in one","Our exclusive graphic tee and spirit wear line is something Game One can't offer","National brand relationships (Nike, UA, Adidas, Rawlings, Easton, Marucci, Wilson)","We serve youth through high school with no program too small or too large"],their_strengths:["Local rep relationships — coaches get a person, not a 1-800 number","Only national dealer with Nike + Adidas + Under Armour simultaneously","Full service: equipment + apparel + team stores","Smaller than BSN — programs feel valued"],key_messages:["Game One is a good local dealer. ST1 is that — plus exclusive products they can't touch.","Local relationships are our specialty too. And we bring more to the table.","They grew through mergers. We grew through coaches trusting us."],objection_handlers:[{objection:"Game One knows our community and our coaches",response:"Local relationships are valuable — and ST1 builds the same local relationship while adding equipment, custom apparel, exclusive tee designs, and team stores that Game One can't match."},{objection:"We already have a Game One rep we like",response:"Keep that relationship for what they do well. Let us show you what they can't do — our exclusive product lines, faster customs, and full-service team store platform."}],discovery_landmines:["Does your current dealer offer exclusive graphic tee and spirit wear designs unique to your school?","Can you get equipment, custom uniforms, AND team stores all from Game One?","When you need something custom, how long does turnaround take?"]},
+"SquadLocker":{competitor:"SquadLocker",category:"Do It All",our_strengths:["Full equipment catalog — SquadLocker is apparel only at meaningful depth","Human relationship + technology — we provide both, not just a platform","Exclusive ST1 graphic tee line available only through our stores","Custom performance uniforms with sublimation — SquadLocker can't compete"],their_strengths:["Best-in-class team store UX — genuinely easy for coaches to set up","No inventory, no minimums, no money collection by coaches","Direct-to-athlete shipping eliminates distribution headaches","70+ major brands, 16,000+ products"],key_messages:["SquadLocker makes the admin easy. We make the whole program easy.","A platform answers tickets. We answer phones.","Coaches love not handling money. We give them that AND equipment AND uniforms."],objection_handlers:[{objection:"SquadLocker makes it so easy — coaches love it",response:"Coaches love not handling money. We give them the same freedom with our team store platform — plus equipment, custom uniforms, and exclusive designs that SquadLocker doesn't have."},{objection:"They have no minimums and free setup",response:"So do we. And when something goes wrong, you call a person who knows your program — not a chatbot."}],discovery_landmines:["Does your team need custom performance uniforms, not just spirit wear?","Do you also need equipment sourcing beyond the team store?","When something goes wrong with a SquadLocker order, who do you call?"]},
+"Team Sports Planet":{competitor:"Team Sports Planet",category:"Do It All",our_strengths:["Dedicated rep who knows your program vs anonymous online catalog","Exclusive ST1 graphic tee and spirit wear line unavailable elsewhere","Custom uniform expertise with sublimation — Team Sports Planet can't deliver this","Full-service team store platform with exclusive designs and program support"],their_strengths:["Wide catalog across equipment and apparel categories","Accepts school POs","Competitive pricing with volume breaks","Accessible to small programs with no minimums"],key_messages:["An online catalog ships quickly. A partner shows up.","Team Sports Planet has everything. We have everything plus a relationship.","Anonymous vendors are fine — until something goes wrong."],objection_handlers:[{objection:"Team Sports Planet has everything and ships quickly",response:"An online catalog ships quickly. But when you need customization, a team store, or advice on what works for your sport, you need ST1. We're the difference between a vendor and a partner."}],discovery_landmines:["Do you get custom design support for uniforms or are you picking from templates?","Who is your dedicated contact when something goes wrong with an order?","Does Team Sports Planet carry any exclusive products your athletes actually want to wear?"]},
+"Boombah":{competitor:"Boombah",category:"Sport Specialist",our_strengths:["We carry all major brands (Rawlings, Easton, Marucci, Wilson) — Boombah only does their own brand","Our CS is actually responsive — Boombah's 1.9-star PissedConsumer rating speaks for itself","Better accountability when orders go wrong — no stone wall on returns","We're multi-sport experts, not baseball/softball specialists who expanded","Our graphic tee drops create the same athlete identity buzz as their novelty collections — across ALL sports"],their_strengths:["Own factory = 2-week custom turnaround (industry fastest)","Direct pricing eliminates distributor markup","Massive style variety via 3D online builder","Strong brand recognition in travel baseball/softball","NFCA and Perfect Game institutional partnerships","Strongest visual brand and Instagram presence in category"],key_messages:["Two weeks means nothing if the return policy stonewalls you on wrong sizing.","They speak to the athlete. So do we — and we do it for every sport, not just baseball.","Boombah's brand playbook (collection drops, athlete identity) is exactly what ST1 does with graphic tees."],objection_handlers:[{objection:"Boombah's 2-week custom turnaround is very fast",response:"Speed matters only if the product is right. With Boombah's return policy and sizing complaints, a wrong order at 2 weeks is worse than a right order at 3. We get it right and stand behind it."},{objection:"Their direct pricing is competitive",response:"We offer team pricing that's equally competitive — and you get to choose from every major brand, not just theirs."},{objection:"They're an NFCA sponsor — gives them credibility",response:"Sponsorship buys visibility, not service. Ask coaches who've dealt with their customer service what they actually think."}],discovery_landmines:["Have you ever had to return or exchange something from Boombah — how did that go?","Do you need brand-name bats and helmets, or are you open to an unknown brand?","What happens when a cleat breaks mid-season and you need an immediate replacement?"]},
+"Smash It Sports":{competitor:"Smash It Sports",category:"Sport Specialist",our_strengths:["We serve all sports — not just baseball and softball","Better customer service when things go wrong — no restocking fees, real accountability","Multi-sport team program capability Smash It simply doesn't have","Our reps know your whole program, not just your bat preferences"],their_strengths:["Unrivaled bat selection — nation's largest softball retailer","Ridiculously fast shipping consistently praised by reviewers","Strong brand relationships with exclusive limited-edition bat drops","USA Softball Slow Pitch National Team partnership 2025","Smash Cash loyalty program"],key_messages:["The best bat store in the country. Not the best team dealer.","We do everything Smash It does for diamond sports — plus everything else.","A 15–20% restocking fee is how you discover who your vendor really is."],objection_handlers:[{objection:"Smash It has the best bat selection",response:"For bats, yes. When your program also needs soccer goals, basketball uniforms, and a team store for all your sports, you need ST1. We do everything they do for diamond sports — plus everything else."},{objection:"They're the official USA Softball supplier",response:"Official partnerships are marketing. Ask their customers about returning an item — that's where the relationship actually shows."},{objection:"Their price match guarantee is compelling",response:"We match prices too. But we also match expectations on service, returns, and accountability — areas where Smash It consistently falls short."}],discovery_landmines:["Do you also need equipment and uniforms for sports beyond baseball and softball?","Have you ever tried to return something to Smash It — what was the experience?","When a bat gets damaged, who do they direct you to for resolution?"]},
+"Extra Innings Direct":{competitor:"Extra Innings Direct",category:"Sport Specialist",our_strengths:["We are the dealer — no membership fee, no wholesale complexity to manage","We cover ALL sports, not just diamond sports","No dependence on BSN Sports' well-documented service problems","A real relationship with a human who knows your program — no dashboard substitute","We handle team stores, custom gear, AND equipment without making you your own purchasing department"],their_strengths:["Truly unique model — eliminates the middleman for members","Collective buying power of 400+ programs at genuine wholesale pricing","No minimums — access to 40+ manufacturers without carrying inventory","Nike/UA/Adidas stores without being an authorized dealer"],key_messages:["EID makes your club director a purchasing manager. We do that for you.","Membership in a buying group is a job. Being our customer isn't.","No BSN middleman — except that EID runs entirely through BSN."],objection_handlers:[{objection:"EID gives us wholesale pricing — cuts you out",response:"It also makes your club director a purchasing manager, inventory analyst, and vendor relationship manager. We do all of that for you, for free, with no membership fee. And we cover every sport, not just baseball."},{objection:"They have 40+ manufacturer relationships",response:"We do too — and you benefit from ours without paying a membership. Plus your orders don't go through BSN Sports, which means no 5-week shipping delays."},{objection:"The BSN Club Direct integration is powerful",response:"It is — until BSN is late on a uniform order and your team misses Opening Day. We're accountable directly to you."}],discovery_landmines:["What sports does your organization run beyond baseball and softball?","Have you calculated the true cost of EID membership vs. the actual savings?","What happens to your team stores if EID's BSN partnership changes?","How much time does your club director spend managing vendor relationships vs. coaching?"]},
+"GoBallistic Sports":{competitor:"GoBallistic Sports",category:"Apparel Specialist",our_strengths:["National reach vs their regional New Jersey focus","Full equipment catalog GoBallistic doesn't carry","Faster turnaround with fewer supply chain excuses","No minimum order constraints for smaller programs and rec leagues"],their_strengths:["Strong design pedigree from advertising background — truly original custom designs","No templates — completely original graphics","In-house printing and production for quality control","Broad sport coverage across 18+ sports"],key_messages:["Original designs are great. 4–5 week timelines aren't.","GoBallistic does great creative. We do great creative AND equipment AND we're national.","25-piece minimum is a real barrier. We don't have one."],objection_handlers:[{objection:"GoBallistic does fully custom original designs",response:"So do we — and we don't have the 4–5 week backlog or the 25-piece minimums that limit smaller programs."},{objection:"They're local to us",response:"Local matters for relationships — but ST1 gives you that same relationship regardless of geography, with broader inventory and faster execution."}],discovery_landmines:["Do you need equipment alongside custom uniforms?","What's your timeline for uniforms — can you wait 4–5 weeks?","Do you have enough players to meet the 25-piece sublimation minimum every time?"]},
+"Wooter Apparel":{competitor:"Wooter Apparel",category:"Apparel Specialist",our_strengths:["We don't ghost clients after payment — real accountability from order to delivery","Full equipment catalog — Wooter has zero hard equipment","Major brand options (Nike, UA, Adidas) vs Wooter's own-brand sublimation","Our fan stores carry exclusive ST1 graphic tee line that actually sells"],their_strengths:["Among the lowest prices for custom sublimated uniforms","High-quality sublimation designs praised initially","Global scale — 40+ countries","Free fan shop with 10–50% commission"],key_messages:["Cheap uniforms and no accountability is an expensive combination.","Wooter gets you in the door at $39. We keep you coming back for 10 years.","Their creative screams startup. Ours says partner."],objection_handlers:[{objection:"Wooter prices are very low",response:"You get what you pay for — and their BBB and Trustpilot reviews show what happens when something goes wrong. We stand behind our products with real accountability."},{objection:"Their fan shop earns us commission",response:"So does ours — plus our fan stores carry our exclusive graphic tee line that actually sells beyond just uniforms."}],discovery_landmines:["Do you also need equipment or are you purely looking for apparel?","Have you or another coach had issues getting responses from Wooter after ordering?","Does your team need gear from recognized major brands like Nike or Under Armour?"]},
+"Sports Gear Swag":{competitor:"Sports Gear Swag",category:"Apparel Specialist",our_strengths:["Major brand access (Nike, UA, Adidas) vs SGS's no-name sublimation","Equipment alongside apparel — SGS is apparel-only at meaningful depth","Relationship and accountability vs pure online transactional model","Our graphic tee line has sport-specific original designs vs generic templates"],their_strengths:["Super Rush 3-day delivery available","No order minimums","User-friendly online design tool with quick digital proofs","Broad 60+ sport coverage"],key_messages:["3-day rush means nothing when sizing is wrong.","Generic templates for 60 sports. We do original designs for your sport.","Entry-level pricing attracts teams. Quality complaints follow."],objection_handlers:[{objection:"No minimums and 3-day rush is very appealing",response:"Rush matters — but not when sizing is wrong or material is stiff. We can turn custom orders quickly too, with better quality control and major brands behind the product."},{objection:"Their pricing is very low",response:"Entry-level pricing attracts teams, then the quality complaints follow. We're competitive on price for the quality tier that holds up a full season."}],discovery_landmines:["Do you need equipment as well as apparel for your program?","What brands do your athletes or parents expect to see on their gear?","Have you had sizing issues with ultra-cheap custom apparel before?"]},
+"Custom Ink":{competitor:"Custom Ink",category:"Apparel Only",our_strengths:["We're an actual sports dealer — Custom Ink is a t-shirt printer","Performance athletic fabrics vs cotton fashion apparel that cracks and peels","Equipment + uniforms + team stores in one relationship vs apparel only","Sport-specific expertise vs generic design templates for any group"],their_strengths:["Extremely user-friendly design tool — accessible to anyone","Massive brand recognition — every parent and coach knows Custom Ink","100% satisfaction guarantee","Fast turnaround options for spirit wear and casual apparel"],key_messages:["Custom Ink is great for the school picnic. Not for game day.","We start where Custom Ink ends.","Everyone knows Custom Ink. Coaches who know the difference choose ST1."],objection_handlers:[{objection:"Custom Ink is easy and everyone knows them",response:"For custom tees with your team name — great. For performance uniforms that survive a season, catcher's gear, batting helmets, and a team store that sells all year, you need a sports dealer."},{objection:"Their guarantee is risk-free",response:"So is ours. But we start with performance fabrics and sports-specific designs that don't need to be guaranteed because they're right the first time."}],discovery_landmines:["Are you looking for cotton fashion tees or performance athletic uniforms?","Do you need equipment alongside the apparel?","Does your team need individual name/number customization on moisture-wicking fabric?"]},
+"Trigon Sports":{competitor:"Trigon Sports",category:"Equipment Only",our_strengths:["We handle equipment AND apparel AND team stores — Trigon can't outfit your team","We carry major brand equipment (Rawlings, Easton, Wilson) alongside facility gear","One vendor relationship for the entire program — not a specialty equipment-only vendor"],their_strengths:["A+ BBB rating — outstanding CS reputation","98% Facebook recommendation rate","ProCage batting cage line highly praised for durability","Deep facility equipment expertise: bleachers, batting cages, field covers","Acquired Proper Pitch Inc. (pitching mounds) 2025"],key_messages:["The best batting cage vendor. Not the best team dealer.","A+ rating on equipment they specialize in. Zero capability on everything else you need.","One more specialty vendor is one more relationship to manage."],objection_handlers:[{objection:"Trigon has the batting cages and field equipment we need",response:"We can source that too — and when you need uniforms, team stores, and spirit wear, you don't need to call a second vendor. We handle everything."},{objection:"They specialize in facility equipment",response:"Specialty is valuable. But for a complete program, you need a partner who handles equipment, apparel, and team gear without multiple vendor relationships."}],discovery_landmines:["Who handles your uniform and team store needs separately from equipment?","How many vendors do you currently manage for your program?","When budget is tight, which vendor is easiest to consolidate?"]},
+"Gopher Sport":{competitor:"Gopher Sport",category:"Equipment Only",our_strengths:["We offer performance custom uniforms Gopher doesn't — full sublimation program","Team store capability for individual parent ordering vs Gopher's bulk-only model","Multi-sport equipment expertise with major brands alongside institutional gear","More flexible for youth clubs and travel teams — Gopher is institution-only focused"],their_strengths:["A+ BBB rating — 75+ years of institutional trust","Unconditional satisfaction guarantee — any time, any reason","Same-day shipping 99%+ of in-stock orders","Deep PE/rec equipment expertise — archery, badminton, floor hockey","Government contract access: GSA, DoDEA, Sourcewell, OMNIA Partners"],key_messages:["The best PE equipment catalog in the business. The worst fit for a competitive team program.","Government contracts close doors. We open new ones.","Gopher has the guarantee. We have the guarantee plus everything Gopher can't do."],objection_handlers:[{objection:"We buy through Gopher because of our school's cooperative purchasing contract",response:"Many of our school clients use cooperative pricing through us too — and we combine that with full uniform programs and team stores that Gopher can't provide."},{objection:"Gopher's unconditional guarantee is great",response:"Ours matches it — and we add team stores, custom uniforms, and major brand equipment to the package."}],discovery_landmines:["Does your school need custom performance uniforms in addition to PE equipment?","Do coaches or parents want individual ordering through a team store?","Is your current equipment setup missing any gap Gopher doesn't cover?"]}
+}};
+
 function ModCompete() {
-  const {s,dispatch}=useApp();
-  const COMPS=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
+  const {s,dispatch,setMod}=useApp();
+  const HARDCODED=["Dick's Sporting Goods","gearUP","Anthem Sports","BSN Sports","Game One","SquadLocker","Team Sports Planet","Boombah","Smash It Sports","Extra Innings Direct","GoBallistic Sports","Wooter Apparel","Sports Gear Swag","Custom Ink","Trigon Sports","Gopher Sport","VS Athletics","MF Athletic","School Specialty","Varsity Group","Anderson's","Epic Sports"];
   const [sel,setSel]=useState(null);
   const intel=s.competeIntel||{};
   const bc=s.battlecards||{};
   const [running,setRunning]=useState(null);
   const [bcRunning,setBcRunning]=useState(null);
 
+  // Seed PDF data on first load — only fills gaps, never overwrites existing intel
+  useEffect(()=>{
+    const missingIntel=Object.keys(COMPETE_SEED.intel).filter(k=>!intel[k]);
+    const missingBc=Object.keys(COMPETE_SEED.battlecards).filter(k=>!bc[k]);
+    if(missingIntel.length>0){
+      const patch={};
+      missingIntel.forEach(k=>{patch[k]=COMPETE_SEED.intel[k];});
+      dispatch("SET_COMPETE_INTEL",patch);
+    }
+    if(missingBc.length>0){
+      const patch={};
+      missingBc.forEach(k=>{patch[k]=COMPETE_SEED.battlecards[k];});
+      dispatch("SET_BATTLECARD",patch);
+    }
+  },[]);
+  const [editingIntel,setEditingIntel]=useState(null); // competitor name being edited
+  const [editText,setEditText]=useState("");
+
+  const withIntel=useMemo(()=>Object.keys(intel).sort(),[intel]);
+  const noIntel=useMemo(()=>HARDCODED.filter(c=>!intel[c]),[intel]);
+
+  // Auto-select first with intel on mount
+  useEffect(()=>{if(!sel&&withIntel.length>0)setSel(withIntel[0]);},[withIntel]);
+
   const research=async(comp)=>{
-    setSel(comp);if(intel[comp])return;
+    setSel(comp);
     setRunning(comp);
     const t=await aiCall(`Research ${comp} as a competitor to ST1 Sports. ${ST1}. Provide: what they focus on, strengths, weaknesses vs ST1, pricing approach, strongest states, and how ST1 can counter them. Be specific and tactical.`,{search:true});
-    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});setRunning(null);
+    dispatch("SET_COMPETE_INTEL",{[comp]:t||""});
+    setRunning(null);
   };
+
   const genBc=async(comp)=>{
     setBcRunning(comp);
     const r=await aiCall(`Sales battlecard for ST1 Sports vs ${comp}. ${ST1}. Return JSON: {"competitor":"","our_strengths":["3 items"],"their_strengths":["2 items"],"key_messages":["3 messages"],"objection_handlers":[{"objection":"","response":""}]}`,{json:true});
-    dispatch("SET_BATTLECARD",{[comp]:r});setBcRunning(null);
+    dispatch("SET_BATTLECARD",{[comp]:r});
+    setBcRunning(null);
   };
 
-  return (
-    <div style={{padding:"22px 26px"}}>
-      <PH title="COMPETITOR INTEL" sub="Research competitors · generate battlecards · counter strategies"/>
-      <div style={{display:"grid",gridTemplateColumns:"190px 1fr",gap:16}}>
-        <div>
-          <Lbl s={{marginBottom:9}}>Competitors</Lbl>
-          {COMPS.map(c=>(
-            <button key={c} onClick={()=>research(c)} style={{display:"block",width:"100%",background:sel===c?`${B.orange}10`:B.white,color:sel===c?B.orange:B.textMid,border:`1px solid ${sel===c?B.orange:B.border}`,borderRadius:5,padding:"8px 11px",fontSize:11,textAlign:"left",fontFamily:"'Lexend',sans-serif",marginBottom:5}}>
-              {c} {intel[c]?"✓":""}
-            </button>
-          ))}
+  const delIntel=(comp)=>{
+    if(!window.confirm(`Delete all intel for ${comp}?`)) return;
+    dispatch("DEL_COMPETE_INTEL",comp);
+    if(sel===comp) setSel(withIntel.find(c=>c!==comp)||null);
+  };
+
+  return(
+    <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+      {/* LEFT RAIL */}
+      <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+        <div style={{padding:"14px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.text,letterSpacing:.5,marginBottom:6}}>COMPETITOR INTEL</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>15 battle cards loaded from April 2026 research. Use REFRESH to update any card with live AI search.</div>
         </div>
-        <div>
-          {!sel&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>Select a competitor to research</div>}
-          {sel&&running===sel&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.yellow,fontSize:12,padding:"20px 0"}}><Spin/>Researching {sel} with live web search...</div>}
-          {sel&&intel[sel]&&(
-            <div className="card fu" style={{padding:14}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:11}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.3}}>{sel}</div>
-                <OBtn sm onClick={()=>genBc(sel)} disabled={bcRunning===sel}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
-              </div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap",marginBottom:bc[sel]?14:0}}>{intel[sel]}</div>
-              {bc[sel]&&(
-                <div style={{borderTop:`1px solid ${B.border}`,paddingTop:13}}>
-                  <Lbl c={B.orange} s={{marginBottom:11}}>BATTLECARD vs {bc[sel].competitor?.toUpperCase()}</Lbl>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:11}}>
-                    {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
-                      <div key={k} style={{background:bg,borderRadius:5,padding:10}}><Lbl c={c} s={{marginBottom:6}}>{l}</Lbl>{(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}</div>
-                    ))}
+        <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+          {withIntel.length>0&&(
+            <>
+              <div style={{padding:"5px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1}}>INTEL SAVED</div>
+              {withIntel.map(c=>(
+                <div key={c} onClick={()=>setSel(c)} style={{padding:"8px 12px",cursor:"pointer",borderLeft:`3px solid ${sel===c?B.orange:"transparent"}`,background:sel===c?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:sel===c?B.orange:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{c}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginTop:1}}>{bc[c]?"✓ battlecard":""}</div>
                   </div>
-                  <div style={{background:B.surface,borderRadius:5,padding:10,marginBottom:10}}><Lbl s={{marginBottom:6}}>Key Messages</Lbl>{(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}</div>
-                  {(bc[sel].objection_handlers||[]).map((oh,i)=>(
-                    <div key={i} style={{marginBottom:7,padding:"9px 10px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5}}>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:5}}>"{oh.objection}"</div>
-                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:3}}>RESPONSE</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  <span style={{fontSize:9,color:B.green,flexShrink:0}}>✓</span>
+                </div>
+              ))}
+            </>
+          )}
+          {noIntel.length>0&&(
+            <>
+              <div style={{padding:"8px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>QUICK RESEARCH</div>
+              {noIntel.map(c=>(
+                <div key={c} style={{padding:"7px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${B.border}`}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{c}</span>
+                  <button onClick={()=>research(c)} disabled={!!running} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",flexShrink:0,letterSpacing:.3,opacity:running?.6:1}}>{running===c?"...":"RESEARCH"}</button>
+                </div>
+              ))}
+            </>
+          )}
+          {withIntel.length===0&&noIntel.length===0&&(
+            <div style={{padding:"20px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>No competitor data yet. Ask the home chat about a competitor to save intel here automatically.</div>
+          )}
+        </div>
+        <div style={{padding:"10px 12px",borderTop:`1px solid ${B.border}`,flexShrink:0}}>
+          <button onClick={()=>setMod("home")} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:5,padding:"7px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>ASK HOME CHAT →</button>
+        </div>
+      </div>
+
+      {/* MAIN AREA */}
+      <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+        {!sel&&(
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:12,opacity:.7}}>
+            <div style={{fontSize:32}}>⊗</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,textAlign:"center",maxWidth:280,lineHeight:1.6}}>Select a competitor from the left, or ask the home chat something like "Research BSN Sports as a competitor"</div>
+            <button onClick={()=>setMod("home")} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>GO TO HOME CHAT →</button>
+          </div>
+        )}
+        {sel&&running===sel&&(
+          <div style={{display:"flex",gap:10,alignItems:"center",padding:"40px 0",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:13}}>
+            <Spin/>Researching {sel} with live web search...
+          </div>
+        )}
+        {sel&&intel[sel]&&running!==sel&&(
+          <div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+              <div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.text,letterSpacing:.3,marginBottom:3}}>{sel}</div>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>COMPETITOR INTEL</div>
+              </div>
+              <div style={{display:"flex",gap:7}}>
+                <OBtn sm onClick={()=>research(sel)} disabled={!!running}>REFRESH</OBtn>
+                <OBtn sm onClick={()=>genBc(sel)} disabled={!!bcRunning}>{bcRunning===sel?"...":"GEN BATTLECARD"}</OBtn>
+                <button onClick={()=>{setEditText(intel[sel]);setEditingIntel(sel);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>EDIT</button>
+                <button onClick={()=>delIntel(sel)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>DELETE</button>
+              </div>
+            </div>
+
+            {editingIntel===sel?(
+              <div style={{marginBottom:16}}>
+                <textarea value={editText} onChange={e=>setEditText(e.target.value)} rows={12} style={{width:"100%",padding:"10px 12px",border:`1px solid ${B.border}`,borderRadius:6,fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.7,resize:"vertical",color:B.text}}/>
+                <div style={{display:"flex",gap:7,marginTop:8}}>
+                  <OBtn onClick={()=>{dispatch("SET_COMPETE_INTEL",{[sel]:editText});setEditingIntel(null);}}>SAVE</OBtn>
+                  <GBtn onClick={()=>setEditingIntel(null)}>CANCEL</GBtn>
+                </div>
+              </div>
+            ):(
+              <div className="card" style={{padding:16,marginBottom:16,whiteSpace:"pre-wrap",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8}}>{intel[sel]}</div>
+            )}
+
+            {bc[sel]&&(
+              <div>
+                <Lbl c={B.orange} s={{marginBottom:12}}>BATTLECARD vs {(bc[sel].competitor||sel).toUpperCase()}</Lbl>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
+                  {[["Our Strengths ✓","our_strengths",B.green,B.greenBg],["Their Strengths","their_strengths",B.red,B.redBg]].map(([l,k,c,bg])=>(
+                    <div key={k} style={{background:bg,borderRadius:6,padding:12}}>
+                      <Lbl c={c} s={{marginBottom:8}}>{l}</Lbl>
+                      {(bc[sel][k]||[]).map((x,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7}}>· {x}</div>)}
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12}}>
+                  <Lbl s={{marginBottom:8}}>Key Messages</Lbl>
+                  {(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}
+                </div>
+                {bc[sel].category&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"3px 10px",borderRadius:4,display:"inline-block",marginBottom:10}}>{bc[sel].category.toUpperCase()}</div>}
+                {(bc[sel].objection_handlers||[]).map((oh,i)=>(
+                  <div key={i} style={{marginBottom:8,padding:"10px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>"{oh.objection}"</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>RESPONSE</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
+                  </div>
+                ))}
+                {(bc[sel].discovery_landmines||[]).length>0&&(
+                  <div style={{marginTop:12,padding:"12px 14px",background:`${B.orange}06`,border:`1px solid ${B.orange}25`,borderRadius:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:8}}>💣 DISCOVERY LANDMINES — ask early to surface pain</div>
+                    {(bc[sel].discovery_landmines||[]).map((q,i)=>(
+                      <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,paddingLeft:10,borderLeft:`2px solid ${B.orange}40`,marginBottom:6}}>■ {q}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -11193,58 +12781,6 @@ function ModAgent() {
   useEffect(()=>{
     if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
   },[s.agentDraft]);
-
-  const buildContext=()=>{
-    const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-    const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-    const ar=(s.invoices||[]).filter(i=>!["paid","void","draft"].includes(i.status)).reduce((a,i)=>a+(i.balance||0),0);
-    const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
-    const hot=openDeals.filter(d=>d.priority==="hot");
-    const activeRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage));
-    const reachableContacts=(s.contacts||[]).filter(c=>c.email).slice(0,30);
-    const activeCampaigns=(s.sequences||[]).filter(seq=>seq.status==="active");
-    const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,6);
-    const recentActivity=(s.activity||[]).slice(-5);
-    const competitors=Object.keys(s.competeIntel||{});
-
-    return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist.
-${ST1}
-Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-User: ${cu?.name||"Matt"} (${cu?.role||"owner"})
-
-=== PIPELINE ===
-${openDeals.length} open deals · ${fmt$(pipeline)} total · ${overdue.length} overdue · ${hot.length} hot 🔥
-${overdue.length>0?`OVERDUE: ${overdue.slice(0,5).map(d=>`${d.name} (${Math.abs(dUntil(d.followUpDate))}d)`).join(", ")}\n`:""}${openDeals.slice(0,12).map(d=>`· ${d.name} — ${d.stage} — ${fmt$(d.value)}${d.followUpDate?` — due ${d.followUpDate}`:""}${d.priority==="hot"?" 🔥":""}`).join("\n")}
-
-=== TOP CONTACTS (by lead score) ===
-${topContacts.length===0?"No scored contacts":`${topContacts.map(c=>`· ${c.fullName||c.firstName} (${c.score||0}pts) — ${c.title}, ${c.school}, ${c.state} — ${c.sport||"?"} — ${c.email||"no email"}`).join("\n")}`}
-${reachableContacts.length} contacts with email | Sports: ${[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].join(", ")||"none"}
-
-=== ACTIVE CAMPAIGNS ===
-${activeCampaigns.length===0?"None":`${activeCampaigns.map(seq=>`· "${seq.name}" (${seq.product}) — ${seq.enrollments?.filter(e=>e.status==="active").length||0} active, ${seq.enrollments?.filter(e=>e.status==="replied").length||0} replied`).join("\n")}`}
-
-=== OPEN RFPS ===
-${activeRfps.length===0?"None":`${activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}`}
-
-=== AR ===
-${fmt$(ar)} outstanding${(s.invoices||[]).filter(i=>i.status==="overdue").length>0?` — ${(s.invoices||[]).filter(i=>i.status==="overdue").length} overdue`:""}
-
-${recentActivity.length>0?`=== RECENT ACTIVITY ===\n${recentActivity.map(a=>`· ${a.msg||""}`).join("\n")}\n`:""}${competitors.length>0?`=== KNOWN COMPETITORS ===\n${competitors.slice(0,5).join(", ")}\n`:""}
-=== ACTIONS YOU CAN TAKE ===
-Include an "actions" array when taking real action:
-· draft_email: {type:"draft_email",to_name,to_email,subject,body}
-· create_deal: {type:"create_deal",name,org,value,stage,product,contact_name?}
-· flag_deal: {type:"flag_deal",deal_name,priority:"hot"|"warm"}
-· schedule_followup: {type:"schedule_followup",deal_name,date:"YYYY-MM-DD",note?}
-· log_note: {type:"log_note",deal_name,note}
-· add_contact: {type:"add_contact",firstName,lastName,title,school,state,email?,phone?,sport?}
-· create_campaign: {type:"create_campaign",name,product,audience,channel}
-
-Also include "suggestions": 3 short follow-up questions the user might want to ask next.
-
-ALWAYS respond: {"message":"text","actions":[],"suggestions":["...","...","..."]}
-Be specific, tactical, use real names. Flag hot signals with 🔥.`;
-  };
 
   const copyEmail=(action)=>{
     const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
@@ -11313,10 +12849,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
     if(action.type==="add_to_nurture"){
       if(!action.email){toast("No email — can't add to nurture","error");return;}
       try{
-        await fetch("/api/zoho-campaigns",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          action:"add_subscribers",listKey:"cold_leads",subscribers:[{email:action.email,firstName:action.firstName||"",lastName:action.lastName||"",company:action.company||""}]
+        const r=await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          action:"add_lead",email:action.email,firstName:action.firstName||"",lastName:action.lastName||"",company:action.company||""
         })});
-        toast(`${action.email} added to nurture sequence`,"success");
+        const d=await r.json();
+        if(d.error) throw new Error(d.error);
+        toast(`${action.email} added to Instantly nurture sequence`,"success");
       }catch(e){toast(`Nurture add failed: ${e.message}`,"error");}
       return;
     }
@@ -11421,12 +12959,12 @@ Be specific, tactical, use real names. Flag hot signals with 🔥.`;
 
   const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 
-  // Sidebar data
-  const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-  const pipeline=openDeals.reduce((a,d)=>a+d.value,0);
-  const overdueDeals=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4);
-  const topContacts=[...(s.contacts||[])].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4);
-  const openRfps=(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3);
+  // Sidebar data — memoized so chat messages don't retrigger expensive filters/sorts
+  const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
+  const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
+  const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
+  const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
+  const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 
   const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg}};
   const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE"};
@@ -12041,6 +13579,672 @@ function ModAdmin() {
   );
 }
 
+// ─── PRICE LISTS (unified) ────────────────────────────────────────────────────
+const MARGIN_TARGET=20,MARGIN_WARN=15,MARGIN_CRITICAL=10;
+function getMarginStatus(cost,price){
+  const m=cost&&price?((price-cost)/price*100):0;
+  if(m<MARGIN_CRITICAL) return{color:"#C0392B",bg:"#FDECEA",label:"Critical"};
+  if(m<MARGIN_WARN)     return{color:"#C77800",bg:"#FFF8E6",label:"Low"};
+  if(m>=MARGIN_TARGET)  return{color:"#1E8F4E",bg:"#EAF7EE",label:"Good"};
+  return                      {color:"#1A5FA8",bg:"#E8F0FA",label:"OK"};
+}
+
+function ModPriceLists() {
+  const {s,dispatch,toast}=useApp();
+  const [selId,setSelId]=useState(null);
+  const [tab,setTab]=useState("own"); // "own" | "competitor"
+  const [showUpload,setShowUpload]=useState(false);
+  const [editItem,setEditItem]=useState(null);
+  const [searchQ,setSearchQ]=useState("");
+
+  const allLists=s.priceLists||[];
+  const ownLists=useMemo(()=>allLists.filter(pl=>pl.type==="own"),[allLists]);
+  const compLists=useMemo(()=>allLists.filter(pl=>pl.type==="competitor"),[allLists]);
+  const lists=tab==="own"?ownLists:compLists;
+  const selected=useMemo(()=>selId?allLists.find(pl=>pl.id===selId):null,[allLists,selId]);
+
+  // Stats
+  const totalProducts=useMemo(()=>allLists.reduce((a,pl)=>a+(pl.items||[]).length,0),[allLists]);
+  const {avgMargin,lowCount}=useMemo(()=>{
+    let sum=0,cnt=0,low=0;
+    ownLists.forEach(pl=>(pl.items||[]).forEach(it=>{
+      if(it.cost>0&&it.price>0){
+        const m=(it.price-it.cost)/it.price*100;
+        sum+=m;cnt++;
+        if(m<MARGIN_WARN) low++;
+      }
+    }));
+    return{avgMargin:cnt?Math.round(sum/cnt):0,lowCount:low};
+  },[ownLists]);
+
+  // Auto-select first list when tab changes
+  useEffect(()=>{
+    const first=(tab==="own"?ownLists:compLists)[0];
+    setSelId(first?.id||null);
+    setSearchQ("");
+  },[tab]);
+
+  const filteredItems=useMemo(()=>{
+    const items=selected?.items||[];
+    if(!searchQ.trim()) return items;
+    const q=searchQ.toLowerCase();
+    return items.filter(it=>(it.name||"").toLowerCase().includes(q)||(it.sku||"").toLowerCase().includes(q)||(it.category||"").toLowerCase().includes(q));
+  },[selected,searchQ]);
+
+  const hasMAP=useMemo(()=>(selected?.items||[]).some(it=>it.map>0),[selected]);
+
+  const delList=(id)=>{
+    if(!window.confirm("Delete this price list?")) return;
+    dispatch("DEL_PRICE_LIST",id);
+    setSelId(null);
+    toast("Price list deleted","success");
+  };
+
+  const th={padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8,borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"};
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%",overflow:"hidden"}}>
+      {/* TOP STATS BAR */}
+      <div style={{padding:"8px 16px",borderBottom:`1px solid ${B.border}`,background:B.surface,display:"flex",alignItems:"center",gap:16,flexShrink:0,flexWrap:"wrap"}}>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{ownLists.length} SUPPLIERS</span>
+        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{totalProducts} PRODUCTS</span>
+        {ownLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{avgMargin}% AVG MARGIN</span>}
+        {lowCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#C77800",letterSpacing:.5,background:"#FFF8E6",borderRadius:3,padding:"1px 5px"}}>{lowCount} LOW MARGIN</span>}
+        {compLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5}}>{compLists.length} COMPETITOR SOURCES</span>}
+        <div style={{flex:1}}/>
+        <button onClick={()=>setShowUpload(true)} style={{padding:"6px 14px",background:B.orange,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD LIST</button>
+      </div>
+      <div style={{display:"flex",flex:1,overflow:"hidden"}}>
+        {/* LEFT RAIL */}
+        <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
+          <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
+            {/* OUR SUPPLIERS section */}
+            <div style={{padding:"8px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.8}}>OUR SUPPLIERS</div>
+            {ownLists.length===0&&(
+              <div style={{padding:"6px 12px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No supplier lists yet</div>
+            )}
+            {ownLists.map(pl=>{
+              const lowItems=(pl.items||[]).filter(it=>it.cost>0&&it.price>0&&(it.price-it.cost)/it.price*100<MARGIN_WARN).length;
+              return(
+                <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("own");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.orange:"transparent"}`,background:selId===pl.id?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.supplierName||pl.name}</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
+                    {lowItems>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#C77800",background:"#FFF8E6",borderRadius:2,padding:"0 4px",letterSpacing:.3}}>{lowItems} LOW</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {/* COMPETITOR PRICING section */}
+            <div style={{padding:"12px 12px 4px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.8}}>COMPETITOR PRICING</div>
+            {compLists.length===0&&(
+              <div style={{padding:"6px 12px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>No competitor data yet</div>
+            )}
+            {compLists.map(pl=>(
+              <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("competitor");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.blue:"transparent"}`,background:selId===pl.id?`${B.blue}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.competitorName||pl.name}</div>
+                <div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
+                  {pl.source&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{pl.source.slice(0,10).toUpperCase()}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{padding:"10px 12px",borderTop:`1px solid ${B.border}`}}>
+            <button onClick={()=>setShowUpload(true)} style={{width:"100%",padding:"7px 0",background:"transparent",color:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD</button>
+          </div>
+        </div>
+
+        {/* MAIN AREA */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {!selected&&(
+            <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}>
+              <div style={{fontSize:32,opacity:.3}}>$</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>Select a price list or upload one to get started</div>
+              <button onClick={()=>setShowUpload(true)} style={{padding:"8px 18px",background:B.orange,color:"#fff",border:"none",borderRadius:6,fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>UPLOAD PRICE LIST</button>
+            </div>
+          )}
+          {selected&&(
+            <>
+              {/* HEADER */}
+              <div style={{padding:"12px 18px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:6}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,fontWeight:500,color:B.text,marginBottom:3}}>{selected.name}</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      {selected.source&&<Pill v={selected.source} sc={B.blue} bc={B.blue}/>}
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(selected.items||[]).length} items · {new Date(selected.uploadedAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                  <button onClick={()=>delList(selected.id)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",flexShrink:0}}>DELETE</button>
+                </div>
+                {/* Rep info for own lists */}
+                {selected.type==="own"&&(selected.supplierName||selected.repName||selected.repEmail||selected.repPhone)&&(
+                  <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+                    {selected.supplierName&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,fontWeight:500}}>{selected.supplierName}</span>}
+                    {selected.repName&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Rep: {selected.repName}</span>}
+                    {selected.repEmail&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{selected.repEmail}</span>}
+                    {selected.repPhone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{selected.repPhone}</span>}
+                  </div>
+                )}
+                {selected.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4,fontStyle:"italic"}}>{selected.notes}</div>}
+              </div>
+              {/* SEARCH */}
+              <div style={{padding:"8px 18px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
+                <input value={searchQ} onChange={e=>setSearchQ(e.target.value)} placeholder="Search items by name, SKU, or category..." style={{width:"100%",padding:"6px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,background:B.surface}}/>
+              </div>
+              {/* ITEMS TABLE */}
+              <div style={{flex:1,overflowY:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead>
+                    <tr style={{background:B.surface,position:"sticky",top:0,zIndex:1}}>
+                      <th style={{...th,textAlign:"left"}}>ITEM</th>
+                      <th style={{...th,textAlign:"left"}}>SKU</th>
+                      <th style={{...th,textAlign:"left"}}>CATEGORY</th>
+                      <th style={{...th,textAlign:"left"}}>UNIT</th>
+                      {selected.type==="own"?(
+                        <>
+                          <th style={{...th,textAlign:"right"}}>OUR COST</th>
+                          <th style={{...th,textAlign:"right"}}>OUR PRICE</th>
+                          <th style={{...th,textAlign:"center"}}>MARGIN</th>
+                          {hasMAP&&<th style={{...th,textAlign:"right"}}>MAP</th>}
+                        </>
+                      ):(
+                        <>
+                          <th style={{...th,textAlign:"right"}}>THEIR PRICE</th>
+                          <th style={{...th,textAlign:"left"}}>NOTES</th>
+                        </>
+                      )}
+                      <th style={{...th}}/>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredItems.map((it,i)=>{
+                      const ms=selected.type==="own"?getMarginStatus(it.cost,it.price):null;
+                      return(
+                        <tr key={it.id||i} style={{borderBottom:`1px solid ${B.border}`,background:i%2===0?"transparent":B.surface}}>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,maxWidth:220}}>
+                            <div style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</div>
+                            {it.notes&&selected.type!=="own"&&<div style={{fontSize:9,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.notes}</div>}
+                          </td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.sku||"—"}</td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.category||"—"}</td>
+                          <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.unit||"—"}</td>
+                          {selected.type==="own"?(
+                            <>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right"}}>{it.cost>0?`$${Number(it.cost).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",fontWeight:500}}>{it.price>0?`$${Number(it.price).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",textAlign:"center"}}>
+                                {ms&&it.cost>0&&it.price>0?<span style={{background:ms.bg,color:ms.color,borderRadius:4,padding:"2px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>{ms.label}</span>:"—"}
+                              </td>
+                              {hasMAP&&<td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{it.map>0?`$${Number(it.map).toFixed(2)}`:"—"}</td>}
+                            </>
+                          ):(
+                            <>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",fontWeight:500}}>{it.price>0?`$${Number(it.price).toFixed(2)}`:"—"}</td>
+                              <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.notes||"—"}</td>
+                            </>
+                          )}
+                          <td style={{padding:"7px 8px",textAlign:"right"}}>
+                            <button onClick={()=>setEditItem({listId:selected.id,item:{...it},listType:selected.type})} style={{background:"none",border:"none",color:B.blue,fontSize:10,cursor:"pointer",padding:"2px 4px"}}>✎</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {filteredItems.length===0&&searchQ&&(
+                  <div style={{padding:"28px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No items match "{searchQ}"</div>
+                )}
+                {filteredItems.length===0&&!searchQ&&selected&&(
+                  <div style={{padding:"28px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>This list has no items.</div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* UPLOAD MODAL */}
+      {showUpload&&<PLUploadModal onClose={()=>setShowUpload(false)} onSave={(pl)=>{dispatch("ADD_PRICE_LIST",pl);setSelId(pl.id);setTab(pl.type);setShowUpload(false);toast(`"${pl.name}" saved — ${pl.items.length} items`,"success");}} existingLists={allLists}/>}
+
+      {/* EDIT ITEM MODAL */}
+      {editItem&&<PLEditItemModal listType={editItem.listType} item={editItem.item} onSave={(updates)=>{dispatch("UPDATE_PRICE_LIST_ITEM",{listId:editItem.listId,itemId:editItem.item.id,updates});setEditItem(null);toast("Item updated","success");}} onClose={()=>setEditItem(null)}/>}
+    </div>
+  );
+}
+
+function PLEditItemModal({listType, item, onSave, onClose}) {
+  const [form,setForm]=useState({...item});
+  const f=(k,v)=>setForm(p=>({...p,[k]:v}));
+  const commonFields=[["name","Item Name","text"],["sku","SKU","text"],["category","Category","text"],["unit","Unit","text"]];
+  const ownFields=[["cost","Our Cost (what we pay)","number"],["price","Our Price (what we charge)","number"],["map","MAP Price","number"]];
+  const compFields=[["price","Their Price","number"],["notes","Notes","text"]];
+  const fields=[...commonFields,...(listType==="own"?ownFields:compFields)];
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:10,boxShadow:"0 20px 60px rgba(0,0,0,.2)",width:440,padding:20}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,letterSpacing:.5,color:B.text,marginBottom:14}}>EDIT ITEM</div>
+        {fields.map(([k,lbl,type])=>(
+          <div key={k} style={{marginBottom:9}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>{lbl.toUpperCase()}</div>
+            <input type={type} value={form[k]||""} onChange={e=>f(k,type==="number"?parseFloat(e.target.value)||0:e.target.value)} style={{width:"100%",padding:"6px 9px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:14}}>
+          <OBtn onClick={()=>onSave(form)}>SAVE</OBtn>
+          <GBtn onClick={onClose}>CANCEL</GBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PLUploadModal({onClose, onSave, existingLists}) {
+  const [step,setStep]=useState(1); // 1=info, 2=file+mapping, 3=preview
+  const [name,setName]=useState("");
+  const [type,setType]=useState("own");
+  const [supplierName,setSupplierName]=useState("");
+  const [repName,setRepName]=useState("");
+  const [repEmail,setRepEmail]=useState("");
+  const [repPhone,setRepPhone]=useState("");
+  const [competitorName,setCompetitorName]=useState("");
+  const [source,setSource]=useState("Catalog");
+  const [notes,setNotes]=useState("");
+  const [rawRows,setRawRows]=useState(null);
+  const [headers,setHeaders]=useState([]);
+  const [mapping,setMapping]=useState({});
+  const [loading,setLoading]=useState(false);
+  const [loadMsg,setLoadMsg]=useState("");
+  const [error,setError]=useState("");
+  const fileRef=useRef(null);
+
+  const FIELDS=useMemo(()=>[
+    {key:"name",    label:"Item Name",   required:true},
+    {key:"sku",     label:"SKU",         required:false},
+    {key:"category",label:"Category",    required:false},
+    {key:"unit",    label:"Unit",        required:false},
+    {key:"cost",    label:type==="own"?"Our Cost (dealer price)":"(skip)",  required:false},
+    {key:"price",   label:type==="own"?"Our Price (sell price)":"Their Price", required:false},
+    {key:"map",     label:"MAP Price",   required:false},
+    {key:"notes",   label:"Notes",       required:false},
+  ],[type]);
+
+  const autoDetect=(hdrs)=>{
+    const m={};
+    const lc=hdrs.map(h=>(h||"").toLowerCase());
+    const guess=(terms)=>lc.findIndex(h=>terms.some(t=>h.includes(t)));
+    m.name     = guess(["item name","name","product","description","item"]);
+    m.sku      = guess(["sku","item code","code","part"]);
+    m.category = guess(["category","cat","type","group"]);
+    m.unit     = guess(["unit","uom","each","qty"]);
+    m.cost     = guess(["cost","dealer","wholesale","our cost"]);
+    m.price    = guess(["price","sell","our price","rate","unit price","competitor"]);
+    m.map      = guess(["map","minimum advertised"]);
+    m.notes    = guess(["note","comment","remark"]);
+    return m;
+  };
+
+  const parseCSVRows=(text)=>{
+    return text.split(/\r?\n/).filter(l=>l.trim()).map(l=>{
+      const res=[];let cur="",inQ=false;
+      for(let ci=0;ci<l.length;ci++){
+        const ch=l[ci];
+        if(ch==='"'){inQ=!inQ;}
+        else if(ch===","&&!inQ){res.push(cur.trim());cur="";}
+        else{cur+=ch;}
+      }
+      res.push(cur.trim());
+      return res;
+    });
+  };
+
+  const handleFile=async(f)=>{
+    if(!f) return;
+    setLoading(true);setError("");setLoadMsg("");
+    const isPdf=f.name.toLowerCase().endsWith(".pdf");
+    const isCsv=f.name.toLowerCase().endsWith(".csv");
+    try{
+      if(isPdf){
+        setLoadMsg("Reading PDF...");
+        const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
+        setLoadMsg("Extracting data with AI...");
+        const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          model:"claude-sonnet-4-6",max_tokens:16000,stream:true,
+          system:"Return ONLY valid JSON, no markdown, no code fences.",
+          messages:[{role:"user",content:[
+            {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+            {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
+          ]}]
+        })});
+        if(!resp.ok){let e="API error";try{const j=await resp.json();e=j.error||e;}catch{}throw new Error(e);}
+        // Stream the SSE response and accumulate text
+        setLoadMsg("Extracting data with AI (this may take a minute for large files)...");
+        const reader=resp.body.getReader();const decoder=new TextDecoder();
+        let accumulated="";let buf="";
+        while(true){
+          const{done,value}=await reader.read();
+          if(done) break;
+          buf+=decoder.decode(value,{stream:true});
+          const lines=buf.split("\n");
+          buf=lines.pop()||"";
+          for(const line of lines){
+            if(!line.startsWith("data: ")) continue;
+            const raw=line.slice(6).trim();
+            if(!raw||raw==="[DONE]") continue;
+            try{
+              const ev=JSON.parse(raw);
+              if(ev.type==="content_block_delta"&&ev.delta?.type==="text_delta") accumulated+=ev.delta.text;
+            }catch{}
+          }
+        }
+        let txt=accumulated.trim();
+        if(!txt) throw new Error("AI returned empty response — the PDF may be too large or unsupported");
+        // Strip markdown code fences if present
+        txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/,"").trim();
+        // Parse — if truncated, salvage complete entries
+        let parsed;
+        try{
+          parsed=JSON.parse(txt);
+        }catch{
+          const lastBrace=txt.lastIndexOf("}");
+          if(lastBrace>0) txt=txt.slice(0,lastBrace+1);
+          txt=txt.replace(/,(\s*[}\]])/g,"$1");
+          const openBrackets=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
+          const openBraces=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
+          txt+="]".repeat(Math.max(0,openBrackets))+"}".repeat(Math.max(0,openBraces));
+          parsed=JSON.parse(txt);
+        }
+        if(!name&&parsed.supplierName) setName(parsed.supplierName);
+        if(!supplierName&&parsed.supplierName) setSupplierName(parsed.supplierName);
+        if(!repName&&parsed.repName) setRepName(parsed.repName||"");
+        if(!repEmail&&parsed.repEmail) setRepEmail(parsed.repEmail||"");
+        if(!repPhone&&parsed.repPhone) setRepPhone(parsed.repPhone||"");
+        const items=(parsed.products||[]).map(p=>({
+          id:mkId(),name:p.name||"",sku:p.sku||"",category:p.category||"",unit:p.unit||"each",
+          cost:parseFloat(p.cost)||0,price:parseFloat(p.price)||0,map:parseFloat(p.map)||0,notes:p.notes||""
+        }));
+        setRawRows(items.map(it=>[it.name,it.sku,it.category,it.unit,it.cost,it.price,it.map,it.notes]));
+        const syntheticHdrs=["name","sku","category","unit","cost","price","map","notes"];
+        setHeaders(syntheticHdrs);
+        setMapping({name:0,sku:1,category:2,unit:3,cost:4,price:5,map:6,notes:7});
+        setStep(3);
+      }else{
+        let rows;
+        if(isCsv){
+          rows=parseCSVRows(await f.text());
+        }else{
+          const {default:XLSX}=await import("xlsx");
+          const buf=await toBuffer(f);
+          const wb=XLSX.read(buf,{type:"array"});
+          const ws=wb.Sheets[wb.SheetNames[0]];
+          rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
+        }
+        if(!rows||rows.length<2){setError("File appears empty or unreadable");setLoading(false);return;}
+        const hdrs=(rows[0]||[]).map(h=>String(h||"").trim());
+        setHeaders(hdrs);
+        setRawRows(rows.slice(1));
+        setMapping(autoDetect(hdrs));
+        if(!name) setName(f.name.replace(/\.[^.]+$/,""));
+        setStep(2);
+      }
+    }catch(err){setError("Could not parse file: "+err.message);}
+    setLoading(false);setLoadMsg("");
+  };
+
+  const handleDrop=async(e)=>{
+    e.preventDefault();
+    const f=e.dataTransfer.files?.[0];
+    if(f) await handleFile(f);
+  };
+
+  const buildItems=useCallback(()=>{
+    if(!rawRows) return[];
+    // If PDF path: rows are already structured arrays matching synth headers
+    if(headers[0]==="name"&&headers[1]==="sku"&&headers[3]==="unit"){
+      return rawRows.filter(r=>r[0]).map((r,i)=>({
+        id:mkId(),name:String(r[0]||`Item ${i+1}`),sku:String(r[1]||""),category:String(r[2]||""),
+        unit:String(r[3]||"each"),cost:parseFloat(r[4])||0,price:parseFloat(r[5])||0,
+        map:parseFloat(r[6])||0,notes:String(r[7]||""),
+      }));
+    }
+    return rawRows.filter(row=>row.some(c=>String(c||"").trim())).map((row,i)=>{
+      const g=(k)=>{const idx=mapping[k];return(idx!=null&&idx>=0)?String(row[idx]||"").trim():"";}
+      return{id:mkId(),name:g("name")||`Item ${i+1}`,sku:g("sku"),category:g("category"),
+        unit:g("unit")||"each",cost:parseFloat(g("cost"))||0,price:parseFloat(g("price"))||0,
+        map:parseFloat(g("map"))||0,notes:g("notes")};
+    }).filter(it=>it.name);
+  },[rawRows,mapping,headers]);
+
+  const previewItems=useMemo(()=>buildItems().slice(0,5),[buildItems]);
+
+  const handleSave=()=>{
+    if(!name.trim()){setError("Please enter a list name.");return;}
+    if(type==="competitor"&&!competitorName.trim()){setError("Please enter the competitor name.");return;}
+    const items=buildItems();
+    if(items.length===0){setError("No items could be parsed.");return;}
+    const dup=(existingLists||[]).find(pl=>pl.name.toLowerCase()===name.toLowerCase()&&pl.type===type);
+    if(dup&&!window.confirm(`A list named "${name}" already exists. Continue?`)) return;
+    onSave({id:mkId(),name:name.trim(),type,
+      supplierName:type==="own"?supplierName.trim():"",
+      repName:type==="own"?repName.trim():"",
+      repEmail:type==="own"?repEmail.trim():"",
+      repPhone:type==="own"?repPhone.trim():"",
+      competitorName:type==="competitor"?competitorName.trim():"",
+      source:source.trim()||"Upload",notes:notes.trim(),
+      uploadedAt:Date.now(),items});
+  };
+
+  const inp={width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"};
+  const lbl={fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4,display:"block"};
+
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:620,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+        {/* Header */}
+        <div style={{padding:"16px 20px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+          <div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5}}>UPLOAD PRICE LIST</div>
+            <div style={{display:"flex",gap:0,marginTop:6}}>
+              {["1 Info","2 File","3 Preview"].map((lbtext,idx)=>{
+                const sn=idx+1;
+                return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.3,padding:"2px 8px",borderRadius:3,background:step===sn?B.orange:"transparent",color:step===sn?"#fff":B.muted,marginRight:2}}>{lbtext}</span>);
+              })}
+            </div>
+          </div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{flex:1,overflowY:"auto",padding:20}}>
+          {error&&<div style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11}}>{error}</div>}
+
+          {/* STEP 1: INFO */}
+          {step===1&&(
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div style={{gridColumn:"1/-1"}}>
+                <label style={lbl}>LIST NAME *</label>
+                <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Blazer Athletic 2025 Catalog" style={inp}/>
+              </div>
+              <div>
+                <label style={lbl}>TYPE *</label>
+                <select value={type} onChange={e=>setType(e.target.value)} style={{...inp,background:"#fff"}}>
+                  <option value="own">Our Prices (supplier)</option>
+                  <option value="competitor">Competitor Pricing</option>
+                </select>
+              </div>
+              <div>
+                <label style={lbl}>SOURCE</label>
+                <select value={source} onChange={e=>setSource(e.target.value)} style={{...inp,background:"#fff"}}>
+                  <option>Catalog</option>
+                  <option>PDF Catalog</option>
+                  <option>RFP Result</option>
+                  <option>Quote</option>
+                  <option>Website</option>
+                  <option>Sales Rep</option>
+                  <option>CSV Upload</option>
+                  <option>Manual</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              {type==="own"&&(
+                <>
+                  <div>
+                    <label style={lbl}>SUPPLIER NAME</label>
+                    <input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="e.g. Blazer Athletic" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP NAME</label>
+                    <input value={repName} onChange={e=>setRepName(e.target.value)} placeholder="e.g. John Smith" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP EMAIL</label>
+                    <input value={repEmail} onChange={e=>setRepEmail(e.target.value)} placeholder="rep@supplier.com" style={inp}/>
+                  </div>
+                  <div>
+                    <label style={lbl}>REP PHONE</label>
+                    <input value={repPhone} onChange={e=>setRepPhone(e.target.value)} placeholder="555-000-0000" style={inp}/>
+                  </div>
+                </>
+              )}
+              {type==="competitor"&&(
+                <div style={{gridColumn:"1/-1"}}>
+                  <label style={lbl}>COMPETITOR NAME *</label>
+                  <input value={competitorName} onChange={e=>setCompetitorName(e.target.value)} placeholder="e.g. Track Supply Co" style={inp}/>
+                </div>
+              )}
+              <div style={{gridColumn:"1/-1"}}>
+                <label style={lbl}>NOTES (optional)</label>
+                <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Date range, discount terms, RFP context..." rows={2} style={{...inp,resize:"vertical"}}/>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2: FILE + MAPPING */}
+          {step===2&&(
+            <div>
+              <div
+                onDragOver={e=>e.preventDefault()}
+                onDrop={handleDrop}
+                onClick={()=>fileRef.current?.click()}
+                style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:"center",marginBottom:14,cursor:"pointer",background:B.surface}}
+              >
+                <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={e=>handleFile(e.target.files?.[0])} style={{display:"none"}}/>
+                {loading?(
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:8}}>
+                    <Spin/>
+                    {loadMsg&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{loadMsg}</div>}
+                  </div>
+                ):(
+                  <>
+                    <div style={{fontSize:24,marginBottom:6,opacity:.5}}>📄</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Drop file here or click to browse</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>.pdf (AI extracts automatically) · .csv · .xlsx · .xls</div>
+                    {rawRows&&<div style={{marginTop:8,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5}}>✓ {rawRows.length} ROWS LOADED — ADJUST MAPPING BELOW</div>}
+                  </>
+                )}
+              </div>
+              {rawRows&&headers.length>0&&(
+                <>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>COLUMN MAPPING</div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                    {FIELDS.filter(fl=>!(type==="competitor"&&fl.key==="cost")&&!(type==="competitor"&&fl.key==="map")).map(fl=>(
+                      <div key={fl.key}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>{fl.label.toUpperCase()}{fl.required?" *":""}</div>
+                        <select value={mapping[fl.key]??-1} onChange={e=>setMapping(p=>({...p,[fl.key]:parseInt(e.target.value)}))} style={{width:"100%",padding:"5px 8px",border:`1px solid ${B.border}`,borderRadius:4,fontSize:10,fontFamily:"'Lexend',sans-serif",background:"#fff"}}>
+                          <option value={-1}>— not mapped —</option>
+                          {headers.map((h,i)=><option key={i} value={i}>{h||`Col ${i+1}`}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                  {previewItems.length>0&&(
+                    <div>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:6}}>PREVIEW ({previewItems.length} of {buildItems().length} items)</div>
+                      <div style={{overflowX:"auto"}}>
+                        <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                          <thead>
+                            <tr style={{background:B.surface}}>
+                              {["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {previewItems.map((it,i)=>(
+                              <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+                                {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+                                <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* STEP 3: PREVIEW / CONFIRM */}
+          {step===3&&(
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>PREVIEW — {buildItems().length} ITEMS READY TO SAVE</div>
+              <div style={{overflowX:"auto",marginBottom:14}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+                  <thead>
+                    <tr style={{background:B.surface}}>
+                      {["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {buildItems().slice(0,5).map((it,i)=>(
+                      <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+                        {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+                        <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {buildItems().length>5&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>...and {buildItems().length-5} more items</div>}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"12px 20px",borderTop:`1px solid ${B.border}`,display:"flex",gap:8,flexShrink:0}}>
+          {step===1&&(
+            <>
+              <OBtn onClick={()=>{setError("");setStep(2);}}>NEXT: ADD FILE</OBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+          {step===2&&(
+            <>
+              {rawRows&&buildItems().length>0&&<OBtn onClick={()=>{setError("");setStep(3);}}>REVIEW {buildItems().length} ITEMS</OBtn>}
+              <GBtn onClick={()=>setStep(1)}>BACK</GBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+          {step===3&&(
+            <>
+              <OBtn onClick={handleSave}>SAVE {buildItems().length} ITEMS</OBtn>
+              <GBtn onClick={()=>setStep(2)}>BACK</GBtn>
+              <GBtn onClick={onClose}>CANCEL</GBtn>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ModSettings() {
   const {s,dispatch,toast,setMod}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
@@ -12124,7 +14328,7 @@ function ModSettings() {
             <Lbl s={{marginBottom:3}}>Inbound Email Webhook Secret</Lbl>
             <input value={co.inboundEmailSecret||""} onChange={e=>setCo(c=>({...c,inboundEmailSecret:e.target.value}))}
               placeholder="Generate a random string here"
-              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontFamily:"monospace"}}/>
+              style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"monospace"}}/>
             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Add this to your email provider's webhook URL as <code style={{color:B.orange}}>?secret=...</code></div>
           </div>
           <div>

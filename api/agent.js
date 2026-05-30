@@ -16,20 +16,42 @@
 
 import { getZohoToken } from './_lib/zoho-token.js';
 
-export const config = {
-  api: { bodyParser: { sizeLimit: "4mb" } },
-  maxDuration: 60,
-};
+export const config = { maxDuration: 120 };
 
-const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks, shot puts, throws equipment, training gear) sold directly to high school and college athletic programs, coaches, and athletic directors across the US. Based in Colorado. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Website: st1sports.com. Direct sales model, volume discounts for teams, fast shipping, personalized service.`;
+const ST1 = `ST1 Sports — premium athletic equipment (hurdles, starting blocks, shot puts, throws equipment, training gear) sold directly to high school and college athletic programs, coaches, and athletic directors across the US. Based in Colorado. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Website: st1sports.com. Direct sales model, volume discounts for teams, fast shipping, personalized service.
+
+BRAND POSITIONING — 5 attributes NO competitor occupies:
+1. WARM CONFIDENCE: Approachable, relationship-first tone. Zero competitors own this — 9 of 15 run red/black/white aggressive palettes.
+2. ATHLETE IDENTITY: Speak TO the athlete, not just the administrator. Youth baseball culture, sport slang, identity-first. Nobody else does this.
+3. HUMAN CONTACT: "One person picks up the phone." Matt answers personally. This narrative is completely unoccupied in the market.
+4. ALL-SPORT BREADTH: One contact, one relationship — track, baseball, volleyball, football, all of it. Position this as relief for the AD managing 20 programs.
+5. EXCLUSIVE CULTURE: Graphic tees as culture drops ("I Hit Dingers", "Oppo Taco") — limited runs, sport slang, kids actually want to wear them.
+
+BRAND VOICE RULES — apply to every email, response, and campaign:
+✓ Warm, direct, first-person: "I'm Matt. I pick up the phone."
+✓ Athlete-aware: reference the sport's culture, the kid wearing the gear
+✓ Relationship-first: lead with the person, then the product
+✓ Specific over generic: real names, real schools, real details — never filler
+✓ Short sentences, human language — never corporate or formal
+✗ NEVER use efficiency-first hooks: "2-week turnaround", "no minimums", "lowest prices" — every competitor says this
+✗ NEVER use corporate "we" language or institutional B2B tone
+✗ NEVER use generic inspiration phrases: "Make Winning Possible", "Building Champions", "Welcome to Sporthood"
+✗ NEVER lean on social proof as personality: "4.9 stars", "#1 rated"
+
+UNDERSERVED AUDIENCES ST1 can own:
+- The Athlete: zero competitors in this category speak directly to them
+- Youth baseball/softball culture: graphic tee slang completely unaddressed by any competitor
+- The All-Sport AD/Parent: one stop, one contact, every sport — relief for multi-program schools
+- The Serious Rec Athlete (25-45)
+
+KEY MESSAGES THAT WIN (competitors run zero ads like these):
+- "I'm Matt. I pick up the phone."
+- "One contact, every sport your school runs"
+- Drop-style graphic tees: named collections, limited runs, culture-driven`;
+
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
 const TOOLS = [
-  // Web search — Anthropic executes this automatically server-side
-  {
-    type: "web_search_20250305",
-    name: "web_search",
-  },
   // CRM / action proposals — returned in actions[] for user to confirm
   {
     name: "propose_create_deal",
@@ -133,20 +155,105 @@ const TOOLS = [
       required: ["deal_name", "note"],
     },
   },
+  {
+    name: "propose_create_quote",
+    description: "Build and create a Zoho Books estimate/quote for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin.",
+    input_schema: {
+      type: "object",
+      properties: {
+        customer_name:  { type: "string", description: "Customer or school name" },
+        contact_person: { type: "string", description: "Contact person's name" },
+        email:          { type: "string", description: "Email to send the quote to" },
+        line_items: {
+          type: "array",
+          description: "Products/services to quote",
+          items: {
+            type: "object",
+            properties: {
+              name:        { type: "string" },
+              description: { type: "string" },
+              quantity:    { type: "number" },
+              rate:        { type: "number", description: "Price per unit after margin" },
+            },
+            required: ["name", "quantity", "rate"],
+          },
+        },
+        notes:      { type: "string", description: "Notes visible on the quote" },
+        send_email: { type: "boolean", description: "Whether to email the quote to the customer" },
+      },
+      required: ["customer_name", "line_items"],
+    },
+  },
+  {
+    name: "propose_store_competitor_intel",
+    description: "Save competitor intelligence to the Competitors tab so it persists and the user can reference it. ALWAYS call this when you research or learn anything useful about a competitor — pricing, strengths, weaknesses, customer segments, tactics. This executes automatically (no user confirmation needed).",
+    input_schema: {
+      type: "object",
+      properties: {
+        competitor_name: { type: "string", description: "Company name exactly as it should appear (e.g. 'BSN Sports', 'VS Athletics', 'Track Supply Co')" },
+        intel: { type: "string", description: "All intelligence gathered — product focus, pricing approach, strengths, weaknesses vs ST1, key states/customers, counter-tactics. Be specific and comprehensive." },
+        source: { type: "string", description: "How gathered: 'web search', 'RFP document', 'user provided', 'price list upload'" },
+      },
+      required: ["competitor_name", "intel"],
+    },
+  },
+  {
+    name: "propose_create_campaign_sequence",
+    description: "Build a multi-email outreach sequence, match contacts from the CRM, and set it up ready to launch. Use when the user asks to build a campaign, send a sequence to a group, or automate outreach to a segment.",
+    input_schema: {
+      type: "object",
+      properties: {
+        campaign_name: { type: "string", description: "Short descriptive name for this campaign" },
+        product:       { type: "string", description: "Product or category being promoted" },
+        emails: {
+          type: "array",
+          description: "The email sequence — each is one touch",
+          items: {
+            type: "object",
+            properties: {
+              subject:    { type: "string" },
+              body:       { type: "string", description: "Full email body, personalized, signed by Matt Stone" },
+              delay_days: { type: "number", description: "Days after previous email (0 = send first)" },
+            },
+            required: ["subject", "body", "delay_days"],
+          },
+        },
+        contact_filters: {
+          type: "object",
+          description: "Filters to match the right contacts from CRM",
+          properties: {
+            sports:    { type: "array", items: { type: "string" }, description: "Sports to match (e.g. ['Baseball', 'Softball'])" },
+            states:    { type: "array", items: { type: "string" }, description: "State codes to match (e.g. ['IA', 'MN'])" },
+            titles:    { type: "array", items: { type: "string" }, description: "Title keywords to match (e.g. ['Athletic Director', 'Coach'])" },
+            min_score: { type: "number", description: "Minimum lead score (omit to include all)" },
+          },
+        },
+        notes: { type: "string", description: "Context or strategy notes for this campaign" },
+      },
+      required: ["campaign_name", "emails"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
+function fetchWithTimeout(url, opts = {}, ms = 8000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(timer));
+}
+
 async function fetchZohoContext() {
   try {
     const token = await getZohoToken();
+    const hdrs = { headers: { Authorization: `Zoho-oauthtoken ${token}` } };
     const [dealsRes, contactsRes] = await Promise.allSettled([
-      fetch(
+      fetchWithTimeout(
         "https://www.zohoapis.com/crm/v3/Deals?fields=Deal_Name,Account_Name,Amount,Stage,Closing_Date,id&per_page=25&sort_by=Modified_Time&sort_order=desc",
-        { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+        hdrs
       ),
-      fetch(
+      fetchWithTimeout(
         "https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,id&per_page=20&sort_by=Modified_Time&sort_order=desc",
-        { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+        hdrs
       ),
     ]);
     const deals    = dealsRes.status === "fulfilled" && dealsRes.value.ok    ? (await dealsRes.value.json()).data || []    : [];
@@ -157,13 +264,39 @@ async function fetchZohoContext() {
   }
 }
 
+// ── ZOHO BOOKS INVENTORY ──────────────────────────────────────────────────────
+async function fetchZohoInventory() {
+  try {
+    const orgId = process.env.ZOHO_ORG_ID;
+    if (!orgId) return [];
+    const token = await getZohoToken();
+    const res = await fetchWithTimeout(
+      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
+      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items || []).map(i => ({
+      name: i.name,
+      rate: parseFloat(i.rate || i.selling_price || 0),
+      sku:  i.sku  || "",
+      unit: i.unit || "",
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho) {
+function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
   const invoices = localCtx.invoices || [];
   const sequences = localCtx.sequences || [];
+  const priceLists = localCtx.priceLists || [];
+  const storedIntel = localCtx.competeIntel || [];
+  const brandVoice = localCtx.brandVoice || "";
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -192,7 +325,7 @@ ${topContacts.length === 0 ? "No scored contacts yet" : topContacts.map(c=>`· $
 ${contacts.filter(c=>c.email).length} contacts with email
 
 === ACTIVE CAMPAIGNS ===
-${sequences.filter(s=>s.status==="active").length === 0 ? "None" : sequences.filter(s=>s.status==="active").map(s=>`· "${s.name}" — ${s.enrollments?.filter(e=>e.status==="active").length||0} active`).join("\n")}
+${sequences.filter(s=>s.status==="active").length === 0 ? "None" : sequences.filter(s=>s.status==="active").map(s=>`· "${s.name}" — ${s.activeCount||0} active`).join("\n")}
 
 === OPEN RFPs ===
 ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.stage}${r.dueDate?` — due ${r.dueDate}`:""}`).join("\n")}
@@ -200,23 +333,122 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-=== YOUR CAPABILITIES ===
-You have access to:
-1. web_search — search the web in real-time for prospect research, competitor intel, school budgets, coaching news
-2. propose_create_deal — suggest creating a deal (user confirms)
-3. propose_add_contact — suggest adding a prospect (user confirms)
-4. propose_draft_email — compose a personalized email (user reviews + sends)
-5. propose_schedule_followup — set a follow-up date on a deal
-6. propose_flag_deal — mark a deal as hot/warm priority
-7. propose_add_to_nurture — add cold leads to email nurture campaign
-8. propose_log_note — log notes on a deal
+${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books) ===
+${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
+(Use these rates as the base cost when building quotes — apply margin on top)
+` : ""}${(() => {
+  const own = priceLists.filter(pl => pl.type === "own");
+  const comp = priceLists.filter(pl => pl.type === "competitor");
+  let out = "";
+  if (own.length > 0) {
+    out += `\n=== OUR PRICE LISTS (${own.length} lists) ===\n`;
+    for (const pl of own) {
+      out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}${it.category ? " ("+it.category+")" : ""}`;
+        if (it.cost > 0) out += ` — Our Cost: $${Number(it.cost).toFixed(2)}`;
+        if (it.price > 0) {
+          out += ` — Our Price: $${Number(it.price).toFixed(2)}`;
+          if (it.cost > 0) out += ` (${Math.round((it.price - it.cost) / it.price * 100)}% margin)`;
+        }
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use these costs when answering pricing questions or building quotes. List price = what we charge customers.\n`;
+  }
+  if (comp.length > 0) {
+    out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
+    for (const pl of comp) {
+      out += `${pl.competitorName || pl.name}${pl.source ? " ["+pl.source+"]" : ""}${pl.notes ? " — "+pl.notes : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
+      const items = (pl.items || []).slice(0, 20);
+      for (const it of items) {
+        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}`;
+        if (it.price > 0) out += ` — $${Number(it.price).toFixed(2)}`;
+        if (it.notes) out += ` (${it.notes})`;
+        out += "\n";
+      }
+      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+    }
+    out += `Use competitor pricing to position ST1 competitively. When responding to RFPs, reference how ST1's pricing compares to known competitors — highlight our advantages (service, speed, quality) even when we're not cheapest.\n`;
+  }
+  return out;
+})()}
+${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
+${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
+(Use this when answering questions about competitors or building counter-strategies)
+` : ""}=== BRAND VOICE — ALWAYS APPLY ===
+Every email draft, campaign sequence, and customer-facing response must reflect ST1's brand:
+• Lead with the relationship: "We were thinking about your program" not "We offer the fastest turnaround"
+• Reference the athlete and the sport culture — not just the coach or the product SKU
+• Use plain, direct sentences. No bullet-pointed sales decks. No formal closings like "Best regards"
+• Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+• If a prospect mentions a competitor (BSN, Dick's, gearUP, SquadLocker, etc.), acknowledge it and pivot to what ST1 uniquely offers: human contact, all-sport breadth, culture-driven product
+• Graphic tee drops are a culture play — not a commodity item. Frame them as limited collections with names, not "custom apparel"
+
+=== ROUTING — CHOOSE THE RIGHT ACTION ===
+For every message, first classify the intent, then act:
+
+RESPOND DIRECTLY (no tools) when:
+- User asks a question answerable from the context above (pipeline status, deal details, contact lookup, AR balance, RFP status, pricing from price list)
+- User asks for analysis, prioritization, or strategy recommendations
+- User asks "what should I do next" or "what's my pipeline looking like"
+- Greeting or clarification
+
+USE propose_draft_email when:
+- User says "write", "draft", "send", "email", or "reach out" to a specific person or school
+- ALWAYS chain: draft_email → log_note (summarizing outreach) → schedule_followup (3 business days out)
+- ALWAYS write a COMPLETE, personalized email body — no placeholders
+- Apply ST1 brand voice: warm, direct, athlete-aware — never efficiency-first or corporate
+- Lead with the person or their program, not the product
+- Under 100 words for follow-ups; under 150 for cold outreach — shorter is better
+- Sign all emails as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+
+USE propose_create_deal when:
+- User says "add a deal", "create a deal", "new opportunity", or describes a new sales opportunity
+
+USE propose_add_contact when:
+- User says "add", "save", or "track" a new prospect or contact
+
+USE propose_create_campaign_sequence when:
+- User says "build a campaign", "send to a group", "email all [sport] coaches", "reach out to [segment]", or describes outbound to multiple people
+- Write COMPLETE email bodies for every touch in the sequence
+
+USE propose_create_quote when:
+- User asks to "build a quote", "create an estimate", or "price this out" with specific products and a customer
+
+USE propose_flag_deal when:
+- User says a deal is urgent, high priority, or mentions a hot lead
+
+USE propose_schedule_followup when:
+- User says "remind me", "follow up on", "check back with" — or as part of the email chain
+
+USE propose_add_to_nurture when:
+- User says to put a contact in nurture, or a contact has gone cold/unresponsive
+
+USE propose_log_note when:
+- User says "log", "note", "record" something on a deal — or as part of the email chain
+
+USE propose_store_competitor_intel (auto-executes silently) when:
+- ANYTHING about a competitor is mentioned, researched, or discussed — always save it
+
+=== YOUR TOOLS ===
+1. propose_create_deal — suggest creating a deal (user confirms)
+2. propose_add_contact — suggest adding a prospect (user confirms)
+3. propose_draft_email — compose a personalized email (user reviews + sends)
+4. propose_schedule_followup — set a follow-up date on a deal
+5. propose_flag_deal — mark a deal as hot/warm priority
+6. propose_add_to_nurture — add cold leads to email nurture campaign
+7. propose_log_note — log notes on a deal
+8. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
+9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
+10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 
 IMPORTANT BEHAVIORS:
-- Use web_search proactively when asked about specific prospects, schools, competitors, or market data
 - Always personalize emails with real names, real school names, real products
 - Be specific and tactical — use actual deal names, contact names, dollar amounts from context
 - Flag 🔥 when you see genuine urgency or high value
-- When drafting emails, include Matt's signature: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
 
 AUTOMATION — ALWAYS DO THIS:
 - When you propose_draft_email, ALWAYS also propose_log_note (summarizing the outreach) AND propose_schedule_followup (3 business days out) in the SAME response. Never draft an email without the follow-up chain.
@@ -225,46 +457,95 @@ AUTOMATION — ALWAYS DO THIS:
 - If asked "what's next" or "auto-execute", respond with propose_log_note + propose_schedule_followup right away.
 - Never end a conversation with just an email draft — always add the follow-up scaffolding.
 
+COMPETITOR INTEL — ALWAYS DO THIS:
+- Whenever you research, discuss, learn, or look up ANYTHING about a competitor (BSN Sports, VS Athletics, MF Athletic, School Specialty, Varsity Group, Gopher Sport, Anderson's, Epic Sports, or any other athletic equipment supplier), ALWAYS call propose_store_competitor_intel to save the intel.
+- This auto-executes silently — the user just sees a "✓ Saved" chip. It does not require confirmation.
+- Include: product/category focus, pricing approach (premium/value/volume), key states/markets, their strengths, their weaknesses vs ST1, and how Matt should counter them.
+- If the user mentions a competitor in passing ("BSN Sports bid lower on that RFP"), save that pricing intel too.
+- If new info about an already-stored competitor is found, update it with the combined/latest intel.
+
+PRICING & RFP STRATEGY:
+- When asked "how much should we charge", "what's our cost", or "what's the price" — reference OUR PRICE LISTS first, then fall back to the Zoho Books product catalog.
+- For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
+- When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
+- Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
+
+CAMPAIGN BUILDING:
+- When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.
+- Always write COMPLETE email bodies — not placeholders. Every email should be fully personalized and ready to send.
+- For contact_filters, be specific: if the user says "baseball coaches in Iowa" → sports:["Baseball","Baseball/Softball"], states:["IA"], titles:["Coach","Head Coach","Athletic Director"].
+- Each email in the sequence should be a distinct touch with its own angle:
+  • Email 1 = personal intro, relationship hook — reference their sport or program specifically
+  • Email 2 = value angle — a specific product, a school they know, a season timing hook — NO generic "checking in"
+  • Email 3 = direct ask or low-friction offer — "Worth a 10-minute call?" or "Want me to send a quick quote?"
+- delay_days: email 1 = 0, email 2 = 3–5 days, email 3 = 7–10 days.
+- Apply ST1 brand voice throughout: warm, direct, athlete-aware, short sentences
+- Never use "hope this finds you well", "I wanted to reach out", "as per my last email", or efficiency-first angles
+- Always sign emails: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com
+
 After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
-Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"`;
+Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
 async function callClaude(messages, system, tools, apiKey) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type":    "application/json",
-      "x-api-key":       apiKey,
-      "anthropic-version": "2023-06-01",
-      "anthropic-beta":  "web-search-2025-03-05",
-    },
-    body: JSON.stringify({
-      model:      "claude-sonnet-4-6",
-      max_tokens: 3000,
-      system,
-      tools,
-      tool_choice: { type: "auto" },
-      messages,
-    }),
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Anthropic ${res.status}: ${txt.slice(0, 200)}`);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 28_000);
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type":      "application/json",
+        "x-api-key":         apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model:       "claude-sonnet-4-6",
+        max_tokens:  2000,
+        system,
+        tools,
+        tool_choice: { type: "auto" },
+        messages,
+      }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`Anthropic ${res.status}: ${txt.slice(0, 300)}`);
+    }
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json();
 }
 
 // ── MAIN HANDLER ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // CORS headers first — guaranteed even if the function crashes below
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
+  // Hard deadline — ensures we always send a response before Vercel can drop the connection
+  const deadline = new Promise(resolve =>
+    setTimeout(() => resolve("timeout"), 55_000)
+  );
+  try {
+    const result = await Promise.race([_handler(req, res), deadline]);
+    if (result === "timeout" && !res.headersSent) {
+      res.status(504).json({ error: "Agent timed out — try a shorter question" });
+    }
+  } catch (err) {
+    console.error("[agent] unhandled crash:", err.message, err.stack);
+    if (!res.headersSent) res.status(500).json({ error: `Agent crashed: ${err.message}` });
+  }
+}
+
+async function _handler(req, res) {
   const apiKey = process.env.ANTHROPIC_KEY;
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_KEY not configured" });
 
@@ -273,10 +554,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: "messages array required" });
   }
 
-  // Fetch fresh Zoho context in parallel with nothing blocking
-  const zoho = await fetchZohoContext();
+  // Fetch fresh Zoho context + inventory in parallel
+  const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system = buildSystemPrompt(localContext, zoho);
+  const system = buildSystemPrompt(localContext, zoho, inventory);
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({
@@ -284,8 +565,8 @@ export default async function handler(req, res) {
     content: m.role === "user" ? m.content : (m.raw || m.content || ""),
   }));
 
-  // Tool call loop — max 4 iterations to handle web_search + proposals
-  const MAX_LOOPS = 4;
+  // Tool call loop — max 2 iterations (no web search, just proposal tools)
+  const MAX_LOOPS = 2;
   let allToolCalls = [];
   let loopCount   = 0;
   let finalText   = "";
@@ -306,8 +587,7 @@ export default async function handler(req, res) {
 
     // Track tool usage
     for (const t of toolUseBlocks) {
-      if (t.name === "web_search") searchUsed = true;
-      else allToolCalls.push(t);
+      allToolCalls.push(t);
     }
 
     // Done when no tool calls or stop reason is end_turn
@@ -318,9 +598,7 @@ export default async function handler(req, res) {
     const toolResults = toolUseBlocks.map(t => ({
       type:        "tool_result",
       tool_use_id: t.id,
-      content:     t.name === "web_search"
-        ? "Search completed."
-        : JSON.stringify({ proposed: true, ...t.input }),
+      content:     JSON.stringify({ proposed: true, ...t.input }),
     }));
     messages.push({ role: "user", content: toolResults });
     loopCount++;
@@ -335,7 +613,6 @@ export default async function handler(req, res) {
 
   // Build actions from tool proposals + any in parsed.actions
   const proposedActions = allToolCalls
-    .filter(t => t.name !== "web_search")
     .map(t => {
       const typeMap = {
         propose_create_deal:     "create_deal",
@@ -345,6 +622,9 @@ export default async function handler(req, res) {
         propose_flag_deal:       "flag_deal",
         propose_add_to_nurture:  "add_to_nurture",
         propose_log_note:        "log_note",
+        propose_create_quote:             "create_quote",
+        propose_store_competitor_intel:   "store_competitor_intel",
+        propose_create_campaign_sequence: "create_campaign_sequence",
       };
       return { type: typeMap[t.name] || t.name, ...t.input };
     });

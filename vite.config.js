@@ -22,9 +22,15 @@ export default defineConfig({
             return 'router';
           }
           // xlsx and pdfjs are already lazy/dynamic — let Rollup auto-chunk them
+          // Anthropic / AI SDK into its own chunk
+          if (id.includes('node_modules/@anthropic-ai') || id.includes('node_modules/anthropic')) {
+            return 'anthropic';
+          }
         }
       }
-    }
+    },
+    // Don't inline small assets — keep requests cacheable
+    assetsInlineLimit: 0,
   },
   define: {
     'import.meta.env.VITE_ANTHROPIC_KEY': JSON.stringify(process.env.VITE_ANTHROPIC_KEY || ''),

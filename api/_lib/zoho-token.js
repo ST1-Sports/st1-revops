@@ -21,16 +21,24 @@ export async function getZohoToken() {
     );
   }
 
-  const res = await fetch("https://accounts.zoho.com/oauth/v2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id:     ZOHO_CLIENT_ID,
-      client_secret: ZOHO_CLIENT_SECRET,
-      refresh_token: ZOHO_REFRESH_TOKEN,
-      grant_type:    "refresh_token",
-    }).toString(),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 6_000);
+  let res;
+  try {
+    res = await fetch("https://accounts.zoho.com/oauth/v2/token", {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id:     ZOHO_CLIENT_ID,
+        client_secret: ZOHO_CLIENT_SECRET,
+        refresh_token: ZOHO_REFRESH_TOKEN,
+        grant_type:    "refresh_token",
+      }).toString(),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const txt = await res.text();

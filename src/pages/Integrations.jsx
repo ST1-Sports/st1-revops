@@ -129,6 +129,15 @@ export default function IntegrationsHub() {
   const [campaignCreating, setCampaignCreating] = useState(false);
   const [newListName, setNewListName] = useState("Cold Leads — Promo Offers");
 
+  // Ad platforms + Instantly
+  const [adsStatus, setAdsStatus]   = useState(() => { try { const s=JSON.parse(localStorage.getItem("st1_ads_status_v1")||"{}"); return (Date.now()-(s.ts||0))<3600000?s:{}; } catch { return {}; } });
+  const [adsLoading, setAdsLoading] = useState(false);
+  const [instStatus, setInstStatus] = useState(null);
+  const [instCampaigns, setInstCampaigns] = useState([]);
+  const [lsEmbedUrl, setLsEmbedUrl]   = useState(() => { try { return localStorage.getItem("st1_ls_embed")||""; } catch { return ""; } });
+  const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
+  const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
+
   // Zoho Social
   const [socialPortals, setSocialPortals] = useState([]);
   const [socialChannels, setSocialChannels] = useState([]);
@@ -575,6 +584,37 @@ export default function IntegrationsHub() {
     setTesting(null);
   };
 
+  const loadAdsStatus = async () => {
+    setAdsLoading(true);
+    try {
+      const r = await fetch("/api/ads/status");
+      const d = await r.json();
+      setAdsStatus(d);
+      try { localStorage.setItem("st1_ads_status_v1", JSON.stringify({...d,ts:Date.now()})); } catch {}
+      const connected = Object.values(d).filter(v=>v?.status==="connected").length;
+      addLog(`Ad platforms: ${connected} connected`, connected>0?"success":"info");
+    } catch(e) {
+      addLog(`Ads status: ${e.message.slice(0,80)}`,"error");
+    }
+    setAdsLoading(false);
+  };
+
+  const testInstantly = async () => {
+    setTesting("instantly");
+    try {
+      const r = await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list_campaigns"})});
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      setInstStatus({ok:true, count:d.campaigns?.length||0});
+      setInstCampaigns(d.campaigns||[]);
+      addLog(`✓ Instantly connected — ${d.campaigns?.length||0} campaigns`,"success");
+    } catch(e) {
+      setInstStatus({ok:false, error:e.message});
+      addLog(`Instantly: ${e.message.slice(0,100)}`,"error");
+    }
+    setTesting(null);
+  };
+
   const scanEmailInbox = async () => {
     setEmailScanning(true); setEmailOpps([]); setEmailMessages([]);
     addLog("Fetching recent emails from Gmail...");
@@ -774,19 +814,22 @@ Channel: ${slackChannelName}`);
           </div>
         </div>
         {/* Live connection status */}
-        <div style={{display:"flex",gap:18,alignItems:"center"}}>
+        <div style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap"}}>
           {[
-            ["Slack",       status.slack,       "#4A154B"],
-            ["Zoho Books",  status.books,       "#E42527"],
-            ["Zoho CRM",    status.crm,         "#E42527"],
-            ["Campaigns",   status.campaigns,   "#E42527"],
-            ["Social",      status.social,      "#E42527"],
-            ["Gmail",       gmailStatus,        "#EA4335"],
-            ["WooCommerce", status.woo,         "#7F54B3"],
+            ["Slack",       status.slack,                                  "#4A154B"],
+            ["Zoho Books",  status.books,                                  "#E42527"],
+            ["Zoho CRM",    status.crm,                                    "#E42527"],
+            ["Campaigns",   status.campaigns,                              "#E42527"],
+            ["Gmail",       gmailStatus,                                   "#EA4335"],
+            ["Instantly",   instStatus?.ok,                                "#FF4A00"],
+            ["Meta Ads",    adsStatus.meta?.status==="connected",          "#1877F2"],
+            ["Google Ads",  adsStatus.google?.status==="connected",        "#4285F4"],
+            ["LinkedIn",    adsStatus.linkedin?.status==="connected",      "#0A66C2"],
+            ["WooCommerce", status.woo,                                    "#7F54B3"],
           ].map(([l,ok,c])=>(
-            <div key={l} style={{display:"flex",alignItems:"center",gap:5}}>
-              <div style={{width:7,height:7,borderRadius:"50%",background:ok?B.green:B.muted}}/>
-              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:ok?B.green:B.muted}}>{l}</span>
+            <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
+              <div style={{width:6,height:6,borderRadius:"50%",background:ok?B.green:B.muted}}/>
+              <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:ok?B.green:B.muted}}>{l}</span>
             </div>
           ))}
         </div>
@@ -794,7 +837,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["email","Email Scanner"],["woo","WooCommerce"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["woo","WooCommerce"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -873,6 +916,58 @@ Channel: ${slackChannelName}`);
                     {status.woo?"Products and orders loaded.":"Paste Consumer Key and Secret from WooCommerce → Settings → REST API."}
                   </div>
                   <OBtn sm onClick={()=>setTab("woo")}>CONFIGURE →</OBtn>
+                </div>
+
+                {/* Ad platforms */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${Object.values(adsStatus).some(v=>v?.status==="connected")?"#1877F2":B.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                      <span style={{fontSize:22}}>📣</span>
+                      <div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>Ad Platforms</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Meta · Google · LinkedIn · TikTok · Microsoft</div>
+                      </div>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:2,alignItems:"flex-end"}}>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:Object.values(adsStatus).filter(v=>v?.status==="connected").length>0?B.green:B.muted}}>
+                        {Object.values(adsStatus).filter(v=>v?.status==="connected").length} / 6 connected
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:9}}>
+                    {[
+                      {k:"meta",l:"Meta",c:"#1877F2"},
+                      {k:"google",l:"Google",c:"#4285F4"},
+                      {k:"linkedin",l:"LinkedIn",c:"#0A66C2"},
+                      {k:"tiktok",l:"TikTok",c:"#010101"},
+                      {k:"microsoft",l:"Bing",c:"#00A4EF"},
+                      {k:"ga4",l:"GA4",c:"#E37400"},
+                    ].map(({k,l,c})=>(
+                      <span key={k} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,padding:"2px 7px",borderRadius:10,letterSpacing:.5,
+                        color:adsStatus[k]?.status==="connected"?B.white:B.muted,
+                        background:adsStatus[k]?.status==="connected"?c:B.surface,
+                        border:`1px solid ${adsStatus[k]?.status==="connected"?c:B.border}`}}>{l}</span>
+                    ))}
+                  </div>
+                  <OBtn sm onClick={()=>setTab("ads")}>CONFIGURE →</OBtn>
+                </div>
+
+                {/* Instantly */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${instStatus?.ok?"#FF4A00":B.border}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                      <span style={{fontSize:22}}>⚡</span>
+                      <div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>Instantly.ai</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Cold email sequences & nurture</div>
+                      </div>
+                    </div>
+                    <StatusBadge ok={instStatus?.ok}/>
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:9}}>
+                    {instStatus?.ok?`${instStatus.count} campaign${instStatus.count!==1?"s":""} active. Cold leads route here automatically.`:"Set INSTANTLY_API_KEY in Vercel to connect email sequences."}
+                  </div>
+                  <OBtn sm color="#FF4A00" onClick={()=>setTab("marketing")}>CONFIGURE →</OBtn>
                 </div>
 
                 {/* Quick actions */}
@@ -1367,6 +1462,73 @@ Channel: ${slackChannelName}`);
                 )}
               </div>
 
+              {/* ── INSTANTLY.AI ────────────────────────────────────────────── */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #FF4A00"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                  <div>
+                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>INSTANTLY.AI</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Cold email sequences · automated follow-ups · inbox rotation</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    {instStatus?.ok
+                      ?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3}}>✓ CONNECTED</span>
+                      :<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:3}}>NOT TESTED</span>}
+                    <button onClick={testInstantly} disabled={testing==="instantly"}
+                      style={{background:"#FF4A00",color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                      {testing==="instantly"?"TESTING...":"TEST CONNECTION"}
+                    </button>
+                  </div>
+                </div>
+
+                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12,border:`1px solid ${B.border}`}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>VERCEL ENVIRONMENT VARIABLES</div>
+                  {[
+                    ["INSTANTLY_API_KEY","Your API key — Instantly → Settings → API Keys"],
+                    ["INSTANTLY_DEFAULT_CAMPAIGN_ID","ID of default nurture campaign to add leads to (optional)"],
+                  ].map(([k,hint])=>(
+                    <div key={k} style={{display:"flex",gap:12,padding:"4px 0",borderBottom:`1px solid ${B.border}`,alignItems:"baseline"}}>
+                      <span style={{fontFamily:"monospace",fontSize:10,color:"#FF4A00",minWidth:250,flexShrink:0}}>{k}</span>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{hint}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {instStatus?.ok&&instCampaigns.length>0&&(
+                  <div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>ACTIVE CAMPAIGNS ({instCampaigns.length})</div>
+                    <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                      {instCampaigns.slice(0,6).map((c,i)=>(
+                        <div key={c.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:B.surface,borderRadius:5,padding:"7px 11px",border:`1px solid ${B.border}`}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.name||c.campaign_name||`Campaign ${i+1}`}</div>
+                            <div style={{fontFamily:"monospace",fontSize:9,color:B.muted,marginTop:1}}>{c.id}</div>
+                          </div>
+                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c.status==="active"?B.green:B.muted,background:c.status==="active"?B.greenBg:B.surface,padding:"2px 7px",borderRadius:3,border:`1px solid ${B.border}`}}>{(c.status||"—").toUpperCase()}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                      Use campaign IDs above as <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>INSTANTLY_DEFAULT_CAMPAIGN_ID</code> or pass them directly from RevOps outreach flows.
+                    </div>
+                  </div>
+                )}
+
+                {instStatus?.ok===false&&(
+                  <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:5,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+                    ✗ {instStatus.error}
+                  </div>
+                )}
+
+                <div style={{marginTop:12,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:5}}>HOW IT'S USED IN REVOPS</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
+                    <div>→ <strong>Batch Outreach</strong>: ⚡ ADD TO INSTANTLY button adds selected contacts to the default campaign</div>
+                    <div>→ <strong>AI Agent</strong>: When agent suggests "add to nurture", it calls Instantly to enroll the lead</div>
+                    <div>→ <strong>CRM module</strong>: Add lead to Instantly directly from contact record via agent action</div>
+                  </div>
+                </div>
+              </div>
+
               {/* ── SOCIAL PUBLISHING (Ayrshare) ────────────────────────────── */}
               <AyrsharePanel addLog={addLog}/>
 
@@ -1604,6 +1766,15 @@ Channel: ${slackChannelName}`);
             </div>
           )}
 
+          {/* ── ADS ── */}
+          {tab==="ads"&&<AdsTab
+            adsStatus={adsStatus} adsLoading={adsLoading} loadAdsStatus={loadAdsStatus}
+            lsEmbedUrl={lsEmbedUrl} setLsEmbedUrl={v=>{setLsEmbedUrl(v);try{localStorage.setItem("st1_ls_embed",v);}catch{}}}
+            adLinks={adLinks} setAdLinks={v=>{setAdLinks(v);try{localStorage.setItem("st1_ad_links",JSON.stringify(v));}catch{}}}
+            adMetrics={adMetrics} setAdMetrics={v=>{setAdMetrics(v);try{localStorage.setItem("st1_ad_metrics",JSON.stringify(v));}catch{}}}
+            B={B} OBtn={OBtn}
+          />}
+
           {/* ── AI TOOLS ── */}
           {tab==="tools"&&(
             <div className="fu">
@@ -1643,8 +1814,13 @@ Channel: ${slackChannelName}`);
             {l:"Slack",        c:"#4A154B",desc:"MCP connected",          ok:status.slack},
             {l:"Zoho Books",   c:B.red,   desc:"Invoice & AR data",       ok:status.books},
             {l:"Zoho CRM",     c:B.red,   desc:"Contact sync",            ok:status.crm},
-            {l:"Campaigns",    c:B.red,   desc:"Email lists + automation", ok:status.campaigns},
-            {l:"Social",       c:B.red,   desc:"Facebook/Instagram/etc",  ok:status.social},
+            {l:"Campaigns",    c:B.red,   desc:"Email lists",             ok:status.campaigns},
+            {l:"Instantly",    c:"#FF4A00",desc:"Nurture sequences",       ok:instStatus?.ok},
+            {l:"Meta Ads",     c:"#1877F2",desc:"Facebook/Instagram ads", ok:adsStatus.meta?.status==="connected"},
+            {l:"Google Ads",   c:"#4285F4",desc:"Search & Display ads",   ok:adsStatus.google?.status==="connected"},
+            {l:"LinkedIn Ads", c:"#0A66C2",desc:"B2B ad targeting",       ok:adsStatus.linkedin?.status==="connected"},
+            {l:"TikTok Ads",   c:"#010101",desc:"Video ad campaigns",     ok:adsStatus.tiktok?.status==="connected"},
+            {l:"GA4",          c:"#E37400",desc:"Analytics & attribution", ok:adsStatus.ga4?.status==="connected"},
             {l:"WooCommerce",  c:"#7F54B3",desc:"Products & orders",      ok:status.woo},
           ].map(k=>(
             <div key={k.l} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1680,6 +1856,242 @@ Channel: ${slackChannelName}`);
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── AD PLATFORMS TAB ────────────────────────────────────────────────────────
+function AdsTab({adsStatus,adsLoading,loadAdsStatus,lsEmbedUrl,setLsEmbedUrl,adLinks,setAdLinks,adMetrics,setAdMetrics,B,OBtn}) {
+  const PLATFORMS = [
+    {key:"meta",     label:"Meta Ads",       icon:"📘", color:"#1877F2", defaultUrl:"https://adsmanager.facebook.com/adsmanager/reporting/view", desc:"Facebook & Instagram"},
+    {key:"google",   label:"Google Ads",     icon:"🔍", color:"#4285F4", defaultUrl:"https://ads.google.com/aw/overview", desc:"Search, Display, Shopping"},
+    {key:"linkedin", label:"LinkedIn Ads",   icon:"💼", color:"#0A66C2", defaultUrl:"https://www.linkedin.com/campaignmanager/", desc:"B2B audience targeting"},
+    {key:"tiktok",   label:"TikTok Ads",     icon:"🎵", color:"#010101", defaultUrl:"https://ads.tiktok.com/i18n/dashboard", desc:"Short-form video ads"},
+    {key:"microsoft",label:"Microsoft Ads",  icon:"🔷", color:"#00A4EF", defaultUrl:"https://ui.ads.microsoft.com/campaign/vnext/overview", desc:"Bing Search"},
+    {key:"ga4",      label:"Google Analytics",icon:"📊",color:"#E37400", defaultUrl:"https://analytics.google.com/", desc:"Website analytics & attribution"},
+  ];
+  const METRIC_FIELDS = [
+    {k:"spend",  label:"Spend",   prefix:"$", suffix:""},
+    {k:"roas",   label:"ROAS",    prefix:"",  suffix:"x"},
+    {k:"leads",  label:"Leads",   prefix:"",  suffix:""},
+    {k:"clicks", label:"Clicks",  prefix:"",  suffix:""},
+  ];
+  const [editMetrics, setEditMetrics] = useState(null);
+  const [apiOpen, setApiOpen]         = useState(false);
+
+  const API_VARS = [
+    {key:"meta",      color:"#1877F2", vars:["META_ACCESS_TOKEN","META_AD_ACCOUNT_ID"], note:"Requires Meta developer app + System User. See developers.facebook.com."},
+    {key:"google",    color:"#4285F4", vars:["GOOGLE_ADS_CLIENT_ID","GOOGLE_ADS_CLIENT_SECRET","GOOGLE_ADS_REFRESH_TOKEN","GOOGLE_ADS_DEVELOPER_TOKEN","GOOGLE_ADS_CUSTOMER_ID"], note:"Apply for developer token at ads.google.com → Tools → API Center."},
+    {key:"linkedin",  color:"#0A66C2", vars:["LINKEDIN_ACCESS_TOKEN","LINKEDIN_AD_ACCOUNT_ID"], note:"Create LinkedIn Marketing Developer Platform app at developer.linkedin.com."},
+    {key:"tiktok",    color:"#010101", vars:["TIKTOK_ACCESS_TOKEN","TIKTOK_ADVERTISER_ID"], note:"Create TikTok for Business app at ads.tiktok.com → Tools → Developer Portal."},
+    {key:"microsoft", color:"#00A4EF", vars:["MICROSOFT_ADS_CLIENT_ID","MICROSOFT_ADS_CLIENT_SECRET","MICROSOFT_ADS_REFRESH_TOKEN","MICROSOFT_ADS_DEVELOPER_TOKEN","MICROSOFT_ADS_CUSTOMER_ID","MICROSOFT_ADS_ACCOUNT_ID"], note:"Register app at apps.dev.microsoft.com; request developer token at ads.microsoft.com."},
+    {key:"ga4",       color:"#E37400", vars:["GA4_PROPERTY_ID","GOOGLE_ANALYTICS_REFRESH_TOKEN"], note:"Enable Analytics Data API in console.cloud.google.com. Reuses Google Ads OAuth creds if already set."},
+  ];
+
+  return (
+    <div className="fu">
+      <div style={{marginBottom:20}}>
+        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>AD PLATFORMS</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Quick access to your ad dashboards · report embed · manual KPI tracking</div>
+        <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
+      </div>
+
+      {/* ── SECTION 1: PLATFORM QUICK LINKS ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>QUICK LINKS — OPEN YOUR AD DASHBOARDS</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+          Paste in your account-specific URLs (or use the defaults). Opens the platform's native reporting in a new tab — no API setup needed.
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:10}}>
+          {PLATFORMS.map(p=>{
+            const apiOk = adsStatus[p.key]?.status==="connected";
+            const url = adLinks[p.key]||p.defaultUrl;
+            return (
+              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:16}}>{p.icon}</span>
+                    <div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{p.desc}</div>
+                    </div>
+                  </div>
+                  {apiOk&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:8,flexShrink:0}}>API ✓</span>}
+                </div>
+                <input
+                  value={adLinks[p.key]||""}
+                  onChange={e=>setAdLinks({...adLinks,[p.key]:e.target.value})}
+                  placeholder={p.defaultUrl}
+                  style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:10,fontFamily:"monospace",marginBottom:8}}
+                />
+                <a href={url} target="_blank" rel="noreferrer"
+                  style={{display:"block",background:p.color,color:"#fff",textDecoration:"none",textAlign:"center",borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5}}>
+                  OPEN {p.label.toUpperCase()} →
+                </a>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── SECTION 2: LOOKER STUDIO EMBED ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #4285F4"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>LOOKER STUDIO REPORT EMBED</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Free · No developer account needed · Connects Meta, Google, LinkedIn and more via built-in connectors</div>
+          </div>
+          <a href="https://lookerstudio.google.com" target="_blank" rel="noreferrer"
+            style={{background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",flexShrink:0}}>
+            OPEN LOOKER STUDIO ↗
+          </a>
+        </div>
+
+        <div style={{background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"10px 12px",marginBottom:12}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1.5,marginBottom:5}}>WHY LOOKER STUDIO</div>
+          <div style={{display:"flex",flexDirection:"column",gap:3,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
+            <div>→ <strong>No developer app needed</strong> — connects with your normal Google/Meta/LinkedIn login</div>
+            <div>→ Free Google product — create reports that pull live data from every ad platform</div>
+            <div>→ Paste the share URL below and the report embeds directly here</div>
+          </div>
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>LOOKER STUDIO REPORT EMBED URL</div>
+          <div style={{display:"flex",gap:8}}>
+            <input
+              value={lsEmbedUrl}
+              onChange={e=>setLsEmbedUrl(e.target.value)}
+              placeholder="https://lookerstudio.google.com/embed/reporting/XXXXXXXX/page/XXXXXXXX"
+              style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"monospace"}}
+            />
+            {lsEmbedUrl&&<button onClick={()=>setLsEmbedUrl("")} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"0 10px",fontSize:11,cursor:"pointer"}}>✕</button>}
+          </div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>
+            In Looker Studio: File → Share → Embed report → copy the <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>src</code> URL from the iframe code
+          </div>
+        </div>
+
+        {lsEmbedUrl ? (
+          <div style={{borderRadius:6,overflow:"hidden",border:`1px solid ${B.border}`,background:B.surface}}>
+            <iframe src={lsEmbedUrl} width="100%" height="600" frameBorder="0" allowFullScreen
+              style={{display:"block"}}
+              sandbox="allow-storage-access-by-user-activation allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"/>
+          </div>
+        ) : (
+          <div style={{background:B.surface,borderRadius:6,padding:"30px 0",textAlign:"center",border:`1px solid ${B.border}`}}>
+            <div style={{fontSize:28,marginBottom:8}}>📊</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Paste your Looker Studio embed URL above to show the report here</div>
+          </div>
+        )}
+      </div>
+
+      {/* ── SECTION 3: MANUAL KPI TRACKING ── */}
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:4}}>MANUAL KPI TRACKING</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14}}>
+          Copy numbers from each platform and paste them here for a quick weekly snapshot.
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {PLATFORMS.filter(p=>p.key!=="ga4").map(p=>{
+            const m = adMetrics[p.key]||{};
+            const isEditing = editMetrics===p.key;
+            return (
+              <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isEditing?10:0}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <span>{p.icon}</span>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{p.label}</span>
+                  </div>
+                  {!isEditing&&(
+                    <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                      {METRIC_FIELDS.filter(f=>m[f.k]).map(f=>(
+                        <div key={f.k} style={{textAlign:"right"}}>
+                          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:p.color}}>{f.prefix}{m[f.k]}{f.suffix}</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{f.label.toUpperCase()}</div>
+                        </div>
+                      ))}
+                      <button onClick={()=>setEditMetrics(p.key)}
+                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700}}>
+                        {Object.keys(m).length?"EDIT":"+ ADD"}
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {isEditing&&(
+                  <div>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:8}}>
+                      {METRIC_FIELDS.map(f=>(
+                        <div key={f.k}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1.5,marginBottom:3}}>{f.label.toUpperCase()}</div>
+                          <input
+                            value={m[f.k]||""}
+                            onChange={e=>setAdMetrics({...adMetrics,[p.key]:{...m,[f.k]:e.target.value}})}
+                            placeholder={f.prefix+"0"+f.suffix}
+                            style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:7}}>
+                      <OBtn sm onClick={()=>setEditMetrics(null)}>SAVE</OBtn>
+                      <button onClick={()=>{const n={...adMetrics};delete n[p.key];setAdMetrics(n);setEditMetrics(null);}}
+                        style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 9px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>
+                        clear
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── SECTION 4: API INTEGRATION (ADVANCED) ── */}
+      <details style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8}}>
+        <summary style={{padding:16,cursor:"pointer",listStyle:"none",display:"flex",justifyContent:"space-between",alignItems:"center"}}
+          onClick={()=>setApiOpen(o=>!o)}>
+          <div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>API INTEGRATION (ADVANCED)</div>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>For automated data pulls, budget control, and Slack alerts — requires developer app setup per platform</div>
+          </div>
+          <div style={{display:"flex",gap:10,alignItems:"center"}}>
+            <OBtn sm onClick={e=>{e.stopPropagation();loadAdsStatus();}} disabled={adsLoading}>{adsLoading?"...":"↻ TEST ALL"}</OBtn>
+            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{apiOpen?"▲ COLLAPSE":"▸ EXPAND"}</span>
+          </div>
+        </summary>
+        <div style={{padding:"0 16px 16px"}}>
+          <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,padding:"9px 12px",marginBottom:14,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+            <strong>Note:</strong> Meta requires creating a Facebook developer app (free at developers.facebook.com) and getting a System User token — typically takes 15–30 min. Other platforms have similar requirements. For read-only results, the Looker Studio embed above is easier.
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {API_VARS.map(p=>{
+              const s=adsStatus[p.key];
+              const ok=s?.status==="connected";
+              const err=s?.status==="error";
+              return (
+                <div key={p.key} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12,borderLeft:`3px solid ${ok?B.green:err?"#f97316":p.color}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>
+                      {PLATFORMS.find(pl=>pl.key===p.key)?.icon} {PLATFORMS.find(pl=>pl.key===p.key)?.label}
+                    </span>
+                    {ok&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:8}}>✓ CONNECTED{s.name?` · ${s.name}`:""}</span>}
+                    {err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#f97316",background:"#fff7ed",padding:"2px 7px",borderRadius:8}}>⚠ {s.message?.slice(0,60)}</span>}
+                    {!ok&&!err&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"2px 7px",borderRadius:8,border:`1px solid ${B.border}`}}>NOT SET</span>}
+                  </div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
+                    {p.vars.map(v=>(
+                      <code key={v} style={{fontFamily:"monospace",fontSize:9,color:p.color,background:`${p.color}10`,padding:"2px 6px",borderRadius:3,border:`1px solid ${p.color}30`}}>{v}</code>
+                    ))}
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>{p.note}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }
