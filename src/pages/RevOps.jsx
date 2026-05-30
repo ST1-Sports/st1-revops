@@ -7061,6 +7061,7 @@ function ModMarketing() {
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [showTemplateSelect,setShowTemplateSelect]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
+  const [campListUploading,setCampListUploading]=useState(false);
   // Campaign detail sub-tabs: strategy | assets | execute | report
   const [campSubTab,setCampSubTab]=useState("strategy");
   // Wizard steps: 1=define 2=icp 3=assets_checklist 4=build_assets 5=launch
@@ -7127,7 +7128,7 @@ function ModMarketing() {
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
-  const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+  const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
   // Matching contacts (ICP filter)
   const [matchingContacts,setMatchingContacts]=useState(null);
   // Flighting (plan detail multi-select)
@@ -7199,6 +7200,54 @@ function ModMarketing() {
     setCampStep(1);
     setShowNewCampForm(true);
     setShowTemplateSelect(false);
+  };
+
+  const handleCampListUpload=async(e)=>{
+    const f=e.target.files?.[0];
+    if(!f) return;
+    setCampListUploading(true);
+    try{
+      const isCsv=f.name.toLowerCase().endsWith(".csv");
+      let rows;
+      if(isCsv){
+        const text=await f.text();
+        // Simple CSV parse
+        const lines=text.split(/\r?\n/).filter(l=>l.trim());
+        const hdrs=lines[0].split(",").map(h=>h.replace(/^"|"$/g,"").trim().toLowerCase());
+        rows=lines.slice(1).map(l=>{const cells=l.split(",").map(c=>c.replace(/^"|"$/g,"").trim());return Object.fromEntries(hdrs.map((h,i)=>[h,cells[i]||""]));});
+      }else{
+        const {default:XLSX}=await import("xlsx");
+        const buf=await new Promise((res)=>{const r=new FileReader();r.onload=ev=>res(new Uint8Array(ev.target.result));r.readAsArrayBuffer(f);});
+        const wb=XLSX.read(buf,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json(ws,{defval:""});
+        rows=raw.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k.toLowerCase().trim(),String(v).trim()])));
+      }
+      const g=(row,...keys)=>{for(const k of keys){const v=row[k]||row[k.replace(/_/," ")]||"";if(v) return String(v).trim();}return"";};
+      const contacts=rows.filter(r=>Object.values(r).some(v=>v)).map(r=>({
+        id:mkId(),
+        firstName:g(r,"first name","firstname","first_name"),
+        lastName:g(r,"last name","lastname","last_name"),
+        fullName:(g(r,"full name","fullname","name")||[g(r,"first name","firstname","first_name"),g(r,"last name","lastname","last_name")].filter(Boolean).join(" ")).trim(),
+        email:g(r,"email","email address"),
+        phone:g(r,"phone","phone number","mobile"),
+        title:g(r,"title","job title","role","position"),
+        school:g(r,"school","organization","company","org","account"),
+        state:g(r,"state","st"),
+        city:g(r,"city"),
+        sport:g(r,"sport","sports"),
+        source:"import",confidence:"medium",outreachStatus:"new",importedAt:Date.now(),
+      }));
+      if(contacts.length===0){toast("No contacts found in file","error");return;}
+      dispatch("ADD_CONTACTS",contacts);
+      const listName=f.name.replace(/\.[^.]+$/,"");
+      const newList={id:mkId(),name:listName,contactIds:contacts.map(c=>c.id),createdAt:Date.now(),source:"import"};
+      dispatch("ADD_CONTACT_LIST",newList);
+      setCampDraft(c=>({...c,audienceListId:newList.id}));
+      toast(`Imported ${contacts.length} contacts as "${listName}"  `,"success");
+    }catch(err){toast("Upload failed: "+err.message,"error");}
+    setCampListUploading(false);
+    e.target.value="";
   };
 
   const findMatchingContacts = (icp) => {
@@ -7737,9 +7786,9 @@ function ModMarketing() {
     if(!postDraft.caption.trim()) return;
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
-    const post = {id:mkId(),...postDraft,campId,createdAt:today()};
+    const post = {id:mkId(),...postDraft,campId,createdAt:today(),scheduledDate:postDraft.date||""};
     dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-    setPostDraft({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+    setPostDraft({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
     setShowAddPost(false);
     toast("Post added to campaign","success");
   };
@@ -8618,25 +8667,31 @@ function ModMarketing() {
                         <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                           {["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
                         </div>
-                        {/* Image generation */}
+                        {/* Image */}
                         <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE GENERATION</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE</div>
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="Image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="AI image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                             <button onClick={async()=>{
                               const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
-                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true}:x)}));
+                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true,imageError:""}:x)}));
                               try{
-                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"lifestyle",sizeKey:"square"})});
+                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"REALISTIC",sizeKey:"square"})});
                                 const d=await r.json();
-                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl||"",imageGenerating:false}:x)}));
-                              }catch(err){setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false}:x)}));}
+                                if(!r.ok||!d.imageUrl){const errMsg=d.error||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:errMsg}:x)}));toast(errMsg,"error");return;}
+                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl,imageGenerating:false,imageError:""}:x)}));
+                              }catch(err){const msg=err.message||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:msg}:x)}));toast(msg,"error");}
                             }} disabled={p.imageGenerating} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,opacity:p.imageGenerating?.7:1}}>
-                              {p.imageGenerating?"GENERATING...":"🎨 GENERATE IMAGE"}
+                              {p.imageGenerating?"GENERATING...":"🎨 AI IMAGE"}
                             </button>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:ev.target.result,imageError:""}:x)}));r.readAsDataURL(f);}}/>
+                            </label>
                           </div>
                           {p.imageGenerating&&<div style={{display:"flex",gap:6,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.purple}}><Spin/>Generating image…</div>}
-                          {p.imageUrl&&<img src={p.imageUrl} alt="Generated social post visual" style={{maxWidth:200,borderRadius:5,marginTop:4,border:`1px solid ${B.border}`}}/>}
+                          {p.imageError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:4}}>{p.imageError}</div>}
+                          {p.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={p.imageUrl} alt="Post visual" style={{maxWidth:200,borderRadius:5,border:`1px solid ${B.border}`,display:"block"}}/><button onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:""}:x)}))} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"2px 6px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
                         </div>
                       </div>
                     ))}
@@ -8847,9 +8902,7 @@ function ModMarketing() {
                   </div>
                   {(campDraft.audienceMode||"ai")==="list"&&(
                     <div>
-                      {(s.contactLists||[]).length===0?(
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>No contact lists found — create lists in the Contacts section first.</div>
-                      ):(
+                      {(s.contactLists||[]).length>0&&(
                         <select value={campDraft.audienceListId||""} onChange={e=>setCampDraft(c=>({...c,audienceListId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:campDraft.audienceListId?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",marginBottom:8}}>
                           <option value="">— select a contact list —</option>
                           {(s.contactLists||[]).map(list=>(
@@ -8857,6 +8910,10 @@ function ModMarketing() {
                           ))}
                         </select>
                       )}
+                      <label style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,width:"100%",background:B.surface,border:`1px dashed ${B.orange}60`,borderRadius:4,padding:"8px 12px",cursor:"pointer",boxSizing:"border-box",opacity:campListUploading?.6:1}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.4}}>{campListUploading?"IMPORTING…":"⬆ UPLOAD NEW LIST (.csv / .xlsx)"}</span>
+                        <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} disabled={campListUploading} onChange={handleCampListUpload}/>
+                      </label>
                     </div>
                   )}
                 </div>
@@ -9708,7 +9765,21 @@ function ModMarketing() {
                           </div>
                         </div>
                         <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-                        <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                        <div style={{marginBottom:10}}>
+                          <Lbl s={{marginBottom:4}}>Image (optional)</Lbl>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                            <input value={typeof postDraft.imageUrl==="string"&&!postDraft.imageUrl.startsWith("data:")?postDraft.imageUrl:""} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://... or upload →" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPostDraft(d=>({...d,imageUrl:ev.target.result}));r.readAsDataURL(f);}}/>
+                            </label>
+                          </div>
+                          {postDraft.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={postDraft.imageUrl} alt="" style={{maxHeight:80,borderRadius:4,border:`1px solid ${B.border}`}}/><button onClick={()=>setPostDraft(d=>({...d,imageUrl:""}))} style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"1px 5px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
+                        </div>
+                        <div style={{marginBottom:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                          <div><Lbl s={{marginBottom:4}}>Schedule Date</Lbl><input type="date" value={postDraft.date} min={new Date().toISOString().slice(0,10)} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                          <div><Lbl s={{marginBottom:4}}>Time</Lbl><input type="time" value={postDraft.time||"09:00"} onChange={e=>setPostDraft(d=>({...d,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                        </div>
                         <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
                       </div>
                     )}
