@@ -18,6 +18,15 @@ const AR_DIMS = {
   ASPECT_3_4:  [900, 1200],
 };
 
+// Normalize any style string to a valid Ideogram style_type
+const STYLE_NORM = {
+  lifestyle: 'REALISTIC', photo: 'REALISTIC', realistic: 'REALISTIC',
+  design: 'DESIGN', graphic: 'DESIGN',
+  general: 'GENERAL',
+  anime: 'ANIME', illustration: 'ANIME',
+  auto: 'AUTO',
+};
+
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -28,8 +37,8 @@ export default async function handler(req, res) {
 
   const {
     prompt,
-    style      = 'REALISTIC',  // REALISTIC | DESIGN | GENERAL | ANIME | AUTO
-    sizeKey    = 'square',      // square | landscape | story
+    style      = 'REALISTIC',
+    sizeKey    = 'square',
     campaignId,
     productId,
   } = req.body;
@@ -37,6 +46,10 @@ export default async function handler(req, res) {
   if (!prompt?.trim()) return res.status(400).json({ error: 'prompt required' });
 
   const aspectRatio = AR_MAP[sizeKey] || 'ASPECT_1_1';
+  const styleType = STYLE_NORM[style?.toLowerCase()] || (
+    ['REALISTIC','DESIGN','GENERAL','ANIME','AUTO'].includes(style?.toUpperCase())
+      ? style.toUpperCase() : 'REALISTIC'
+  );
 
   // Prepend ST1 brand context to help Ideogram
   const fullPrompt = `Athletic sports equipment marketing photo. ${prompt} ST1 Sports brand. Professional commercial photography quality. No text, no logos, no watermarks.`;
@@ -48,7 +61,7 @@ export default async function handler(req, res) {
       image_request: {
         prompt: fullPrompt,
         model: 'V_2_TURBO',
-        style_type: style,
+        style_type: styleType,
         aspect_ratio: aspectRatio,
         magic_prompt_option: 'AUTO',
         num_images: 1,
