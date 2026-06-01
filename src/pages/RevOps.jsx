@@ -13920,7 +13920,12 @@ function PLUploadModal({onClose, onSave, existingLists}) {
             {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
           ]}]
         })});
-        if(!resp.ok){let e="API error";try{const j=await resp.json();e=j.error||e;}catch{}throw new Error(e);}
+        if(!resp.ok){
+          let e=`HTTP ${resp.status}`;
+          try{const j=await resp.json();e=j.error||j.message||e;}
+          catch{try{const t=await resp.text();e=`HTTP ${resp.status}: ${t.slice(0,200)}`;}catch{}}
+          throw new Error(e);
+        }
         // Stream the SSE response and accumulate text
         setLoadMsg("Extracting data with AI (this may take a minute for large files)...");
         const reader=resp.body.getReader();const decoder=new TextDecoder();
