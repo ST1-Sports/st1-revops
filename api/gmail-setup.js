@@ -26,8 +26,10 @@ export default async function handler(req, res) {
   const proto        = host.includes("localhost") ? "http" : "https";
   const redirectUri  = process.env.GMAIL_REDIRECT_URI || `${proto}://${host}/api/gmail-setup`;
 
-  const { code, error: oauthError, repKey } = req.query || {};
-  const repKeyClean = repKey ? repKey.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "";
+  const { code, error: oauthError, repKey, state } = req.query || {};
+  // repKey can come from the initial query param OR from the OAuth state param on callback
+  const repKeyRaw = repKey || (state ? decodeURIComponent(state) : "");
+  const repKeyClean = repKeyRaw ? repKeyRaw.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "";
   const refreshTokenVar = repKeyClean ? `GMAIL_REFRESH_TOKEN_${repKeyClean}` : "GMAIL_REFRESH_TOKEN";
 
   // ── Step 2: exchange code ───────────────────────────────────────────────────
@@ -77,7 +79,7 @@ export default async function handler(req, res) {
   if (oauthError) {
     return res.status(400).send(page("Authorization Denied", `
       <p style="color:red">Google returned: ${oauthError}</p>
-      <p><a href="/api/gmail-setup">← Try again</a></p>
+      <p><a href="/api/gmail-setup${repKeyClean ? `?repKey=${repKeyClean}` : ""}">← Try again</a></p>
     `));
   }
 
@@ -100,14 +102,15 @@ export default async function handler(req, res) {
     `));
   }
 
-  // Carry repKey through state so we know which env var to display after redirect
+  // Carry repKey through OAuth state param — redirect_uri must be exact, no query params
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id:     clientId,
     response_type: "code",
     access_type:   "offline",
     scope:         SCOPE,
-    redirect_uri:  redirectUri + (repKeyClean ? `?repKey=${repKeyClean}` : ""),
+    redirect_uri:  redirectUri,
     prompt:        "consent",
+    ...(repKeyClean ? { state: repKeyClean } : {}),
   }).toString();
 
   const pageTitle = repKeyClean ? `Connect Gmail for ${repKeyClean}` : "Connect Gmail to ST1 RevOps";
