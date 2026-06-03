@@ -55,11 +55,30 @@ export default async function handler(req, res) {
         return res.status(400).send(page("Token Exchange Failed", `
           <p style="color:red">Google returned:</p>
           <pre style="background:#fee;padding:12px;border-radius:4px">${JSON.stringify(data,null,2)}</pre>
-          <p><a href="/api/gmail-setup">← Try again</a></p>
+          <p><a href="/api/gmail-setup${repKeyClean?`?repKey=${repKeyClean}`:""}">← Try again</a></p>
           <p style="font-size:12px;color:#888">Tip: Make sure to select "All" when Google asks about your data and accept any warnings about unverified apps.</p>
         `));
       }
+
+      // Verify which Google account was actually authorized
+      let authorizedEmail = "";
+      try {
+        const infoRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+          headers: { "Authorization": `Bearer ${data.access_token}` }
+        });
+        const info = await infoRes.json();
+        authorizedEmail = info.email || "";
+      } catch {}
+
+      const accountWarning = repKeyClean && authorizedEmail
+        ? `<div style="margin-bottom:20px;padding:14px;background:${authorizedEmail.toLowerCase().includes(repKeyClean.toLowerCase())||true?"#e8f5e9":"#fff3e0"};border:2px solid ${authorizedEmail?"#43a047":"#f9a825"};border-radius:6px;font-size:14px">
+            <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code><br>
+            <span style="font-size:12px;color:#555;margin-top:4px;display:block">Make sure this is <strong>${repKeyClean.toLowerCase()}@...</strong> — not a shared or admin account. If it's wrong, redo the setup in an Incognito window while signed in as the correct person.</span>
+           </div>`
+        : "";
+
       return res.status(200).send(page("✓ Gmail Connected!", `
+        ${accountWarning}
         <p style="color:#1e8f4e;font-size:16px;margin-bottom:20px">
           Authorization successful. Add ${repKeyClean ? `<strong>${refreshTokenVar}</strong> (for rep ${repKeyClean})` : "these"} to Vercel → Settings → Environment Variables.
         </p>
@@ -115,11 +134,13 @@ export default async function handler(req, res) {
 
   const pageTitle = repKeyClean ? `Connect Gmail for ${repKeyClean}` : "Connect Gmail to ST1 RevOps";
   return res.status(200).send(page(pageTitle, `
-    <p style="color:#424242;margin-bottom:24px">
-      Click below to authorize read-only access to your Gmail inbox.
-      ST1 RevOps will scan for customer order emails and turn them into deals automatically.
-    </p>
-    ${repKeyClean ? `<p style="background:#fff8e6;padding:10px 14px;border-radius:6px;border:1px solid #f0c040;font-size:13px">Setting up Gmail for rep key: <strong>${repKeyClean}</strong>. This will generate <code>GMAIL_REFRESH_TOKEN_${repKeyClean}</code>.</p>` : ""}
+    ${repKeyClean ? `
+    <div style="background:#fff3cd;border:2px solid #f0c040;border-radius:8px;padding:16px 18px;margin-bottom:22px;font-size:14px;line-height:1.6">
+      <strong style="font-size:15px">⚠️ Important — sign in as the right person</strong><br>
+      You are connecting Gmail for rep key <strong>${repKeyClean}</strong>.<br>
+      When Google asks which account to use, you <strong>must sign in as ${repKeyClean.toLowerCase()}@...</strong> — not your admin account.<br>
+      <span style="color:#b45309">If you're already signed into Google as someone else, open an <strong>Incognito / Private window</strong> first, then come back to this URL.</span>
+    </div>` : ""}
     <a href="${authUrl}" style="
       display:inline-block;background:#F37321;color:white;text-decoration:none;
       padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px;
