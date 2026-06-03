@@ -531,11 +531,12 @@ function GmailStatusBanner({repKey=""}) {
       <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
     </div>
   );
+  const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}`:"/api/gmail-setup";
   const fixes={
     network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
-    setup:<>Gmail is not configured. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Click here to connect Gmail →</a></>,
-    expired:<>Your Gmail authorization has expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
-    auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+    setup:<>Gmail is not configured for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Click here to connect Gmail →</a></>,
+    expired:<>Gmail authorization has expired for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+    auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
   };
   return(
     <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:5,marginBottom:8}}>
