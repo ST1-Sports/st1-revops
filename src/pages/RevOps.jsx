@@ -14266,6 +14266,17 @@ function ModSettings() {
 
   const testRepEmail=async(rep)=>{
     const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
+    // First: diagnose which account the token resolves to
+    if(rep.gmailEnvKey){
+      try{
+        const dbg=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:rep.gmailEnvKey})}).then(r=>r.json());
+        if(!dbg.found){toast(`GMAIL_REFRESH_TOKEN_${rep.gmailEnvKey} not found in Vercel — add it and redeploy`,"error");return;}
+        if(dbg.email&&dbg.email!==rep.email){
+          toast(`Token mismatch: ${dbg.envVar} resolves to ${dbg.email} but rep email is ${rep.email}. Redo OAuth as ${rep.email}.`,"error");
+          return;
+        }
+      }catch{}
+    }
     toast(`Sending test to ${rep.email} via ${fromLabel}…`,"info");
     try {
       const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
