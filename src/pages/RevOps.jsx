@@ -14635,9 +14635,11 @@ function ModSettings() {
                   <input type="text" value={repForm.gmailEnvKey||""} onChange={e=>setRepForm(f=>({...f,gmailEnvKey:e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g,"")}))}
                     placeholder="e.g. JOSH" maxLength={20}
                     style={{width:120,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",letterSpacing:1}}/>
-                  {repForm.gmailEnvKey&&<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
-                    style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline"}}>Set up Gmail for {repForm.gmailEnvKey} →</a>}
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>→ set <code>GMAIL_REFRESH_TOKEN_{repForm.gmailEnvKey||"KEY"}</code> in Vercel</span>
+                  {repForm.gmailEnvKey
+                    ?<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
+                        style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline",whiteSpace:"nowrap"}}>1. OAuth: /api/gmail-setup?repKey={repForm.gmailEnvKey} →</a>
+                    :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Type a key above, then click the setup link</span>}
+                  {repForm.gmailEnvKey&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>2. Add <code>GMAIL_REFRESH_TOKEN_{repForm.gmailEnvKey}</code> to Vercel</span>}
                 </div>
               </div>
             </div>
@@ -14678,6 +14680,7 @@ function ModSettings() {
                 </div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title={hasOwnGmail?`Send test from ${rep.gmailEnvKey}'s Gmail`:"Send test from shared Gmail"}>✉ TEST</button>
+                  {hasOwnGmail&&<a href={`/api/gmail-setup?repKey=${rep.gmailEnvKey}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",textDecoration:"none"}}>GMAIL SETUP →</a>}
                   <button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
                   {hasAccess&&<button onClick={toggleRepAdmin} style={{background:isRepAdmin?B.purpleBg:"none",border:`1px solid ${isRepAdmin?`${B.purple}40`:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:isRepAdmin?B.purple:B.muted,cursor:"pointer"}} title={isRepAdmin?"Remove admin access":"Grant admin access to this rep"}>◐ {isRepAdmin?"ADMIN":"MAKE ADMIN"}</button>}
                   <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>
