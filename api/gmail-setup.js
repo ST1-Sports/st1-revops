@@ -26,9 +26,10 @@ export default async function handler(req, res) {
   const proto        = host.includes("localhost") ? "http" : "https";
   const redirectUri  = process.env.GMAIL_REDIRECT_URI || `${proto}://${host}/api/gmail-setup`;
 
-  const { code, error: oauthError, repKey, state } = req.query || {};
+  const { code, error: oauthError, repKey, hint, state } = req.query || {};
   // repKey can come from the initial query param OR from the OAuth state param on callback
-  const repKeyRaw = repKey || (state ? decodeURIComponent(state) : "");
+  const repKeyRaw = repKey || (state ? decodeURIComponent(state).split("|")[0] : "");
+  const hintEmail = hint || (state ? decodeURIComponent(state).split("|")[1] || "" : "");
   const repKeyClean = repKeyRaw ? repKeyRaw.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "";
   const refreshTokenVar = repKeyClean ? `GMAIL_REFRESH_TOKEN_${repKeyClean}` : "GMAIL_REFRESH_TOKEN";
 
@@ -121,7 +122,8 @@ export default async function handler(req, res) {
     `));
   }
 
-  // Carry repKey through OAuth state param — redirect_uri must be exact, no query params
+  // Carry repKey (and optional email hint) through OAuth state param
+  const stateVal = repKeyClean ? (hintEmail ? `${repKeyClean}|${hintEmail}` : repKeyClean) : "";
   const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + new URLSearchParams({
     client_id:     clientId,
     response_type: "code",
@@ -129,7 +131,8 @@ export default async function handler(req, res) {
     scope:         SCOPE,
     redirect_uri:  redirectUri,
     prompt:        "consent",
-    ...(repKeyClean ? { state: repKeyClean } : {}),
+    ...(stateVal    ? { state: stateVal }             : {}),
+    ...(hintEmail   ? { login_hint: hintEmail }       : {}),
   }).toString();
 
   const pageTitle = repKeyClean ? `Connect Gmail for ${repKeyClean}` : "Connect Gmail to ST1 RevOps";
@@ -137,9 +140,9 @@ export default async function handler(req, res) {
     ${repKeyClean ? `
     <div style="background:#fff3cd;border:2px solid #f0c040;border-radius:8px;padding:16px 18px;margin-bottom:22px;font-size:14px;line-height:1.6">
       <strong style="font-size:15px">⚠️ Important — sign in as the right person</strong><br>
-      You are connecting Gmail for rep key <strong>${repKeyClean}</strong>.<br>
-      When Google asks which account to use, you <strong>must sign in as ${repKeyClean.toLowerCase()}@...</strong> — not your admin account.<br>
-      <span style="color:#b45309">If you're already signed into Google as someone else, open an <strong>Incognito / Private window</strong> first, then come back to this URL.</span>
+      You are connecting Gmail for rep key <strong>${repKeyClean}</strong>${hintEmail ? ` (${hintEmail})` : ""}.<br>
+      ${hintEmail ? `Google will ask you to sign in as <strong>${hintEmail}</strong> — use that person's password, not your own admin password.` : `When Google asks which account to use, sign in as <strong>${repKeyClean.toLowerCase()}@...</strong> — not your admin account.`}<br>
+      <span style="color:#b45309">If you accidentally signed in as the wrong account before, open an <strong>Incognito / Private window</strong> and come back to this URL.</span>
     </div>` : ""}
     <a href="${authUrl}" style="
       display:inline-block;background:#F37321;color:white;text-decoration:none;
