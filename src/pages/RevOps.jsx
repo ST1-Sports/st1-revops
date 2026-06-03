@@ -13944,7 +13944,8 @@ function PLUploadModal({onClose, onSave, existingLists}) {
             try{
               const ev=JSON.parse(raw);
               if(ev.type==="content_block_delta"&&ev.delta?.type==="text_delta") accumulated+=ev.delta.text;
-            }catch{}
+              else if(ev.type==="error") throw new Error(ev.error?.message||ev.error?.type||"Anthropic stream error");
+            }catch(parseErr){if(!(parseErr instanceof SyntaxError)) throw parseErr;}
           }
         }
         let txt=accumulated.trim();
