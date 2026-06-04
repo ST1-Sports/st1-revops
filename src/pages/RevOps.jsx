@@ -5751,15 +5751,20 @@ function ModProspecting() {
 
   const commitListImport=async(pushZoho=false)=>{
     const selected=importRows.filter(c=>importSel.has(c.id));
-    const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
-    const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
+    // Build email→id map for existing contacts so dupes can be added to the list by their real ID
+    const existingByEmail=Object.fromEntries((s.contacts||[]).filter(c=>c.email).map(c=>[c.email.toLowerCase(),c.id]));
+    const toAdd=selected.filter(c=>!c.email||!existingByEmail[c.email.toLowerCase()]);
     const dupes=selected.length-toAdd.length;
     dispatch("ADD_CONTACTS",toAdd);
-    // Save as a named contact list for easy campaign use
+    // List includes NEW contacts (their new IDs) + EXISTING dupes (their real IDs)
     const listName=(importListName||"Imported List").trim();
-    const newList={id:mkId(),name:listName,contactIds:toAdd.map(c=>c.id),createdAt:Date.now(),source:"import"};
+    const allListIds=[
+      ...toAdd.map(c=>c.id),
+      ...selected.filter(c=>c.email&&existingByEmail[c.email.toLowerCase()]).map(c=>existingByEmail[c.email.toLowerCase()]),
+    ];
+    const newList={id:mkId(),name:listName,contactIds:allListIds,createdAt:Date.now(),source:"import"};
     dispatch("ADD_CONTACT_LIST",newList);
-    toast(`Imported ${toAdd.length} contacts → saved as list "${listName}"${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
+    toast(`Saved list "${listName}" with ${allListIds.length} contacts${dupes>0?` · ${dupes} already in DB (included in list)`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
     setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
     setView("lists"); // jump straight to the lists view
     if(pushZoho&&toAdd.length>0){
@@ -7254,12 +7259,20 @@ function ModMarketing() {
         source:"import",confidence:"medium",outreachStatus:"new",importedAt:Date.now(),
       }));
       if(contacts.length===0){toast("No contacts found in file","error");return;}
-      dispatch("ADD_CONTACTS",contacts);
+      // Dedup by email — skip adding contacts already in DB, but still include them in the list
+      const existingByEmail=Object.fromEntries((s.contacts||[]).filter(c=>c.email).map(c=>[c.email.toLowerCase(),c.id]));
+      const toAdd=contacts.filter(c=>!c.email||!existingByEmail[c.email.toLowerCase()]);
+      const dupes=contacts.length-toAdd.length;
+      if(toAdd.length>0) dispatch("ADD_CONTACTS",toAdd);
+      const allListIds=[
+        ...toAdd.map(c=>c.id),
+        ...contacts.filter(c=>c.email&&existingByEmail[c.email.toLowerCase()]).map(c=>existingByEmail[c.email.toLowerCase()]),
+      ];
       const listName=f.name.replace(/\.[^.]+$/,"");
-      const newList={id:mkId(),name:listName,contactIds:contacts.map(c=>c.id),createdAt:Date.now(),source:"import"};
+      const newList={id:mkId(),name:listName,contactIds:allListIds,createdAt:Date.now(),source:"import"};
       dispatch("ADD_CONTACT_LIST",newList);
       setCampDraft(c=>({...c,audienceListId:newList.id,audienceMode:"list"}));
-      toast(`Imported ${contacts.length} contacts as "${listName}"  `,"success");
+      toast(`List "${listName}" ready — ${allListIds.length} contacts${dupes>0?` · ${dupes} already in DB (included)`:""}  `,"success");
     }catch(err){toast("Upload failed: "+err.message,"error");}
     setCampListUploading(false);
     e.target.value="";
