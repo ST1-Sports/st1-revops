@@ -14650,9 +14650,9 @@ function ModSettings() {
                     style={{width:120,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",letterSpacing:1}}/>
                   {repForm.gmailEnvKey
                     ?<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
-                        style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline",whiteSpace:"nowrap"}}>1. OAuth: /api/gmail-setup?repKey={repForm.gmailEnvKey} →</a>
+                        style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline",whiteSpace:"nowrap"}}>Gmail setup link →</a>
                     :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Type a key above, then click the setup link</span>}
-                  {repForm.gmailEnvKey&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>2. Add <code>GMAIL_REFRESH_TOKEN_{repForm.gmailEnvKey}</code> to Vercel</span>}
+                  {repForm.gmailEnvKey&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>Save, then have the rep open this link on their own computer. Token saves automatically.</span>}
                 </div>
               </div>
             </div>
