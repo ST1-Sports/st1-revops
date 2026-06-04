@@ -8956,7 +8956,10 @@ function ModMarketing() {
                 {/* Batch size */}
                 <div style={{marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,flexShrink:0}}>BATCH SIZE</div>
-                  <input type="number" min={1} max={500} value={campDraft.batchSize||25} onChange={e=>setCampDraft(c=>({...c,batchSize:Math.max(1,parseInt(e.target.value)||25)}))} style={{width:80,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  <input type="number" min={1} max={500} value={campDraft.batchSize||25}
+                    onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCampDraft(c=>({...c,batchSize:v}));}}
+                    onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)setCampDraft(c=>({...c,batchSize:25}));}}
+                    style={{width:80,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
                   <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>contacts per day — stagger enrollment (first batch starts day 0, next on day 1, etc.)</span>
                 </div>
                 <div style={{padding:"10px 14px",background:`${B.green}08`,border:`1px solid ${B.green}20`,borderRadius:6,marginBottom:18}}>
@@ -9329,6 +9332,13 @@ function ModMarketing() {
                       );
                     })}
                     <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"4px 10px"}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,whiteSpace:"nowrap"}}>BATCH SZ</span>
+                        <input type="number" min={1} max={500} value={selCamp.batchSize||25}
+                          onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:v});}}
+                          onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:25});}}
+                          style={{width:44,background:"transparent",border:"none",color:B.text,fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",textAlign:"center"}}/>
+                      </div>
                       <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens} style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingReplies?"CHECKING...":"↻ REPLIES"}</button>
                       <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies} style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingOpens?"CHECKING...":"👁 OPENS"}</button>
                     </div>
@@ -9409,8 +9419,9 @@ function ModMarketing() {
                     const noEmail=allActive.filter(e=>!contactMap[e.contactId]?.email);
                     // Contacts who already received this touch (step has moved past ti)
                     const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","not_interested","unsubscribed"].includes(e.status))).length;
+                    const campBatchSz=selCamp.batchSize||25;
                     const touchBatches=[];
-                    for(let i=0;i<pending.length;i+=BATCH_SIZE) touchBatches.push(pending.slice(i,i+BATCH_SIZE));
+                    for(let i=0;i<pending.length;i+=campBatchSz) touchBatches.push(pending.slice(i,i+campBatchSz));
                     const allDone=pending.length===0&&noEmail.length===0;
 
                     return(
@@ -9567,9 +9578,12 @@ function ModMarketing() {
                     }
                   });
                   dispatch("UPDATE_CAMPAIGN",updated);
-                  const suffix=noEmail>0?` (${noEmail} without email — add emails to reach them)`:"";
-                  toast(`${count} contact${count!==1?"s":""} enrolled in ${selCamp.name}${suffix}`,"success");
+                  const already=toEnroll.length-count;
+                  const alreadyNote=already>0?` · ${already} were already enrolled`:"";
+                  const noEmailNote=noEmail>0?` · ${noEmail} have no email (add emails to reach them)`:"";
+                  toast(`✓ ${count} contact${count!==1?"s":""} enrolled in ${selCamp.name}${alreadyNote}${noEmailNote}`,"success");
                   setEnrollSearch(""); setEnrollListId("");
+                  setExecuteFilter("all");
                 };
 
                 const doQuickAdd=()=>{
@@ -9607,7 +9621,12 @@ function ModMarketing() {
                       <select value={enrollListId} onChange={e=>{setEnrollListId(e.target.value);setEnrollSearch("");}}
                         style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,color:enrollListId?B.text:B.muted,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
                         <option value="">— pick a contact list —</option>
-                        {(s.contactLists||[]).map(l=><option key={l.id} value={l.id}>{l.name} ({(l.contactIds||[]).length})</option>)}
+                        {(s.contactLists||[]).map(l=>{
+                          const total=(l.contactIds||[]).length;
+                          const alreadyIn=(l.contactIds||[]).filter(id=>enrolledIds.has(id)).length;
+                          const newCount=total-alreadyIn;
+                          return <option key={l.id} value={l.id}>{l.name} — {newCount} new{alreadyIn>0?`, ${alreadyIn} already enrolled`:""}</option>;
+                        })}
                       </select>
                     </div>
                     <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
