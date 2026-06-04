@@ -14351,7 +14351,7 @@ function ModSettings() {
   },[]);
 
   // ── Rep (non-admin) view: just their own Gmail + profile ─────────────────────
-  if (!cu?.isAdmin) {
+  if (cu && !cu.isAdmin) {
     const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
     const myKey = cu?.gmailEnvKey || "";
     const setupUrl = myKey ? `/api/gmail-setup?repKey=${myKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}` : "";
@@ -14449,7 +14449,7 @@ function ModSettings() {
         const [publerSendDebug,setPublerSendDebug]=useState(null);
         const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 
-        const repGmailKey = (!cu?.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
+        const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
           try{
@@ -14531,7 +14531,7 @@ function ModSettings() {
                 </div>
               </div>
               {/* Rep (non-admin) with no gmailEnvKey set */}
-              {!cu?.isAdmin && !cu?.gmailEnvKey && (
+              {cu && !cu.isAdmin && !cu?.gmailEnvKey && (
                 <div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
                   No Gmail key assigned. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
                 </div>
