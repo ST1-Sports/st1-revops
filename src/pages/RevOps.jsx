@@ -699,8 +699,6 @@ export default function App() {
     return()=>window.removeEventListener("keydown",handler);
   },[]);
 
-  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
-
   const NAV = useMemo(()=>[
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
@@ -732,6 +730,10 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
+  usePrefetchPanels();
+
+  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
+
   // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
     for (const n of NAV) {
@@ -740,8 +742,6 @@ export default function App() {
     }
     return "";
   };
-
-  usePrefetchPanels();
 
   return (
     <AppCtx.Provider value={ctx}>
