@@ -14256,7 +14256,7 @@ function PLUploadModal({onClose, onSave, existingLists}) {
 }
 
 function ModSettings() {
-  const {s,dispatch,toast,setMod}=useApp();
+  const {s,dispatch,toast,setMod,cu}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
   const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
@@ -14384,10 +14384,11 @@ function ModSettings() {
         const [publerSendDebug,setPublerSendDebug]=useState(null);
         const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 
+        const repGmailKey = (!cu?.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
           try{
-            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})}).then(r=>r.json());
+            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile",...(repGmailKey?{repEnvKey:repGmailKey}:{})})}).then(r=>r.json());
             setGmailInfo(d.error?{error:d.error}:{email:d.email});
           }catch(e){setGmailInfo({error:e.message});}
           setGmailChecking(false);
@@ -14456,22 +14457,32 @@ function ModSettings() {
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
-                  <button onClick={async()=>{
+                  {!repGmailKey&&<button onClick={async()=>{
                     const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:s.company?.email||"test@example.com",to_name:"ST1 Test",subject:"ST1 RevOps — Gmail test",body:"If you receive this, Gmail sending is working correctly."})}).then(r=>r.json());
                     if(d.sent) toast("Test email sent — check your inbox","success");
                     else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
-                  }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>
+                  }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>}
+                  {repGmailKey&&<a href={`/api/gmail-setup?repKey=${repGmailKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",textDecoration:"none"}}>Connect Gmail →</a>}
                 </div>
               </div>
+              {/* Rep (non-admin) with no gmailEnvKey set */}
+              {!cu?.isAdmin && !cu?.gmailEnvKey && (
+                <div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                  No Gmail key assigned. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
+                </div>
+              )}
               {gmailInfo&&(
                 gmailInfo.error
                   ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-                    ✕ Not connected — {gmailInfo.error}
-                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                    ✕ {repGmailKey ? "Your Gmail is not connected yet." : `Not connected — ${gmailInfo.error}`}
+                    {repGmailKey
+                      ?<div style={{marginTop:6,fontSize:10,color:B.muted}}>Click <strong>Connect Gmail →</strong> above to link your Google account. Open it on <strong>your own device</strong> and sign in with your own Google account.</div>
+                      :<div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                    }
                   </div>
                   :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
                     ✓ Connected as <strong>{gmailInfo.email}</strong>
-                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>All campaign emails send FROM this account. Rep name &amp; email appear in the signature — replies go back to this inbox.</div>
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>{repGmailKey?"Campaign emails assigned to you will send from this account.":"All campaign emails send FROM this account. Rep name & email appear in the signature — replies go back to this inbox."}</div>
                   </div>
               )}
               {!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
