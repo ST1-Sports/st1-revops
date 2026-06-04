@@ -626,6 +626,9 @@ export default function App() {
   }, []);
 
   const cu = (() => {
+    if (s.currentUserId === "__owner__") {
+      return { id:"__owner__", name:"Admin", email:"", initials:"AD", color:B.orange, role:"owner", isAdmin:true };
+    }
     const rep = (s.reps||[]).find(r=>r.id===s.currentUserId);
     if (!rep) return null;
     const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
@@ -1058,6 +1061,16 @@ function Login({dispatch, reps=[], appUsers=[]}) {
           style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
           {loading?"CHECKING…":"SIGN IN →"}
         </button>
+        {/* Admin bypass — only visible when no admin accounts are set up */}
+        {!appUsers.some(au=>au.isAdmin)&&(
+          <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>No admin account configured yet</div>
+            <button onClick={()=>dispatch("LOGIN","__owner__")}
+              style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+              ADMIN ACCESS →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
