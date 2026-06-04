@@ -5,11 +5,14 @@
  *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
  *   (get them from /api/gmail-setup)
  *
- * For per-rep sending, add GMAIL_REFRESH_TOKEN_{REPKEY} e.g. GMAIL_REFRESH_TOKEN_JOSH
- * and pass repEnvKey:"JOSH" in the request body.
+ * For per-rep sending, tokens are stored in the database (Setting model).
+ * Falls back to GMAIL_REFRESH_TOKEN_{REPKEY} env var for backwards compat.
+ * Pass repEnvKey:"JOSH" in the request body to use a rep-specific token.
  *
  * POST body: { action: "list" | "get" | "send" | "profile", repEnvKey?: string, ... }
  */
+
+import { prisma } from './_lib/prisma.js';
 
 export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
@@ -27,17 +30,24 @@ async function getToken(repEnvKey = "") {
     throw new Error("Gmail not configured — set GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET in Vercel env vars");
   }
 
-  // Look up per-rep refresh token, fall back to default
-  const refreshTokenVar = repEnvKey
-    ? `GMAIL_REFRESH_TOKEN_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`
-    : "GMAIL_REFRESH_TOKEN";
-  const refreshToken = process.env[refreshTokenVar];
-
+  // Look up refresh token: database first, then env var (backwards compat)
+  let refreshToken = null;
+  if (repEnvKey) {
+    try {
+      const dbKey = `gmail_token_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+      const row = await prisma.setting.findUnique({ where: { key: dbKey } });
+      if (row?.value?.refreshToken) refreshToken = row.value.refreshToken;
+    } catch {}
+  }
   if (!refreshToken) {
-    if (repEnvKey) {
-      throw new Error(`Gmail not configured for rep key "${repEnvKey}" — add ${refreshTokenVar} to Vercel env vars (visit /api/gmail-setup?repKey=${repEnvKey})`);
+    const refreshTokenVar = repEnvKey
+      ? `GMAIL_REFRESH_TOKEN_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`
+      : "GMAIL_REFRESH_TOKEN";
+    refreshToken = process.env[refreshTokenVar];
+    if (!refreshToken) {
+      if (repEnvKey) throw new Error(`Gmail not configured for "${repEnvKey}" — connect Gmail in your account settings`);
+      throw new Error("Gmail not configured — visit /api/gmail-setup");
     }
-    throw new Error("Gmail not configured — visit /api/gmail-setup");
   }
 
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -199,21 +209,15 @@ export default async function handler(req, res) {
 
       const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
-      // If from_email is provided, try to send as that address (requires Gmail "Send As" alias).
-      // If it fails (not a verified alias), fall back to sending without custom From.
-      const fromHeader = from_email
-        ? (from_name ? `${from_name} <${from_email}>` : from_email)
-        : null;
       // Reply-To points to the rep so replies land in their inbox
       const replyToHeader = reply_to
         ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
-        : (from_email && from_email !== reply_to ? fromHeader : null);
+        : null;
       const lines = [
         `To: ${toHeader}`,
-        ...(fromHeader ? [`From: ${fromHeader}`] : []),
         ...(cc  ? [`Cc: ${cc}`]   : []),
         ...(bcc ? [`Bcc: ${bcc}`] : []),
-        ...(replyToHeader && replyToHeader !== fromHeader ? [`Reply-To: ${replyToHeader}`] : []),
+        ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
         `Content-Type: ${contentType}`,

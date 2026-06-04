@@ -71,24 +71,74 @@ export default async function handler(req, res) {
         authorizedEmail = info.email || "";
       } catch {}
 
-      const accountWarning = repKeyClean && authorizedEmail
-        ? `<div style="margin-bottom:20px;padding:14px;background:${authorizedEmail.toLowerCase().includes(repKeyClean.toLowerCase())||true?"#e8f5e9":"#fff3e0"};border:2px solid ${authorizedEmail?"#43a047":"#f9a825"};border-radius:6px;font-size:14px">
-            <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code><br>
-            <span style="font-size:12px;color:#555;margin-top:4px;display:block">Make sure this is <strong>${repKeyClean.toLowerCase()}@...</strong> — not a shared or admin account. If it's wrong, redo the setup in an Incognito window while signed in as the correct person.</span>
+      // Auto-save token to database — no manual copy needed
+      let dbSaveOk = false;
+      if (repKeyClean && data.refresh_token) {
+        try {
+          const { prisma } = await import('./_lib/prisma.js');
+          const dbKey = `gmail_token_${repKeyClean}`;
+          await prisma.setting.upsert({
+            where: { key: dbKey },
+            update: { value: { refreshToken: data.refresh_token, email: authorizedEmail || null, connectedAt: new Date().toISOString() } },
+            create: { key: dbKey, value: { refreshToken: data.refresh_token, email: authorizedEmail || null, connectedAt: new Date().toISOString() } },
+          });
+          dbSaveOk = true;
+        } catch {}
+      }
+
+      // Rep-specific flow: show auto-saved confirmation (or fallback to manual copy)
+      if (repKeyClean) {
+        if (dbSaveOk) {
+          const repDisplayName = repKeyClean.charAt(0) + repKeyClean.slice(1).toLowerCase();
+          return res.status(200).send(page("✓ Gmail Connected!", `
+            <div style="padding:20px;background:#e8f5e9;border:2px solid #43a047;border-radius:8px;margin-bottom:24px;text-align:center">
+              <div style="font-size:48px;margin-bottom:12px">✓</div>
+              <div style="font-size:18px;font-weight:700;color:#1e8f4e;margin-bottom:8px">Gmail Connected Successfully!</div>
+              ${authorizedEmail ? `<div style="font-size:14px;color:#2e7d32;margin-bottom:4px">Connected as <strong>${authorizedEmail}</strong></div>` : ""}
+              <div style="font-size:13px;color:#388e3c;margin-top:8px">Token saved to the database. No Vercel env var needed.</div>
+            </div>
+            <p style="font-size:14px;color:#555;text-align:center">You can close this window and return to the app. ${repDisplayName}'s Gmail is ready to use.</p>
+          `));
+        }
+        // dbSave failed — fall back to manual copy UI
+        const accountWarning = authorizedEmail
+          ? `<div style="margin-bottom:20px;padding:14px;background:#e8f5e9;border:2px solid #43a047;border-radius:6px;font-size:14px">
+              <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code><br>
+              <span style="font-size:12px;color:#555;margin-top:4px;display:block">Make sure this is <strong>${repKeyClean.toLowerCase()}@...</strong> — not a shared or admin account. If it's wrong, redo the setup in an Incognito window while signed in as the correct person.</span>
+             </div>`
+          : "";
+        return res.status(200).send(page("✓ Gmail Connected! (Manual step needed)", `
+          ${accountWarning}
+          <p style="color:#b45309;font-size:14px;margin-bottom:16px">⚠️ Auto-save to database failed. Please add this token to Vercel manually.</p>
+          <p style="color:#1e8f4e;font-size:15px;margin-bottom:20px">
+            Authorization successful. Add <strong>${refreshTokenVar}</strong> to Vercel → Settings → Environment Variables.
+          </p>
+          ${tokenRow(refreshTokenVar, data.refresh_token)}
+          <div style="margin-top:20px;padding:14px;background:#e8f0fa;border:1px solid #1a5fa840;border-radius:6px">
+            <strong>Next:</strong> Add <code>${refreshTokenVar}</code> to Vercel env vars, then redeploy.
+            In Settings → Sales Reps, make sure the Gmail Key for this rep is set to <strong>${repKeyClean}</strong>.
+          </div>
+        `));
+      }
+
+      // Shared/admin account flow: always show copy-token UI
+      const accountWarning = authorizedEmail
+        ? `<div style="margin-bottom:20px;padding:14px;background:#e8f5e9;border:2px solid #43a047;border-radius:6px;font-size:14px">
+            <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code>
            </div>`
         : "";
 
       return res.status(200).send(page("✓ Gmail Connected!", `
         ${accountWarning}
         <p style="color:#1e8f4e;font-size:16px;margin-bottom:20px">
-          Authorization successful. Add ${repKeyClean ? `<strong>${refreshTokenVar}</strong> (for rep ${repKeyClean})` : "these"} to Vercel → Settings → Environment Variables.
+          Authorization successful. Add these to Vercel → Settings → Environment Variables.
         </p>
         ${tokenRow(refreshTokenVar, data.refresh_token)}
-        ${!repKeyClean ? tokenRow("GMAIL_CLIENT_ID", clientId) : ""}
-        ${!repKeyClean ? tokenRow("GMAIL_CLIENT_SECRET", clientSecret) : ""}
+        ${tokenRow("GMAIL_CLIENT_ID", clientId)}
+        ${tokenRow("GMAIL_CLIENT_SECRET", clientSecret)}
         <div style="margin-top:20px;padding:14px;background:#e8f0fa;border:1px solid #1a5fa840;border-radius:6px">
           <strong>Next:</strong> Add <code>${refreshTokenVar}</code> to Vercel env vars, then redeploy.
-          ${repKeyClean ? `In Settings → Sales Reps, make sure the Gmail Key for this rep is set to <strong>${repKeyClean}</strong>.` : 'Click "Test Gmail" in the Integrations → Email tab to confirm.'}
+          Click "Test Gmail" in the Integrations → Email tab to confirm.
         </div>
       `));
     } catch(err) {

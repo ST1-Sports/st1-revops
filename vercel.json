@@ -43,7 +43,8 @@
     "api/admin/questions/[id].js":                 { "maxDuration": 15 },
     "api/admin/sponsorship-config.js":             { "maxDuration": 15 },
     "api/ai/email.js":                             { "maxDuration": 30 },
-    "api/instantly.js":                            { "maxDuration": 30 }
+    "api/instantly.js":                            { "maxDuration": 30 },
+    "api/gmail-token.js":                          { "maxDuration": 15 }
   },
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

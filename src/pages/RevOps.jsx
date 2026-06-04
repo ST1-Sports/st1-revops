@@ -499,7 +499,7 @@ function reducer(prev, action, payload) {
 
 // ─── GMAIL STATUS BANNER ──────────────────────────────────────────────────────
 // Auto-checks Gmail connectivity on mount. Used in the campaign execute tab.
-function GmailStatusBanner({repKey=""}) {
+function GmailStatusBanner({repKey="",repEmail=""}) {
   const [status,setStatus]=React.useState(null); // null=checking | {ok,email} | {ok:false,error,type}
   const check=React.useCallback(()=>{
     setStatus(null);
@@ -531,10 +531,10 @@ function GmailStatusBanner({repKey=""}) {
       <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
     </div>
   );
-  const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}`:"/api/gmail-setup";
+  const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}${repEmail?`&hint=${encodeURIComponent(repEmail)}`:""}`:"/api/gmail-setup";
   const fixes={
     network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
-    setup:<>Gmail is not configured for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Click here to connect Gmail →</a></>,
+    setup:<>Gmail not connected. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
     expired:<>Gmail authorization has expired for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
     auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
   };
@@ -7630,8 +7630,8 @@ function ModMarketing() {
           htmlBody,
           // Use rep's own OAuth token if configured, otherwise use shared account
           ...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
-          // Always set From/Reply-To to the rep — works via Gmail Send As alias or per-rep token
-          ...(rep?.email ? {from_email:rep.email, from_name:rep.name, reply_to:rep.email} : {}),
+          // Reply-To = rep's email so replies land in their inbox
+          ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
           // BCC quote tracker if this touch is marked as a pricing email
           ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
         })});
@@ -9245,7 +9245,7 @@ function ModMarketing() {
 
                 return(<>
                   {/* Always-visible Gmail connectivity check — auto-runs on mount */}
-                  <GmailStatusBanner repKey={rep?.gmailEnvKey||""} />
+                  <GmailStatusBanner repKey={rep?.gmailEnvKey||""} repEmail={rep?.email||""} />
 
                   {/* Rep sender selector */}
                   {rep?(
@@ -9254,10 +9254,11 @@ function ModMarketing() {
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
                           ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail ({rep.email||rep.gmailEnvKey})</span>
-                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from the shared account with their name. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Reps → set Gmail Key</a>.</span>
+                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Set a Gmail Key in Settings</a>, then have {rep.name.split(" ")[0]} open <a href={rep.gmailEnvKey?`/api/gmail-setup?repKey=${rep.gmailEnvKey}&hint=${encodeURIComponent(rep.email||"")}`:"/api/gmail-setup"} target="_blank" rel="noreferrer" style={{color:B.blue,fontWeight:600}}>this link on their own computer →</a></span>
                         }
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
+                      {rep.gmailEnvKey&&<a href={`/api/gmail-setup?repKey=${rep.gmailEnvKey}${rep.email?`&hint=${encodeURIComponent(rep.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",whiteSpace:"nowrap",textDecoration:"none",display:"inline-flex",alignItems:"center"}}>CONNECT GMAIL →</a>}
                       <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
                     </div>
                   ):(
@@ -14270,9 +14271,9 @@ function ModSettings() {
     if(rep.gmailEnvKey){
       try{
         const dbg=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:rep.gmailEnvKey})}).then(r=>r.json());
-        if(!dbg.found){toast(`GMAIL_REFRESH_TOKEN_${rep.gmailEnvKey} not found in Vercel — add it and redeploy`,"error");return;}
+        if(!dbg.found){toast(`No Gmail connected for ${rep.name} — have them visit /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser to connect`,"error");return;}
         if(dbg.email&&dbg.email!==rep.email){
-          toast(`Token mismatch: ${dbg.envVar} resolves to ${dbg.email} but rep email is ${rep.email}. Redo OAuth as ${rep.email}.`,"error");
+          toast(`Wrong account: ${rep.gmailEnvKey} is connected as ${dbg.email}, not ${rep.email}. Have ${rep.name} redo the OAuth at /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser`,"error");
           return;
         }
       }catch{}
