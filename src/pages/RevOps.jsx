@@ -7628,10 +7628,10 @@ function ModMarketing() {
           subject,
           body:plainBody,
           htmlBody,
-          // Send from the rep's own Gmail if they have a key, otherwise shared account
+          // Use rep's own OAuth token if configured, otherwise use shared account
           ...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
-          // Reply-To = rep's email so replies land in their inbox (fallback if no own Gmail)
-          ...(!rep?.gmailEnvKey && rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+          // Always set From/Reply-To to the rep — works via Gmail Send As alias or per-rep token
+          ...(rep?.email ? {from_email:rep.email, from_name:rep.name, reply_to:rep.email} : {}),
           // BCC quote tracker if this touch is marked as a pricing email
           ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
         })});
@@ -14284,6 +14284,7 @@ function ModSettings() {
         subject:`ST1 RevOps — email test for ${rep.name}`,
         body:`Hi ${(rep.name||"there").split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
         ...(rep.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
+        ...(rep.email ? {from_email:rep.email, from_name:rep.name, reply_to:rep.email} : {}),
       })}).then(r=>r.json());
       if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
       else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");

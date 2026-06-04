@@ -199,15 +199,21 @@ export default async function handler(req, res) {
 
       const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
-      // Reply-To points to the rep so replies land in their inbox, not the sending Gmail account
+      // If from_email is provided, try to send as that address (requires Gmail "Send As" alias).
+      // If it fails (not a verified alias), fall back to sending without custom From.
+      const fromHeader = from_email
+        ? (from_name ? `${from_name} <${from_email}>` : from_email)
+        : null;
+      // Reply-To points to the rep so replies land in their inbox
       const replyToHeader = reply_to
         ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
-        : null;
+        : (from_email && from_email !== reply_to ? fromHeader : null);
       const lines = [
         `To: ${toHeader}`,
+        ...(fromHeader ? [`From: ${fromHeader}`] : []),
         ...(cc  ? [`Cc: ${cc}`]   : []),
         ...(bcc ? [`Bcc: ${bcc}`] : []),
-        ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
+        ...(replyToHeader && replyToHeader !== fromHeader ? [`Reply-To: ${replyToHeader}`] : []),
         `Subject: ${subject}`,
         `MIME-Version: 1.0`,
         `Content-Type: ${contentType}`,
