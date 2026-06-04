@@ -14255,6 +14255,39 @@ function PLUploadModal({onClose, onSave, existingLists}) {
   );
 }
 
+function RepGmailConnector({repKey, email, name}) {
+  const {toast} = useApp();
+  const [info, setInfo] = React.useState(null);
+  const [checking, setChecking] = React.useState(false);
+  const check = React.useCallback(async()=>{
+    setChecking(true); setInfo(null);
+    try {
+      const d = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:repKey})}).then(r=>r.json());
+      setInfo(d);
+    } catch(e){ setInfo({found:false,error:e.message}); }
+    setChecking(false);
+  },[repKey]);
+  React.useEffect(()=>{check();},[check]);
+  const setupUrl = `/api/gmail-setup?repKey=${repKey}${email?`&hint=${encodeURIComponent(email)}`:""}`;
+  if (checking) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Checking…</div>;
+  if (!info) return null;
+  if (info.found && info.email) return (
+    <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"10px 14px"}}>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green,fontWeight:600}}>✓ Connected as {info.email}</div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Campaign emails assigned to you will send from this account.</div>
+      <a href={setupUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>Reconnect →</a>
+    </div>
+  );
+  return (
+    <div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"10px 14px"}}>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.red,fontWeight:600,marginBottom:6}}>Your Gmail is not connected yet.</div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>Click the button below to connect your Google account. <strong>Open it on your own device</strong> and sign in as yourself — not a shared or admin account.</div>
+      <a href={setupUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",background:B.orange,color:B.white,borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,textDecoration:"none",letterSpacing:.3}}>Connect My Gmail →</a>
+      <button onClick={check} style={{marginLeft:10,background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer"}}>↻ Recheck</button>
+    </div>
+  );
+}
+
 function ModSettings() {
   const {s,dispatch,toast,setMod,cu}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
@@ -14316,6 +14349,38 @@ function ModSettings() {
       .then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
       .catch(()=>setGmailStatus(false));
   },[]);
+
+  // ── Rep (non-admin) view: just their own Gmail + profile ─────────────────────
+  if (!cu?.isAdmin) {
+    const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
+    const myKey = cu?.gmailEnvKey || "";
+    const setupUrl = myKey ? `/api/gmail-setup?repKey=${myKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}` : "";
+    return (
+      <div style={{padding:"22px 26px",maxWidth:600}}>
+        <PH title="MY ACCOUNT" sub={`Logged in as ${cu?.name||"you"}`}/>
+        <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
+          <Lbl c={B.orange} s={{marginBottom:12}}>My Profile</Lbl>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+            {[["Name","name"],["Email","email"],["Title","title"],["Phone","phone"]].map(([l,k])=>(
+              <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
+                <div style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}>{myRep?.[k]||<span style={{color:B.muted}}>—</span>}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
+          <Lbl c={B.green} s={{marginBottom:12}}>My Gmail</Lbl>
+          {!myKey ? (
+            <div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+              No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
+            </div>
+          ) : (
+            <RepGmailConnector repKey={myKey} email={cu?.email||""} name={cu?.name||""} />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{padding:"22px 26px",maxWidth:760}}>
