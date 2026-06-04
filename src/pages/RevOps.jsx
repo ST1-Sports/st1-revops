@@ -7140,6 +7140,7 @@ function ModMarketing() {
   const [selectedContacts,setSelectedContacts]=useState(new Set());
   const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
+  const [quickAddEmail,setQuickAddEmail]=useState(""); // manual email quick-add in execute tab
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
@@ -9571,6 +9572,30 @@ function ModMarketing() {
                   setEnrollSearch(""); setEnrollListId("");
                 };
 
+                const doQuickAdd=()=>{
+                  const email=(quickAddEmail||"").trim().toLowerCase();
+                  if(!email||!email.includes("@")){toast("Enter a valid email address","warn");return;}
+                  const todayStr=today();
+                  const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
+                  // Find existing contact by email
+                  let contact=(s.contacts||[]).find(c=>(c.email||"").toLowerCase()===email);
+                  let isNew=false;
+                  if(!contact){
+                    contact={id:mkId(),firstName:"",lastName:"",fullName:email,email,phone:"",title:"",school:"",state:"",sport:"",orgType:"school",priority:"medium",confidence:"medium",source:"manual",importedAt:Date.now()};
+                    dispatch("ADD_CONTACTS",[contact]);
+                    isNew=true;
+                  }
+                  if(updated.enrollments.some(e=>e.contactId===contact.id)){
+                    toast(`${email} is already enrolled in this campaign`,"warn");
+                    setQuickAddEmail(""); return;
+                  }
+                  updated.enrollments=[...updated.enrollments,{contactId:contact.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}];
+                  dispatch("SCORE_CONTACT",{contactId:contact.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
+                  dispatch("UPDATE_CAMPAIGN",updated);
+                  toast(`${isNew?"New contact created and enrolled":"Contact enrolled"}: ${email}`,"success");
+                  setQuickAddEmail("");
+                };
+
                 return(
                   <div className="card" style={{padding:"12px 14px",marginBottom:16,borderLeft:`3px solid ${B.purple}`}}>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.purple,letterSpacing:1,marginBottom:10}}>+ ENROLL CONTACTS</div>
@@ -9584,6 +9609,13 @@ function ModMarketing() {
                         <option value="">— pick a contact list —</option>
                         {(s.contactLists||[]).map(l=><option key={l.id} value={l.id}>{l.name} ({(l.contactIds||[]).length})</option>)}
                       </select>
+                    </div>
+                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                      <input value={quickAddEmail} onChange={e=>setQuickAddEmail(e.target.value)}
+                        onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();doQuickAdd();}}}
+                        placeholder="Or type an email and press Enter to add & enroll…"
+                        style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                      <OBtn sm onClick={doQuickAdd} disabled={!quickAddEmail.trim()}>ADD</OBtn>
                     </div>
                     {(q||enrollListId)&&(
                       <div style={{marginBottom:10}}>
