@@ -19,6 +19,10 @@
 
 const SCOPE = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send";
 
+function escHtml(s) {
+  return String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 export default async function handler(req, res) {
   const clientId     = process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
@@ -28,8 +32,15 @@ export default async function handler(req, res) {
 
   const { code, error: oauthError, repKey, hint, state } = req.query || {};
   // repKey can come from the initial query param OR from the OAuth state param on callback
-  const repKeyRaw = repKey || (state ? decodeURIComponent(state).split("|")[0] : "");
-  const hintEmail = hint || (state ? decodeURIComponent(state).split("|")[1] || "" : "");
+  let repKeyRaw = repKey || "";
+  let hintEmail = hint || "";
+  if (state && (!repKeyRaw || !hintEmail)) {
+    try {
+      const parts = decodeURIComponent(state).split("|");
+      if (!repKeyRaw) repKeyRaw = parts[0] || "";
+      if (!hintEmail) hintEmail = parts[1] || "";
+    } catch {}
+  }
   const repKeyClean = repKeyRaw ? repKeyRaw.toUpperCase().replace(/[^A-Z0-9]/g, "_") : "";
   const refreshTokenVar = repKeyClean ? `GMAIL_REFRESH_TOKEN_${repKeyClean}` : "GMAIL_REFRESH_TOKEN";
 
@@ -94,7 +105,7 @@ export default async function handler(req, res) {
             <div style="padding:20px;background:#e8f5e9;border:2px solid #43a047;border-radius:8px;margin-bottom:24px;text-align:center">
               <div style="font-size:48px;margin-bottom:12px">✓</div>
               <div style="font-size:18px;font-weight:700;color:#1e8f4e;margin-bottom:8px">Gmail Connected Successfully!</div>
-              ${authorizedEmail ? `<div style="font-size:14px;color:#2e7d32;margin-bottom:4px">Connected as <strong>${authorizedEmail}</strong></div>` : ""}
+              ${authorizedEmail ? `<div style="font-size:14px;color:#2e7d32;margin-bottom:4px">Connected as <strong>${escHtml(authorizedEmail)}</strong></div>` : ""}
               <div style="font-size:13px;color:#388e3c;margin-top:8px">Token saved to the database. No Vercel env var needed.</div>
             </div>
             <p style="font-size:14px;color:#555;text-align:center">You can close this window and return to the app. ${repDisplayName}'s Gmail is ready to use.</p>
@@ -103,7 +114,7 @@ export default async function handler(req, res) {
         // dbSave failed — fall back to manual copy UI
         const accountWarning = authorizedEmail
           ? `<div style="margin-bottom:20px;padding:14px;background:#e8f5e9;border:2px solid #43a047;border-radius:6px;font-size:14px">
-              <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code><br>
+              <strong>Authorized account:</strong> <code style="font-size:14px">${escHtml(authorizedEmail)}</code><br>
               <span style="font-size:12px;color:#555;margin-top:4px;display:block">Make sure this is <strong>${repKeyClean.toLowerCase()}@...</strong> — not a shared or admin account. If it's wrong, redo the setup in an Incognito window while signed in as the correct person.</span>
              </div>`
           : "";
@@ -124,7 +135,7 @@ export default async function handler(req, res) {
       // Shared/admin account flow: always show copy-token UI
       const accountWarning = authorizedEmail
         ? `<div style="margin-bottom:20px;padding:14px;background:#e8f5e9;border:2px solid #43a047;border-radius:6px;font-size:14px">
-            <strong>Authorized account:</strong> <code style="font-size:14px">${authorizedEmail}</code>
+            <strong>Authorized account:</strong> <code style="font-size:14px">${escHtml(authorizedEmail)}</code>
            </div>`
         : "";
 
@@ -148,7 +159,7 @@ export default async function handler(req, res) {
 
   if (oauthError) {
     return res.status(400).send(page("Authorization Denied", `
-      <p style="color:red">Google returned: ${oauthError}</p>
+      <p style="color:red">Google returned: ${escHtml(oauthError)}</p>
       <p><a href="/api/gmail-setup${repKeyClean ? `?repKey=${repKeyClean}` : ""}">← Try again</a></p>
     `));
   }
@@ -190,8 +201,8 @@ export default async function handler(req, res) {
     ${repKeyClean ? `
     <div style="background:#fff3cd;border:2px solid #f0c040;border-radius:8px;padding:16px 18px;margin-bottom:22px;font-size:14px;line-height:1.6">
       <strong style="font-size:15px">⚠️ Important — sign in as the right person</strong><br>
-      You are connecting Gmail for rep key <strong>${repKeyClean}</strong>${hintEmail ? ` (${hintEmail})` : ""}.<br>
-      ${hintEmail ? `Google will ask you to sign in as <strong>${hintEmail}</strong> — use that person's password, not your own admin password.` : `When Google asks which account to use, sign in as <strong>${repKeyClean.toLowerCase()}@...</strong> — not your admin account.`}<br>
+      You are connecting Gmail for rep key <strong>${repKeyClean}</strong>${hintEmail ? ` (${escHtml(hintEmail)})` : ""}.<br>
+      ${hintEmail ? `Google will ask you to sign in as <strong>${escHtml(hintEmail)}</strong> — use that person's password, not your own admin password.` : `When Google asks which account to use, sign in as <strong>${repKeyClean.toLowerCase()}@...</strong> — not your admin account.`}<br>
       <span style="color:#b45309">If you accidentally signed in as the wrong account before, open an <strong>Incognito / Private window</strong> and come back to this URL.</span>
     </div>` : ""}
     <a href="${authUrl}" style="
@@ -206,12 +217,13 @@ export default async function handler(req, res) {
 }
 
 function tokenRow(name, value) {
-  const safe = value.replace(/'/g, "\\'");
+  const safe = value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  const attr = value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
   return `
     <div style="margin-bottom:12px">
       <div style="font-size:11px;font-weight:700;color:#7a7a7a;margin-bottom:4px;letter-spacing:1px">${name}</div>
       <div style="display:flex;gap:8px;align-items:center">
-        <input readonly value="${value}"
+        <input readonly value="${attr}"
           style="flex:1;font-family:monospace;font-size:12px;padding:8px 10px;
                  border:1px solid #e0e0e0;border-radius:4px;background:#f8f8f8"
           onclick="this.select()"/>

@@ -9258,7 +9258,6 @@ function ModMarketing() {
                         }
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
-                      {rep.gmailEnvKey&&<a href={`/api/gmail-setup?repKey=${rep.gmailEnvKey}${rep.email?`&hint=${encodeURIComponent(rep.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",whiteSpace:"nowrap",textDecoration:"none",display:"inline-flex",alignItems:"center"}}>CONNECT GMAIL →</a>}
                       <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
                     </div>
                   ):(

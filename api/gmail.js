@@ -103,24 +103,19 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, from_email, repEnvKey } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, repEnvKey } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
-  // ── DEBUG: show which env var is found and what account it maps to ────────────
+  // ── DEBUG: check if token exists (DB or env var) and which account it maps to ──
   if (action === "debug") {
-    const refreshTokenVar = repEnvKey
-      ? `GMAIL_REFRESH_TOKEN_${repEnvKey.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`
-      : "GMAIL_REFRESH_TOKEN";
-    const hasToken = !!process.env[refreshTokenVar];
-    if (!hasToken) return res.json({ envVar: refreshTokenVar, found: false, email: null });
     try {
       const tok = await getToken(repEnvKey || "");
       const profileRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", { headers: { Authorization: `Bearer ${tok}` } });
       const profile = await profileRes.json();
-      return res.json({ envVar: refreshTokenVar, found: true, email: profile.emailAddress || null });
+      return res.json({ found: true, email: profile.emailAddress || null });
     } catch(e) {
-      return res.json({ envVar: refreshTokenVar, found: true, email: null, error: e.message });
+      return res.json({ found: false, email: null, error: e.message });
     }
   }
 
