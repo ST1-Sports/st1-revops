@@ -7484,7 +7484,7 @@ function ModMarketing() {
     if(audienceMode==="list"&&campDraft.audienceListId){
       const list=(s.contactLists||[]).find(l=>l.id===campDraft.audienceListId);
       const listIds=list?.contactIds||[];
-      seg=contacts.filter(c=>listIds.includes(c.id)&&c.email);
+      seg=contacts.filter(c=>listIds.includes(c.id));
       // Stagger: contact at index i gets startDate + floor(i/batchSize) days
       enrollments=seg.map((c,i)=>{
         const dayOffset=Math.floor(i/batchSize);
@@ -9556,17 +9556,18 @@ function ModMarketing() {
                   if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
                   const todayStr=today();
                   const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
-                  let count=0;
+                  let count=0; let noEmail=0;
                   toEnroll.forEach(c=>{
-                    if(!c.email) return;
                     if(!updated.enrollments.some(e=>e.contactId===c.id)){
                       updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}];
                       dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
                       count++;
+                      if(!c.email) noEmail++;
                     }
                   });
                   dispatch("UPDATE_CAMPAIGN",updated);
-                  toast(`${count} contacts enrolled in ${selCamp.name}`,"success");
+                  const suffix=noEmail>0?` (${noEmail} without email — add emails to reach them)`:"";
+                  toast(`${count} contact${count!==1?"s":""} enrolled in ${selCamp.name}${suffix}`,"success");
                   setEnrollSearch(""); setEnrollListId("");
                 };
 
