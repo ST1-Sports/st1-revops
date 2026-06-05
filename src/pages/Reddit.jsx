@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useRef } from 'react'
 
 const C = {
   bg:       '#F2F2F0',
@@ -14,16 +14,24 @@ const C = {
   reddit:   '#FF4500',
   orangeBg: '#FEF3EC',
   greenBg:  '#f0fdf4',
+  purpleBg: '#f5f3ff',
+  purple:   '#7c3aed',
 }
 
-// ─── tiny helpers ────────────────────────────────────────────────────────────
+const PRESET_TOPICS = [
+  { id: "tf",    label: "Track & Field Equipment" },
+  { id: "cc",    label: "Cross Country" },
+  { id: "jump",  label: "Pole Vault / High Jump" },
+  { id: "throw", label: "Throws — Javelin / Discus / Shot Put" },
+  { id: "timing",label: "Timing Systems" },
+  { id: "ad",    label: "Athletic Director Purchasing" },
+  { id: "uni",   label: "Uniforms & Apparel" },
+  { id: "rec",   label: "Equipment Recommendations" },
+  { id: "budget",label: "School Sports Budget" },
+  { id: "fund",  label: "Fundraising for Sports" },
+]
 
-function fmtDate(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-function CopyBtn({ text, label = '⎘ COPY REPLY', successLabel = '✓ COPIED' }) {
+function CopyBtn({ text, label = '⎘ COPY', successLabel = '✓ COPIED', style = {} }) {
   const [copied, setCopied] = useState(false)
   const copy = () => {
     navigator.clipboard?.writeText(text).catch(() => {})
@@ -32,42 +40,75 @@ function CopyBtn({ text, label = '⎘ COPY REPLY', successLabel = '✓ COPIED' }
   }
   return (
     <button onClick={copy}
-      style={{ background: copied ? C.green : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, transition: 'background .2s' }}>
+      style={{ background: copied ? C.green : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, transition: 'background .2s', ...style }}>
       {copied ? successLabel : label}
     </button>
   )
 }
 
-// ─── main component ───────────────────────────────────────────────────────────
+function fmtTime(iso) {
+  if (!iso) return ''
+  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
 
 export default function Reddit() {
-  const [feed,    setFeed]    = useState({ threads: [], lastRunDate: null, runDescription: '', loading: true, error: null })
-  const [sel,     setSel]     = useState(null)    // selected thread from feed
-  const [detail,  setDetail]  = useState(null)    // { body, topComments, loading, fetchError }
-  const [reply,   setReply]   = useState('')      // editable reply text
-  const replyRef              = useRef(null)
+  const [selectedTopics, setSelectedTopics] = useState(new Set(['tf', 'cc', 'ad']))
+  const [customTopic,    setCustomTopic]    = useState('')
+  const [loading,        setLoading]        = useState(false)
+  const [error,          setError]          = useState(null)
+  const [result,         setResult]         = useState(null)   // { threads, searchedAt, topicsSearched }
+  const [sel,            setSel]            = useState(null)   // selected thread
+  const [detail,         setDetail]         = useState(null)   // reddit thread detail
+  const [reply,          setReply]          = useState('')
+  const replyRef = useRef(null)
 
-  // Load Slack feed on mount
-  useEffect(() => {
-    fetch('/api/reddit/slack-feed')
-      .then(r => r.json())
-      .then(d => setFeed({ ...d, loading: false, error: d.error || null }))
-      .catch(e => setFeed(f => ({ ...f, loading: false, error: e.message })))
-  }, [])
+  const toggleTopic = (id) => {
+    setSelectedTopics(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
 
-  // When thread changes, pre-fill reply and fetch Reddit thread detail
-  useEffect(() => {
-    if (!sel) return
-    setReply(sel.suggestedReply)
+  const search = async () => {
+    const topics = PRESET_TOPICS.filter(t => selectedTopics.has(t.id)).map(t => t.label)
+    if (!topics.length && !customTopic.trim()) {
+      setError('Select at least one topic before searching.')
+      return
+    }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    setSel(null)
+    setDetail(null)
+    try {
+      const r = await fetch('/api/perplexity', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topics, customTopic: customTopic.trim() }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.error) throw new Error(d.error || 'Search failed')
+      setResult(d)
+      if (!d.threads.length) setError('No Reddit discussions found for these topics. Try different keywords or a broader search.')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const selectThread = (thread) => {
+    setSel(thread)
+    setReply(thread.suggestedReply)
     setDetail({ loading: true })
-    fetch(`/api/reddit/thread-detail?url=${encodeURIComponent(sel.url)}`)
+    fetch(`/api/reddit/thread-detail?url=${encodeURIComponent(thread.url)}`)
       .then(r => r.json())
       .then(d => setDetail({ ...d, loading: false }))
       .catch(e => setDetail({ loading: false, fetchError: e.message, body: '', topComments: [] }))
-  }, [sel?.id])
+  }
 
   const openAndPaste = (url) => {
-    // Copy reply first so user can immediately Ctrl+V in the Reddit comment box
     navigator.clipboard?.writeText(reply).catch(() => {})
     window.open(url, '_blank', 'noopener,noreferrer')
   }
@@ -75,72 +116,104 @@ export default function Reddit() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: "'Lexend', sans-serif", background: C.bg }}>
 
-      {/* ── Left sidebar: thread list ─────────────────────────────────────── */}
-      <div style={{ width: 360, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
+      {/* ── Left sidebar ─────────────────────────────────────────────────── */}
+      <div style={{ width: 340, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
 
-        {/* Sidebar header */}
-        <div style={{ padding: '16px 18px 12px', borderBottom: `1px solid ${C.border}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        {/* Header */}
+        <div style={{ padding: '16px 18px 14px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <div style={{ width: 34, height: 34, background: C.reddit, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>r/</div>
             <div>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.dark }}>Reddit Engagement</div>
-              <div style={{ fontSize: 10, color: C.muted }}>via Perplexity Monitor → Slack #reddit</div>
+              <div style={{ fontSize: 10, color: C.muted }}>Powered by Perplexity Search</div>
             </div>
           </div>
 
-          {feed.lastRunDate && (
-            <div style={{ fontSize: 11, color: C.muted, background: '#f5f5f4', borderRadius: 6, padding: '5px 10px', lineHeight: 1.5 }}>
-              <strong style={{ color: C.mid }}>{fmtDate(feed.lastRunDate)}</strong>
-              {' · '}
-              <strong style={{ color: C.reddit }}>{feed.threads.length}</strong> threads
-              {feed.runDescription && <span> · {feed.runDescription}</span>}
+          {/* Topic chips */}
+          <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, letterSpacing: .8, fontFamily: "'Lexend Zetta', sans-serif", marginBottom: 7 }}>SEARCH TOPICS</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
+            {PRESET_TOPICS.map(t => {
+              const on = selectedTopics.has(t.id)
+              return (
+                <button key={t.id} onClick={() => toggleTopic(t.id)}
+                  style={{ background: on ? C.orange : C.bg, color: on ? '#fff' : C.muted, border: `1px solid ${on ? C.orange : C.border}`, borderRadius: 20, padding: '4px 10px', fontSize: 10, fontFamily: "'Lexend', sans-serif", cursor: 'pointer', transition: 'all .15s' }}>
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Custom topic */}
+          <input
+            value={customTopic}
+            onChange={e => setCustomTopic(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && search()}
+            placeholder="Custom keyword (optional)…"
+            style={{ width: '100%', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 11, fontFamily: "'Lexend', sans-serif", color: C.dark, boxSizing: 'border-box', marginBottom: 10 }}
+          />
+
+          <button onClick={search} disabled={loading}
+            style={{ width: '100%', background: loading ? C.muted : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '10px 0', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, transition: 'background .2s' }}>
+            {loading ? '⏳ SEARCHING REDDIT…' : '🔍 SEARCH REDDIT'}
+          </button>
+
+          {result && !loading && (
+            <div style={{ marginTop: 8, fontSize: 10, color: C.muted, textAlign: 'center' }}>
+              {result.threads.length} thread{result.threads.length !== 1 ? 's' : ''} found · {fmtTime(result.searchedAt)}
             </div>
           )}
         </div>
 
         {/* Thread list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px' }}>
-          {feed.loading && (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: C.muted, fontSize: 13 }}>Loading…</div>
-          )}
-          {feed.error && !feed.loading && (
-            <div style={{ padding: 16, color: C.red, fontSize: 12, lineHeight: 1.5 }}>
-              <strong>Could not load feed</strong><br />{feed.error}<br />
-              <span style={{ color: C.muted }}>Check SLACK_BOT_TOKEN env var.</span>
-            </div>
-          )}
-          {!feed.loading && !feed.error && feed.threads.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 13, lineHeight: 1.6 }}>
-              No threads found in #reddit.<br />The Perplexity monitor posts each morning.
+          {error && (
+            <div style={{ margin: '10px 4px', padding: 12, background: '#fef2f2', border: `1px solid ${C.red}40`, borderRadius: 7, fontSize: 11, color: C.red, lineHeight: 1.5 }}>
+              {error}
             </div>
           )}
 
-          {feed.threads.map(t => {
+          {!result && !loading && !error && (
+            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 12, lineHeight: 1.7 }}>
+              Select topics above and click<br /><strong style={{ color: C.orange }}>SEARCH REDDIT</strong><br />to find relevant discussions.
+            </div>
+          )}
+
+          {loading && (
+            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 12, lineHeight: 1.7 }}>
+              <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
+              Searching Reddit via Perplexity…<br />
+              <span style={{ fontSize: 10 }}>This takes 10–20 seconds</span>
+            </div>
+          )}
+
+          {result?.threads.map(t => {
             const active = sel?.id === t.id
             return (
-              <button key={t.id} onClick={() => setSel(t)}
+              <button key={t.id} onClick={() => selectThread(t)}
                 style={{ width: '100%', textAlign: 'left', display: 'block', background: active ? C.orangeBg : 'transparent', border: `1px solid ${active ? C.orange : C.border}`, borderRadius: 8, padding: '11px 13px', marginBottom: 7, cursor: 'pointer', transition: 'border-color .15s, background .15s' }}>
                 <div style={{ fontSize: 9, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 4 }}>
                   {t.subreddit}
                 </div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, lineHeight: 1.35, marginBottom: 5 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.dark, lineHeight: 1.35, marginBottom: 5 }}>
                   {t.title}
                 </div>
-                <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                  {t.suggestedReply.slice(0, 100)}…
-                </div>
+                {t.excerpt && (
+                  <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                    {t.excerpt}
+                  </div>
+                )}
               </button>
             )
           })}
         </div>
       </div>
 
-      {/* ── Right panel: thread detail + reply ───────────────────────────── */}
+      {/* ── Right panel ──────────────────────────────────────────────────── */}
       {!sel ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: C.muted }}>
           <div style={{ fontSize: 36 }}>💬</div>
           <div style={{ fontSize: 14, color: C.mid }}>Select a thread to review and reply</div>
-          <div style={{ fontSize: 12, color: C.muted }}>Your Perplexity-drafted reply will be pre-loaded and editable</div>
+          <div style={{ fontSize: 12, color: C.muted }}>Perplexity drafts a reply — you edit and paste it into Reddit</div>
         </div>
       ) : (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -152,18 +225,17 @@ export default function Reddit() {
                 <div style={{ fontSize: 10, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 5 }}>
                   {sel.subreddit}
                 </div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: C.dark, lineHeight: 1.3 }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: C.dark, lineHeight: 1.3 }}>
                   {sel.title}
                 </div>
               </div>
-              <button
-                onClick={() => openAndPaste(sel.url)}
+              <button onClick={() => openAndPaste(sel.url)}
                 style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, whiteSpace: 'nowrap', flexShrink: 0 }}>
                 OPEN & PASTE ↗
               </button>
             </div>
-            <div style={{ marginTop: 8, fontSize: 11, color: C.blue }}>
-              <a href={sel.url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, textDecoration: 'none' }}>
+            <div style={{ marginTop: 8, fontSize: 11 }}>
+              <a href={sel.url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, textDecoration: 'none', wordBreak: 'break-all' }}>
                 {sel.url}
               </a>
             </div>
@@ -172,36 +244,45 @@ export default function Reddit() {
           {/* Scrollable body */}
           <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
 
-            {/* ── Reddit thread content ── */}
+            {/* Thread context */}
             <div>
               <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
                 THREAD CONTEXT
               </div>
 
+              {/* Perplexity excerpt (always shown) */}
+              {sel.excerpt && (
+                <div style={{ background: C.purpleBg, border: `1px solid ${C.purple}30`, borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, letterSpacing: .5, marginBottom: 6, fontFamily: "'Lexend Zetta', sans-serif" }}>PERPLEXITY SUMMARY</div>
+                  <div style={{ fontSize: 13, color: C.dark, lineHeight: 1.6 }}>{sel.excerpt}</div>
+                </div>
+              )}
+
               {detail?.loading && (
-                <div style={{ fontSize: 13, color: C.muted, padding: '14px 0' }}>Loading thread…</div>
+                <div style={{ fontSize: 12, color: C.muted, padding: '10px 0' }}>Loading Reddit thread…</div>
               )}
 
               {detail && !detail.loading && (
                 <>
-                  {/* OP body */}
                   {detail.body ? (
-                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px', marginBottom: 12, borderLeft: `3px solid ${C.reddit}` }}>
-                      <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .5, marginBottom: 8 }}>ORIGINAL POST</div>
+                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px', marginBottom: 10, borderLeft: `3px solid ${C.reddit}` }}>
+                      <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>ORIGINAL POST</div>
                       <div style={{ fontSize: 13, color: C.dark, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{detail.body}</div>
                     </div>
+                  ) : detail.fetchError ? (
+                    <div style={{ background: '#fef2f2', border: `1px solid ${C.red}40`, borderRadius: 6, padding: '10px 14px', fontSize: 11, color: C.red, marginBottom: 10 }}>
+                      Could not load thread from Reddit — {detail.fetchError}.<br />
+                      <span style={{ color: C.muted }}>The URL may have moved or the thread was deleted. Click "Open & Paste" to check.</span>
+                    </div>
                   ) : (
-                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 16px', marginBottom: 12, fontSize: 12, color: C.muted }}>
-                      {detail.fetchError
-                        ? `Could not load thread content — ${detail.fetchError}`
-                        : 'No post body (link post or removed). Click "Open & Paste" to view on Reddit.'}
+                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 14px', marginBottom: 10, fontSize: 12, color: C.muted }}>
+                      No post body (link post or removed). Click "Open &amp; Paste" to view on Reddit.
                     </div>
                   )}
 
-                  {/* Top comments */}
                   {detail.topComments?.length > 0 && (
                     <>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>TOP COMMENTS</div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>TOP COMMENTS</div>
                       {detail.topComments.map((c, i) => (
                         <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '10px 14px', marginBottom: 8 }}>
                           <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
@@ -219,7 +300,7 @@ export default function Reddit() {
               )}
             </div>
 
-            {/* ── Reply editor ── */}
+            {/* Reply editor */}
             <div>
               <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
                 YOUR REPLY
@@ -232,18 +313,17 @@ export default function Reddit() {
                   ref={replyRef}
                   value={reply}
                   onChange={e => setReply(e.target.value)}
-                  rows={8}
+                  rows={9}
                   style={{ width: '100%', background: '#f9f9f7', border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 13px', fontSize: 13, fontFamily: "'Lexend', sans-serif", color: C.dark, resize: 'vertical', lineHeight: 1.65, boxSizing: 'border-box' }}
                 />
                 <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <CopyBtn text={reply} />
-                  <button
-                    onClick={() => openAndPaste(sel.url)}
-                    style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 20px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4 }}>
+                  <CopyBtn text={reply} label="⎘ COPY REPLY" successLabel="✓ COPIED" />
+                  <button onClick={() => openAndPaste(sel.url)}
+                    style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4 }}>
                     OPEN & PASTE ↗
                   </button>
-                  <span style={{ fontSize: 11, color: C.muted, flex: 1, minWidth: 200 }}>
-                    "Open & Paste" copies your reply then opens Reddit — just Ctrl+V in the comment box.
+                  <span style={{ fontSize: 11, color: C.muted, flex: 1, minWidth: 180 }}>
+                    "Open & Paste" copies your reply and opens Reddit — Ctrl+V in the comment box.
                   </span>
                 </div>
               </div>
