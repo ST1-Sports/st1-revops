@@ -7236,7 +7236,7 @@ function ModMarketing() {
         const hdrs=lines[0].split(",").map(h=>h.replace(/^"|"$/g,"").trim().toLowerCase());
         rows=lines.slice(1).map(l=>{const cells=l.split(",").map(c=>c.replace(/^"|"$/g,"").trim());return Object.fromEntries(hdrs.map((h,i)=>[h,cells[i]||""]));});
       }else{
-        const {default:XLSX}=await import("xlsx");
+        const XLSX=await import("xlsx");
         const buf=await new Promise((res)=>{const r=new FileReader();r.onload=ev=>res(new Uint8Array(ev.target.result));r.readAsArrayBuffer(f);});
         const wb=XLSX.read(buf,{type:"array"});
         const ws=wb.Sheets[wb.SheetNames[0]];
@@ -14062,9 +14062,9 @@ function PLUploadModal({onClose, onSave, existingLists}) {
         if(isCsv){
           rows=parseCSVRows(await f.text());
         }else{
-          const {default:XLSX}=await import("xlsx");
+          const XLSX=await import("xlsx");
           const buf=await toBuffer(f);
-          const wb=XLSX.read(buf,{type:"array"});
+          const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
           const ws=wb.Sheets[wb.SheetNames[0]];
           rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
         }
