@@ -82,6 +82,7 @@ const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d
 const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};
 const fmtSchedDt=(dt)=>{if(!dt)return"";const d=new Date(dt);const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];const h=d.getHours();return`${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()}, ${h%12||12}:${String(d.getMinutes()).padStart(2,"0")}${h>=12?"pm":"am"}`;};
 const dtLocalStr=(dt)=>{const d=new Date(dt);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
+const addBusinessDays=(startMs,days)=>{const dt=new Date(startMs);let added=0;while(added<days){dt.setDate(dt.getDate()+1);const wd=dt.getDay();if(wd!==0&&wd!==6)added++;}return dt.getTime();};
 // Local "now + N minutes" as HH:MM string
 const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
@@ -7152,7 +7153,8 @@ function ModMarketing() {
   // Scheduled send for Execute tab
   const [batchSchedules,setBatchSchedules]=useState({}); // {batchKey: isoDateTime}
   const [schedStartDt,setSchedStartDt]=useState(()=>{const d=new Date();d.setDate(d.getDate()+1);d.setHours(9,0,0,0);return dtLocalStr(d);});
-  const [schedDelay,setSchedDelay]=useState(60); // minutes between batches
+  const [schedDelay,setSchedDelay]=useState(60); // minutes between batches within a touch
+  const [schedTouchGap,setSchedTouchGap]=useState(3); // business days between touch steps
   const [nowTick,setNowTick]=useState(Date.now()); // updates every 15s for countdown display
   // Refs so the interval callback always sees fresh values without being recreated
   const pendingSendFnsRef=useRef({}); // populated each render: {batchKey: ()=>void}
@@ -9496,33 +9498,54 @@ function ModMarketing() {
                           <div style={{padding:"10px 14px",display:"flex",flexDirection:"column",gap:6,borderTop:`1px solid ${B.border}`}}>
                             {/* ── Batch schedule panel ── */}
                             {touchBatches.length>0&&(()=>{
+                              const sz=selCamp.batchSize||25;
                               const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>!batchSentMap[bk]);
                               const anyScheduled=unsentBatches.some(({bk})=>batchSchedules[bk]);
+                              const hasMoreTouches=ti<touches.length-1;
+                              // Count how many subsequent touches also have pending batches
+                              let touchesQueued=anyScheduled?1:0;
+                              for(let t=ti+1;t<touches.length;t++){
+                                const tp=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email);
+                                const firstBk=tp.length?`${selCamp.id}-${t}-${tp.slice(0,sz)[0]?.contactId||0}`:null;
+                                if(firstBk&&batchSchedules[firstBk]) touchesQueued++;
+                              }
                               const applySchedule=()=>{
                                 const startMs=new Date(schedStartDt).getTime();
                                 if(isNaN(startMs))return;
                                 const updates={};
-                                unsentBatches.forEach(({bk},idx)=>{updates[bk]=new Date(startMs+idx*schedDelay*60000).toISOString();});
+                                let currentMs=startMs;
+                                for(let t=ti;t<touches.length;t++){
+                                  const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                                  const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
+                                  const tBatches=[];
+                                  for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                                  const unsentKeys=tBatches.map((b,bi)=>`${selCamp.id}-${t}-${b[0]?.contactId||bi}`).filter(bk=>!batchSentMap[bk]);
+                                  if(!unsentKeys.length) continue;
+                                  unsentKeys.forEach((bk,idx)=>{updates[bk]=new Date(currentMs+idx*schedDelay*60000).toISOString();});
+                                  const lastMs=currentMs+(unsentKeys.length-1)*schedDelay*60000;
+                                  currentMs=addBusinessDays(lastMs,schedTouchGap);
+                                }
                                 setBatchSchedules(s=>({...s,...updates}));
                               };
                               const clearSchedule=()=>{
                                 const keys=new Set(unsentBatches.map(({bk})=>bk));
                                 setBatchSchedules(s=>{const n={...s};keys.forEach(k=>delete n[k]);return n;});
                               };
+                              const inputStyle={background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none"};
+                              const labelStyle={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5};
                               return(
-                                <div style={{marginBottom:4,padding:"10px 14px",background:anyScheduled?`${B.blue}06`:B.surface,border:`1px solid ${anyScheduled?B.blue:B.border}`,borderRadius:7}}>
-                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:8}}>⏱ SCHEDULE BATCHES</div>
+                                <div style={{marginBottom:4,padding:"12px 14px",background:anyScheduled?`${B.blue}06`:B.surface,border:`1px solid ${anyScheduled?B.blue:B.border}`,borderRadius:7}}>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:10}}>⏱ SCHEDULE BATCHES</div>
                                   <div style={{display:"flex",alignItems:"flex-end",gap:10,flexWrap:"wrap"}}>
                                     <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                                      <label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>START DATE & TIME</label>
+                                      <label style={labelStyle}>START DATE & TIME</label>
                                       <input type="datetime-local" value={schedStartDt} min={dtLocalStr(Date.now())}
-                                        onChange={e=>setSchedStartDt(e.target.value)}
-                                        style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none"}}/>
+                                        onChange={e=>setSchedStartDt(e.target.value)} style={inputStyle}/>
                                     </div>
                                     <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                                      <label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>DELAY BETWEEN BATCHES</label>
+                                      <label style={labelStyle}>DELAY BETWEEN BATCHES</label>
                                       <select value={schedDelay} onChange={e=>setSchedDelay(Number(e.target.value))}
-                                        style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none",cursor:"pointer"}}>
+                                        style={{...inputStyle,cursor:"pointer"}}>
                                         <option value={15}>15 minutes</option>
                                         <option value={30}>30 minutes</option>
                                         <option value={60}>1 hour</option>
@@ -9532,27 +9555,35 @@ function ModMarketing() {
                                         <option value={1440}>1 day</option>
                                       </select>
                                     </div>
+                                    {hasMoreTouches&&(
+                                      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                        <label style={labelStyle}>DAYS UNTIL NEXT TOUCH</label>
+                                        <div style={{display:"flex",alignItems:"center",gap:5}}>
+                                          <input type="number" min={1} max={60} value={schedTouchGap}
+                                            onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setSchedTouchGap(v);}}
+                                            onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)setSchedTouchGap(3);}}
+                                            style={{...inputStyle,width:52,textAlign:"center"}}/>
+                                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>business days</span>
+                                        </div>
+                                      </div>
+                                    )}
                                     <button onClick={applySchedule} disabled={!schedStartDt}
-                                      style={{background:B.blue,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:schedStartDt?"pointer":"not-allowed",whiteSpace:"nowrap",alignSelf:"flex-end"}}>
-                                      SCHEDULE {unsentBatches.length} BATCH{unsentBatches.length!==1?"ES":""}
+                                      style={{background:anyScheduled?B.green:B.blue,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:schedStartDt?"pointer":"not-allowed",whiteSpace:"nowrap",alignSelf:"flex-end",transition:"background .2s"}}>
+                                      {anyScheduled?"✓ SCHEDULED":`SCHEDULE ${unsentBatches.length} BATCH${unsentBatches.length!==1?"ES":""}`}
                                     </button>
                                     {anyScheduled&&(
                                       <button onClick={clearSchedule}
                                         style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap",alignSelf:"flex-end"}}>
-                                        CLEAR ALL
+                                        CLEAR
                                       </button>
                                     )}
                                   </div>
-                                  {anyScheduled&&(
-                                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>
-                                      ✓ Scheduled — batches will fire automatically · Mon–Fri 9am–5pm only
-                                    </div>
-                                  )}
-                                  {!anyScheduled&&(
-                                    <div style={{marginTop:6,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                                      Set a start time and delay, then click SCHEDULE to auto-queue all batches · Mon–Fri 9am–5pm only
-                                    </div>
-                                  )}
+                                  <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:anyScheduled?B.blue:B.muted}}>
+                                    {anyScheduled
+                                      ?`✓ Queued across ${touchesQueued} touch${touchesQueued!==1?"es":""} · fires Mon–Fri 9am–5pm · click to update timing`
+                                      :`Set a start time, batch delay${hasMoreTouches?", and days between touches":""}, then click SCHEDULE · Mon–Fri 9am–5pm only`
+                                    }
+                                  </div>
                                 </div>
                               );
                             })()}
