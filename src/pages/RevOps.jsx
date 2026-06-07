@@ -7152,6 +7152,7 @@ function ModMarketing() {
   const [quickAddEmail,setQuickAddEmail]=useState(""); // manual email quick-add in execute tab
   // Scheduled send for Execute tab
   const [batchSchedules,setBatchSchedules]=useState({}); // {batchKey: isoDateTime}
+  const [touchSchedStarts,setTouchSchedStarts]=useState({}); // {ti: isoDateTime} planned start per touch step
   const [schedStartDt,setSchedStartDt]=useState(()=>{const d=new Date();d.setDate(d.getDate()+1);d.setHours(9,0,0,0);return dtLocalStr(d);});
   const [schedDelay,setSchedDelay]=useState(60); // minutes between batches within a touch
   const [schedTouchGap,setSchedTouchGap]=useState(3); // business days between touch steps
@@ -7159,9 +7160,15 @@ function ModMarketing() {
   // Refs so the interval callback always sees fresh values without being recreated
   const pendingSendFnsRef=useRef({}); // populated each render: {batchKey: ()=>void}
   const batchSchedulesRef=useRef({});
+  const touchSchedStartsRef=useRef({});
+  const schedDelayRef=useRef(60);
+  const batchSentMapRef=useRef({});
   const sendingRef=useRef(false);
   // Keep refs in sync
   useEffect(()=>{batchSchedulesRef.current=batchSchedules;},[batchSchedules]);
+  useEffect(()=>{touchSchedStartsRef.current=touchSchedStarts;},[touchSchedStarts]);
+  useEffect(()=>{schedDelayRef.current=schedDelay;},[schedDelay]);
+  useEffect(()=>{batchSentMapRef.current=batchSentMap;},[batchSentMap]);
   useEffect(()=>{sendingRef.current=sending;},[sending]);
   // 15-second ticker for countdown display
   useEffect(()=>{const id=setInterval(()=>setNowTick(Date.now()),15000);return()=>clearInterval(id);},[]);
@@ -7180,6 +7187,29 @@ function ModMarketing() {
     },15000);
     return()=>clearInterval(id);
   },[]); // empty deps — all state read via refs
+  // Auto-stamp batch keys when contacts advance into a touch that has a planned start time
+  useEffect(()=>{
+    if(!selCamp||!Object.keys(touchSchedStartsRef.current).length) return;
+    const sz=selCamp.batchSize||25;
+    const enrs=selCamp.enrollments||[];
+    const cmap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+    const updates={};
+    Object.entries(touchSchedStartsRef.current).forEach(([tiStr,startIso])=>{
+      const t=parseInt(tiStr);
+      const startMs=new Date(startIso).getTime();
+      const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!cmap[e.contactId]?.optedOut);
+      const tPending=tActive.filter(e=>cmap[e.contactId]?.email);
+      const tBatches=[];
+      for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+      tBatches.forEach((batch,bi)=>{
+        const bk=`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`;
+        if(!batchSentMapRef.current[bk]&&!batchSchedulesRef.current[bk]){
+          updates[bk]=new Date(startMs+bi*schedDelayRef.current*60000).toISOString();
+        }
+      });
+    });
+    if(Object.keys(updates).length) setBatchSchedules(prev=>({...prev,...updates}));
+  },[selCamp?.id,selCamp?.enrollments]); // re-run when campaign or enrollments change
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
@@ -9512,20 +9542,27 @@ function ModMarketing() {
                               const applySchedule=()=>{
                                 const startMs=new Date(schedStartDt).getTime();
                                 if(isNaN(startMs))return;
-                                const updates={};
+                                const batchUpdates={};
+                                const startUpdates={};
                                 let currentMs=startMs;
+                                // Estimate total enrolled with email — fallback batch count for future empty touches
+                                const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
                                 for(let t=ti;t<touches.length;t++){
+                                  startUpdates[t]=new Date(currentMs).toISOString();
                                   const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
                                   const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
                                   const tBatches=[];
                                   for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
                                   const unsentKeys=tBatches.map((b,bi)=>`${selCamp.id}-${t}-${b[0]?.contactId||bi}`).filter(bk=>!batchSentMap[bk]);
-                                  if(!unsentKeys.length) continue;
-                                  unsentKeys.forEach((bk,idx)=>{updates[bk]=new Date(currentMs+idx*schedDelay*60000).toISOString();});
-                                  const lastMs=currentMs+(unsentKeys.length-1)*schedDelay*60000;
+                                  // Stamp actual batch keys for contacts currently at this step
+                                  unsentKeys.forEach((bk,idx)=>{batchUpdates[bk]=new Date(currentMs+idx*schedDelay*60000).toISOString();});
+                                  // Use actual count or total enrolled estimate for timing (so future empty touches still advance the clock)
+                                  const estimatedBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
+                                  const lastMs=currentMs+(estimatedBatches-1)*schedDelay*60000;
                                   currentMs=addBusinessDays(lastMs,schedTouchGap);
                                 }
-                                setBatchSchedules(s=>({...s,...updates}));
+                                setBatchSchedules(s=>({...s,...batchUpdates}));
+                                setTouchSchedStarts(prev=>({...prev,...startUpdates}));
                               };
                               const clearSchedule=()=>{
                                 const keys=new Set(unsentBatches.map(({bk})=>bk));
@@ -9587,6 +9624,18 @@ function ModMarketing() {
                                 </div>
                               );
                             })()}
+                            {/* Pre-scheduled banner for future touches that have no contacts yet */}
+                            {touchBatches.length===0&&noEmail.length===0&&touchSchedStarts[ti]&&(
+                              <div style={{padding:"10px 14px",background:`${B.blue}06`,border:`1px solid ${B.blue}40`,borderRadius:5,display:"flex",alignItems:"center",gap:10}}>
+                                <span style={{fontSize:16,flexShrink:0}}>⏱</span>
+                                <div>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:2}}>PRE-SCHEDULED</div>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                                    Queued to start <strong>{fmtSchedDt(touchSchedStarts[ti])}</strong> — batches will be auto-stamped as contacts advance from the previous touch.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                             {/* No email contacts only — nothing to send, show skip button */}
                             {touchBatches.length===0&&noEmail.length>0&&(
                               <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:`${B.yellow}10`,border:`1px solid ${B.yellow}60`,borderRadius:5}}>
