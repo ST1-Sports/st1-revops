@@ -79,6 +79,7 @@ const STORE = "st1_revops_v2";
 const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};
 // Local "now + N minutes" as HH:MM string
 const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
@@ -7146,6 +7147,58 @@ function ModMarketing() {
   const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   const [quickAddEmail,setQuickAddEmail]=useState(""); // manual email quick-add in execute tab
+  // Scheduled / auto-send for Execute tab
+  const [batchSchedules,setBatchSchedules]=useState({}); // {batchKey: isoDateTime}
+  const [autoSendEnabled,setAutoSendEnabled]=useState(false);
+  const [autoSendInterval,setAutoSendInterval]=useState(60); // minutes between batches
+  const [autoSendNextAt,setAutoSendNextAt]=useState(null); // ms timestamp of next auto-fire
+  const [nowTick,setNowTick]=useState(Date.now()); // updates every 15s for countdown display
+  // Refs so the interval callback always sees fresh values without being recreated
+  const pendingSendFnsRef=useRef({}); // populated each render: {batchKey: ()=>void}
+  const autoSendEnabledRef=useRef(false);
+  const autoSendNextAtRef=useRef(null);
+  const autoSendIntervalRef=useRef(60);
+  const batchSchedulesRef=useRef({});
+  const sendingRef=useRef(false);
+  // Keep scheduling refs in sync with state
+  useEffect(()=>{autoSendEnabledRef.current=autoSendEnabled;},[autoSendEnabled]);
+  useEffect(()=>{autoSendNextAtRef.current=autoSendNextAt;},[autoSendNextAt]);
+  useEffect(()=>{autoSendIntervalRef.current=autoSendInterval;},[autoSendInterval]);
+  useEffect(()=>{batchSchedulesRef.current=batchSchedules;},[batchSchedules]);
+  useEffect(()=>{sendingRef.current=sending;},[sending]);
+  // 15-second ticker — drives countdown display without triggering heavy re-renders
+  useEffect(()=>{const id=setInterval(()=>setNowTick(Date.now()),15000);return()=>clearInterval(id);},[]);
+  // Scheduled send engine — checks every 15s, fires batches at scheduled time or on auto-send cadence
+  useEffect(()=>{
+    const isWorkingHours=()=>{const d=new Date();const h=d.getHours();const wd=d.getDay();return wd>=1&&wd<=5&&h>=9&&h<17;};
+    const id=setInterval(()=>{
+      if(sendingRef.current) return;
+      const now=Date.now();
+      for(const [bk,dt] of Object.entries(batchSchedulesRef.current)){
+        if(dt&&new Date(dt).getTime()<=now){
+          if(!isWorkingHours()) return;
+          const fn=pendingSendFnsRef.current[bk];
+          if(fn){fn();setBatchSchedules(s=>{const n={...s};delete n[bk];return n;});return;}
+        }
+      }
+      if(!autoSendEnabledRef.current||!autoSendNextAtRef.current||now<autoSendNextAtRef.current) return;
+      if(!isWorkingHours()){
+        const next9=new Date();next9.setHours(9,0,0,0);
+        if(next9.getTime()<=now){next9.setDate(next9.getDate()+1);}
+        while(next9.getDay()===0||next9.getDay()===6) next9.setDate(next9.getDate()+1);
+        setAutoSendNextAt(next9.getTime());
+        return;
+      }
+      const entries=Object.entries(pendingSendFnsRef.current);
+      if(entries.length){
+        entries[0][1]();
+        setAutoSendNextAt(now+autoSendIntervalRef.current*60_000);
+      } else {
+        setAutoSendEnabled(false);setAutoSendNextAt(null);
+      }
+    },15000);
+    return()=>clearInterval(id);
+  },[]); // empty deps — all state accessed via refs
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
@@ -9143,6 +9196,8 @@ function ModMarketing() {
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
               {(()=>{
+                // Reset and repopulate batch send callbacks this render
+                pendingSendFnsRef.current={};
                 const enrs=selCamp.enrollments||[];
                 const touches=selCamp.touches||[];
                 const rep=selCamp.repId?(s.reps||[]).find(r=>r.id===selCamp.repId):null;
@@ -9357,6 +9412,43 @@ function ModMarketing() {
                     </div>
                   </div>
 
+                  {/* ── Auto-send scheduler ── */}
+                  {(()=>{
+                    const d=new Date();const h=d.getHours();const wd=d.getDay();
+                    const inWorkingHours=wd>=1&&wd<=5&&h>=9&&h<17;
+                    return(
+                      <div style={{marginBottom:16,padding:"10px 14px",background:autoSendEnabled?`${B.orange}06`:B.surface,border:`1px solid ${autoSendEnabled?B.orange:B.border}`,borderRadius:8,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,flexShrink:0}}>⏱ AUTO-SEND</div>
+                        <select value={autoSendInterval} onChange={e=>setAutoSendInterval(Number(e.target.value))} disabled={autoSendEnabled}
+                          style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:autoSendEnabled?"not-allowed":"pointer"}}>
+                          <option value={30}>every 30 min</option>
+                          <option value={60}>every 1 hour</option>
+                          <option value={120}>every 2 hours</option>
+                          <option value={240}>every 4 hours</option>
+                        </select>
+                        {!autoSendEnabled
+                          ?<button onClick={()=>{setAutoSendEnabled(true);setAutoSendNextAt(Date.now()+5000);}}
+                              style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                              ▶ START
+                            </button>
+                          :<button onClick={()=>{setAutoSendEnabled(false);setAutoSendNextAt(null);}}
+                              style={{background:B.red,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
+                              ⏹ STOP
+                            </button>
+                        }
+                        {autoSendEnabled&&autoSendNextAt&&(
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>
+                            {inWorkingHours
+                              ?`Next batch in ${fmtCountdown(autoSendNextAt-nowTick)}`
+                              :`⏸ Outside working hours — resumes ${new Date().getDay()===5||new Date().getDay()===6?"Mon ":""}9am`
+                            }
+                          </span>
+                        )}
+                        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:"auto"}}>Mon–Fri · 9am–5pm only</span>
+                      </div>
+                    );
+                  })()}
+
                   {/* ── INTERESTED section ── */}
                   {interested>0&&(
                     <div style={{marginBottom:20,border:`2px solid ${B.teal}`,borderRadius:8,overflow:"hidden"}}>
@@ -9477,17 +9569,22 @@ function ModMarketing() {
                               // Stable key based on first contact ID so it survives re-indexing
                               const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
                               const wasSent=!!batchSentMap[batchKey];
+                              const scheduledDt=batchSchedules[batchKey]?new Date(batchSchedules[batchKey]):null;
+                              const schedMs=scheduledDt?scheduledDt.getTime()-nowTick:null;
+                              // Register this batch's send callback for the auto-send timer
+                              if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[]);
                               return(
-                                <div key={batchKey} style={{border:`1px solid ${wasSent?B.green:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:wasSent?`${B.green}08`:isFirst?`${B.orange}06`:B.white}}>
+                                <div key={batchKey} style={{border:`1px solid ${wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
                                     <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:wasSent?B.green:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
                                       <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
                                       {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {batchSentMap[batchKey].sent}{batchSentMap[batchKey].failed>0?` · ${batchSentMap[batchKey].failed} failed`:""}</span>}
+                                      {scheduledDt&&!wasSent&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>⏱ {schedMs>0?fmtCountdown(schedMs):"firing…"}</span>}
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
                                     </div>
                                     {!wasSent&&(
-                                      <div style={{display:"flex",gap:5,flexShrink:0}}>
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
                                         <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
                                           style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
                                           {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
@@ -9497,6 +9594,20 @@ function ModMarketing() {
                                           style={{background:B.surface,color:B.green,border:`1px solid ${B.green}50`,borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
                                           ✓ MARK SENT
                                         </button>
+                                        {/* Per-batch schedule picker */}
+                                        <div style={{display:"flex",alignItems:"center",gap:3,background:B.surface,border:`1px solid ${scheduledDt?B.blue:B.border}`,borderRadius:4,padding:"3px 8px"}}>
+                                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>SCHED</span>
+                                          <input type="time" value={scheduledDt?`${String(scheduledDt.getHours()).padStart(2,"0")}:${String(scheduledDt.getMinutes()).padStart(2,"0")}`:""}
+                                            onChange={e=>{
+                                              if(!e.target.value){setBatchSchedules(s=>{const n={...s};delete n[batchKey];return n;});return;}
+                                              const [hh,mm]=e.target.value.split(":").map(Number);
+                                              const dt=new Date();dt.setHours(hh,mm,0,0);
+                                              if(dt<=new Date()) dt.setDate(dt.getDate()+1);
+                                              setBatchSchedules(s=>({...s,[batchKey]:dt.toISOString()}));
+                                            }}
+                                            style={{background:"transparent",border:"none",color:scheduledDt?B.blue:B.muted,fontSize:11,fontFamily:"'Lexend',sans-serif",outline:"none",cursor:"pointer",width:70}}/>
+                                          {scheduledDt&&<button onClick={()=>setBatchSchedules(s=>{const n={...s};delete n[batchKey];return n;})} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,padding:0,lineHeight:1}}>×</button>}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
