@@ -7189,9 +7189,11 @@ function ModMarketing() {
   },[]); // empty deps — all state read via refs
   // Auto-stamp batch keys when contacts advance into a touch that has a planned start time
   useEffect(()=>{
-    if(!selCamp||!Object.keys(touchSchedStartsRef.current).length) return;
-    const sz=selCamp.batchSize||25;
-    const enrs=selCamp.enrollments||[];
+    if(!selCampId||!Object.keys(touchSchedStartsRef.current).length) return;
+    const camp=(s.campaigns||[]).find(c=>c.id===selCampId);
+    if(!camp) return;
+    const sz=camp.batchSize||25;
+    const enrs=camp.enrollments||[];
     const cmap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
     const updates={};
     Object.entries(touchSchedStartsRef.current).forEach(([tiStr,startIso])=>{
@@ -7202,14 +7204,14 @@ function ModMarketing() {
       const tBatches=[];
       for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
       tBatches.forEach((batch,bi)=>{
-        const bk=`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`;
+        const bk=`${selCampId}-${t}-${batch[0]?.contactId||bi}`;
         if(!batchSentMapRef.current[bk]&&!batchSchedulesRef.current[bk]){
           updates[bk]=new Date(startMs+bi*schedDelayRef.current*60000).toISOString();
         }
       });
     });
     if(Object.keys(updates).length) setBatchSchedules(prev=>({...prev,...updates}));
-  },[selCamp?.id,selCamp?.enrollments]); // re-run when campaign or enrollments change
+  },[selCampId,s.campaigns]); // re-run when campaign changes — s.campaigns reference changes when enrollments update
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
   const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
