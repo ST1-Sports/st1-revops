@@ -90,8 +90,6 @@ const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
-// Advance ms by N business days (skip Sat/Sun)
-const addBusinessDays=(ms,n)=>{let d=new Date(ms);let added=0;while(added<n){d=new Date(d.getTime()+86400000);if(d.getDay()!==0&&d.getDay()!==6)added++;}return d.getTime();};
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
@@ -7171,12 +7169,6 @@ function ModMarketing() {
   const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
   const [quickAddEmail,setQuickAddEmail]=useState(""); // manual email quick-add in execute tab
-  // Scheduled send for Execute tab
-  const [batchSchedules,setBatchSchedules]=useState({}); // {batchKey: isoDateTime}
-  const [touchSchedStarts,setTouchSchedStarts]=useState({}); // {ti: isoDateTime} planned start per touch step
-  const [schedStartDt,setSchedStartDt]=useState(()=>{const d=new Date();d.setDate(d.getDate()+1);d.setHours(9,0,0,0);return dtLocalStr(d);});
-  const [schedDelay,setSchedDelay]=useState(60); // minutes between batches within a touch
-  const [schedTouchGap,setSchedTouchGap]=useState(3); // business days between touch steps
   const [nowTick,setNowTick]=useState(Date.now()); // updates every 15s for countdown display
   // Refs so the interval callback always sees fresh values without being recreated
   const pendingSendFnsRef=useRef({}); // populated each render: {batchKey: ()=>void}
