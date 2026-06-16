@@ -4,11 +4,11 @@
  * Fires scheduled email batches for all campaigns, independent of the browser.
  * Called every 15 minutes by Vercel Cron.
  *
- * Authorization: Bearer ${CRON_SECRET} header required in production.
- * If CRON_SECRET is not set, auth check is skipped (allows manual testing).
+ * Business hours: Mon–Fri 9am–5pm only.
+ * Outside those hours: overdue batches are rescheduled to the next 9am business day
+ * (preserving relative gaps between batches) rather than being skipped or dropped.
  *
- * For each campaign with due scheduledBatches, fires one batch per campaign per run
- * to stay within the 120s function timeout.
+ * Authorization: Bearer ${CRON_SECRET} header required in production.
  */
 
 import { prisma } from '../_lib/prisma.js';
@@ -23,6 +23,27 @@ const mergeTags = (text, c) => (text || "")
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+function isBusinessHours(nowMs = Date.now()) {
+  const d = new Date(nowMs);
+  const h = d.getHours();
+  const wd = d.getDay(); // 0=Sun, 6=Sat
+  return wd >= 1 && wd <= 5 && h >= 9 && h < 17;
+}
+
+// Returns the timestamp of the next 9:00am on a weekday (Mon–Fri).
+// If called at 8am Monday, returns 9am Monday.
+// If called at 5pm Friday, returns 9am Monday.
+function nextBusinessStart(nowMs = Date.now()) {
+  const d = new Date(nowMs);
+  d.setHours(9, 0, 0, 0);
+  // If 9am today is already in the past, advance to tomorrow
+  if (nowMs >= d.getTime()) d.setDate(d.getDate() + 1);
+  // Skip Saturday and Sunday
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  d.setHours(9, 0, 0, 0);
+  return d.getTime();
 }
 
 export default async function handler(req, res) {
@@ -47,11 +68,10 @@ export default async function handler(req, res) {
     }
 
     const state = row.value;
-    const campaigns = state.campaigns || [];
+    const campaigns = [...(state.campaigns || [])];
     const contacts = state.contacts || [];
     const reps = state.reps || [];
 
-    // Build contact map for fast lookup
     const contactMap = {};
     for (const c of contacts) {
       if (c?.id) contactMap[c.id] = c;
@@ -59,57 +79,108 @@ export default async function handler(req, res) {
 
     const now = Date.now();
     const todStr = new Date().toISOString().slice(0, 10);
+
+    // ── Outside business hours: reschedule overdue batches to next 9am ──────
+    if (!isBusinessHours(now)) {
+      const nextStart = nextBusinessStart(now);
+      let anyRescheduled = false;
+
+      for (let ci = 0; ci < campaigns.length; ci++) {
+        const camp = campaigns[ci];
+        if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") continue;
+
+        // Collect overdue batches (past due AND any scheduled before next business start)
+        const toReschedule = Object.entries(camp.scheduledBatches)
+          .filter(([, info]) => new Date(info.scheduledAt).getTime() < nextStart)
+          .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
+
+        if (toReschedule.length === 0) continue;
+
+        // Shift entire block so the first batch starts at nextStart,
+        // subsequent batches keep their original spacing.
+        const newSched = { ...camp.scheduledBatches };
+        const firstOrigMs = new Date(toReschedule[0][1].scheduledAt).getTime();
+
+        for (const [bk, info] of toReschedule) {
+          const origMs = new Date(info.scheduledAt).getTime();
+          const offsetFromFirst = origMs - firstOrigMs; // 0 for first, delay*N for rest
+          newSched[bk] = { ...info, scheduledAt: new Date(nextStart + offsetFromFirst).toISOString() };
+        }
+
+        campaigns[ci] = { ...camp, scheduledBatches: newSched };
+        anyRescheduled = true;
+        console.log(`[cron] Off-hours: rescheduled ${toReschedule.length} batch(es) for campaign ${camp.id} → ${new Date(nextStart).toISOString()}`);
+      }
+
+      if (anyRescheduled) {
+        await prisma.setting.upsert({
+          where: { key: "app_state" },
+          update: { value: { ...state, campaigns } },
+          create: { key: "app_state", value: { ...state, campaigns } },
+        });
+      }
+
+      return res.json({
+        ok: true,
+        batchesFired: 0,
+        emailsSent: 0,
+        offHours: true,
+        rescheduledCampaigns: anyRescheduled ? campaigns.filter(c => c.scheduledBatches && Object.keys(c.scheduledBatches).length).length : 0,
+        nextWindow: new Date(nextStart).toISOString(),
+      });
+    }
+
+    // ── Business hours: fire one due batch per campaign ──────────────────────
     let totalBatchesFired = 0;
     let totalEmailsSent = 0;
     const errors = [];
 
-    // Process each campaign
-    for (const camp of campaigns) {
+    for (let ci = 0; ci < campaigns.length; ci++) {
+      const camp = campaigns[ci];
       if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") continue;
 
-      // Find all due batches for this campaign, sorted by scheduledAt ascending
+      // Find due batches, sorted oldest-first
       const dueBatches = Object.entries(camp.scheduledBatches)
         .filter(([, info]) => new Date(info.scheduledAt).getTime() <= now)
         .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
 
       if (dueBatches.length === 0) continue;
 
-      // Fire only ONE batch per campaign per cron run to stay within timeout
+      // Fire ONE batch per campaign per run to stay within 120s timeout
       const [batchKey, batchInfo] = dueBatches[0];
-      const { scheduledAt, touchIdx, contactIds } = batchInfo;
+      const { touchIdx, contactIds } = batchInfo;
 
       if (!Array.isArray(contactIds) || contactIds.length === 0) {
-        // Empty batch — just remove it
-        delete camp.scheduledBatches[batchKey];
+        const newSched = { ...camp.scheduledBatches };
+        delete newSched[batchKey];
+        campaigns[ci] = { ...camp, scheduledBatches: newSched };
         continue;
       }
 
       const touch = (camp.touches || [])[touchIdx];
       if (!touch) {
-        console.warn(`[cron] Touch ${touchIdx} not found in campaign ${camp.id} — skipping batch ${batchKey}`);
-        delete camp.scheduledBatches[batchKey];
+        console.warn(`[cron] Touch ${touchIdx} not found in campaign ${camp.id} — dropping batch ${batchKey}`);
+        const newSched = { ...camp.scheduledBatches };
+        delete newSched[batchKey];
+        campaigns[ci] = { ...camp, scheduledBatches: newSched };
         continue;
       }
 
       const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
       const updEnr = [...(camp.enrollments || [])];
-
       let sent = 0;
       let failed = 0;
 
       for (const contactId of contactIds) {
         const enroll = updEnr.find(e => e.contactId === contactId);
         if (!enroll) continue;
-
-        // Skip guards
-        if (enroll.step !== touchIdx) continue; // already advanced
-        if (enroll.status === "interested") continue; // interested contacts skip email
-        if ((enroll.sentSteps || []).includes(touchIdx)) continue; // already sent this touch
+        if (enroll.step !== touchIdx) continue;
+        if (enroll.status === "interested") continue;
+        if ((enroll.sentSteps || []).includes(touchIdx)) continue;
 
         const c = contactMap[contactId];
-        if (!c?.email) continue; // no email
+        if (!c?.email) continue;
 
-        // Build email content
         const subject = mergeTags(touch.subject, c) || `Following up — ${camp.product || camp.name}`;
         const mergedBody = mergeTags(touch.body, c);
         const plainBody = mergedBody.trim() ? mergedBody : "(No email body — edit this touch in the Assets tab)";
@@ -119,9 +190,6 @@ export default async function handler(req, res) {
         const htmlBody = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}</body></html>`;
 
         const to_name = c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim();
-        const repEnvKey = rep?.gmailEnvKey || null;
-        const reply_to = rep?.email || null;
-        const from_name = rep?.name || null;
 
         try {
           const gmailRes = await fetch(`${APP_URL}/api/gmail`, {
@@ -134,15 +202,14 @@ export default async function handler(req, res) {
               subject,
               body: plainBody,
               htmlBody,
-              ...(repEnvKey ? { repEnvKey } : {}),
-              ...(reply_to ? { reply_to, from_name } : {}),
+              ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}),
+              ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}),
             }),
           });
 
           const gmailData = await gmailRes.json();
 
           if (gmailData.sent) {
-            // Update enrollment: mark sentStep and advance
             const idx = updEnr.findIndex(e => e.contactId === contactId);
             if (idx >= 0) {
               const ns = touchIdx + 1;
@@ -161,8 +228,7 @@ export default async function handler(req, res) {
             }
             sent++;
           } else {
-            const reason = gmailData.error || "send failed";
-            console.error(`[cron] Failed to send to ${c.email}: ${reason}`);
+            console.error(`[cron] Failed to send to ${c.email}: ${gmailData.error || "send failed"}`);
             failed++;
           }
         } catch (err) {
@@ -171,39 +237,31 @@ export default async function handler(req, res) {
           errors.push({ contactId, error: err.message });
         }
 
-        // Rate limit: wait 3s between emails (same as frontend)
         await sleep(3000);
       }
 
-      // Update campaign: remove from scheduledBatches, add to sentBatches, update enrollments
-      const campIdx = campaigns.findIndex(c => c.id === camp.id);
-      if (campIdx >= 0) {
-        const newSched = { ...(campaigns[campIdx].scheduledBatches || {}) };
-        delete newSched[batchKey];
-        campaigns[campIdx] = {
-          ...campaigns[campIdx],
-          enrollments: updEnr,
-          scheduledBatches: newSched,
-          sentBatches: {
-            ...(campaigns[campIdx].sentBatches || {}),
-            [batchKey]: { sent, failed, sentAt: new Date().toISOString() },
-          },
-        };
-      }
+      const newSched = { ...camp.scheduledBatches };
+      delete newSched[batchKey];
+      campaigns[ci] = {
+        ...camp,
+        enrollments: updEnr,
+        scheduledBatches: newSched,
+        sentBatches: {
+          ...(camp.sentBatches || {}),
+          [batchKey]: { sent, failed, sentAt: new Date().toISOString() },
+        },
+      };
 
       totalBatchesFired++;
       totalEmailsSent += sent;
-
       console.log(`[cron] Batch ${batchKey}: sent=${sent} failed=${failed}`);
     }
 
-    // Save updated state back to DB
     if (totalBatchesFired > 0) {
-      const updatedState = { ...state, campaigns };
       await prisma.setting.upsert({
         where: { key: "app_state" },
-        update: { value: updatedState },
-        create: { key: "app_state", value: updatedState },
+        update: { value: { ...state, campaigns } },
+        create: { key: "app_state", value: { ...state, campaigns } },
       });
     }
 
