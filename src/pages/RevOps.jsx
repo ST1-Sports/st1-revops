@@ -9684,12 +9684,14 @@ function ModMarketing() {
                                 if(firstBk&&batchSchedules[firstBk]) touchesQueued++;
                               }
                               const applySchedule=()=>{
-                                const startMs=new Date(schedStartDt).getTime();
-                                if(isNaN(startMs))return;
+                                const startMs=parseMTLocalStr(schedStartDt);
+                                if(!startMs||isNaN(startMs))return;
                                 const batchUpdates={};
                                 const startUpdates={};
+                                const campBatches={};
                                 let currentMs=startMs;
-                                // Estimate total enrolled with email — fallback batch count for future empty touches
+                                let batchesThisDay=0;
+                                const maxBpd=maxPerDay>0?Math.max(1,Math.floor(maxPerDay/sz)):Infinity;
                                 const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
                                 for(let t=ti;t<touches.length;t++){
                                   startUpdates[t]=new Date(currentMs).toISOString();
@@ -9697,17 +9699,35 @@ function ModMarketing() {
                                   const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
                                   const tBatches=[];
                                   for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
-                                  const unsentKeys=tBatches.map((b,bi)=>`${selCamp.id}-${t}-${b[0]?.contactId||bi}`).filter(bk=>!batchSentMap[bk]);
-                                  // Stamp actual batch keys for contacts currently at this step
-                                  unsentKeys.forEach((bk,idx)=>{batchUpdates[bk]=new Date(currentMs+idx*schedDelay*60000).toISOString();});
-                                  // Use actual count or total enrolled estimate for timing (so future empty touches still advance the clock)
-                                  const estimatedBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
-                                  const lastMs=currentMs+(estimatedBatches-1)*schedDelay*60000;
-                                  currentMs=addBusinessDays(lastMs,schedTouchGap);
+                                  const unsentBatchInfos=tBatches
+                                    .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
+                                    .filter(({bk})=>!batchSentMap[bk]);
+                                  unsentBatchInfos.forEach(({bk,contactIds})=>{
+                                    const firesAt=new Date(currentMs).toISOString();
+                                    batchUpdates[bk]=firesAt;
+                                    campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
+                                    batchesThisDay++;
+                                    const tentNext=currentMs+schedDelay*60000;
+                                    const nc=getMTComp(tentNext);
+                                    const afterHours=nc.h>=17||nc.wd===0||nc.wd===6;
+                                    const hitDayCap=maxBpd<Infinity&&batchesThisDay>=maxBpd;
+                                    if(afterHours||hitDayCap){currentMs=nextMTBizStart(currentMs);batchesThisDay=0;}
+                                    else currentMs=tentNext;
+                                  });
+                                  if(t<touches.length-1){
+                                    const estBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
+                                    currentMs=addBusinessDays(currentMs,schedTouchGap);
+                                    const gc=getMTComp(currentMs);
+                                    if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
+                                    batchesThisDay=0;
+                                    void estBatches;
+                                  }
                                 }
                                 setBatchSchedules(s=>({...s,...batchUpdates}));
                                 setTouchSchedStarts(prev=>({...prev,...startUpdates}));
+                                dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{...(selCamp.scheduledBatches||{}),...campBatches}});
                               };
+                              const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
                               const clearSchedule=()=>{
                                 const keys=new Set(unsentBatches.map(({bk})=>bk));
                                 setBatchSchedules(s=>{const n={...s};keys.forEach(k=>delete n[k]);return n;});
@@ -9748,9 +9768,9 @@ function ModMarketing() {
                                         </div>
                                       </div>
                                     )}
-                                    <button onClick={applySchedule} disabled={!schedStartDt}
-                                      style={{background:anyScheduled?B.green:B.blue,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:schedStartDt?"pointer":"not-allowed",whiteSpace:"nowrap",alignSelf:"flex-end",transition:"background .2s"}}>
-                                      {anyScheduled?"✓ SCHEDULED":`SCHEDULE ${unsentBatches.length} BATCH${unsentBatches.length!==1?"ES":""}`}
+                                    <button onClick={handleSchedClick} disabled={!schedStartDt||schedStatus==='applying'}
+                                      style={{background:schedStatus==='done'?B.green:schedStatus==='applying'?B.muted:anyScheduled?B.green:B.blue,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:(schedStartDt&&schedStatus!=='applying')?"pointer":"not-allowed",whiteSpace:"nowrap",alignSelf:"flex-end",transition:"background .2s"}}>
+                                      {schedStatus==='applying'?"⟳ SCHEDULING…":schedStatus==='done'?"✓ SCHEDULED":anyScheduled?"✓ SCHEDULED":`SCHEDULE ${unsentBatches.length} BATCH${unsentBatches.length!==1?"ES":""}`}
                                     </button>
                                     {anyScheduled&&(
                                       <button onClick={clearSchedule}
@@ -9761,8 +9781,8 @@ function ModMarketing() {
                                   </div>
                                   <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:anyScheduled?B.blue:B.muted}}>
                                     {anyScheduled
-                                      ?`✓ Queued across ${touchesQueued} touch${touchesQueued!==1?"es":""} · fires Mon–Fri 9am–5pm · click to update timing`
-                                      :`Set a start time, batch delay${hasMoreTouches?", and days between touches":""}, then click SCHEDULE · Mon–Fri 9am–5pm only`
+                                      ?`✓ Queued across ${touchesQueued} touch${touchesQueued!==1?"es":""} · Mon–Fri 9am–5pm MT · batches past 5pm auto-shift to next 9am`
+                                      :`Set a start time (Mountain Time), delay${hasMoreTouches?", and days between touches":""}, then click SCHEDULE · batches wrap at 5pm MT`
                                     }
                                   </div>
                                 </div>
