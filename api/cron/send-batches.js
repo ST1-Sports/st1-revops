@@ -25,25 +25,39 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+// All business-hours logic runs in Mountain Time (America/Denver).
+function getMTComponents(ms = Date.now()) {
+  const parts = {};
+  new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Denver",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short",
+  }).formatToParts(new Date(ms)).forEach(p => { if (p.type !== "literal") parts[p.type] = p.value; });
+  return {
+    h: parseInt(parts.hour) % 24,
+    wd: ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(parts.weekday),
+    y: parseInt(parts.year), mo: parseInt(parts.month) - 1, d: parseInt(parts.day),
+  };
+}
+
 function isBusinessHours(nowMs = Date.now()) {
-  const d = new Date(nowMs);
-  const h = d.getHours();
-  const wd = d.getDay(); // 0=Sun, 6=Sat
+  const { h, wd } = getMTComponents(nowMs);
   return wd >= 1 && wd <= 5 && h >= 9 && h < 17;
 }
 
-// Returns the timestamp of the next 9:00am on a weekday (Mon–Fri).
-// If called at 8am Monday, returns 9am Monday.
-// If called at 5pm Friday, returns 9am Monday.
+// Returns UTC timestamp of the next 9:00am Mountain Time on a business day.
 function nextBusinessStart(nowMs = Date.now()) {
-  const d = new Date(nowMs);
-  d.setHours(9, 0, 0, 0);
-  // If 9am today is already in the past, advance to tomorrow
-  if (nowMs >= d.getTime()) d.setDate(d.getDate() + 1);
-  // Skip Saturday and Sunday
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
-  d.setHours(9, 0, 0, 0);
-  return d.getTime();
+  for (let i = 0; i <= 7; i++) {
+    const probe = nowMs + i * 86400000;
+    const { y, mo, d } = getMTComponents(probe);
+    for (const off of [6, 7]) {
+      const c = Date.UTC(y, mo, d, 9 + off, 0, 0);
+      const ck = getMTComponents(c);
+      if (ck.h !== 9 || c <= nowMs) continue;
+      if (ck.wd >= 1 && ck.wd <= 5) return c;
+    }
+  }
+  return nowMs + 86400000;
 }
 
 export default async function handler(req, res) {

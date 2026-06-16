@@ -80,9 +80,13 @@ const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};
-const fmtSchedDt=(dt)=>{if(!dt)return"";const d=new Date(dt);const days=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];const h=d.getHours();return`${days[d.getDay()]} ${months[d.getMonth()]} ${d.getDate()}, ${h%12||12}:${String(d.getMinutes()).padStart(2,"0")}${h>=12?"pm":"am"}`;};
+const fmtSchedDt=(dt)=>dt?fmtMT(new Date(dt).getTime()):"";;
 const dtLocalStr=(dt)=>{const d=new Date(dt);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
 const addBusinessDays=(startMs,days)=>{const dt=new Date(startMs);let added=0;while(added<days){dt.setDate(dt.getDate()+1);const wd=dt.getDay();if(wd!==0&&wd!==6)added++;}return dt.getTime();};
+const getMTComp=(ms)=>{const p={};new Intl.DateTimeFormat('en-US',{timeZone:'America/Denver',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',weekday:'short'}).formatToParts(new Date(ms)).forEach(x=>{if(x.type!=='literal')p[x.type]=x.value;});return{h:parseInt(p.hour)%24,wd:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(p.weekday),y:parseInt(p.year),mo:parseInt(p.month)-1,d:parseInt(p.day),min:parseInt(p.minute)};};
+const nextMTBizStart=(ms)=>{for(let i=0;i<=7;i++){const probe=ms+i*86400000;const{y,mo,d}=getMTComp(probe);for(const off of[6,7]){const c=Date.UTC(y,mo,d,9+off,0,0);const ck=getMTComp(c);if(ck.h!==9||c<=ms)continue;if(ck.wd>=1&&ck.wd<=5)return c;}}return ms+86400000;};
+const fmtMT=(ms)=>{if(!ms)return'';const{h,min,wd,mo,d,y}=getMTComp(ms);const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return`${days[wd]} ${months[mo]} ${d}, ${h%12||12}:${String(min).padStart(2,'0')}${h>=12?'pm':'am'} MT`;};
+const parseMTLocalStr=(localStr)=>{const[dp,tp]=localStr.split('T');const[yr,mo,da]=dp.split('-').map(Number);const[hr,mi]=(tp||'09:00').split(':').map(Number);for(const off of[6,7]){const c=Date.UTC(yr,mo-1,da,hr+off,mi,0);if(getMTComp(c).h===hr)return c;}return Date.UTC(yr,mo-1,da,hr+6,mi,0);};
 // Local "now + N minutes" as HH:MM string
 const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
@@ -7157,9 +7161,11 @@ function ModMarketing() {
   const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
   const [batchSchedules,setBatchSchedules]=useState({}); // key→scheduledAt ISO string (UI display)
   const [touchSchedStarts,setTouchSchedStarts]=useState({}); // touchIdx→ISO string of first batch start
-  const [schedStartDt,setSchedStartDt]=useState(()=>{const d=new Date(Date.now()+60000);return d.toISOString().slice(0,16);}); // datetime-local value
+  const [schedStartDt,setSchedStartDt]=useState(()=>{const c=getMTComp(nextMTBizStart(Date.now()));return`${c.y}-${String(c.mo+1).padStart(2,'0')}-${String(c.d).padStart(2,'0')}T09:00`;}); // datetime-local value (interpreted as MT)
   const [schedDelay,setSchedDelay]=useState(60); // minutes between batches
   const [schedTouchGap,setSchedTouchGap]=useState(7); // business days between touches
+  const [maxPerDay,setMaxPerDay]=useState(0); // 0 = unlimited; >0 caps daily contacts sent
+  const [schedStatus,setSchedStatus]=useState(null); // null | 'applying' | 'done'
   const [lastSendErr,setLastSendErr]=useState(null); // persistent error from last send attempt
   const [intCollapsed,setIntCollapsed]=useState(false);
   // Audience segmentation (wizard step 5)
@@ -9522,12 +9528,14 @@ function ModMarketing() {
                     const sentBatchCount=Object.keys(selCamp.sentBatches||{}).length;
 
                     const applySchedule=()=>{
-                      const startMs=new Date(schedStartDt).getTime();
-                      if(isNaN(startMs))return;
+                      const startMs=parseMTLocalStr(schedStartDt);
+                      if(!startMs||isNaN(startMs))return;
                       const batchUpdates={};
                       const startUpdates={};
-                      const campBatches={}; // for server-side cron persistence
+                      const campBatches={};
                       let currentMs=startMs;
+                      let batchesThisDay=0;
+                      const maxBpd=maxPerDay>0?Math.max(1,Math.floor(maxPerDay/sz)):Infinity;
                       const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
                       for(let t=startTi;t<touches.length;t++){
                         startUpdates[t]=new Date(currentMs).toISOString();
@@ -9538,19 +9546,37 @@ function ModMarketing() {
                         const unsentBatchInfos=tBatches
                           .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
                           .filter(({bk})=>!batchSentMap[bk]);
-                        unsentBatchInfos.forEach(({bk,contactIds},idx)=>{
-                          const firesAt=new Date(currentMs+idx*schedDelay*60000).toISOString();
+                        unsentBatchInfos.forEach(({bk,contactIds})=>{
+                          const firesAt=new Date(currentMs).toISOString();
                           batchUpdates[bk]=firesAt;
                           campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
+                          // Advance to next batch slot, respecting MT business hours + maxPerDay
+                          batchesThisDay++;
+                          const tentNext=currentMs+schedDelay*60000;
+                          const nc=getMTComp(tentNext);
+                          const afterHours=nc.h>=17||nc.wd===0||nc.wd===6;
+                          const hitDayCap=maxBpd<Infinity&&batchesThisDay>=maxBpd;
+                          if(afterHours||hitDayCap){currentMs=nextMTBizStart(currentMs);batchesThisDay=0;}
+                          else currentMs=tentNext;
                         });
-                        const estimatedBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
-                        const lastMs=currentMs+(estimatedBatches-1)*schedDelay*60000;
-                        currentMs=addBusinessDays(lastMs,schedTouchGap);
+                        if(t<touches.length-1){
+                          const estBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
+                          // Advance schedTouchGap biz days from last batch, then snap to 9am MT
+                          currentMs=addBusinessDays(currentMs,schedTouchGap);
+                          const gc=getMTComp(currentMs);
+                          if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
+                          batchesThisDay=0;
+                          void estBatches;
+                        }
                       }
                       setBatchSchedules(prev=>({...prev,...batchUpdates}));
                       setTouchSchedStarts(prev=>({...prev,...startUpdates}));
-                      // Persist to campaign so server-side cron can fire batches independently
                       dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{...(selCamp.scheduledBatches||{}),...campBatches}});
+                    };
+
+                    const handleScheduleClick=()=>{
+                      setSchedStatus('applying');
+                      setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);
                     };
 
                     return(
@@ -9562,9 +9588,21 @@ function ModMarketing() {
                         </div>
                         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:8}}>
                           <div>
-                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>START DATE & TIME</div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>START (MOUNTAIN TIME)</div>
                             <input type="datetime-local" value={schedStartDt} onChange={e=>setSchedStartDt(e.target.value)}
                               style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>CONTACTS / BATCH</div>
+                            <input type="number" min={1} max={500} value={selCamp.batchSize||25}
+                              onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:v});}}
+                              style={{width:65,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>MAX / DAY (0=∞)</div>
+                            <input type="number" min={0} max={10000} value={maxPerDay}
+                              onChange={e=>setMaxPerDay(parseInt(e.target.value)||0)}
+                              style={{width:75,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                           </div>
                           <div>
                             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>MINS BETWEEN BATCHES</div>
@@ -9576,9 +9614,9 @@ function ModMarketing() {
                             <input type="number" min={1} max={60} value={schedTouchGap} onChange={e=>setSchedTouchGap(parseInt(e.target.value)||7)}
                               style={{width:60,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                           </div>
-                          <button onClick={applySchedule}
-                            style={{background:B.blue,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                            SCHEDULE ALL BATCHES
+                          <button onClick={handleScheduleClick} disabled={schedStatus==='applying'}
+                            style={{background:schedStatus==='done'?B.green:schedStatus==='applying'?B.muted:B.blue,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:schedStatus==='applying'?"not-allowed":"pointer",whiteSpace:"nowrap",transition:"background .2s"}}>
+                            {schedStatus==='applying'?"⟳ SCHEDULING…":schedStatus==='done'?"✓ SCHEDULED":"SCHEDULE ALL BATCHES"}
                           </button>
                           {pendingScheduledCount>0&&(
                             <button onClick={()=>{dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{}});setBatchSchedules({});setTouchSchedStarts({});}}
@@ -9589,7 +9627,7 @@ function ModMarketing() {
                         </div>
                         {pendingScheduledCount>0&&(
                           <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                            {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} scheduled — server cron fires every 15 min automatically.
+                            {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} pending · cron fires every 15 min Mon–Fri 9am–5pm MT · batches outside hours shift to next 9am MT automatically.
                           </div>
                         )}
                       </div>
