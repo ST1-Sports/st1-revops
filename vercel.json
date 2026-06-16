@@ -45,8 +45,12 @@
     "api/ai/email.js":                             { "maxDuration": 30 },
     "api/perplexity.js":                           { "maxDuration": 60 },
     "api/instantly.js":                            { "maxDuration": 30 },
-    "api/gmail-token.js":                          { "maxDuration": 15 }
+    "api/gmail-token.js":                          { "maxDuration": 15 },
+    "api/cron/send-batches.js":                    { "maxDuration": 120 }
   },
+  "crons": [
+    { "path": "/api/cron/send-batches", "schedule": "*/15 * * * *" }
+  ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],

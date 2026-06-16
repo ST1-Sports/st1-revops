@@ -90,6 +90,8 @@ const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+// Advance ms by N business days (skip Sat/Sun)
+const addBusinessDays=(ms,n)=>{let d=new Date(ms);let added=0;while(added<n){d=new Date(d.getTime()+86400000);if(d.getDay()!==0&&d.getDay()!==6)added++;}return d.getTime();};
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
@@ -7126,6 +7128,20 @@ function ModMarketing() {
     },700);
     return ()=>clearTimeout(touchSaveTimer.current);
   },[touchDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Restore schedule state from campaign record when campaign changes
+  useEffect(()=>{
+    const camp=(s.campaigns||[]).find(c=>c.id===selCampId);
+    if(!camp){setBatchSchedules({});setBatchSentMap({});setTouchSchedStarts({});return;}
+    if(camp.scheduledBatches){
+      const uiBatches={};
+      Object.entries(camp.scheduledBatches).forEach(([bk,info])=>{uiBatches[bk]=info.scheduledAt;});
+      setBatchSchedules(uiBatches);
+    } else {
+      setBatchSchedules({});
+    }
+    if(camp.sentBatches) setBatchSentMap(camp.sentBatches);
+    setTouchSchedStarts({});
+  },[selCampId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Execute tab
   const [filterSport,setFilterSport]=useState("all");
   const [executeFilter,setExecuteFilter]=useState("all"); // status filter for enrolled contacts
@@ -7141,6 +7157,11 @@ function ModMarketing() {
   const [pendingBatch,setPendingBatch]=useState(null);
   const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
   const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
+  const [batchSchedules,setBatchSchedules]=useState({}); // key→scheduledAt ISO string (UI display)
+  const [touchSchedStarts,setTouchSchedStarts]=useState({}); // touchIdx→ISO string of first batch start
+  const [schedStartDt,setSchedStartDt]=useState(()=>{const d=new Date(Date.now()+60000);return d.toISOString().slice(0,16);}); // datetime-local value
+  const [schedDelay,setSchedDelay]=useState(60); // minutes between batches
+  const [schedTouchGap,setSchedTouchGap]=useState(7); // business days between touches
   const [lastSendErr,setLastSendErr]=useState(null); // persistent error from last send attempt
   const [intCollapsed,setIntCollapsed]=useState(false);
   // Audience segmentation (wizard step 5)
@@ -9279,8 +9300,15 @@ function ModMarketing() {
                     }
                   }
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
-                  dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
-                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
+                  if(batchKey){
+                    setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
+                    // Remove from campaign's scheduledBatches so server cron doesn't double-fire
+                    const newSched={...(finalCamp.scheduledBatches||{})};
+                    delete newSched[batchKey];
+                    dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched,sentBatches:{...(finalCamp.sentBatches||{}),[batchKey]:{sent,failed,sentAt:new Date().toISOString()}}});
+                  } else {
+                    dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
+                  }
                   const skipNote=skipped?` · ${skipped} already sent/interested`:"";
                   const noEmailNote=noEmailAdv?` · ${noEmailAdv} skipped (no email)`:"";
                   const msg=`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`;
@@ -9491,6 +9519,90 @@ function ModMarketing() {
                       )}
                     </div>
                   )}
+
+                  {/* ── Batch Schedule Panel ── */}
+                  {touches.length>0&&(()=>{
+                    const sz=selCamp.batchSize||25;
+                    // Starting touch index: first touch that has unsent batches
+                    const ti=touches.findIndex((_,idx)=>enrs.some(e=>e.step===idx&&e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email));
+                    const startTi=ti<0?0:ti;
+                    const pendingScheduledCount=Object.keys(selCamp.scheduledBatches||{}).length;
+                    const sentBatchCount=Object.keys(selCamp.sentBatches||{}).length;
+
+                    const applySchedule=()=>{
+                      const startMs=new Date(schedStartDt).getTime();
+                      if(isNaN(startMs))return;
+                      const batchUpdates={};
+                      const startUpdates={};
+                      const campBatches={}; // for server-side cron persistence
+                      let currentMs=startMs;
+                      const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
+                      for(let t=startTi;t<touches.length;t++){
+                        startUpdates[t]=new Date(currentMs).toISOString();
+                        const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                        const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
+                        const tBatches=[];
+                        for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                        const unsentBatchInfos=tBatches
+                          .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
+                          .filter(({bk})=>!batchSentMap[bk]);
+                        unsentBatchInfos.forEach(({bk,contactIds},idx)=>{
+                          const firesAt=new Date(currentMs+idx*schedDelay*60000).toISOString();
+                          batchUpdates[bk]=firesAt;
+                          campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
+                        });
+                        const estimatedBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
+                        const lastMs=currentMs+(estimatedBatches-1)*schedDelay*60000;
+                        currentMs=addBusinessDays(lastMs,schedTouchGap);
+                      }
+                      setBatchSchedules(prev=>({...prev,...batchUpdates}));
+                      setTouchSchedStarts(prev=>({...prev,...startUpdates}));
+                      // Persist to campaign so server-side cron can fire batches independently
+                      dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{...(selCamp.scheduledBatches||{}),...campBatches}});
+                    };
+
+                    return(
+                      <div className="card" style={{padding:"12px 14px",marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
+                        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1}}>BATCH SCHEDULE</div>
+                          {pendingScheduledCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{pendingScheduledCount} PENDING</span>}
+                          {sentBatchCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>{sentBatchCount} SENT</span>}
+                        </div>
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:8}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>START DATE & TIME</div>
+                            <input type="datetime-local" value={schedStartDt} onChange={e=>setSchedStartDt(e.target.value)}
+                              style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>MINS BETWEEN BATCHES</div>
+                            <input type="number" min={5} max={1440} value={schedDelay} onChange={e=>setSchedDelay(parseInt(e.target.value)||60)}
+                              style={{width:70,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>BIZ DAYS BETWEEN TOUCHES</div>
+                            <input type="number" min={1} max={60} value={schedTouchGap} onChange={e=>setSchedTouchGap(parseInt(e.target.value)||7)}
+                              style={{width:60,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <button onClick={applySchedule}
+                            style={{background:B.blue,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                            SCHEDULE ALL BATCHES
+                          </button>
+                          {pendingScheduledCount>0&&(
+                            <button onClick={()=>{dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{}});setBatchSchedules({});setTouchSchedStarts({});}}
+                              style={{background:"none",border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,cursor:"pointer",whiteSpace:"nowrap"}}>
+                              CLEAR SCHEDULE
+                            </button>
+                          )}
+                        </div>
+                        {pendingScheduledCount>0&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                            {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} scheduled — server cron fires every 15 min automatically.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
