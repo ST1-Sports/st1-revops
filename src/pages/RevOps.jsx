@@ -9554,6 +9554,7 @@ function ModMarketing() {
                         const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
                         const tBatches=[];
                         for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                        const touchStartMs=currentMs; // next touch advances from HERE, not from last batch
                         const unsentBatchInfos=tBatches
                           .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
                           .filter(({bk})=>!batchSentMap[bk]);
@@ -9561,7 +9562,6 @@ function ModMarketing() {
                           const firesAt=new Date(currentMs).toISOString();
                           batchUpdates[bk]=firesAt;
                           campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
-                          // Advance to next batch slot, respecting MT business hours + maxPerDay
                           batchesThisDay++;
                           const tentNext=currentMs+schedDelay*60000;
                           const nc=getMTComp(tentNext);
@@ -9571,13 +9571,12 @@ function ModMarketing() {
                           else currentMs=tentNext;
                         });
                         if(t<touches.length-1){
-                          const estBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
-                          // Advance schedTouchGap biz days from last batch, then snap to 9am MT
-                          currentMs=addBusinessDays(currentMs,schedTouchGap);
+                          // Advance from touch START so email 2 begins N days after email 1 started
+                          // — batches from different touches run in parallel, no waiting for last batch
+                          currentMs=addBusinessDays(touchStartMs,schedTouchGap);
                           const gc=getMTComp(currentMs);
                           if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
                           batchesThisDay=0;
-                          void estBatches;
                         }
                       }
                       setBatchSchedules(prev=>({...prev,...batchUpdates}));
@@ -9710,6 +9709,7 @@ function ModMarketing() {
                                   const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
                                   const tBatches=[];
                                   for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                                  const touchStartMs=currentMs;
                                   const unsentBatchInfos=tBatches
                                     .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
                                     .filter(({bk})=>!batchSentMap[bk]);
@@ -9726,12 +9726,10 @@ function ModMarketing() {
                                     else currentMs=tentNext;
                                   });
                                   if(t<touches.length-1){
-                                    const estBatches=Math.max(1,Math.ceil((tPending.length||totalWithEmail)/sz));
-                                    currentMs=addBusinessDays(currentMs,schedTouchGap);
+                                    currentMs=addBusinessDays(touchStartMs,schedTouchGap);
                                     const gc=getMTComp(currentMs);
                                     if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
                                     batchesThisDay=0;
-                                    void estBatches;
                                   }
                                 }
                                 setBatchSchedules(s=>({...s,...batchUpdates}));
