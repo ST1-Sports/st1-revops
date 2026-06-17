@@ -9299,11 +9299,22 @@ function ModMarketing() {
                   }
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
                   if(batchKey){
-                    setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
-                    // Remove from campaign's scheduledBatches so server cron doesn't double-fire
-                    const newSched={...(finalCamp.scheduledBatches||{})};
-                    delete newSched[batchKey];
-                    dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched,sentBatches:{...(finalCamp.sentBatches||{}),[batchKey]:{sent,failed,sentAt:new Date().toISOString()}}});
+                    const totalProcessed=sent+skipped+noEmailAdv;
+                    if(totalProcessed>0){
+                      // At least something was processed — mark batch done
+                      setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
+                      const newSched={...(finalCamp.scheduledBatches||{})};
+                      delete newSched[batchKey];
+                      dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched,sentBatches:{...(finalCamp.sentBatches||{}),[batchKey]:{sent,failed,sentAt:new Date().toISOString()}}});
+                    } else {
+                      // Total failure — reschedule to next 9am MT so cron/engine can retry
+                      const retryMs=nextMTBizStart(Date.now());
+                      const retryIso=new Date(retryMs).toISOString();
+                      setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                      const prevInfo=finalCamp.scheduledBatches?.[batchKey]||{};
+                      const newSched={...(finalCamp.scheduledBatches||{}),[batchKey]:{...prevInfo,scheduledAt:retryIso}};
+                      dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched});
+                    }
                   } else {
                     dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
                   }
@@ -9816,22 +9827,46 @@ function ModMarketing() {
                               const isExp=batchExpanded[expKey]??(bi===0);
                               // Stable key based on first contact ID so it survives re-indexing
                               const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
-                              const wasSent=!!batchSentMap[batchKey];
+                              const sentInfo=batchSentMap[batchKey];
+                              const wasSent=!!(sentInfo&&(sentInfo.sent>0||sentInfo.failed===0)); // total failures are retryable
+                              const totalFailed=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed>0);
                               const scheduledDt=batchSchedules[batchKey]?new Date(batchSchedules[batchKey]):null;
                               const schedMs=scheduledDt?scheduledDt.getTime()-nowTick:null;
                               // Register this batch's send callback for the auto-send timer
                               if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[]);
                               return(
-                                <div key={batchKey} style={{border:`1px solid ${wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
+                                <div key={batchKey} style={{border:`1px solid ${totalFailed?B.red:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:totalFailed?`${B.red}06`:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
                                     <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:totalFailed?B.red:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
                                       <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
-                                      {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {batchSentMap[batchKey].sent}{batchSentMap[batchKey].failed>0?` · ${batchSentMap[batchKey].failed} failed`:""}</span>}
+                                      {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {sentInfo.sent}{sentInfo.failed>0?` · ${sentInfo.failed} failed`:""}</span>}
+                                      {totalFailed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:`${B.red}15`,padding:"2px 7px",borderRadius:3}}>✗ {sentInfo.failed} FAILED — rescheduled to next 9am MT</span>}
                                       {scheduledDt&&!wasSent&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>⏱ {fmtSchedDt(scheduledDt)}{schedMs>0?` · ${fmtCountdown(schedMs)}`:" · firing…"}</span>}
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
                                     </div>
-                                    {!wasSent&&(
+                                    {totalFailed&&(
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
+                                        <button onClick={()=>{
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const retryMs=nextMTBizStart(Date.now());
+                                          const retryIso=new Date(retryMs).toISOString();
+                                          setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const prevInfo2=fc.scheduledBatches?.[batchKey]||{};
+                                          const ns={...(fc.scheduledBatches||{}),[batchKey]:{...prevInfo2,scheduledAt:retryIso}};
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
+                                        }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                          ↺ RETRY AT 9AM MT
+                                        </button>
+                                        <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
+                                          style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          ▶ SEND NOW
+                                        </button>
+                                      </div>
+                                    )}
+                                    {!wasSent&&!totalFailed&&(
                                       <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
                                         <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
                                           style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
