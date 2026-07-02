@@ -9248,7 +9248,7 @@ function ModMarketing() {
                 // One-batch sender — sends exactly this list of enrollments for their current step.
                 // Guards against duplicate sends via the sentSteps array on each enrollment.
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
-                const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
+                const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[],forceResend=false)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
                   if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
@@ -9263,14 +9263,16 @@ function ModMarketing() {
                   for(const enroll of batchEnrollments){
                     if(enroll.status==="interested"){ skipped++; continue; }
                     const guardIdx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
-                    // Hard dedup guards — skip if step already advanced or already sent this touch
-                    if(guardIdx>=0 && updEnr[guardIdx].step!==enroll.step){ skipped++; continue; }
+                    // Hard dedup: never re-send a step already in sentSteps
                     if(guardIdx>=0 && (updEnr[guardIdx].sentSteps||[]).includes(enroll.step)){ skipped++; continue; }
+                    // Step-advance guard — bypassed on forceResend (contacts skipped by step mismatch)
+                    if(!forceResend && guardIdx>=0 && updEnr[guardIdx].step!==enroll.step){ skipped++; continue; }
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
                       // Record sent step BEFORE advancing so dedup survives any re-render between sends
-                      if(guardIdx>=0) updEnr[guardIdx]={...updEnr[guardIdx],sentSteps:[...(updEnr[guardIdx].sentSteps||[]),enroll.step]};
-                      advanceEnroll(updEnr,enroll,todStr,camp);
+                      if(guardIdx>=0) updEnr[guardIdx]={...updEnr[guardIdx],sentSteps:[...(updEnr[guardIdx].sentSteps||[]),enroll.step],lastContacted:todStr,lastSentAt:todStr};
+                      // On force-resend don't reset step (contact may be further ahead)
+                      if(!forceResend) advanceEnroll(updEnr,enroll,todStr,camp);
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
                       sent++;
@@ -9558,7 +9560,7 @@ function ModMarketing() {
                         const unsentBatchInfos=tBatches
                           .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
                           // Skip only successfully-sent batches; failed batches (sent===0 && failed>0) get rescheduled
-                          .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
+                          .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
                         unsentBatchInfos.forEach(({bk,contactIds})=>{
                           const firesAt=new Date(currentMs).toISOString();
                           batchUpdates[bk]=firesAt;
@@ -9694,7 +9696,7 @@ function ModMarketing() {
                             {/* ── Batch schedule panel ── */}
                             {touchBatches.length>0&&(()=>{
                               const sz=selCamp.batchSize||25;
-                              const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
+                              const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
                               const anyScheduled=unsentBatches.some(({bk})=>batchSchedules[bk]);
                               const hasMoreTouches=ti<touches.length-1;
                               // Count how many subsequent touches also have pending batches
@@ -9724,7 +9726,7 @@ function ModMarketing() {
                                   const unsentBatchInfos=tBatches
                                     .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
                                     // Skip only successfully-sent batches; failed batches get rescheduled
-                                    .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
+                                    .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
                                   unsentBatchInfos.forEach(({bk,contactIds})=>{
                                     const firesAt=new Date(currentMs).toISOString();
                                     batchUpdates[bk]=firesAt;
@@ -9847,20 +9849,22 @@ function ModMarketing() {
                               // Stable key based on first contact ID so it survives re-indexing
                               const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
                               const sentInfo=batchSentMap[batchKey];
-                              const wasSent=!!(sentInfo&&(sentInfo.sent>0||sentInfo.failed===0)); // total failures are retryable
+                              const wasSent=!!(sentInfo&&sentInfo.sent>0); // only truly locked if at least 1 sent
                               const scheduledDt=batchSchedules[batchKey]?new Date(batchSchedules[batchKey]):null;
-                              // Suppress failed state when a new schedule is set (rescheduled = not failed anymore)
+                              // Suppress failed/skipped states when a new schedule is set
                               const totalFailed=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed>0&&!scheduledDt);
+                              const wasSkipped=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed===0&&!scheduledDt);
                               const schedMs=scheduledDt?scheduledDt.getTime()-nowTick:null;
                               // Register this batch's send callback for the auto-send timer
-                              if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[]);
+                              if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[],wasSkipped);
                               return(
-                                <div key={batchKey} style={{border:`1px solid ${totalFailed?B.red:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:totalFailed?`${B.red}06`:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
+                                <div key={batchKey} style={{border:`1px solid ${totalFailed?B.red:wasSkipped?B.orange:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:totalFailed?`${B.red}06`:wasSkipped?`${B.orange}06`:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
                                     <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:totalFailed?B.red:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:totalFailed?B.red:wasSkipped?B.orange:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
                                       <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
                                       {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {sentInfo.sent}{sentInfo.failed>0?` · ${sentInfo.failed} failed`:""}</span>}
+                                      {wasSkipped&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>⚠ SENT 0 — contacts skipped</span>}
                                       {totalFailed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:`${B.red}15`,padding:"2px 7px",borderRadius:3}}>✗ {sentInfo.failed} FAILED — rescheduled to next 9am MT</span>}
                                       {scheduledDt&&!wasSent&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>⏱ {fmtSchedDt(scheduledDt)}{schedMs>0?` · ${fmtCountdown(schedMs)}`:" · firing…"}</span>}
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
@@ -9886,7 +9890,38 @@ function ModMarketing() {
                                         </button>
                                       </div>
                                     )}
-                                    {!wasSent&&!totalFailed&&(
+                                    {wasSkipped&&(
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
+                                        <button onClick={()=>{
+                                          // Clear sentBatches record + schedule resend at next 9am MT with forceResend flag
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const retryMs=nextMTBizStart(Date.now());
+                                          const retryIso=new Date(retryMs).toISOString();
+                                          setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const prevInfo2=fc.scheduledBatches?.[batchKey]||{touchIdx:ti,contactIds:batch.map(e=>e.contactId)};
+                                          const ns={...(fc.scheduledBatches||{}),[batchKey]:{...prevInfo2,scheduledAt:retryIso,forceResend:true}};
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
+                                          const _uc=(campaignsRef.current||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:ns,sentBatches:ns2}:c);
+                                          const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
+                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                                        }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                          ↺ RESEND AT 9AM MT
+                                        </button>
+                                        <button onClick={()=>{
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,sentBatches:ns2});
+                                          sendOneBatch(batch,batchKey,bi===0?noEmail:[],true);
+                                        }} disabled={sending}
+                                          style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          ▶ RESEND NOW
+                                        </button>
+                                      </div>
+                                    )}
+                                    {!wasSent&&!totalFailed&&!wasSkipped&&(
                                       <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
                                         <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
                                           style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>

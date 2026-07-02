@@ -181,6 +181,7 @@ export default async function handler(req, res) {
       }
 
       const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
+      const forceResend = !!batchInfo.forceResend;
       const updEnr = [...(camp.enrollments || [])];
       let sent = 0;
       let failed = 0;
@@ -188,7 +189,8 @@ export default async function handler(req, res) {
       for (const contactId of contactIds) {
         const enroll = updEnr.find(e => e.contactId === contactId);
         if (!enroll) continue;
-        if (enroll.step !== touchIdx) continue;
+        // forceResend bypasses step guard (contacts skipped by step mismatch)
+        if (!forceResend && enroll.step !== touchIdx) continue;
         if (enroll.status === "interested") continue;
         if ((enroll.sentSteps || []).includes(touchIdx)) continue;
 
@@ -226,19 +228,29 @@ export default async function handler(req, res) {
           if (gmailData.sent) {
             const idx = updEnr.findIndex(e => e.contactId === contactId);
             if (idx >= 0) {
-              const ns = touchIdx + 1;
-              const done = ns >= (camp.touches || []).length;
-              const nt = (camp.touches || [])[ns];
-              const nd = nt ? new Date(Date.now() + nt.dayOffset * 86400000).toISOString().slice(0, 10) : null;
-              updEnr[idx] = {
-                ...updEnr[idx],
-                sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
-                step: ns,
-                status: done ? "done" : "active",
-                nextDate: nd || enroll.nextDate,
-                lastContacted: todStr,
-                lastSentAt: todStr,
-              };
+              if (forceResend) {
+                // Don't reset step — contact may be further ahead; just record sent step + timestamps
+                updEnr[idx] = {
+                  ...updEnr[idx],
+                  sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
+                  lastContacted: todStr,
+                  lastSentAt: todStr,
+                };
+              } else {
+                const ns = touchIdx + 1;
+                const done = ns >= (camp.touches || []).length;
+                const nt = (camp.touches || [])[ns];
+                const nd = nt ? new Date(Date.now() + nt.dayOffset * 86400000).toISOString().slice(0, 10) : null;
+                updEnr[idx] = {
+                  ...updEnr[idx],
+                  sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
+                  step: ns,
+                  status: done ? "done" : "active",
+                  nextDate: nd || enroll.nextDate,
+                  lastContacted: todStr,
+                  lastSentAt: todStr,
+                };
+              }
             }
             sent++;
           } else {
