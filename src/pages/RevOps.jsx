@@ -9557,7 +9557,8 @@ function ModMarketing() {
                         const touchStartMs=currentMs; // next touch advances from HERE, not from last batch
                         const unsentBatchInfos=tBatches
                           .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
-                          .filter(({bk})=>!batchSentMap[bk]);
+                          // Skip only successfully-sent batches; failed batches (sent===0 && failed>0) get rescheduled
+                          .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
                         unsentBatchInfos.forEach(({bk,contactIds})=>{
                           const firesAt=new Date(currentMs).toISOString();
                           batchUpdates[bk]=firesAt;
@@ -9581,7 +9582,17 @@ function ModMarketing() {
                       }
                       setBatchSchedules(prev=>({...prev,...batchUpdates}));
                       setTouchSchedStarts(prev=>({...prev,...startUpdates}));
-                      dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{...(selCamp.scheduledBatches||{}),...campBatches}});
+                      // Clear sentBatches entries for (re)scheduled batches so failed state is wiped
+                      const rescheduledKeys=Object.keys(campBatches);
+                      const updSentBatches={...(selCamp.sentBatches||{})};
+                      rescheduledKeys.forEach(k=>delete updSentBatches[k]);
+                      if(rescheduledKeys.length>0) setBatchSentMap(prev=>{const n={...prev};rescheduledKeys.forEach(k=>delete n[k]);return n;});
+                      const newScheduledBatches={...(selCamp.scheduledBatches||{}),...campBatches};
+                      dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches});
+                      // Immediate DB save — don't wait for debounce (set-and-forget)
+                      const _uc=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches}:c);
+                      const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
+                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
                     };
 
                     const handleScheduleClick=()=>{
@@ -9683,7 +9694,7 @@ function ModMarketing() {
                             {/* ── Batch schedule panel ── */}
                             {touchBatches.length>0&&(()=>{
                               const sz=selCamp.batchSize||25;
-                              const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>!batchSentMap[bk]);
+                              const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
                               const anyScheduled=unsentBatches.some(({bk})=>batchSchedules[bk]);
                               const hasMoreTouches=ti<touches.length-1;
                               // Count how many subsequent touches also have pending batches
@@ -9712,7 +9723,8 @@ function ModMarketing() {
                                   const touchStartMs=currentMs;
                                   const unsentBatchInfos=tBatches
                                     .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
-                                    .filter(({bk})=>!batchSentMap[bk]);
+                                    // Skip only successfully-sent batches; failed batches get rescheduled
+                                    .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&(si.sent>0||si.failed===0));});
                                   unsentBatchInfos.forEach(({bk,contactIds})=>{
                                     const firesAt=new Date(currentMs).toISOString();
                                     batchUpdates[bk]=firesAt;
@@ -9734,7 +9746,16 @@ function ModMarketing() {
                                 }
                                 setBatchSchedules(s=>({...s,...batchUpdates}));
                                 setTouchSchedStarts(prev=>({...prev,...startUpdates}));
-                                dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{...(selCamp.scheduledBatches||{}),...campBatches}});
+                                // Clear sentBatches for rescheduled batches + immediate DB save
+                                const rescheduledKeys2=Object.keys(campBatches);
+                                const updSentBatches2={...(selCamp.sentBatches||{})};
+                                rescheduledKeys2.forEach(k=>delete updSentBatches2[k]);
+                                if(rescheduledKeys2.length>0) setBatchSentMap(prev=>{const n={...prev};rescheduledKeys2.forEach(k=>delete n[k]);return n;});
+                                const newScheduledBatches2={...(selCamp.scheduledBatches||{}),...campBatches};
+                                dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2});
+                                const _uc2=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2}:c);
+                                const{currentUserId:_cid2,contacts:_cc2,agentHistory:_ah2,..._ts2}={...s,campaigns:_uc2};
+                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts2})}).catch(()=>{});
                               };
                               const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
                               const clearSchedule=()=>{
@@ -9827,8 +9848,9 @@ function ModMarketing() {
                               const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
                               const sentInfo=batchSentMap[batchKey];
                               const wasSent=!!(sentInfo&&(sentInfo.sent>0||sentInfo.failed===0)); // total failures are retryable
-                              const totalFailed=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed>0);
                               const scheduledDt=batchSchedules[batchKey]?new Date(batchSchedules[batchKey]):null;
+                              // Suppress failed state when a new schedule is set (rescheduled = not failed anymore)
+                              const totalFailed=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed>0&&!scheduledDt);
                               const schedMs=scheduledDt?scheduledDt.getTime()-nowTick:null;
                               // Register this batch's send callback for the auto-send timer
                               if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[]);
