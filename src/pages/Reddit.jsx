@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 
 const C = {
   bg:       '#F2F2F0',
@@ -14,324 +14,572 @@ const C = {
   reddit:   '#FF4500',
   orangeBg: '#FEF3EC',
   greenBg:  '#f0fdf4',
-  purpleBg: '#f5f3ff',
-  purple:   '#7c3aed',
+  blueBg:   '#eff6ff',
 }
 
-const PRESET_TOPICS = [
-  { id: "tf",    label: "Track & Field Equipment" },
-  { id: "cc",    label: "Cross Country" },
-  { id: "jump",  label: "Pole Vault / High Jump" },
-  { id: "throw", label: "Throws — Javelin / Discus / Shot Put" },
-  { id: "timing",label: "Timing Systems" },
-  { id: "ad",    label: "Athletic Director Purchasing" },
-  { id: "uni",   label: "Uniforms & Apparel" },
-  { id: "rec",   label: "Equipment Recommendations" },
-  { id: "budget",label: "School Sports Budget" },
-  { id: "fund",  label: "Fundraising for Sports" },
-]
+// ── helpers ──────────────────────────────────────────────────────────────────
 
-function CopyBtn({ text, label = '⎘ COPY', successLabel = '✓ COPIED', style = {} }) {
-  const [copied, setCopied] = useState(false)
-  const copy = () => {
-    navigator.clipboard?.writeText(text).catch(() => {})
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2200)
+function fmtDate(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const now = new Date()
+  const diff = (now - d) / 1000
+  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function scoreColor(n) {
+  if (!n) return C.muted
+  if (n >= 8)  return C.green
+  if (n >= 5)  return C.orange
+  return C.red
+}
+
+function intentLabel(intent) {
+  const map = {
+    buying_now:          '💰 Buying Now',
+    researching:         '🔍 Researching',
+    general_discussion:  '💬 Discussion',
+    support_request:     '🙋 Support',
+    off_topic:           '↗ Off-Topic',
   }
+  return map[intent] || intent || ''
+}
+
+function audienceLabel(aud) {
+  const map = {
+    coach: '🏃 Coach', parent: '👨 Parent', athlete: '🎽 Athlete',
+    admin: '🏫 Admin/AD', unknown: '❓ Unknown',
+  }
+  return map[aud] || aud || ''
+}
+
+function statusBadge(status) {
+  const s = {
+    PENDING:   { label: 'Pending',   bg: '#f3f4f6', color: C.muted },
+    EVALUATED: { label: 'Evaluated', bg: '#fffbeb', color: '#b45309' },
+    NOTIFIED:  { label: 'Notified',  bg: C.blueBg,  color: C.blue },
+    APPROVED:  { label: 'Approved',  bg: C.greenBg, color: C.green },
+    REJECTED:  { label: 'Rejected',  bg: '#fef2f2', color: C.red },
+    POSTED:    { label: 'Posted ✓',  bg: C.greenBg, color: C.green },
+    SKIPPED:   { label: 'Skipped',   bg: '#f3f4f6', color: C.muted },
+  }
+  const d = s[status] || { label: status, bg: '#f3f4f6', color: C.muted }
   return (
-    <button onClick={copy}
-      style={{ background: copied ? C.green : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, transition: 'background .2s', ...style }}>
-      {copied ? successLabel : label}
+    <span style={{ background: d.bg, color: d.color, borderRadius: 4, padding: '2px 7px',
+      fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: .4, whiteSpace: 'nowrap' }}>
+      {d.label}
+    </span>
+  )
+}
+
+function CopyBtn({ text, label = '⎘ Copy', style = {} }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button onClick={() => {
+      navigator.clipboard?.writeText(text).catch(() => {})
+      setCopied(true); setTimeout(() => setCopied(false), 2000)
+    }} style={{ background: copied ? C.green : C.surface, color: copied ? '#fff' : C.mid,
+      border: `1px solid ${copied ? C.green : C.border}`, borderRadius: 4, padding: '6px 12px',
+      fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer', ...style }}>
+      {copied ? '✓ Copied' : label}
     </button>
   )
 }
 
-function fmtTime(iso) {
-  if (!iso) return ''
-  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-}
+// ── main component ────────────────────────────────────────────────────────────
 
 export default function Reddit() {
-  const [selectedTopics, setSelectedTopics] = useState(new Set(['tf', 'cc', 'ad']))
-  const [customTopic,    setCustomTopic]    = useState('')
-  const [loading,        setLoading]        = useState(false)
-  const [error,          setError]          = useState(null)
-  const [result,         setResult]         = useState(null)   // { threads, searchedAt, topicsSearched }
-  const [sel,            setSel]            = useState(null)   // selected thread
-  const [detail,         setDetail]         = useState(null)   // reddit thread detail
-  const [reply,          setReply]          = useState('')
-  const replyRef = useRef(null)
+  const [threads,   setThreads]   = useState([])
+  const [loading,   setLoading]   = useState(true)
+  const [scanning,  setScanning]  = useState(false)
+  const [scanMsg,   setScanMsg]   = useState('')
+  const [sel,       setSel]       = useState(null)   // selected thread
+  const [variant,   setVariant]   = useState(1)      // 1 or 2
+  const [filter,    setFilter]    = useState('review') // review | all | posted | rejected
+  const [acting,    setActing]    = useState(false)
+  const [actErr,    setActErr]    = useState(null)
 
-  const toggleTopic = (id) => {
-    setSelectedTopics(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
-  const search = async () => {
-    const topics = PRESET_TOPICS.filter(t => selectedTopics.has(t.id)).map(t => t.label)
-    if (!topics.length && !customTopic.trim()) {
-      setError('Select at least one topic before searching.')
-      return
-    }
+  // ── load threads from DB ────────────────────────────────────────────────────
+  const loadThreads = useCallback(async () => {
     setLoading(true)
-    setError(null)
-    setResult(null)
-    setSel(null)
-    setDetail(null)
     try {
-      const r = await fetch('/api/perplexity', {
+      const r = await fetch('/api/reddit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ topics, customTopic: customTopic.trim() }),
+        body: JSON.stringify({ action: 'threads', limit: 100 }),
       })
       const d = await r.json()
-      if (!r.ok || d.error) throw new Error(d.error || 'Search failed')
-      setResult(d)
-      if (!d.threads.length) setError('No Reddit discussions found for these topics. Try different keywords or a broader search.')
+      const list = d.threads || []
+      setThreads(list)
+      // Auto-select first actionable thread
+      const first = list.find(t => t.replies?.length && !['POSTED','REJECTED','SKIPPED'].includes(t.status))
+      if (first && !sel) setSel(first)
     } catch (e) {
-      setError(e.message)
+      console.error('[Reddit] load error:', e)
     } finally {
       setLoading(false)
     }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadThreads() }, [loadThreads])
+
+  // When threads reload, keep selection current
+  useEffect(() => {
+    if (sel) {
+      const updated = threads.find(t => t.id === sel.id)
+      if (updated) setSel(updated)
+    }
+  }, [threads]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── run pipeline ────────────────────────────────────────────────────────────
+  const runPipeline = async () => {
+    setScanning(true)
+    setScanMsg('Claude is searching Reddit and evaluating opportunities…')
+    try {
+      const r = await fetch('/api/reddit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pipeline' }),
+      })
+      const d = await r.json()
+      const msg = d.ok
+        ? `Found ${d.ingested} new threads · Evaluated ${d.evaluated} · ${d.generated} ready to review`
+        : (d.error || 'Pipeline ran with errors')
+      setScanMsg(msg)
+      await loadThreads()
+    } catch (e) {
+      setScanMsg('Error: ' + e.message)
+    } finally {
+      setScanning(false)
+    }
   }
 
-  const selectThread = (thread) => {
-    setSel(thread)
-    setReply(thread.suggestedReply)
-    setDetail({ loading: true })
-    fetch(`/api/reddit/thread-detail?url=${encodeURIComponent(thread.url)}`)
-      .then(r => r.json())
-      .then(d => setDetail({ ...d, loading: false }))
-      .catch(e => setDetail({ loading: false, fetchError: e.message, body: '', topComments: [] }))
+  // ── actions ─────────────────────────────────────────────────────────────────
+  const api = async (body) => {
+    const r = await fetch('/api/reddit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return r.json()
   }
 
-  const openAndPaste = (url) => {
-    navigator.clipboard?.writeText(reply).catch(() => {})
-    window.open(url, '_blank', 'noopener,noreferrer')
+  const approve = async (threadId, replyId) => {
+    setActing(true); setActErr(null)
+    try {
+      await api({ action: 'approve', threadId, replyId, decidedBy: 'matt' })
+      await loadThreads()
+    } catch (e) { setActErr(e.message) }
+    setActing(false)
   }
 
+  const reject = async (threadId) => {
+    setActing(true); setActErr(null)
+    try {
+      await api({ action: 'reject', threadId, decidedBy: 'matt' })
+      await loadThreads()
+    } catch (e) { setActErr(e.message) }
+    setActing(false)
+  }
+
+  const post = async (replyId) => {
+    setActing(true); setActErr(null)
+    try {
+      const d = await api({ action: 'post', replyId, decidedBy: 'matt' })
+      if (!d.ok) setActErr(d.error || 'Post failed')
+      else await loadThreads()
+    } catch (e) { setActErr(e.message) }
+    setActing(false)
+  }
+
+  // ── derived lists ────────────────────────────────────────────────────────────
+  const reviewable = threads.filter(t =>
+    t.replies?.length > 0 && !['POSTED','REJECTED','SKIPPED'].includes(t.status)
+  )
+  const posted   = threads.filter(t => t.status === 'POSTED')
+  const rejected = threads.filter(t => t.status === 'REJECTED' || t.status === 'SKIPPED')
+  const pending  = threads.filter(t => t.status === 'PENDING' || (t.status === 'EVALUATED' && !t.replies?.length))
+
+  const visibleList = filter === 'review'   ? reviewable
+                    : filter === 'posted'   ? posted
+                    : filter === 'rejected' ? rejected
+                    : threads
+
+  const lastScanTime = threads[0]?.ingestedAt
+  const selReply = sel?.replies?.find(r => r.variant === variant) || sel?.replies?.[0]
+
+  // ── render ───────────────────────────────────────────────────────────────────
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden', fontFamily: "'Lexend', sans-serif", background: C.bg }}>
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden',
+      fontFamily: "'Lexend',sans-serif", background: C.bg }}>
 
-      {/* ── Left sidebar ─────────────────────────────────────────────────── */}
-      <div style={{ width: 340, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
+      {/* ── Left sidebar ──────────────────────────────────────────────────── */}
+      <div style={{ width: 360, flexShrink: 0, borderRight: `1px solid ${C.border}`,
+        display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface }}>
 
         {/* Header */}
-        <div style={{ padding: '16px 18px 14px', borderBottom: `1px solid ${C.border}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <div style={{ width: 34, height: 34, background: C.reddit, borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 900, fontSize: 14, flexShrink: 0 }}>r/</div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: C.dark }}>Reddit Engagement</div>
-              <div style={{ fontSize: 10, color: C.muted }}>Powered by Perplexity Search</div>
+        <div style={{ padding: '14px 16px 10px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <div style={{ width: 32, height: 32, background: C.reddit, borderRadius: 6,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontWeight: 900, fontSize: 13, flexShrink: 0 }}>r/</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.dark }}>Reddit Opportunities</div>
+              <div style={{ fontSize: 10, color: C.muted }}>
+                {lastScanTime ? `Last scan: ${fmtDate(lastScanTime)}` : 'No scans yet'}
+              </div>
             </div>
+            <button onClick={runPipeline} disabled={scanning}
+              style={{ background: scanning ? C.muted : C.orange, color: '#fff', border: 'none',
+                borderRadius: 5, padding: '6px 12px', fontSize: 9, fontWeight: 700, cursor: scanning ? 'not-allowed' : 'pointer',
+                fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: .3, whiteSpace: 'nowrap' }}>
+              {scanning ? '⟳ Scanning…' : '⟳ Scan Now'}
+            </button>
           </div>
 
-          {/* Topic chips */}
-          <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, letterSpacing: .8, fontFamily: "'Lexend Zetta', sans-serif", marginBottom: 7 }}>SEARCH TOPICS</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 10 }}>
-            {PRESET_TOPICS.map(t => {
-              const on = selectedTopics.has(t.id)
-              return (
-                <button key={t.id} onClick={() => toggleTopic(t.id)}
-                  style={{ background: on ? C.orange : C.bg, color: on ? '#fff' : C.muted, border: `1px solid ${on ? C.orange : C.border}`, borderRadius: 20, padding: '4px 10px', fontSize: 10, fontFamily: "'Lexend', sans-serif", cursor: 'pointer', transition: 'all .15s' }}>
-                  {t.label}
-                </button>
-              )
-            })}
-          </div>
-
-          {/* Custom topic */}
-          <input
-            value={customTopic}
-            onChange={e => setCustomTopic(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && search()}
-            placeholder="Custom keyword (optional)…"
-            style={{ width: '100%', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '7px 10px', fontSize: 11, fontFamily: "'Lexend', sans-serif", color: C.dark, boxSizing: 'border-box', marginBottom: 10 }}
-          />
-
-          <button onClick={search} disabled={loading}
-            style={{ width: '100%', background: loading ? C.muted : C.orange, color: '#fff', border: 'none', borderRadius: 6, padding: '10px 0', fontSize: 12, fontWeight: 700, cursor: loading ? 'not-allowed' : 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, transition: 'background .2s' }}>
-            {loading ? '⏳ SEARCHING REDDIT…' : '🔍 SEARCH REDDIT'}
-          </button>
-
-          {result && !loading && (
-            <div style={{ marginTop: 8, fontSize: 10, color: C.muted, textAlign: 'center' }}>
-              {result.threads.length} thread{result.threads.length !== 1 ? 's' : ''} found · {fmtTime(result.searchedAt)}
-            </div>
+          {scanMsg && (
+            <div style={{ fontSize: 10, color: C.blue, background: C.blueBg, borderRadius: 4,
+              padding: '5px 9px', marginBottom: 8 }}>{scanMsg}</div>
           )}
+
+          {/* Stats row */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+            {[
+              { label: 'To Review', count: reviewable.length, key: 'review', color: C.orange },
+              { label: 'All',       count: threads.length,    key: 'all',    color: C.muted },
+              { label: 'Posted',    count: posted.length,     key: 'posted', color: C.green },
+              { label: 'Skipped',   count: rejected.length,   key: 'rejected', color: C.muted },
+            ].map(({ label, count, key, color }) => (
+              <button key={key} onClick={() => setFilter(key)}
+                style={{ background: filter === key ? (key === 'review' ? C.orangeBg : C.bg) : 'transparent',
+                  border: `1px solid ${filter === key ? C.orange : C.border}`, borderRadius: 4,
+                  padding: '4px 9px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif",
+                  color: filter === key ? C.dark : C.muted, cursor: 'pointer', letterSpacing: .3 }}>
+                {label} <span style={{ color }}>{count}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Thread list */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 10px' }}>
-          {error && (
-            <div style={{ margin: '10px 4px', padding: 12, background: '#fef2f2', border: `1px solid ${C.red}40`, borderRadius: 7, fontSize: 11, color: C.red, lineHeight: 1.5 }}>
-              {error}
-            </div>
-          )}
-
-          {!result && !loading && !error && (
-            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 12, lineHeight: 1.7 }}>
-              Select topics above and click<br /><strong style={{ color: C.orange }}>SEARCH REDDIT</strong><br />to find relevant discussions.
-            </div>
-          )}
-
+        <div style={{ flex: 1, overflowY: 'auto' }}>
           {loading && (
-            <div style={{ textAlign: 'center', padding: '40px 16px', color: C.muted, fontSize: 12, lineHeight: 1.7 }}>
-              <div style={{ fontSize: 28, marginBottom: 10 }}>🔍</div>
-              Searching Reddit via Perplexity…<br />
-              <span style={{ fontSize: 10 }}>This takes 10–20 seconds</span>
+            <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 11 }}>
+              Loading…
             </div>
           )}
-
-          {result?.threads.map(t => {
-            const active = sel?.id === t.id
+          {!loading && visibleList.length === 0 && (
+            <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 11 }}>
+              {filter === 'review'
+                ? 'No threads ready to review. Click "Scan Now" to find opportunities.'
+                : 'Nothing here yet.'}
+            </div>
+          )}
+          {visibleList.map(thread => {
+            const ev = thread.evaluation || {}
+            const isSel = sel?.id === thread.id
+            const hasReplies = thread.replies?.length > 0
             return (
-              <button key={t.id} onClick={() => selectThread(t)}
-                style={{ width: '100%', textAlign: 'left', display: 'block', background: active ? C.orangeBg : 'transparent', border: `1px solid ${active ? C.orange : C.border}`, borderRadius: 8, padding: '11px 13px', marginBottom: 7, cursor: 'pointer', transition: 'border-color .15s, background .15s' }}>
-                <div style={{ fontSize: 9, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 4 }}>
-                  {t.subreddit}
+              <div key={thread.id} onClick={() => { setSel(thread); setVariant(1); setActErr(null) }}
+                style={{ padding: '10px 14px', borderBottom: `1px solid ${C.border}`, cursor: 'pointer',
+                  background: isSel ? C.orangeBg : C.surface,
+                  borderLeft: `3px solid ${isSel ? C.orange : 'transparent'}` }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 9, color: C.reddit, fontWeight: 700, whiteSpace: 'nowrap',
+                    fontFamily: "'Lexend Zetta',sans-serif" }}>r/{thread.subreddit}</span>
+                  <div style={{ flex: 1 }} />
+                  {statusBadge(thread.status)}
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.dark, lineHeight: 1.35, marginBottom: 5 }}>
-                  {t.title}
+                <div style={{ fontSize: 11, color: C.dark, fontWeight: 600, lineHeight: 1.35,
+                  marginBottom: 4, display: '-webkit-box', WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                  {thread.title}
                 </div>
-                {t.excerpt && (
-                  <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                    {t.excerpt}
-                  </div>
-                )}
-              </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {ev.fit_score != null && (
+                    <span style={{ fontSize: 9, color: scoreColor(ev.fit_score),
+                      fontFamily: "'Lexend Zetta',sans-serif" }}>
+                      ★ {ev.fit_score}/10
+                    </span>
+                  )}
+                  {ev.intent_type && (
+                    <span style={{ fontSize: 9, color: C.muted }}>{intentLabel(ev.intent_type)}</span>
+                  )}
+                  <span style={{ fontSize: 9, color: C.muted, marginLeft: 'auto' }}>
+                    {fmtDate(thread.ingestedAt)}
+                  </span>
+                  {hasReplies && (
+                    <span style={{ fontSize: 8, color: C.orange, fontFamily: "'Lexend Zetta',sans-serif",
+                      background: C.orangeBg, padding: '1px 5px', borderRadius: 3 }}>
+                      REPLY READY
+                    </span>
+                  )}
+                </div>
+              </div>
             )
           })}
+
+          {/* Pending threads note */}
+          {filter === 'all' && pending.length > 0 && (
+            <div style={{ padding: '10px 14px', background: '#fffbeb', borderTop: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 10, color: '#b45309' }}>
+                ⏳ {pending.length} thread{pending.length !== 1 ? 's' : ''} still being evaluated by Claude.
+                Click "Scan Now" to process them.
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* ── Right panel ──────────────────────────────────────────────────── */}
-      {!sel ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 12, color: C.muted }}>
-          <div style={{ fontSize: 36 }}>💬</div>
-          <div style={{ fontSize: 14, color: C.mid }}>Select a thread to review and reply</div>
-          <div style={{ fontSize: 12, color: C.muted }}>Perplexity drafts a reply — you edit and paste it into Reddit</div>
-        </div>
-      ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-
-          {/* Thread title bar */}
-          <div style={{ padding: '16px 24px 12px', borderBottom: `1px solid ${C.border}`, background: C.surface, flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, justifyContent: 'space-between' }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 10, color: C.reddit, fontWeight: 700, fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .5, marginBottom: 5 }}>
-                  {sel.subreddit}
-                </div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: C.dark, lineHeight: 1.3 }}>
-                  {sel.title}
-                </div>
-              </div>
-              <button onClick={() => openAndPaste(sel.url)}
-                style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                OPEN & PASTE ↗
-              </button>
+      {/* ── Right panel ───────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 24, minWidth: 0 }}>
+        {!sel ? (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexDirection: 'column', gap: 14 }}>
+            <div style={{ fontSize: 40, opacity: .15 }}>r/</div>
+            <div style={{ fontSize: 14, color: C.muted, textAlign: 'center', maxWidth: 340 }}>
+              {threads.length === 0
+                ? 'Click "Scan Now" — Claude will search Reddit, score each thread, and write reply drafts for your review.'
+                : 'Select a thread from the left to review Claude\'s reply recommendation.'}
             </div>
-            <div style={{ marginTop: 8, fontSize: 11 }}>
-              <a href={sel.url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue, textDecoration: 'none', wordBreak: 'break-all' }}>
-                {sel.url}
+            {threads.length === 0 && (
+              <button onClick={runPipeline} disabled={scanning}
+                style={{ background: C.orange, color: '#fff', border: 'none', borderRadius: 6,
+                  padding: '10px 22px', fontSize: 12, fontWeight: 700, cursor: scanning ? 'not-allowed' : 'pointer',
+                  fontFamily: "'Lexend Zetta',sans-serif" }}>
+                {scanning ? '⟳ Scanning…' : '⟳ Scan Reddit Now'}
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{ maxWidth: 720 }}>
+
+            {/* Thread card */}
+            <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+              padding: '16px 20px', marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: C.reddit, fontWeight: 700,
+                  fontFamily: "'Lexend Zetta',sans-serif" }}>r/{sel.subreddit}</span>
+                <span style={{ fontSize: 10, color: C.muted }}>by u/{sel.author}</span>
+                <span style={{ fontSize: 10, color: C.muted }}>·</span>
+                <span style={{ fontSize: 10, color: C.muted }}>⬆ {sel.score} · 💬 {sel.commentCount}</span>
+                <span style={{ marginLeft: 'auto' }}>{statusBadge(sel.status)}</span>
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.dark, marginBottom: 8, lineHeight: 1.4 }}>
+                {sel.title}
+              </div>
+              {sel.body && (
+                <div style={{ fontSize: 12, color: C.mid, lineHeight: 1.6, marginBottom: 8,
+                  maxHeight: 80, overflow: 'hidden', WebkitLineClamp: 4,
+                  display: '-webkit-box', WebkitBoxOrient: 'vertical' }}>
+                  {sel.body}
+                </div>
+              )}
+              <a href={sel.url} target="_blank" rel="noopener noreferrer"
+                style={{ fontSize: 10, color: C.blue, textDecoration: 'none' }}>
+                ↗ Open on Reddit
               </a>
             </div>
-          </div>
 
-          {/* Scrollable body */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-
-            {/* Thread context */}
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
-                THREAD CONTEXT
-              </div>
-
-              {/* Perplexity excerpt (always shown) */}
-              {sel.excerpt && (
-                <div style={{ background: C.purpleBg, border: `1px solid ${C.purple}30`, borderRadius: 8, padding: '12px 16px', marginBottom: 10 }}>
-                  <div style={{ fontSize: 9, fontWeight: 700, color: C.purple, letterSpacing: .5, marginBottom: 6, fontFamily: "'Lexend Zetta', sans-serif" }}>PERPLEXITY SUMMARY</div>
-                  <div style={{ fontSize: 13, color: C.dark, lineHeight: 1.6 }}>{sel.excerpt}</div>
-                </div>
-              )}
-
-              {detail?.loading && (
-                <div style={{ fontSize: 12, color: C.muted, padding: '10px 0' }}>Loading Reddit thread…</div>
-              )}
-
-              {detail && !detail.loading && (
-                <>
-                  {detail.body ? (
-                    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px', marginBottom: 10, borderLeft: `3px solid ${C.reddit}` }}>
-                      <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>ORIGINAL POST</div>
-                      <div style={{ fontSize: 13, color: C.dark, lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{detail.body}</div>
+            {/* Claude's evaluation */}
+            {sel.evaluation && (
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                padding: '14px 20px', marginBottom: 16 }}>
+                <div style={{ fontSize: 9, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                  letterSpacing: .5, marginBottom: 10 }}>CLAUDE'S EVALUATION</div>
+                <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontSize: 8, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                      letterSpacing: .4, marginBottom: 2 }}>FIT SCORE</div>
+                    <div style={{ fontSize: 22, fontWeight: 800,
+                      color: scoreColor(sel.evaluation.fit_score) }}>
+                      {sel.evaluation.fit_score}<span style={{ fontSize: 12, color: C.muted }}>/10</span>
                     </div>
-                  ) : detail.fetchError ? (
-                    <div style={{ background: '#fef2f2', border: `1px solid ${C.red}40`, borderRadius: 6, padding: '10px 14px', fontSize: 11, color: C.red, marginBottom: 10 }}>
-                      Could not load thread from Reddit — {detail.fetchError}.<br />
-                      <span style={{ color: C.muted }}>The URL may have moved or the thread was deleted. Click "Open & Paste" to check.</span>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 8, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                      letterSpacing: .4, marginBottom: 2 }}>DECISION</div>
+                    <div style={{ fontSize: 13, fontWeight: 700,
+                      color: sel.evaluation.decision === 'REPLY' ? C.green
+                           : sel.evaluation.decision === 'SKIP' ? C.red : C.orange }}>
+                      {sel.evaluation.decision}
                     </div>
-                  ) : (
-                    <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 14px', marginBottom: 10, fontSize: 12, color: C.muted }}>
-                      No post body (link post or removed). Click "Open &amp; Paste" to view on Reddit.
+                  </div>
+                  {sel.evaluation.intent_type && (
+                    <div>
+                      <div style={{ fontSize: 8, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                        letterSpacing: .4, marginBottom: 2 }}>INTENT</div>
+                      <div style={{ fontSize: 12, color: C.dark }}>{intentLabel(sel.evaluation.intent_type)}</div>
                     </div>
                   )}
-
-                  {detail.topComments?.length > 0 && (
-                    <>
-                      <div style={{ fontSize: 9, fontWeight: 700, color: C.muted, letterSpacing: .5, marginBottom: 8, fontFamily: "'Lexend Zetta', sans-serif" }}>TOP COMMENTS</div>
-                      {detail.topComments.map((c, i) => (
-                        <div key={i} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '10px 14px', marginBottom: 8 }}>
-                          <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginBottom: 6 }}>
-                            <span style={{ fontSize: 11, fontWeight: 600, color: C.dark }}>u/{c.author}</span>
-                            <span style={{ fontSize: 11, color: C.muted }}>↑ {c.score}</span>
-                          </div>
-                          <div style={{ fontSize: 12, color: C.mid, lineHeight: 1.6 }}>
-                            {c.body.length > 500 ? c.body.slice(0, 500) + '…' : c.body}
-                          </div>
-                        </div>
-                      ))}
-                    </>
+                  {sel.evaluation.audience_type && (
+                    <div>
+                      <div style={{ fontSize: 8, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                        letterSpacing: .4, marginBottom: 2 }}>AUDIENCE</div>
+                      <div style={{ fontSize: 12, color: C.dark }}>{audienceLabel(sel.evaluation.audience_type)}</div>
+                    </div>
                   )}
-                </>
-              )}
-            </div>
+                  {sel.evaluation.promo_risk != null && (
+                    <div>
+                      <div style={{ fontSize: 8, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                        letterSpacing: .4, marginBottom: 2 }}>PROMO RISK</div>
+                      <div style={{ fontSize: 13, fontWeight: 700,
+                        color: sel.evaluation.promo_risk >= 7 ? C.red
+                             : sel.evaluation.promo_risk >= 4 ? C.orange : C.green }}>
+                        {sel.evaluation.promo_risk}/10
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {sel.evaluation.reasoning_summary && (
+                  <div style={{ fontSize: 11, color: C.mid, lineHeight: 1.6, marginBottom: 6,
+                    borderLeft: `3px solid ${C.orange}`, paddingLeft: 10 }}>
+                    {sel.evaluation.reasoning_summary}
+                  </div>
+                )}
+                {sel.evaluation.value_angle && (
+                  <div style={{ fontSize: 10, color: C.blue, background: C.blueBg,
+                    borderRadius: 4, padding: '6px 10px' }}>
+                    💡 {sel.evaluation.value_angle}
+                  </div>
+                )}
+              </div>
+            )}
 
-            {/* Reply editor */}
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: C.muted, letterSpacing: .8, marginBottom: 10, fontFamily: "'Lexend Zetta', sans-serif" }}>
-                YOUR REPLY
-              </div>
-              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px 18px' }}>
-                <div style={{ fontSize: 11, color: C.muted, marginBottom: 8 }}>
-                  Drafted by Perplexity — edit freely before posting.
+            {/* Reply variants */}
+            {sel.replies?.length > 0 && (
+              <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+                padding: '14px 20px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+                  <div style={{ fontSize: 9, color: C.muted, fontFamily: "'Lexend Zetta',sans-serif",
+                    letterSpacing: .5 }}>CLAUDE'S REPLY DRAFTS</div>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                    {sel.replies.map(r => (
+                      <button key={r.id} onClick={() => setVariant(r.variant)}
+                        style={{ background: variant === r.variant ? C.orange : C.bg,
+                          color: variant === r.variant ? '#fff' : C.mid,
+                          border: `1px solid ${variant === r.variant ? C.orange : C.border}`,
+                          borderRadius: 4, padding: '4px 10px', fontSize: 9,
+                          fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>
+                        {r.variant === 1 ? 'Stronger' : 'Safer'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <textarea
-                  ref={replyRef}
-                  value={reply}
-                  onChange={e => setReply(e.target.value)}
-                  rows={9}
-                  style={{ width: '100%', background: '#f9f9f7', border: `1px solid ${C.border}`, borderRadius: 6, padding: '10px 13px', fontSize: 13, fontFamily: "'Lexend', sans-serif", color: C.dark, resize: 'vertical', lineHeight: 1.65, boxSizing: 'border-box' }}
-                />
-                <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                  <CopyBtn text={reply} label="⎘ COPY REPLY" successLabel="✓ COPIED" />
-                  <button onClick={() => openAndPaste(sel.url)}
-                    style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 6, padding: '9px 18px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: "'Lexend Zetta', sans-serif", letterSpacing: .4 }}>
-                    OPEN & PASTE ↗
-                  </button>
-                  <span style={{ fontSize: 11, color: C.muted, flex: 1, minWidth: 180 }}>
-                    "Open & Paste" copies your reply and opens Reddit — Ctrl+V in the comment box.
-                  </span>
+
+                {selReply && (
+                  <>
+                    {/* Reply approved / posted info */}
+                    {selReply.approvedAt && (
+                      <div style={{ fontSize: 10, color: C.green, background: C.greenBg,
+                        borderRadius: 4, padding: '5px 9px', marginBottom: 8 }}>
+                        ✓ Approved{selReply.approvedBy ? ` by ${selReply.approvedBy}` : ''}
+                        {selReply.postedAt ? ' · Posted to Reddit' : ''}
+                      </div>
+                    )}
+
+                    <div style={{ background: C.bg, borderRadius: 6, padding: '12px 14px',
+                      fontSize: 12, color: C.dark, lineHeight: 1.7, whiteSpace: 'pre-wrap',
+                      marginBottom: 12, minHeight: 80 }}>
+                      {selReply.content}
+                    </div>
+
+                    {actErr && (
+                      <div style={{ fontSize: 11, color: C.red, marginBottom: 8 }}>{actErr}</div>
+                    )}
+
+                    {/* Action buttons */}
+                    {!['POSTED', 'REJECTED', 'SKIPPED'].includes(sel.status) && (
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {sel.status !== 'APPROVED' && (
+                          <button onClick={() => approve(sel.id, selReply.id)} disabled={acting}
+                            style={{ background: C.green, color: '#fff', border: 'none', borderRadius: 5,
+                              padding: '8px 16px', fontSize: 10, fontWeight: 700, cursor: acting ? 'not-allowed' : 'pointer',
+                              fontFamily: "'Lexend Zetta',sans-serif" }}>
+                            {acting ? '…' : '✓ Approve Reply'}
+                          </button>
+                        )}
+                        {sel.status === 'APPROVED' && (
+                          <button onClick={() => post(selReply.id)} disabled={acting}
+                            style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 5,
+                              padding: '8px 16px', fontSize: 10, fontWeight: 700, cursor: acting ? 'not-allowed' : 'pointer',
+                              fontFamily: "'Lexend Zetta',sans-serif" }}>
+                            {acting ? '…' : '↗ Post to Reddit'}
+                          </button>
+                        )}
+                        <CopyBtn text={selReply.content} label="⎘ Copy Reply" />
+                        <button onClick={() => window.open(sel.url, '_blank', 'noopener,noreferrer')}
+                          style={{ background: C.surface, color: C.mid, border: `1px solid ${C.border}`,
+                            borderRadius: 5, padding: '8px 14px', fontSize: 10, cursor: 'pointer',
+                            fontFamily: "'Lexend Zetta',sans-serif" }}>
+                          ↗ Open Thread
+                        </button>
+                        <button onClick={() => {
+                          navigator.clipboard?.writeText(selReply.content).catch(() => {})
+                          window.open(sel.url, '_blank', 'noopener,noreferrer')
+                        }} style={{ background: C.orange, color: '#fff', border: 'none', borderRadius: 5,
+                          padding: '8px 14px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
+                          fontFamily: "'Lexend Zetta',sans-serif" }}>
+                          ⎘ Copy + Open
+                        </button>
+                        <button onClick={() => reject(sel.id)} disabled={acting}
+                          style={{ background: C.surface, color: C.red, border: `1px solid ${C.red}40`,
+                            borderRadius: 5, padding: '8px 14px', fontSize: 10, cursor: acting ? 'not-allowed' : 'pointer',
+                            fontFamily: "'Lexend Zetta',sans-serif", marginLeft: 'auto' }}>
+                          ✕ Skip
+                        </button>
+                      </div>
+                    )}
+
+                    {sel.status === 'POSTED' && selReply.redditCommentId && (
+                      <div style={{ fontSize: 11, color: C.green }}>
+                        ✓ Posted · Comment ID: {selReply.redditCommentId}
+                        {selReply.upvotes != null && ` · ${selReply.upvotes} upvotes`}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Evaluated but no replies yet */}
+            {sel.evaluation?.decision === 'REPLY' && !sel.replies?.length && (
+              <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8,
+                padding: '14px 20px', marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: '#92400e' }}>
+                  ⏳ Claude thinks this is worth replying to (score: {sel.evaluation.fit_score}/10),
+                  but reply drafts haven't been generated yet.
+                  Click "Scan Now" to generate them.
                 </div>
               </div>
-            </div>
+            )}
+
+            {/* SKIP/MONITOR evaluation */}
+            {sel.evaluation?.decision && sel.evaluation.decision !== 'REPLY' && !sel.replies?.length && (
+              <div style={{ background: '#f3f4f6', border: `1px solid ${C.border}`, borderRadius: 8,
+                padding: '14px 20px' }}>
+                <div style={{ fontSize: 12, color: C.muted }}>
+                  Claude decided to <strong>{sel.evaluation.decision}</strong> this thread.
+                  {sel.evaluation.do_not_reply_reason && ` Reason: ${sel.evaluation.do_not_reply_reason}`}
+                </div>
+              </div>
+            )}
+
+            {/* No evaluation yet */}
+            {!sel.evaluation && (
+              <div style={{ background: '#fffbeb', border: `1px solid #fde68a`, borderRadius: 8,
+                padding: '14px 20px' }}>
+                <div style={{ fontSize: 12, color: '#92400e' }}>
+                  ⏳ This thread is pending evaluation. Click "Scan Now" to have Claude score it.
+                </div>
+              </div>
+            )}
 
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   )
 }

@@ -27,6 +27,7 @@
  */
 
 const { ingestThreads }      = require('./services/ingestion');
+const { generateSearchQueries } = require('./services/query-generator');
 const { evaluateThread }     = require('./services/evaluator');
 const { generateReplies }    = require('./services/reply-generator');
 const { notifySlack }        = require('./services/slack-review');
@@ -198,6 +199,43 @@ export default async function handler(req, res) {
       case 'report': {
         const report = await generateReport({ days: body.days || 90 });
         return ok(res, { report });
+      }
+
+      // pipeline: ingest + evaluate + generate for pending threads (manual trigger from UI)
+      case 'pipeline': {
+        const pResults = { ingested: 0, evaluated: 0, generated: 0, errors: [] };
+
+        // Generate smart queries and ingest new threads
+        try {
+          const queries = await generateSearchQueries();
+          const overrides = queries.length ? {
+            subreddits: [...new Set(queries.map(q => q.subreddit))],
+            keywords:   [...new Set(queries.map(q => q.query))],
+          } : {};
+          const ig = await ingestThreads(flags, overrides);
+          pResults.ingested = ig.ingested;
+        } catch (e) {
+          pResults.errors.push({ step: 'ingest', error: e.message });
+        }
+
+        // Evaluate pending threads (up to 5 to stay under 30s timeout)
+        const db = getPrisma();
+        const pending = await db.redditThread.findMany({
+          where: { status: 'PENDING' }, take: 5, orderBy: { ingestedAt: 'desc' },
+        });
+        for (const thread of pending) {
+          try {
+            const ev = await evaluateThread(thread.id);
+            pResults.evaluated++;
+            if (ev.decision === 'REPLY') {
+              const rs = await generateReplies(thread.id);
+              if (!rs.skip) pResults.generated++;
+            }
+          } catch (e) {
+            pResults.errors.push({ step: 'evaluate', threadId: thread.id, error: e.message });
+          }
+        }
+        return ok(res, pResults);
       }
 
       case 'threads': {
