@@ -98,7 +98,7 @@ export default function Reddit() {
   const [sel,       setSel]       = useState(null)   // selected thread
   const [variant,   setVariant]   = useState(1)      // 1 or 2
   const [filter,    setFilter]    = useState('review') // review | all | posted | rejected
-  const [acting,    setActing]    = useState(false)
+  const [marking,   setMarking]   = useState(null) // threadId being marked
   const [actErr,    setActErr]    = useState(null)
 
   // ── load threads from DB ────────────────────────────────────────────────────
@@ -166,37 +166,27 @@ export default function Reddit() {
     return r.json()
   }
 
-  const approve = async (threadId, replyId) => {
-    setActing(true); setActErr(null)
+  const markDone = async (threadId) => {
+    setMarking(threadId); setActErr(null)
     try {
-      await api({ action: 'approve', threadId, replyId, decidedBy: 'matt' })
+      await api({ action: 'mark-done', threadId })
       await loadThreads()
     } catch (e) { setActErr(e.message) }
-    setActing(false)
+    setMarking(null)
   }
 
-  const reject = async (threadId) => {
-    setActing(true); setActErr(null)
+  const skip = async (threadId) => {
+    setMarking(threadId); setActErr(null)
     try {
-      await api({ action: 'reject', threadId, decidedBy: 'matt' })
+      await api({ action: 'reject', threadId })
       await loadThreads()
     } catch (e) { setActErr(e.message) }
-    setActing(false)
-  }
-
-  const post = async (replyId) => {
-    setActing(true); setActErr(null)
-    try {
-      const d = await api({ action: 'post', replyId, decidedBy: 'matt' })
-      if (!d.ok) setActErr(d.error || 'Post failed')
-      else await loadThreads()
-    } catch (e) { setActErr(e.message) }
-    setActing(false)
+    setMarking(null)
   }
 
   // ── derived lists ────────────────────────────────────────────────────────────
   const reviewable = threads.filter(t =>
-    t.replies?.length > 0 && !['POSTED','REJECTED','SKIPPED'].includes(t.status)
+    t.replies?.length > 0 && !['POSTED','REJECTED','SKIPPED','APPROVED'].includes(t.status)
   )
   const posted   = threads.filter(t => t.status === 'POSTED')
   const rejected = threads.filter(t => t.status === 'REJECTED' || t.status === 'SKIPPED')
@@ -490,54 +480,48 @@ export default function Reddit() {
                       <div style={{ fontSize: 11, color: C.red, marginBottom: 8 }}>{actErr}</div>
                     )}
 
-                    {/* Action buttons */}
+                    {/* Copy-paste workflow */}
                     {!['POSTED', 'REJECTED', 'SKIPPED'].includes(sel.status) && (
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                        {sel.status !== 'APPROVED' && (
-                          <button onClick={() => approve(sel.id, selReply.id)} disabled={acting}
-                            style={{ background: C.green, color: '#fff', border: 'none', borderRadius: 5,
-                              padding: '8px 16px', fontSize: 10, fontWeight: 700, cursor: acting ? 'not-allowed' : 'pointer',
-                              fontFamily: "'Lexend Zetta',sans-serif" }}>
-                            {acting ? '…' : '✓ Approve Reply'}
-                          </button>
-                        )}
-                        {sel.status === 'APPROVED' && (
-                          <button onClick={() => post(selReply.id)} disabled={acting}
-                            style={{ background: C.reddit, color: '#fff', border: 'none', borderRadius: 5,
-                              padding: '8px 16px', fontSize: 10, fontWeight: 700, cursor: acting ? 'not-allowed' : 'pointer',
-                              fontFamily: "'Lexend Zetta',sans-serif" }}>
-                            {acting ? '…' : '↗ Post to Reddit'}
-                          </button>
-                        )}
-                        <CopyBtn text={selReply.content} label="⎘ Copy Reply" />
-                        <button onClick={() => window.open(sel.url, '_blank', 'noopener,noreferrer')}
-                          style={{ background: C.surface, color: C.mid, border: `1px solid ${C.border}`,
-                            borderRadius: 5, padding: '8px 14px', fontSize: 10, cursor: 'pointer',
+                      <>
+                        <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, lineHeight: 1.5 }}>
+                          Copy the reply below, then open the thread and paste it as a comment.
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button onClick={() => {
+                            navigator.clipboard?.writeText(selReply.content).catch(() => {})
+                            window.open(sel.url, '_blank', 'noopener,noreferrer')
+                          }} style={{ background: C.orange, color: '#fff', border: 'none', borderRadius: 5,
+                            padding: '9px 18px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
                             fontFamily: "'Lexend Zetta',sans-serif" }}>
-                          ↗ Open Thread
-                        </button>
-                        <button onClick={() => {
-                          navigator.clipboard?.writeText(selReply.content).catch(() => {})
-                          window.open(sel.url, '_blank', 'noopener,noreferrer')
-                        }} style={{ background: C.orange, color: '#fff', border: 'none', borderRadius: 5,
-                          padding: '8px 14px', fontSize: 10, fontWeight: 700, cursor: 'pointer',
-                          fontFamily: "'Lexend Zetta',sans-serif" }}>
-                          ⎘ Copy + Open
-                        </button>
-                        <button onClick={() => reject(sel.id)} disabled={acting}
-                          style={{ background: C.surface, color: C.red, border: `1px solid ${C.red}40`,
-                            borderRadius: 5, padding: '8px 14px', fontSize: 10, cursor: acting ? 'not-allowed' : 'pointer',
-                            fontFamily: "'Lexend Zetta',sans-serif", marginLeft: 'auto' }}>
-                          ✕ Skip
-                        </button>
-                      </div>
+                            ⎘ Copy &amp; Open Thread
+                          </button>
+                          <CopyBtn text={selReply.content} label="⎘ Copy Reply" />
+                          <button onClick={() => window.open(sel.url, '_blank', 'noopener,noreferrer')}
+                            style={{ background: C.surface, color: C.mid, border: `1px solid ${C.border}`,
+                              borderRadius: 5, padding: '9px 14px', fontSize: 10, cursor: 'pointer',
+                              fontFamily: "'Lexend Zetta',sans-serif" }}>
+                            ↗ Open Thread
+                          </button>
+                          <div style={{ flex: 1 }} />
+                          <button onClick={() => markDone(sel.id)} disabled={marking === sel.id}
+                            title="Mark as replied — removes from queue"
+                            style={{ background: C.greenBg, color: C.green, border: `1px solid ${C.green}40`,
+                              borderRadius: 5, padding: '9px 14px', fontSize: 10, cursor: marking === sel.id ? 'not-allowed' : 'pointer',
+                              fontFamily: "'Lexend Zetta',sans-serif" }}>
+                            {marking === sel.id ? '…' : '✓ Replied'}
+                          </button>
+                          <button onClick={() => skip(sel.id)} disabled={marking === sel.id}
+                            style={{ background: C.surface, color: C.muted, border: `1px solid ${C.border}`,
+                              borderRadius: 5, padding: '9px 14px', fontSize: 10, cursor: marking === sel.id ? 'not-allowed' : 'pointer',
+                              fontFamily: "'Lexend Zetta',sans-serif" }}>
+                            ✕ Skip
+                          </button>
+                        </div>
+                      </>
                     )}
 
-                    {sel.status === 'POSTED' && selReply.redditCommentId && (
-                      <div style={{ fontSize: 11, color: C.green }}>
-                        ✓ Posted · Comment ID: {selReply.redditCommentId}
-                        {selReply.upvotes != null && ` · ${selReply.upvotes} upvotes`}
-                      </div>
+                    {sel.status === 'POSTED' && (
+                      <div style={{ fontSize: 11, color: C.green }}>✓ Marked as replied</div>
                     )}
                   </>
                 )}
