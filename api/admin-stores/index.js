@@ -6,33 +6,25 @@
  * Env vars required:
  *   ADMIN_ST1_EMAIL     — login email for admin.st1sports.com
  *   ADMIN_ST1_PASSWORD  — login password
- *
- * Actions (POST body: { action }):
- *   status      — check if credentials are configured
- *   stores      — return all team stores with status
- *   orders      — return store orders
- *   top-sellers — aggregate top products from order line items
- *   raw-sample  — return 2 raw orders for schema inspection
  */
 
 import { setCors } from '../_lib/cors.js';
 
-const BASE     = 'https://admin.st1sports.com'; // SPA host (catch-all HTML)
-const API_BASE = 'https://api.st1sports.com/admin'; // data endpoints
+const BASE     = 'https://admin.st1sports.com';
+const API_BASE = 'https://api.st1sports.com/admin';
 const API_ROOT = 'https://api.st1sports.com';
 
-// Auth is at api root (not under /admin); data endpoints are under /admin
 const AUTH_ENDPOINTS = [
-  { base: API_ROOT, path: '/auth/login',       body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/auth/sign_in',     body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/users/sign_in',    body: (e, p) => ({ user: { email: e, password: p } }) },
-  { base: API_ROOT, path: '/sessions',         body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/login',            body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/v1/auth/login',    body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/v1/users/sign_in', body: (e, p) => ({ user: { email: e, password: p } }) },
+  { base: API_BASE, path: '/sign_in',           body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/sign_in',           body: (e, p) => ({ admin: { email: e, password: p } }) },
+  { base: API_ROOT, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
+  { base: API_ROOT, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/v1/auth/login',     body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/v1/sign_in',        body: (e, p) => ({ email: e, password: p }) },
 ];
 
-// In-process session cache
 let _auth = null;
 let _sessionExpiry = 0;
 let _probeLog = [];
@@ -52,100 +44,50 @@ function parseCookies(setCookieHeaders) {
 
 async function probeAuth(email, password) {
   _probeLog = [];
-
   for (const ep of AUTH_ENDPOINTS) {
     let status, ct, cookies, bodySnippet;
     try {
       const res = await fetch(`${ep.base}${ep.path}`, {
-        method: 'POST',
-        redirect: 'manual',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': 'ST1-RevOps/1.0',
-        },
+        method: 'POST', redirect: 'manual',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0' },
         body: JSON.stringify(ep.body(email, password)),
       });
-
       status = res.status;
       ct = res.headers.get('content-type') || '';
       cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
-
-      if (status === 404 || status === 405) {
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'not-found' });
-        continue;
-      }
-
+      if (status === 404 || status === 405) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'not-found' }); continue; }
       if (cookies && (status === 200 || status === 201 || status === 302)) {
         _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-auth' });
         return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` };
       }
-
       const text = await res.text();
       bodySnippet = text.slice(0, 200).replace(/\n/g, ' ');
-
-      if (ct.includes('text/html') || text.trim().startsWith('<')) {
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'html-response' });
-        continue;
-      }
-
+      if (ct.includes('text/html') || text.trim().startsWith('<')) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'html-response' }); continue; }
       if ((status === 200 || status === 201) && ct.includes('application/json')) {
-        let body;
-        try { body = JSON.parse(text); } catch { body = {}; }
-
-        const token =
-          body.token || body.access_token || body.auth_token || body.jwt ||
-          body.data?.token || body.user?.token || body.data?.access_token;
-
-        if (token) {
-          _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' });
-          return { type: 'bearer', value: token, endpoint: `${ep.base}${ep.path}` };
-        }
-
-        if (cookies) {
-          _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-json' });
-          return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` };
-        }
-
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet });
-        continue;
+        let body; try { body = JSON.parse(text); } catch { body = {}; }
+        const token = body.token || body.access_token || body.auth_token || body.jwt || body.data?.token || body.user?.token || body.data?.access_token;
+        if (token) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' }); return { type: 'bearer', value: token, endpoint: `${ep.base}${ep.path}` }; }
+        if (cookies) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-json' }); return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` }; }
+        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet }); continue;
       }
-
       if ((status === 401 || status === 403 || status === 422) && ct.includes('application/json')) {
-        let errBody;
-        try { errBody = JSON.parse(text); } catch { errBody = {}; }
+        let errBody; try { errBody = JSON.parse(text); } catch { errBody = {}; }
         _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'auth-rejected', error: errBody.error || errBody.message || bodySnippet });
         return { type: 'rejected', endpoint: `${ep.base}${ep.path}`, status, detail: errBody.error || errBody.message || bodySnippet };
       }
-
       _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'unknown', snippet: bodySnippet });
-    } catch (err) {
-      _probeLog.push({ endpoint: `${ep.base}${ep.path}`, result: 'error', error: err.message });
-    }
+    } catch (err) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, result: 'error', error: err.message }); }
   }
-
   return null;
 }
 
 async function getAuth() {
-  if (_auth && _auth.type !== 'rejected' && Date.now() < _sessionExpiry) {
-    return _auth;
-  }
-
+  if (_auth && _auth.type !== 'rejected' && Date.now() < _sessionExpiry) return _auth;
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
-
   const auth = await probeAuth(email, password);
-
-  if (!auth) {
-    const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', ');
-    throw new Error(`Could not authenticate. Probe results: ${summary}`);
-  }
-
-  if (auth.type === 'rejected') {
-    throw new Error(`Login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
-  }
-
+  if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
+  if (auth.type === 'rejected') throw new Error(`Login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
   _auth = auth;
   _sessionExpiry = Date.now() + 30 * 60 * 1000;
   return auth;
@@ -153,23 +95,12 @@ async function getAuth() {
 
 async function adminGet(path) {
   const auth = await getAuth();
-  const authHeader = auth.type === 'bearer'
-    ? { 'Authorization': `Bearer ${auth.value}` }
-    : { 'Cookie': auth.value };
-
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeader },
-  });
-
-  if (res.status === 401 || res.status === 403) {
-    _auth = null;
-    throw new Error(`Admin API returned ${res.status} for ${path} — session may have expired`);
-  }
+  const authHeader = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
+  const res = await fetch(`${API_BASE}${path}`, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeader } });
+  if (res.status === 401 || res.status === 403) { _auth = null; throw new Error(`Admin API returned ${res.status} for ${path}`); }
   if (!res.ok) throw new Error(`Admin API returned HTTP ${res.status} for ${path}`);
-
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
-
   const text = await res.text();
   if (text.trim().startsWith('<')) throw new Error(`Admin API returned HTML for ${path}`);
   return JSON.parse(text);
@@ -179,12 +110,21 @@ export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-
   const { action = 'status' } = req.body || {};
 
-  if (action === 'status') {
-    const { email, password } = creds();
-    return res.json({ ok: true, configured: Boolean(email && password) });
+  if (action === 'status') { const { email, password } = creds(); return res.json({ ok: true, configured: Boolean(email && password) }); }
+
+  if (action === 'discover') {
+    const paths = [`${API_ROOT}/`, `${API_BASE}/`, `${API_ROOT}/rails/info/routes`, `${API_ROOT}/swagger.json`, `${API_ROOT}/api-docs`, `${API_ROOT}/openapi.json`, `${API_BASE}/swagger.json`];
+    const results = await Promise.all(paths.map(async url => {
+      try {
+        const r = await fetch(url, { headers: { 'Accept': 'application/json, text/plain, */*', 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(5000) });
+        const ct = r.headers.get('content-type') || '';
+        const body = await r.text();
+        return { url, status: r.status, ct, snippet: body.slice(0, 300).replace(/\n/g, ' ') };
+      } catch (e) { return { url, error: e.message }; }
+    }));
+    return res.json({ ok: true, results });
   }
 
   if (action === 'probe-auth') {
@@ -221,9 +161,7 @@ export default async function handler(req, res) {
         } catch (e) { return { base, error: e.message }; }
       }));
       return res.json({ ok: true, bundleUrl, bundleSizeChars: bundleText.length, urlMatches: allQuoted.slice(0, 80), candidateProbes: probeResults, allScripts: scriptMatches });
-    } catch (e) {
-      return res.json({ ok: false, error: e.message });
-    }
+    } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
   try {
@@ -232,17 +170,14 @@ export default async function handler(req, res) {
       const stores = Array.isArray(data) ? data : (data.team_stores || data.stores || data);
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
-
     if (action === 'orders') {
       const data = await adminGet('/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
       return res.json({ ok: true, orders });
     }
-
     if (action === 'top-sellers') {
       const data = await adminGet('/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
-
       const productMap = {};
       for (const order of orders) {
         const lineItems = order.line_items || order.items || order.order_items || order.products || order.order_lines || [];
@@ -254,23 +189,17 @@ export default async function handler(req, res) {
           const price = Number(item.price || item.unit_price || item.amount || 0);
           const revenue = qty * price;
           if (!productMap[name]) productMap[name] = { name, revenue: 0, orders: 0, quantity: 0, stores: new Set() };
-          productMap[name].revenue += revenue;
-          productMap[name].orders++;
-          productMap[name].quantity += qty;
-          productMap[name].stores.add(storeName);
+          productMap[name].revenue += revenue; productMap[name].orders++; productMap[name].quantity += qty; productMap[name].stores.add(storeName);
         }
       }
-
       const sellers = Object.values(productMap).map(p => ({ ...p, stores: p.stores.size })).sort((a, b) => b.quantity - a.quantity);
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
-
     if (action === 'raw-sample') {
       const data = await adminGet('/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
       return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length, authEndpoint: _auth?.endpoint });
     }
-
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {
     console.error('[admin-stores]', e.message);

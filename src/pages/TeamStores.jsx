@@ -52,6 +52,8 @@ export default function TeamStores() {
   const [adminDiag, setAdminDiag] = useState(null);
   const [apiFind, setApiFind] = useState(null);
   const [apiFinding, setApiFinding] = useState(false);
+  const [apiDiscover, setApiDiscover] = useState(null);
+  const [apiDiscovering, setApiDiscovering] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -86,15 +88,11 @@ export default function TeamStores() {
   useEffect(() => {
     fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status" }) })
       .then(r => r.json())
-      .then(d => {
-        setConfigured(d.configured);
-        if (d.configured) load(days);
-      })
+      .then(d => { setConfigured(d.configured); if (d.configured) load(days); })
       .catch(() => setConfigured(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Match a Stripe store name to an admin store record by fuzzy name comparison
   function matchAdminStore(stripeName) {
     if (!adminStores.length) return null;
     const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -106,11 +104,7 @@ export default function TeamStores() {
     }) || null;
   }
 
-  function handleDays(d) {
-    setDays(d);
-    load(d);
-  }
-
+  function handleDays(d) { setDays(d); load(d); }
   function handleSort(col) {
     if (col === sortCol) setSortDir(d => d === "desc" ? "asc" : "desc");
     else { setSortCol(col); setSortDir("desc"); }
@@ -126,8 +120,7 @@ export default function TeamStores() {
     padding: "10px 14px", textAlign: col === "storeName" ? "left" : "right",
     fontSize: 11, fontWeight: 700, color: B.muted, textTransform: "uppercase",
     letterSpacing: "0.05em", cursor: "pointer", whiteSpace: "nowrap",
-    userSelect: "none", borderBottom: `2px solid ${B.border}`,
-    background: B.surface,
+    userSelect: "none", borderBottom: `2px solid ${B.border}`, background: B.surface,
   });
   const tdStyle = (align = "right") => ({
     padding: "11px 14px", fontSize: 13, color: B.text,
@@ -140,12 +133,7 @@ export default function TeamStores() {
         <div style={{ fontSize: 22, fontWeight: 700, color: B.text, marginBottom: 12 }}>Team Store Reporting</div>
         <div style={{ background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 10, padding: "20px 24px" }}>
           <div style={{ fontWeight: 700, color: B.yellow, marginBottom: 8 }}>Stripe Not Configured</div>
-          <div style={{ fontSize: 13, color: B.textMid, lineHeight: 1.7 }}>
-            Add <code style={{ background: B.border, padding: "1px 5px", borderRadius: 3 }}>STRIPE_SECRET_KEY</code> to your Vercel environment variables to enable Team Store Reporting.
-          </div>
-          <div style={{ marginTop: 12, fontSize: 12, color: B.muted }}>
-            Find your secret key at <strong>dashboard.stripe.com → Developers → API keys</strong>
-          </div>
+          <div style={{ fontSize: 13, color: B.textMid, lineHeight: 1.7 }}>Add <code style={{ background: B.border, padding: "1px 5px", borderRadius: 3 }}>STRIPE_SECRET_KEY</code> to your Vercel environment variables.</div>
         </div>
       </div>
     );
@@ -153,7 +141,6 @@ export default function TeamStores() {
 
   return (
     <div style={{ padding: "24px 28px", maxWidth: 1200 }}>
-      {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
         <div>
           <div style={{ fontSize: 22, fontWeight: 700, color: B.text }}>Team Store Reporting</div>
@@ -175,19 +162,14 @@ export default function TeamStores() {
         </div>
       </div>
 
-      {error && (
-        <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: B.red }}>
-          {error}
-        </div>
-      )}
+      {error && <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: B.red }}>{error}</div>}
 
       {summary?.truncated && (
         <div style={{ background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: B.yellow }}>
-          Showing first 5,000 charges — results may be incomplete. Use a shorter date range for full accuracy.
+          Showing first 5,000 charges — results may be incomplete.
         </div>
       )}
 
-      {/* Summary cards */}
       {summary && (
         <div style={{ display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" }}>
           <Card label="Total Revenue" value={fmt$(summary.totalRevenue)} sub={summary.days === "all-time" ? "All time" : `Last ${summary.days} days`} color={B.green} />
@@ -197,7 +179,6 @@ export default function TeamStores() {
         </div>
       )}
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${B.border}`, marginBottom: 20 }}>
         {[["stores", "Stores"], ["sellers", "Top Sellers"], ["recent", "Recent Orders"]].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{
@@ -210,36 +191,22 @@ export default function TeamStores() {
         ))}
       </div>
 
-      {/* Stores table */}
       {tab === "stores" && (
         loading && !stores.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading store data…</div>
         ) : stores.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 60, color: B.muted }}>
-            No charges found for this period.
-            {days === 0 ? "" : " Try expanding the date range."}
-          </div>
+          <div style={{ textAlign: "center", padding: 60, color: B.muted }}>No charges found for this period.{days === 0 ? "" : " Try expanding the date range."}</div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    {[
-                      ["storeName", "Store", "left"],
-                      ["revenue",   "Revenue", "right"],
-                      ["orders",    "Orders",  "right"],
-                      ["avgOrder",  "Avg Order","right"],
-                      ["lastSale",  "Last Sale","right"],
-                    ].map(([col, label, align]) => (
-                      <th key={col} style={{ ...thStyle(col), textAlign: align }} onClick={() => handleSort(col)}>
-                        {label}<SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
-                      </th>
-                    ))}
-                    {adminStores.length > 0 && <th style={{ ...thStyle("status"), textAlign: "left" }}>Status</th>}
-                    {adminStores.length > 0 && <th style={{ ...thStyle("link"), textAlign: "left" }}>Store</th>}
-                  </tr>
-                </thead>
+                <thead><tr>
+                  {[["storeName","Store","left"],["revenue","Revenue","right"],["orders","Orders","right"],["avgOrder","Avg Order","right"],["lastSale","Last Sale","right"]].map(([col, label, align]) => (
+                    <th key={col} style={{ ...thStyle(col), textAlign: align }} onClick={() => handleSort(col)}>{label}<SortIcon col={col} sortCol={sortCol} sortDir={sortDir} /></th>
+                  ))}
+                  {adminStores.length > 0 && <th style={{ ...thStyle("status"), textAlign: "left" }}>Status</th>}
+                  {adminStores.length > 0 && <th style={{ ...thStyle("link"), textAlign: "left" }}>Store</th>}
+                </tr></thead>
                 <tbody>
                   {sortedStores.map((store, i) => {
                     const adminMatch = matchAdminStore(store.storeName);
@@ -248,40 +215,28 @@ export default function TeamStores() {
                     const isOpen = status === true || status === "active" || status === "open" || status === "published";
                     const isClosed = status === false || status === "inactive" || status === "closed" || status === "draft";
                     return (
-                    <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
-                      <td style={tdStyle("left")}>
-                        <div style={{ fontWeight: 600, color: store.storeName === "Unattributed" ? B.muted : B.text }}>
-                          {store.storeName}
-                        </div>
-                      </td>
-                      <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{fmt$(store.revenue)}</td>
-                      <td style={tdStyle()}>{fmtN(store.orders)}</td>
-                      <td style={tdStyle()}>{fmt$(store.avgOrder)}</td>
-                      <td style={{ ...tdStyle(), color: B.muted, fontSize: 12 }}>{store.lastSale || "—"}</td>
-                      {adminStores.length > 0 && (
-                        <td style={tdStyle("left")}>
-                          {adminMatch ? (
-                            <span style={{
-                              display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700,
-                              background: isOpen ? B.greenBg : isClosed ? B.redBg : B.yellowBg,
-                              color: isOpen ? B.green : isClosed ? B.red : B.yellow,
-                            }}>
-                              {String(status ?? "unknown").toUpperCase()}
-                            </span>
-                          ) : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
-                        </td>
-                      )}
-                      {adminStores.length > 0 && (
-                        <td style={tdStyle("left")}>
-                          {slug ? (
-                            <a href={`https://store.st1sports.com/${slug}`} target="_blank" rel="noopener noreferrer"
-                               style={{ color: B.blue, fontSize: 12, textDecoration: "none" }}>
-                              /{slug} ↗
-                            </a>
-                          ) : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
-                        </td>
-                      )}
-                    </tr>
+                      <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
+                        <td style={tdStyle("left")}><div style={{ fontWeight: 600, color: store.storeName === "Unattributed" ? B.muted : B.text }}>{store.storeName}</div></td>
+                        <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{fmt$(store.revenue)}</td>
+                        <td style={tdStyle()}>{fmtN(store.orders)}</td>
+                        <td style={tdStyle()}>{fmt$(store.avgOrder)}</td>
+                        <td style={{ ...tdStyle(), color: B.muted, fontSize: 12 }}>{store.lastSale || "—"}</td>
+                        {adminStores.length > 0 && (
+                          <td style={tdStyle("left")}>
+                            {adminMatch ? (
+                              <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: isOpen ? B.greenBg : isClosed ? B.redBg : B.yellowBg, color: isOpen ? B.green : isClosed ? B.red : B.yellow }}>
+                                {String(status ?? "unknown").toUpperCase()}
+                              </span>
+                            ) : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
+                          </td>
+                        )}
+                        {adminStores.length > 0 && (
+                          <td style={tdStyle("left")}>
+                            {slug ? <a href={`https://store.st1sports.com/${slug}`} target="_blank" rel="noopener noreferrer" style={{ color: B.blue, fontSize: 12, textDecoration: "none" }}>/{slug} ↗</a>
+                              : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
+                          </td>
+                        )}
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -294,7 +249,6 @@ export default function TeamStores() {
         )
       )}
 
-      {/* Top Sellers */}
       {tab === "sellers" && (
         loading && !sellers.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
@@ -303,36 +257,37 @@ export default function TeamStores() {
             <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data found.</div>
             {adminDiag && (
               <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                   <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin API Diagnostic</div>
-                  <button
-                    onClick={async () => {
-                      setApiFinding(true);
-                      try {
-                        const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-api" }) });
-                        setApiFind(await r.json());
-                      } finally { setApiFinding(false); }
-                    }}
-                    disabled={apiFinding}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiFinding ? "default" : "pointer", border: `1px solid ${B.blue}`, borderRadius: 6, background: B.blueBg, color: B.blue }}
-                  >{apiFinding ? "Scanning…" : "Scan JS Bundle for API URL"}</button>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={async () => { setApiDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover" }) }); setApiDiscover(await r.json()); } finally { setApiDiscovering(false); } }} disabled={apiDiscovering}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiDiscovering ? "default" : "pointer", border: `1px solid ${B.orange}`, borderRadius: 6, background: B.orangeBg, color: B.orange }}>
+                      {apiDiscovering ? "Probing…" : "Discover API Routes"}</button>
+                    <button onClick={async () => { setApiFinding(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-api" }) }); setApiFind(await r.json()); } finally { setApiFinding(false); } }} disabled={apiFinding}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiFinding ? "default" : "pointer", border: `1px solid ${B.blue}`, borderRadius: 6, background: B.blueBg, color: B.blue }}>
+                      {apiFinding ? "Scanning…" : "Scan JS Bundle"}</button>
+                  </div>
                 </div>
+                {apiDiscover && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.border}`, borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: B.text, marginBottom: 6 }}>API route discovery:</div>
+                    {apiDiscover.results?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status >= 400 ? B.muted : B.green, marginBottom: 3, wordBreak: "break-all" }}>
+                        <strong>{r.url}</strong> → {r.error || `${r.status} ${r.ct}`}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {apiFind && (
                   <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.border}`, borderRadius: 6 }}>
                     <div style={{ fontWeight: 600, fontSize: 12, color: B.text, marginBottom: 6 }}>Bundle scan: {apiFind.bundleUrl}</div>
-                    {apiFind.urlMatches?.length > 0 ? (
-                      <ul style={{ margin: 0, padding: "0 0 0 16px", fontSize: 12, color: B.text, lineHeight: 1.8 }}>
-                        {apiFind.urlMatches.map((u, i) => <li key={i} style={{ wordBreak: "break-all" }}>{u}</li>)}
-                      </ul>
-                    ) : (
-                      <div style={{ fontSize: 12, color: B.muted }}>No URL patterns found in first 150KB.</div>
-                    )}
+                    {apiFind.urlMatches?.length > 0
+                      ? <ul style={{ margin: 0, padding: "0 0 0 16px", fontSize: 12, color: B.text, lineHeight: 1.8 }}>{apiFind.urlMatches.map((u, i) => <li key={i} style={{ wordBreak: "break-all" }}>{u}</li>)}</ul>
+                      : <div style={{ fontSize: 12, color: B.muted }}>No URL patterns found.</div>}
                     {apiFind.error && <div style={{ color: B.red, fontSize: 12 }}>{apiFind.error}</div>}
                   </div>
                 )}
-                <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                  {JSON.stringify(adminDiag, null, 2)}
-                </pre>
+                <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{JSON.stringify(adminDiag, null, 2)}</pre>
               </div>
             )}
           </div>
@@ -340,16 +295,14 @@ export default function TeamStores() {
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ ...thStyle("name"), textAlign: "left" }}>#</th>
-                    <th style={{ ...thStyle("name"), textAlign: "left" }}>Product</th>
-                    <th style={thStyle("quantity")}>Units Sold</th>
-                    <th style={thStyle("revenue")}>Revenue</th>
-                    <th style={thStyle("orders")}>Orders</th>
-                    <th style={thStyle("stores")}>Stores</th>
-                  </tr>
-                </thead>
+                <thead><tr>
+                  <th style={{ ...thStyle("name"), textAlign: "left" }}>#</th>
+                  <th style={{ ...thStyle("name"), textAlign: "left" }}>Product</th>
+                  <th style={thStyle("quantity")}>Units Sold</th>
+                  <th style={thStyle("revenue")}>Revenue</th>
+                  <th style={thStyle("orders")}>Orders</th>
+                  <th style={thStyle("stores")}>Stores</th>
+                </tr></thead>
                 <tbody>
                   {sellers.map((s, i) => (
                     <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
@@ -368,7 +321,6 @@ export default function TeamStores() {
         )
       )}
 
-      {/* Recent Orders */}
       {tab === "recent" && (
         loading && !recent.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
@@ -378,16 +330,14 @@ export default function TeamStores() {
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ ...thStyle("date"), textAlign: "left" }}>Date</th>
-                    <th style={{ ...thStyle("store"), textAlign: "left" }}>Store</th>
-                    <th style={{ ...thStyle("orderNumber"), textAlign: "left" }}>Order #</th>
-                    <th style={{ ...thStyle("customer"), textAlign: "left" }}>Customer</th>
-                    <th style={thStyle("amount")}>Amount</th>
-                    <th style={thStyle("receipt")}></th>
-                  </tr>
-                </thead>
+                <thead><tr>
+                  <th style={{ ...thStyle("date"), textAlign: "left" }}>Date</th>
+                  <th style={{ ...thStyle("store"), textAlign: "left" }}>Store</th>
+                  <th style={{ ...thStyle("orderNumber"), textAlign: "left" }}>Order #</th>
+                  <th style={{ ...thStyle("customer"), textAlign: "left" }}>Customer</th>
+                  <th style={thStyle("amount")}>Amount</th>
+                  <th style={thStyle("receipt")}></th>
+                </tr></thead>
                 <tbody>
                   {recent.map((r, i) => (
                     <tr key={r.id} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
@@ -396,11 +346,7 @@ export default function TeamStores() {
                       <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12, whiteSpace: "nowrap" }}>{r.orderNumber || "—"}</td>
                       <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12 }}>{r.customer || "—"}</td>
                       <td style={{ ...tdStyle(), fontWeight: 700, color: B.green, whiteSpace: "nowrap" }}>{fmt$(r.amount)}</td>
-                      <td style={{ ...tdStyle(), width: 40 }}>
-                        {r.receiptUrl && (
-                          <a href={r.receiptUrl} target="_blank" rel="noopener noreferrer" style={{ color: B.blue, fontSize: 12, textDecoration: "none" }}>↗</a>
-                        )}
-                      </td>
+                      <td style={{ ...tdStyle(), width: 40 }}>{r.receiptUrl && <a href={r.receiptUrl} target="_blank" rel="noopener noreferrer" style={{ color: B.blue, fontSize: 12, textDecoration: "none" }}>↗</a>}</td>
                     </tr>
                   ))}
                 </tbody>
