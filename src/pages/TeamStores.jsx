@@ -48,6 +48,7 @@ export default function TeamStores() {
   const [sellers, setSellers]     = useState([]);
   const [recent, setRecent]       = useState([]);
   const [summary, setSummary]     = useState(null);
+  const [adminStores, setAdminStores] = useState([]);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -57,17 +58,19 @@ export default function TeamStores() {
     setLoading(true);
     setError(null);
     try {
-      const [storesRes, sellersRes, recentRes] = await Promise.all([
+      const [storesRes, sellersRes, recentRes, adminRes] = await Promise.all([
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores", days: d }) }),
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers", days: d, limit: 15 }) }),
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recent", days: d, limit: 20 }) }),
+        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores" }) }),
       ]);
-      const [sd, sld, rd] = await Promise.all([storesRes.json(), sellersRes.json(), recentRes.json()]);
+      const [sd, sld, rd, ad] = await Promise.all([storesRes.json(), sellersRes.json(), recentRes.json(), adminRes.json()]);
       if (!sd.ok) throw new Error(sd.error);
       setStores(sd.stores || []);
       setSummary(sd.summary || null);
       setSellers(sld.sellers || []);
       setRecent(rd.recent || []);
+      if (ad.ok) setAdminStores(ad.stores || []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -85,6 +88,18 @@ export default function TeamStores() {
       .catch(() => setConfigured(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Match a Stripe store name to an admin store record by fuzzy name comparison
+  function matchAdminStore(stripeName) {
+    if (!adminStores.length) return null;
+    const norm = s => (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const n = norm(stripeName);
+    return adminStores.find(a => {
+      const aName = norm(a.name || a.store_name || a.title || "");
+      const aSlug = norm(a.slug || a.url_slug || a.store_slug || "");
+      return aName === n || aSlug === n || n.includes(aName) || aName.includes(n);
+    }) || null;
+  }
 
   function handleDays(d) {
     setDays(d);
@@ -211,16 +226,23 @@ export default function TeamStores() {
                       ["orders",    "Orders",  "right"],
                       ["avgOrder",  "Avg Order","right"],
                       ["lastSale",  "Last Sale","right"],
-                      ["topProduct","Top Product","left"],
                     ].map(([col, label, align]) => (
                       <th key={col} style={{ ...thStyle(col), textAlign: align }} onClick={() => handleSort(col)}>
                         {label}<SortIcon col={col} sortCol={sortCol} sortDir={sortDir} />
                       </th>
                     ))}
+                    {adminStores.length > 0 && <th style={{ ...thStyle("status"), textAlign: "left" }}>Status</th>}
+                    {adminStores.length > 0 && <th style={{ ...thStyle("link"), textAlign: "left" }}>Store</th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedStores.map((store, i) => (
+                  {sortedStores.map((store, i) => {
+                    const adminMatch = matchAdminStore(store.storeName);
+                    const status = adminMatch?.status || adminMatch?.state || adminMatch?.published;
+                    const slug = adminMatch?.slug || adminMatch?.url_slug || adminMatch?.store_slug;
+                    const isOpen = status === true || status === "active" || status === "open" || status === "published";
+                    const isClosed = status === false || status === "inactive" || status === "closed" || status === "draft";
+                    return (
                     <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
                       <td style={tdStyle("left")}>
                         <div style={{ fontWeight: 600, color: store.storeName === "Unattributed" ? B.muted : B.text }}>
@@ -231,11 +253,32 @@ export default function TeamStores() {
                       <td style={tdStyle()}>{fmtN(store.orders)}</td>
                       <td style={tdStyle()}>{fmt$(store.avgOrder)}</td>
                       <td style={{ ...tdStyle(), color: B.muted, fontSize: 12 }}>{store.lastSale || "—"}</td>
-                      <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {store.topProduct || "—"}
-                      </td>
+                      {adminStores.length > 0 && (
+                        <td style={tdStyle("left")}>
+                          {adminMatch ? (
+                            <span style={{
+                              display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700,
+                              background: isOpen ? B.greenBg : isClosed ? B.redBg : B.yellowBg,
+                              color: isOpen ? B.green : isClosed ? B.red : B.yellow,
+                            }}>
+                              {String(status ?? "unknown").toUpperCase()}
+                            </span>
+                          ) : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
+                        </td>
+                      )}
+                      {adminStores.length > 0 && (
+                        <td style={tdStyle("left")}>
+                          {slug ? (
+                            <a href={`https://store.st1sports.com/${slug}`} target="_blank" rel="noopener noreferrer"
+                               style={{ color: B.blue, fontSize: 12, textDecoration: "none" }}>
+                              /{slug} ↗
+                            </a>
+                          ) : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
+                        </td>
+                      )}
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
