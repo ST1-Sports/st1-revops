@@ -208,14 +208,11 @@ export default async function handler(req, res) {
   // Diagnostic: fetch the SPA JS bundle and extract API base URL hints
   if (action === 'find-api') {
     try {
-      // Step 1: get the index HTML to find the main JS bundle
+      // Step 1: get the index HTML to find all JS bundles
       const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
       const html = await htmlRes.text();
-
-      // Extract all <script src="..."> paths
       const scriptMatches = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
 
-      // Find the main entry bundle (usually largest, named index-XXXXX.js or main-XXXXX.js)
       const mainScript = scriptMatches.find(s => /\/(index|main)[^/]*\.js/.test(s)) || scriptMatches[0];
       if (!mainScript) {
         return res.json({ ok: false, error: 'No JS bundle found in HTML', scripts: scriptMatches, htmlSnippet: html.slice(0, 500) });
@@ -223,30 +220,48 @@ export default async function handler(req, res) {
 
       const bundleUrl = mainScript.startsWith('http') ? mainScript : `${BASE}${mainScript}`;
 
-      // Step 2: fetch the bundle (may be large — read first 150KB only)
+      // Step 2: fetch the FULL bundle (no truncation)
       const bundleRes = await fetch(bundleUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
       const bundleText = await bundleRes.text();
-      const chunk = bundleText.slice(0, 150000);
 
-      // Step 3: extract URL-like strings and API clues
-      const urlMatches = [...new Set([
-        // https:// URLs (likely API base)
-        ...[...chunk.matchAll(/["']https:\/\/[^"']{5,80}["']/g)].map(m => m[0].replace(/["']/g, '')),
-        // Relative paths that look like API routes
-        ...[...chunk.matchAll(/["'](\/api\/[^"']{3,60})["']/g)].map(m => m[1]),
-        // baseURL / baseUrl assignments
-        ...[...chunk.matchAll(/baseURL?["']?\s*[:=]\s*["']([^"']{5,80})["']/g)].map(m => m[1]),
-        // VITE_ env references
-        ...[...chunk.matchAll(/VITE_[A-Z_]+/g)].map(m => m[0]),
-        // login/auth path strings
-        ...[...chunk.matchAll(/["']([^"']*(?:login|sign_in|auth|session)[^"']{0,40})["']/gi)].map(m => m[1]).filter(s => s.startsWith('/')),
+      // Step 3: broad search across the entire bundle
+      const allQuoted = [...new Set([
+        // Any quoted string containing st1sports (the key domain)
+        ...[...bundleText.matchAll(/["'`]([^"'`]*st1sports[^"'`]{0,100})["'`]/gi)].map(m => m[1]),
+        // All https:// URLs in any quote style
+        ...[...bundleText.matchAll(/["'`](https:\/\/[^"'`\s]{5,120})["'`]/g)].map(m => m[1]),
+        // /api/ paths
+        ...[...bundleText.matchAll(/["'`](\/api\/[^"'`\s]{3,80})["'`]/g)].map(m => m[1]),
+        // baseURL patterns
+        ...[...bundleText.matchAll(/baseURL?["'`]?\s*[:=]\s*["'`]([^"'`\s]{5,120})["'`]/gi)].map(m => m[1]),
+        // login/sign_in/auth path strings
+        ...[...bundleText.matchAll(/["'`](\/[^"'`\s]*(?:login|sign_in|auth|session)[^"'`\s]{0,60})["'`]/gi)].map(m => m[1]),
       ])];
+
+      // Also probe candidate API domains directly
+      const candidates = [
+        'https://api.st1sports.com',
+        'https://app.st1sports.com',
+        'https://st1sports.com',
+        'https://admin-api.st1sports.com',
+      ];
+      const probeResults = await Promise.all(candidates.map(async base => {
+        try {
+          const r = await fetch(`${base}/health`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(4000) });
+          const ct = r.headers.get('content-type') || '';
+          const body = await r.text();
+          return { base, status: r.status, ct, snippet: body.slice(0, 100).replace(/\n/g, ' ') };
+        } catch (e) {
+          return { base, error: e.message };
+        }
+      }));
 
       return res.json({
         ok: true,
         bundleUrl,
         bundleSizeChars: bundleText.length,
-        urlMatches: urlMatches.slice(0, 60),
+        urlMatches: allQuoted.slice(0, 80),
+        candidateProbes: probeResults,
         allScripts: scriptMatches,
       });
     } catch (e) {
