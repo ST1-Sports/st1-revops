@@ -41,7 +41,7 @@ function SortIcon({ col, sortCol, sortDir }) {
 }
 
 export default function TeamStores() {
-  const [days, setDays]           = useState(30);
+  const [days, setDays]           = useState(0);
   const [loading, setLoading]     = useState(false);
   const [configured, setConfigured] = useState(null);
   const [stores, setStores]       = useState([]);
@@ -158,6 +158,12 @@ export default function TeamStores() {
       {error && (
         <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: B.red }}>
           {error}
+        </div>
+      )}
+
+      {summary?.truncated && (
+        <div style={{ background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: B.yellow }}>
+          Showing first 5,000 charges — results may be incomplete. Use a shorter date range for full accuracy.
         </div>
       )}
 

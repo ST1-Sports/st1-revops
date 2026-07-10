@@ -35,7 +35,7 @@ async function stripeGet(path, params = {}) {
 }
 
 // Paginate through all succeeded charges in a time window (up to 1000 to avoid timeout)
-async function fetchCharges(fromTs, toTs, maxCharges = 1000) {
+async function fetchCharges(fromTs, toTs, maxCharges = 5000) {
   const all = [];
   let startingAfter = null;
   const params = { limit: 100, 'expand[]': 'data.payment_intent' };
@@ -165,6 +165,7 @@ export default async function handler(req, res) {
           totalOrders,
           activeStores,
           totalChargesScanned: charges.length,
+          truncated: charges.length >= 5000,
           days: Number(days) || 'all-time',
         },
       });
