@@ -53,26 +53,43 @@ async function fetchCharges(fromTs, toTs, maxCharges = 1000) {
   return all;
 }
 
-// Extract a human-readable store name from charge metadata (tries several common keys)
+// Parse description format "#ST1-26-00347 / ADM Tigers Cross Country"
+// Returns { orderNumber, storeName } — either may be null if not matched.
+function parseDescription(desc) {
+  if (!desc) return { orderNumber: null, storeName: null };
+  const slash = desc.indexOf(' / ');
+  if (slash !== -1) {
+    return {
+      orderNumber: desc.slice(0, slash).trim(),
+      storeName:   desc.slice(slash + 3).trim() || null,
+    };
+  }
+  return { orderNumber: null, storeName: null };
+}
+
+// Extract store name: metadata first, then description parsing
 function storeNameOf(charge) {
   const m = charge.metadata || {};
   const pm = charge.payment_intent?.metadata || {};
-  return (
-    m.store_name || m.school_name || m.store_id ||
+  const fromMeta = m.store_name || m.school_name || m.store_id ||
     pm.store_name || pm.school_name || pm.store_id ||
-    charge.statement_descriptor_suffix ||
-    null
-  );
+    charge.statement_descriptor_suffix;
+  if (fromMeta) return fromMeta;
+  return parseDescription(charge.description).storeName;
 }
 
-// Extract a product/item description from a charge
+// Extract order number from description (e.g. "#ST1-26-00347")
+function orderNumberOf(charge) {
+  return parseDescription(charge.description).orderNumber;
+}
+
+// Extract a product/item description from a charge (metadata only — description holds order ref)
 function productOf(charge) {
   const m = charge.metadata || {};
   const pm = charge.payment_intent?.metadata || {};
   return (
     m.product_name || m.item_name || m.product ||
     pm.product_name || pm.item_name || pm.product ||
-    charge.description ||
     null
   );
 }
@@ -178,14 +195,14 @@ export default async function handler(req, res) {
     if (action === 'recent') {
       const charges = await fetchCharges(fromTs, toTs, Number(limit));
       const recent = charges.slice(0, Number(limit)).map(charge => ({
-        id:        charge.id,
-        date:      new Date(charge.created * 1000).toISOString().slice(0, 10),
-        store:     storeNameOf(charge) || 'Unattributed',
-        product:   productOf(charge),
-        amount:    (charge.amount - (charge.amount_refunded || 0)) / 100,
-        currency:  charge.currency,
-        customer:  charge.billing_details?.name || charge.billing_details?.email || null,
-        receiptUrl: charge.receipt_url || null,
+        id:          charge.id,
+        date:        new Date(charge.created * 1000).toISOString().slice(0, 10),
+        store:       storeNameOf(charge) || 'Unattributed',
+        orderNumber: orderNumberOf(charge),
+        amount:      (charge.amount - (charge.amount_refunded || 0)) / 100,
+        currency:    charge.currency,
+        customer:    charge.billing_details?.name || charge.billing_details?.email || null,
+        receiptUrl:  charge.receipt_url || null,
       }));
       return res.json({ ok: true, recent });
     }

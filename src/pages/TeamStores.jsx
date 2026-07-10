@@ -292,7 +292,7 @@ export default function TeamStores() {
                   <tr>
                     <th style={{ ...thStyle("date"), textAlign: "left" }}>Date</th>
                     <th style={{ ...thStyle("store"), textAlign: "left" }}>Store</th>
-                    <th style={{ ...thStyle("product"), textAlign: "left" }}>Item / Description</th>
+                    <th style={{ ...thStyle("orderNumber"), textAlign: "left" }}>Order #</th>
                     <th style={{ ...thStyle("customer"), textAlign: "left" }}>Customer</th>
                     <th style={thStyle("amount")}>Amount</th>
                     <th style={thStyle("receipt")}></th>
@@ -303,7 +303,7 @@ export default function TeamStores() {
                     <tr key={r.id} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
                       <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12, whiteSpace: "nowrap" }}>{r.date}</td>
                       <td style={{ ...tdStyle("left"), fontWeight: 600, fontSize: 13 }}>{r.store}</td>
-                      <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.product || "—"}</td>
+                      <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12, whiteSpace: "nowrap" }}>{r.orderNumber || "—"}</td>
                       <td style={{ ...tdStyle("left"), color: B.muted, fontSize: 12 }}>{r.customer || "—"}</td>
                       <td style={{ ...tdStyle(), fontWeight: 700, color: B.green, whiteSpace: "nowrap" }}>{fmt$(r.amount)}</td>
                       <td style={{ ...tdStyle(), width: 40 }}>
