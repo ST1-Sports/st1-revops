@@ -45,7 +45,7 @@ async function fetchCharges(fromTs, toTs, maxCharges = 1000) {
   while (all.length < maxCharges) {
     if (startingAfter) params.starting_after = startingAfter;
     const page = await stripeGet('/charges', params);
-    const succeeded = page.data.filter(c => c.status === 'succeeded');
+    const succeeded = page.data.filter(c => c.status === 'succeeded' && !c.invoice);
     all.push(...succeeded);
     if (!page.has_more || page.data.length === 0) break;
     startingAfter = page.data[page.data.length - 1].id;
