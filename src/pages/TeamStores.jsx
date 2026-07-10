@@ -49,6 +49,7 @@ export default function TeamStores() {
   const [recent, setRecent]       = useState([]);
   const [summary, setSummary]     = useState(null);
   const [adminStores, setAdminStores] = useState([]);
+  const [adminDiag, setAdminDiag] = useState(null);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -58,19 +59,21 @@ export default function TeamStores() {
     setLoading(true);
     setError(null);
     try {
-      const [storesRes, recentRes, adminStoresRes, adminSellersRes] = await Promise.all([
+      const [storesRes, recentRes, adminStoresRes, adminSellersRes, adminRawRes] = await Promise.all([
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores", days: d }) }),
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recent", days: d, limit: 20 }) }),
         fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores" }) }),
         fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers" }) }),
+        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) }),
       ]);
-      const [sd, rd, ad, asd] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json()]);
+      const [sd, rd, ad, asd, raw] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json(), adminRawRes.json()]);
       if (!sd.ok) throw new Error(sd.error);
       setStores(sd.stores || []);
       setSummary(sd.summary || null);
       setRecent(rd.recent || []);
       if (ad.ok) setAdminStores(ad.stores || []);
       if (asd.ok && asd.sellers?.length) setSellers(asd.sellers || []);
+      setAdminDiag({ sellersResult: asd, rawSample: raw });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -294,8 +297,16 @@ export default function TeamStores() {
         loading && !sellers.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 60, color: B.muted }}>
-            No product data found. This pulls from admin.st1sports.com order line items — check that store orders have items attached.
+          <div style={{ padding: 24 }}>
+            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data found.</div>
+            {adminDiag && (
+              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, marginBottom: 8, textTransform: "uppercase" }}>Admin API Diagnostic</div>
+                <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                  {JSON.stringify(adminDiag, null, 2)}
+                </pre>
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
