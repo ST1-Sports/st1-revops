@@ -48,7 +48,8 @@
     "api/gmail-token.js":                          { "maxDuration": 15 },
     "api/cron/send-batches.js":                    { "maxDuration": 120 },
     "api/cron/reddit-daily.js":                    { "maxDuration": 120 },
-    "api/reddit/index.js":                         { "maxDuration": 30 }
+    "api/stripe/index.js":                         { "maxDuration": 30 },
+    "api/admin-stores/index.js":                   { "maxDuration": 30 }
   },
   "crons": [
     { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
