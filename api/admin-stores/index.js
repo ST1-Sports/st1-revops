@@ -36,26 +36,55 @@ function parseCookies(setCookieHeaders) {
   return headers.map(h => h.split(';')[0]).join('; ');
 }
 
-async function getSessionCookies() {
-  if (_sessionCookies && Date.now() < _sessionExpiry) return _sessionCookies;
+// Returns { type: 'cookie'|'bearer', value: string }
+async function getAuth() {
+  if (_sessionCookies && Date.now() < _sessionExpiry) {
+    return JSON.parse(_sessionCookies);
+  }
 
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
 
-  // Step 1: GET login page to obtain CSRF token + initial session cookie
+  // Try JSON token-based auth first (SPA / API pattern — returns 200 + token in body)
+  const tokenRes = await fetch(`${BASE}/users/sign_in`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': 'ST1-RevOps/1.0',
+    },
+    body: JSON.stringify({ user: { email, password } }),
+  });
+
+  if (tokenRes.status === 200 || tokenRes.status === 201) {
+    const ct = tokenRes.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      const body = await tokenRes.json();
+      // Common token field names across Devise JWT, devise_token_auth, etc.
+      const token = body.token || body.access_token || body.auth_token ||
+                    body.jwt || body.data?.token || body.user?.token;
+      if (token) {
+        const auth = { type: 'bearer', value: token };
+        _sessionCookies = JSON.stringify(auth);
+        _sessionExpiry  = Date.now() + 30 * 60 * 1000;
+        return auth;
+      }
+      // 200 but no recognisable token — surface the body for debugging
+      throw new Error(`Login returned 200 but no token found. Body keys: ${Object.keys(body).join(', ')}`);
+    }
+  }
+
+  // Fallback: cookie-based auth (Devise HTML form flow)
   const loginPageRes = await fetch(`${BASE}/users/sign_in`, {
     headers: { 'Accept': 'text/html', 'User-Agent': 'ST1-RevOps/1.0' },
   });
-
   const loginHtml = await loginPageRes.text();
   const rawCookies = parseCookies(loginPageRes.headers.getSetCookie?.() || loginPageRes.headers.get('set-cookie'));
-
-  // Extract Rails authenticity_token from the login form
   const csrfMatch = loginHtml.match(/name="authenticity_token"[^>]*value="([^"]+)"/) ||
                     loginHtml.match(/content="([^"]+)"[^>]*name="csrf-token"/);
   const csrf = csrfMatch?.[1] || '';
 
-  // Step 2: POST credentials
   const signInRes = await fetch(`${BASE}/users/sign_in`, {
     method: 'POST',
     redirect: 'manual',
@@ -67,36 +96,31 @@ async function getSessionCookies() {
       'X-CSRF-Token': csrf,
     },
     body: new URLSearchParams({
-      'user[email]':    email,
-      'user[password]': password,
-      'authenticity_token': csrf,
+      'user[email]': email, 'user[password]': password, 'authenticity_token': csrf,
     }).toString(),
   });
 
-  // After successful Devise login, server redirects (302) and sets a new session cookie
   const status = signInRes.status;
   if (status !== 302 && status !== 200 && status !== 303) {
-    throw new Error(`Login failed — server returned HTTP ${status}. Check credentials.`);
+    throw new Error(`Login failed — HTTP ${status}`);
   }
-
   const sessionCookies = parseCookies(signInRes.headers.getSetCookie?.() || signInRes.headers.get('set-cookie'));
   if (!sessionCookies) {
-    throw new Error(`Login appeared to succeed (${status}) but no session cookie returned.`);
+    throw new Error(`Login returned ${status} but no session cookie or token found`);
   }
-
-  _sessionCookies = sessionCookies;
-  _sessionExpiry  = Date.now() + 30 * 60 * 1000; // cache 30 min
-  return _sessionCookies;
+  const auth = { type: 'cookie', value: sessionCookies };
+  _sessionCookies = JSON.stringify(auth);
+  _sessionExpiry  = Date.now() + 30 * 60 * 1000;
+  return auth;
 }
 
 async function adminGet(path) {
-  const cookies = await getSessionCookies();
+  const auth = await getAuth();
+  const authHeader = auth.type === 'bearer'
+    ? { 'Authorization': `Bearer ${auth.value}` }
+    : { 'Cookie': auth.value };
   const res = await fetch(`${BASE}${path}`, {
-    headers: {
-      'Accept': 'application/json',
-      'User-Agent': 'ST1-RevOps/1.0',
-      'Cookie': cookies,
-    },
+    headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeader },
   });
   if (res.status === 401 || res.status === 403) {
     _sessionCookies = null; // clear cache so next call re-authenticates
