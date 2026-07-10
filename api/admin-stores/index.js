@@ -57,11 +57,21 @@ async function getAuth() {
     body: JSON.stringify({ user: { email, password } }),
   });
 
-  if (tokenRes.status === 200 || tokenRes.status === 201) {
-    const ct = tokenRes.headers.get('content-type') || '';
-    if (ct.includes('application/json')) {
+  const tokenStatus = tokenRes.status;
+  const tokenCt = tokenRes.headers.get('content-type') || '';
+  const tokenCookies = parseCookies(tokenRes.headers.getSetCookie?.() || tokenRes.headers.get('set-cookie'));
+
+  // If cookies came back on the JSON attempt, use them
+  if (tokenCookies) {
+    const auth = { type: 'cookie', value: tokenCookies };
+    _sessionCookies = JSON.stringify(auth);
+    _sessionExpiry  = Date.now() + 30 * 60 * 1000;
+    return auth;
+  }
+
+  if (tokenStatus === 200 || tokenStatus === 201) {
+    if (tokenCt.includes('application/json')) {
       const body = await tokenRes.json();
-      // Common token field names across Devise JWT, devise_token_auth, etc.
       const token = body.token || body.access_token || body.auth_token ||
                     body.jwt || body.data?.token || body.user?.token;
       if (token) {
@@ -70,48 +80,14 @@ async function getAuth() {
         _sessionExpiry  = Date.now() + 30 * 60 * 1000;
         return auth;
       }
-      // 200 but no recognisable token — surface the body for debugging
-      throw new Error(`Login returned 200 but no token found. Body keys: ${Object.keys(body).join(', ')}`);
+      throw new Error(`Login 200/JSON but no token. Body keys: [${Object.keys(body).join(', ')}]`);
     }
+    // Non-JSON 200 — read a snippet of the body to diagnose
+    const snippet = (await tokenRes.text()).slice(0, 300).replace(/\n/g, ' ');
+    throw new Error(`Login 200 but content-type="${tokenCt}". Body snippet: ${snippet}`);
   }
 
-  // Fallback: cookie-based auth (Devise HTML form flow)
-  const loginPageRes = await fetch(`${BASE}/users/sign_in`, {
-    headers: { 'Accept': 'text/html', 'User-Agent': 'ST1-RevOps/1.0' },
-  });
-  const loginHtml = await loginPageRes.text();
-  const rawCookies = parseCookies(loginPageRes.headers.getSetCookie?.() || loginPageRes.headers.get('set-cookie'));
-  const csrfMatch = loginHtml.match(/name="authenticity_token"[^>]*value="([^"]+)"/) ||
-                    loginHtml.match(/content="([^"]+)"[^>]*name="csrf-token"/);
-  const csrf = csrfMatch?.[1] || '';
-
-  const signInRes = await fetch(`${BASE}/users/sign_in`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'text/html,application/json',
-      'User-Agent': 'ST1-RevOps/1.0',
-      'Cookie': rawCookies,
-      'X-CSRF-Token': csrf,
-    },
-    body: new URLSearchParams({
-      'user[email]': email, 'user[password]': password, 'authenticity_token': csrf,
-    }).toString(),
-  });
-
-  const status = signInRes.status;
-  if (status !== 302 && status !== 200 && status !== 303) {
-    throw new Error(`Login failed — HTTP ${status}`);
-  }
-  const sessionCookies = parseCookies(signInRes.headers.getSetCookie?.() || signInRes.headers.get('set-cookie'));
-  if (!sessionCookies) {
-    throw new Error(`Login returned ${status} but no session cookie or token found`);
-  }
-  const auth = { type: 'cookie', value: sessionCookies };
-  _sessionCookies = JSON.stringify(auth);
-  _sessionExpiry  = Date.now() + 30 * 60 * 1000;
-  return auth;
+  throw new Error(`Login attempt returned HTTP ${tokenStatus} (content-type: ${tokenCt})`);
 }
 
 async function adminGet(path) {
