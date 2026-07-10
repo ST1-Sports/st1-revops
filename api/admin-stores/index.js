@@ -1,27 +1,41 @@
 /**
  * /api/admin-stores — Pulls team store + order data from admin.st1sports.com.
  *
- * Authenticates via Rails/Devise session (CSRF + cookie) then fetches:
- *   GET /team_stores.json  — list of stores with slug, name, status
- *   GET /store_orders.json — orders with store reference
+ * The admin site is a Vite SPA. Auth endpoint is probed at runtime from
+ * a list of common patterns; the working one is cached for the session.
  *
  * Env vars required:
  *   ADMIN_ST1_EMAIL     — login email for admin.st1sports.com
  *   ADMIN_ST1_PASSWORD  — login password
  *
  * Actions (POST body: { action }):
- *   status  — check if credentials are configured
- *   stores  — return all team stores with status
- *   orders  — return store orders (optional: ?storeSlug=xxx to filter)
+ *   status      — check if credentials are configured
+ *   stores      — return all team stores with status
+ *   orders      — return store orders
+ *   top-sellers — aggregate top products from order line items
+ *   raw-sample  — return 2 raw orders for schema inspection
  */
 
 import { setCors } from '../_lib/cors.js';
 
 const BASE = 'https://admin.st1sports.com';
 
-// Simple in-process session cache (reuse across Vercel invocations while warm)
-let _sessionCookies = null;
-let _sessionExpiry  = 0;
+// Ordered list of auth endpoints to probe (SPA patterns)
+const AUTH_ENDPOINTS = [
+  { path: '/api/auth/login',        body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/v1/auth/login',     body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/sessions',          body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/login',             body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/v1/sessions',       body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/auth/sign_in',      body: (e, p) => ({ email: e, password: p }) },
+  { path: '/api/users/sign_in',     body: (e, p) => ({ user: { email: e, password: p } }) },
+  { path: '/api/v1/users/sign_in',  body: (e, p) => ({ user: { email: e, password: p } }) },
+];
+
+// In-process session cache
+let _auth = null;           // { type: 'cookie'|'bearer', value: string, endpoint: string }
+let _sessionExpiry = 0;
+let _probeLog = [];         // captured during last probe attempt, for diagnostics
 
 function creds() {
   return {
@@ -36,58 +50,113 @@ function parseCookies(setCookieHeaders) {
   return headers.map(h => h.split(';')[0]).join('; ');
 }
 
-// Returns { type: 'cookie'|'bearer', value: string }
+async function probeAuth(email, password) {
+  _probeLog = [];
+
+  for (const ep of AUTH_ENDPOINTS) {
+    let status, ct, cookies, bodySnippet;
+    try {
+      const res = await fetch(`${BASE}${ep.path}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': 'ST1-RevOps/1.0',
+        },
+        body: JSON.stringify(ep.body(email, password)),
+      });
+
+      status = res.status;
+      ct = res.headers.get('content-type') || '';
+      cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
+
+      // 404 / 405 → endpoint doesn't exist, move on
+      if (status === 404 || status === 405) {
+        _probeLog.push({ endpoint: ep.path, status, result: 'not-found' });
+        continue;
+      }
+
+      // Got cookies → cookie-based auth succeeded
+      if (cookies && (status === 200 || status === 201 || status === 302)) {
+        _probeLog.push({ endpoint: ep.path, status, result: 'cookie-auth' });
+        return { type: 'cookie', value: cookies, endpoint: ep.path };
+      }
+
+      // Read body
+      const text = await res.text();
+      bodySnippet = text.slice(0, 200).replace(/\n/g, ' ');
+
+      // HTML response → SPA shell, not an API endpoint
+      if (ct.includes('text/html') || text.trim().startsWith('<')) {
+        _probeLog.push({ endpoint: ep.path, status, ct, result: 'html-response' });
+        continue;
+      }
+
+      if ((status === 200 || status === 201) && ct.includes('application/json')) {
+        let body;
+        try { body = JSON.parse(text); } catch { body = {}; }
+
+        // Check for token in common locations
+        const token =
+          body.token || body.access_token || body.auth_token || body.jwt ||
+          body.data?.token || body.user?.token || body.data?.access_token;
+
+        if (token) {
+          _probeLog.push({ endpoint: ep.path, status, result: 'bearer-token' });
+          return { type: 'bearer', value: token, endpoint: ep.path };
+        }
+
+        // Got cookies on JSON 200 (set above already handled, but double-check)
+        if (cookies) {
+          _probeLog.push({ endpoint: ep.path, status, result: 'cookie-json' });
+          return { type: 'cookie', value: cookies, endpoint: ep.path };
+        }
+
+        _probeLog.push({ endpoint: ep.path, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet });
+        continue;
+      }
+
+      // 401/403 with JSON → endpoint exists but credentials wrong (or needs different format)
+      if ((status === 401 || status === 403 || status === 422) && ct.includes('application/json')) {
+        let errBody;
+        try { errBody = JSON.parse(text); } catch { errBody = {}; }
+        _probeLog.push({ endpoint: ep.path, status, result: 'auth-rejected', error: errBody.error || errBody.message || bodySnippet });
+        // This endpoint exists! Return special marker so caller can surface the rejection
+        return { type: 'rejected', endpoint: ep.path, status, detail: errBody.error || errBody.message || bodySnippet };
+      }
+
+      _probeLog.push({ endpoint: ep.path, status, ct, result: 'unknown', snippet: bodySnippet });
+    } catch (err) {
+      _probeLog.push({ endpoint: ep.path, result: 'error', error: err.message });
+    }
+  }
+
+  return null; // no endpoint worked
+}
+
 async function getAuth() {
-  if (_sessionCookies && Date.now() < _sessionExpiry) {
-    return JSON.parse(_sessionCookies);
+  if (_auth && _auth.type !== 'rejected' && Date.now() < _sessionExpiry) {
+    return _auth;
   }
 
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
 
-  // Try JSON token-based auth first (SPA / API pattern — returns 200 + token in body)
-  const tokenRes = await fetch(`${BASE}/users/sign_in`, {
-    method: 'POST',
-    redirect: 'manual',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'User-Agent': 'ST1-RevOps/1.0',
-    },
-    body: JSON.stringify({ user: { email, password } }),
-  });
+  const auth = await probeAuth(email, password);
 
-  const tokenStatus = tokenRes.status;
-  const tokenCt = tokenRes.headers.get('content-type') || '';
-  const tokenCookies = parseCookies(tokenRes.headers.getSetCookie?.() || tokenRes.headers.get('set-cookie'));
-
-  // If cookies came back on the JSON attempt, use them
-  if (tokenCookies) {
-    const auth = { type: 'cookie', value: tokenCookies };
-    _sessionCookies = JSON.stringify(auth);
-    _sessionExpiry  = Date.now() + 30 * 60 * 1000;
-    return auth;
+  if (!auth) {
+    const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', ');
+    throw new Error(`Could not authenticate with admin.st1sports.com. Probe results: ${summary}`);
   }
 
-  if (tokenStatus === 200 || tokenStatus === 201) {
-    if (tokenCt.includes('application/json')) {
-      const body = await tokenRes.json();
-      const token = body.token || body.access_token || body.auth_token ||
-                    body.jwt || body.data?.token || body.user?.token;
-      if (token) {
-        const auth = { type: 'bearer', value: token };
-        _sessionCookies = JSON.stringify(auth);
-        _sessionExpiry  = Date.now() + 30 * 60 * 1000;
-        return auth;
-      }
-      throw new Error(`Login 200/JSON but no token. Body keys: [${Object.keys(body).join(', ')}]`);
-    }
-    // Non-JSON 200 — read a snippet of the body to diagnose
-    const snippet = (await tokenRes.text()).slice(0, 300).replace(/\n/g, ' ');
-    throw new Error(`Login 200 but content-type="${tokenCt}". Body snippet: ${snippet}`);
+  if (auth.type === 'rejected') {
+    throw new Error(`Admin login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
   }
 
-  throw new Error(`Login attempt returned HTTP ${tokenStatus} (content-type: ${tokenCt})`);
+  _auth = auth;
+  _sessionExpiry = Date.now() + 30 * 60 * 1000;
+  return auth;
 }
 
 async function adminGet(path) {
@@ -95,22 +164,23 @@ async function adminGet(path) {
   const authHeader = auth.type === 'bearer'
     ? { 'Authorization': `Bearer ${auth.value}` }
     : { 'Cookie': auth.value };
+
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeader },
   });
+
   if (res.status === 401 || res.status === 403) {
-    _sessionCookies = null; // clear cache so next call re-authenticates
-    throw new Error(`Admin returned ${res.status} — session may have expired`);
+    _auth = null;
+    throw new Error(`Admin returned ${res.status} for ${path} — session may have expired`);
   }
   if (!res.ok) throw new Error(`Admin returned HTTP ${res.status} for ${path}`);
 
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
 
-  // Some Rails apps redirect to HTML on unauthenticated — detect that
   const text = await res.text();
   if (text.trim().startsWith('<')) {
-    throw new Error(`Admin returned HTML instead of JSON for ${path} — may not be authenticated`);
+    throw new Error(`Admin returned HTML for ${path} — authenticated endpoint may be different`);
   }
   return JSON.parse(text);
 }
@@ -127,28 +197,33 @@ export default async function handler(req, res) {
     return res.json({ ok: true, configured: Boolean(email && password) });
   }
 
+  // Diagnostic: probe auth without fetching data
+  if (action === 'probe-auth') {
+    const { email, password } = creds();
+    if (!email || !password) return res.json({ ok: false, error: 'Credentials not configured' });
+    const auth = await probeAuth(email, password);
+    return res.json({ ok: true, auth: auth ? { type: auth.type, endpoint: auth.endpoint, status: auth.status } : null, probeLog: _probeLog });
+  }
+
   try {
     if (action === 'stores') {
-      const data = await adminGet('/team_stores.json');
-      // Normalise — handle both array and { team_stores: [...] }
+      const data = await adminGet('/api/team_stores');
       const stores = Array.isArray(data) ? data : (data.team_stores || data.stores || data);
-      return res.json({ ok: true, stores });
+      return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
 
     if (action === 'orders') {
-      const data = await adminGet('/store_orders.json');
+      const data = await adminGet('/api/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
       return res.json({ ok: true, orders });
     }
 
     if (action === 'top-sellers') {
-      const data = await adminGet('/store_orders.json');
+      const data = await adminGet('/api/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
 
-      // Aggregate line items across all orders — try common Rails field patterns
       const productMap = {};
       for (const order of orders) {
-        // Try every common field name for order line items
         const lineItems =
           order.line_items || order.items || order.order_items ||
           order.products || order.order_lines || [];
@@ -181,19 +256,18 @@ export default async function handler(req, res) {
         .map(p => ({ ...p, stores: p.stores.size }))
         .sort((a, b) => b.quantity - a.quantity);
 
-      return res.json({ ok: true, sellers, rawOrderCount: orders.length });
+      return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
 
-    // raw: return a sample order so we can inspect the data shape
     if (action === 'raw-sample') {
-      const data = await adminGet('/store_orders.json');
+      const data = await adminGet('/api/store_orders');
       const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
-      return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length });
+      return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length, authEndpoint: _auth?.endpoint });
     }
 
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {
     console.error('[admin-stores]', e.message);
-    return res.status(500).json({ ok: false, error: e.message });
+    return res.status(500).json({ ok: false, error: e.message, probeLog: _probeLog });
   }
 }
