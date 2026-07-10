@@ -182,6 +182,9 @@ export default async function handler(req, res) {
 
       const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
       const forceResend = !!batchInfo.forceResend;
+      // batchContacts holds embedded contact fields saved at schedule time —
+      // this is the primary source because contacts are not persisted in app_state
+      const batchContacts = batchInfo.batchContacts || {};
       const updEnr = [...(camp.enrollments || [])];
       let sent = 0;
       let failed = 0;
@@ -194,8 +197,13 @@ export default async function handler(req, res) {
         if (enroll.status === "interested") continue;
         if ((enroll.sentSteps || []).includes(touchIdx)) continue;
 
-        const c = contactMap[contactId];
-        if (!c?.email) continue;
+        // Use embedded contact data (always present for new schedules).
+        // Fall back to contactMap for legacy batches scheduled before this fix.
+        const c = batchContacts[contactId] || contactMap[contactId];
+        if (!c?.email) {
+          console.warn(`[cron] No contact data for ${contactId} in batch ${batchKey} — skipping`);
+          continue;
+        }
 
         const subject = mergeTags(touch.subject, c) || `Following up — ${camp.product || camp.name}`;
         const mergedBody = mergeTags(touch.body, c);
