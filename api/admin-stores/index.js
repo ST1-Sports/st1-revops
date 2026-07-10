@@ -141,6 +141,56 @@ export default async function handler(req, res) {
       return res.json({ ok: true, orders });
     }
 
+    if (action === 'top-sellers') {
+      const data = await adminGet('/store_orders.json');
+      const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
+
+      // Aggregate line items across all orders — try common Rails field patterns
+      const productMap = {};
+      for (const order of orders) {
+        // Try every common field name for order line items
+        const lineItems =
+          order.line_items || order.items || order.order_items ||
+          order.products || order.order_lines || [];
+
+        const storeName =
+          order.store_name || order.team_store_name || order.store?.name ||
+          order.team_store?.name || order.school_name || 'Unknown Store';
+
+        for (const item of lineItems) {
+          const name =
+            item.name || item.product_name || item.title ||
+            item.description || item.sku || null;
+          if (!name) continue;
+
+          const qty = Number(item.quantity || item.qty || 1);
+          const price = Number(item.price || item.unit_price || item.amount || 0);
+          const revenue = qty * price;
+
+          if (!productMap[name]) {
+            productMap[name] = { name, revenue: 0, orders: 0, quantity: 0, stores: new Set() };
+          }
+          productMap[name].revenue += revenue;
+          productMap[name].orders++;
+          productMap[name].quantity += qty;
+          productMap[name].stores.add(storeName);
+        }
+      }
+
+      const sellers = Object.values(productMap)
+        .map(p => ({ ...p, stores: p.stores.size }))
+        .sort((a, b) => b.quantity - a.quantity);
+
+      return res.json({ ok: true, sellers, rawOrderCount: orders.length });
+    }
+
+    // raw: return a sample order so we can inspect the data shape
+    if (action === 'raw-sample') {
+      const data = await adminGet('/store_orders.json');
+      const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
+      return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length });
+    }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {
     console.error('[admin-stores]', e.message);

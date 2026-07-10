@@ -58,19 +58,19 @@ export default function TeamStores() {
     setLoading(true);
     setError(null);
     try {
-      const [storesRes, sellersRes, recentRes, adminRes] = await Promise.all([
+      const [storesRes, recentRes, adminStoresRes, adminSellersRes] = await Promise.all([
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores", days: d }) }),
-        fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers", days: d, limit: 15 }) }),
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recent", days: d, limit: 20 }) }),
         fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores" }) }),
+        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers" }) }),
       ]);
-      const [sd, sld, rd, ad] = await Promise.all([storesRes.json(), sellersRes.json(), recentRes.json(), adminRes.json()]);
+      const [sd, rd, ad, asd] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json()]);
       if (!sd.ok) throw new Error(sd.error);
       setStores(sd.stores || []);
       setSummary(sd.summary || null);
-      setSellers(sld.sellers || []);
       setRecent(rd.recent || []);
       if (ad.ok) setAdminStores(ad.stores || []);
+      if (asd.ok && asd.sellers?.length) setSellers(asd.sellers || []);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -295,7 +295,7 @@ export default function TeamStores() {
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>
-            No product data found. Top sellers require <code>product_name</code> or <code>item_name</code> in Stripe charge metadata.
+            No product data found. This pulls from admin.st1sports.com order line items — check that store orders have items attached.
           </div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -305,7 +305,8 @@ export default function TeamStores() {
                   <tr>
                     <th style={{ ...thStyle("name"), textAlign: "left" }}>#</th>
                     <th style={{ ...thStyle("name"), textAlign: "left" }}>Product</th>
-                    <th style={thStyle("revenue")}>Revenue <SortIcon col="revenue" sortCol="revenue" sortDir="desc" /></th>
+                    <th style={thStyle("quantity")}>Units Sold</th>
+                    <th style={thStyle("revenue")}>Revenue</th>
                     <th style={thStyle("orders")}>Orders</th>
                     <th style={thStyle("stores")}>Stores</th>
                   </tr>
@@ -315,7 +316,8 @@ export default function TeamStores() {
                     <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
                       <td style={{ ...tdStyle("left"), color: B.muted, width: 40 }}>{i + 1}</td>
                       <td style={{ ...tdStyle("left"), fontWeight: 600 }}>{s.name}</td>
-                      <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{fmt$(s.revenue)}</td>
+                      <td style={{ ...tdStyle(), fontWeight: 700 }}>{fmtN(s.quantity || 0)}</td>
+                      <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{s.revenue > 0 ? fmt$(s.revenue) : "—"}</td>
                       <td style={tdStyle()}>{fmtN(s.orders)}</td>
                       <td style={{ ...tdStyle(), color: B.muted }}>{s.stores}</td>
                     </tr>
