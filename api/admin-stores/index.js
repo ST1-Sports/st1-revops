@@ -205,6 +205,55 @@ export default async function handler(req, res) {
     return res.json({ ok: true, auth: auth ? { type: auth.type, endpoint: auth.endpoint, status: auth.status } : null, probeLog: _probeLog });
   }
 
+  // Diagnostic: fetch the SPA JS bundle and extract API base URL hints
+  if (action === 'find-api') {
+    try {
+      // Step 1: get the index HTML to find the main JS bundle
+      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const html = await htmlRes.text();
+
+      // Extract all <script src="..."> paths
+      const scriptMatches = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+
+      // Find the main entry bundle (usually largest, named index-XXXXX.js or main-XXXXX.js)
+      const mainScript = scriptMatches.find(s => /\/(index|main)[^/]*\.js/.test(s)) || scriptMatches[0];
+      if (!mainScript) {
+        return res.json({ ok: false, error: 'No JS bundle found in HTML', scripts: scriptMatches, htmlSnippet: html.slice(0, 500) });
+      }
+
+      const bundleUrl = mainScript.startsWith('http') ? mainScript : `${BASE}${mainScript}`;
+
+      // Step 2: fetch the bundle (may be large — read first 150KB only)
+      const bundleRes = await fetch(bundleUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const bundleText = await bundleRes.text();
+      const chunk = bundleText.slice(0, 150000);
+
+      // Step 3: extract URL-like strings and API clues
+      const urlMatches = [...new Set([
+        // https:// URLs (likely API base)
+        ...[...chunk.matchAll(/["']https:\/\/[^"']{5,80}["']/g)].map(m => m[0].replace(/["']/g, '')),
+        // Relative paths that look like API routes
+        ...[...chunk.matchAll(/["'](\/api\/[^"']{3,60})["']/g)].map(m => m[1]),
+        // baseURL / baseUrl assignments
+        ...[...chunk.matchAll(/baseURL?["']?\s*[:=]\s*["']([^"']{5,80})["']/g)].map(m => m[1]),
+        // VITE_ env references
+        ...[...chunk.matchAll(/VITE_[A-Z_]+/g)].map(m => m[0]),
+        // login/auth path strings
+        ...[...chunk.matchAll(/["']([^"']*(?:login|sign_in|auth|session)[^"']{0,40})["']/gi)].map(m => m[1]).filter(s => s.startsWith('/')),
+      ])];
+
+      return res.json({
+        ok: true,
+        bundleUrl,
+        bundleSizeChars: bundleText.length,
+        urlMatches: urlMatches.slice(0, 60),
+        allScripts: scriptMatches,
+      });
+    } catch (e) {
+      return res.json({ ok: false, error: e.message });
+    }
+  }
+
   try {
     if (action === 'stores') {
       const data = await adminGet('/api/team_stores');

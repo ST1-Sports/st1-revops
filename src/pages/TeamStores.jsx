@@ -50,6 +50,8 @@ export default function TeamStores() {
   const [summary, setSummary]     = useState(null);
   const [adminStores, setAdminStores] = useState([]);
   const [adminDiag, setAdminDiag] = useState(null);
+  const [apiFind, setApiFind] = useState(null);
+  const [apiFinding, setApiFinding] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -301,7 +303,33 @@ export default function TeamStores() {
             <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data found.</div>
             {adminDiag && (
               <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
-                <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, marginBottom: 8, textTransform: "uppercase" }}>Admin API Diagnostic</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin API Diagnostic</div>
+                  <button
+                    onClick={async () => {
+                      setApiFinding(true);
+                      try {
+                        const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-api" }) });
+                        setApiFind(await r.json());
+                      } finally { setApiFinding(false); }
+                    }}
+                    disabled={apiFinding}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiFinding ? "default" : "pointer", border: `1px solid ${B.blue}`, borderRadius: 6, background: B.blueBg, color: B.blue }}
+                  >{apiFinding ? "Scanning…" : "Scan JS Bundle for API URL"}</button>
+                </div>
+                {apiFind && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.border}`, borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: B.text, marginBottom: 6 }}>Bundle scan: {apiFind.bundleUrl}</div>
+                    {apiFind.urlMatches?.length > 0 ? (
+                      <ul style={{ margin: 0, padding: "0 0 0 16px", fontSize: 12, color: B.text, lineHeight: 1.8 }}>
+                        {apiFind.urlMatches.map((u, i) => <li key={i} style={{ wordBreak: "break-all" }}>{u}</li>)}
+                      </ul>
+                    ) : (
+                      <div style={{ fontSize: 12, color: B.muted }}>No URL patterns found in first 150KB.</div>
+                    )}
+                    {apiFind.error && <div style={{ color: B.red, fontSize: 12 }}>{apiFind.error}</div>}
+                  </div>
+                )}
                 <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
                   {JSON.stringify(adminDiag, null, 2)}
                 </pre>
