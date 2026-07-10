@@ -43,8 +43,17 @@
     "api/admin/questions/[id].js":                 { "maxDuration": 15 },
     "api/admin/sponsorship-config.js":             { "maxDuration": 15 },
     "api/ai/email.js":                             { "maxDuration": 30 },
-    "api/instantly.js":                            { "maxDuration": 30 }
+    "api/perplexity.js":                           { "maxDuration": 60 },
+    "api/instantly.js":                            { "maxDuration": 30 },
+    "api/gmail-token.js":                          { "maxDuration": 15 },
+    "api/cron/send-batches.js":                    { "maxDuration": 120 },
+    "api/cron/reddit-daily.js":                    { "maxDuration": 120 },
+    "api/reddit/index.js":                         { "maxDuration": 30 }
   },
+  "crons": [
+    { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/reddit-daily",  "schedule": "0 14 * * 1-5" }
+  ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],

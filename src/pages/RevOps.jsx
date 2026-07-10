@@ -79,6 +79,14 @@ const STORE = "st1_revops_v2";
 const mkId   = () => Math.random().toString(36).slice(2,9);
 // Use local date (not UTC) so "today" matches the user's calendar
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};
+const fmtSchedDt=(dt)=>dt?fmtMT(new Date(dt).getTime()):"";;
+const dtLocalStr=(dt)=>{const d=new Date(dt);return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}T${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;};
+const addBusinessDays=(startMs,days)=>{const dt=new Date(startMs);let added=0;while(added<days){dt.setDate(dt.getDate()+1);const wd=dt.getDay();if(wd!==0&&wd!==6)added++;}return dt.getTime();};
+const getMTComp=(ms)=>{const p={};new Intl.DateTimeFormat('en-US',{timeZone:'America/Denver',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',weekday:'short'}).formatToParts(new Date(ms)).forEach(x=>{if(x.type!=='literal')p[x.type]=x.value;});return{h:parseInt(p.hour)%24,wd:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(p.weekday),y:parseInt(p.year),mo:parseInt(p.month)-1,d:parseInt(p.day),min:parseInt(p.minute)};};
+const nextMTBizStart=(ms)=>{for(let i=0;i<=7;i++){const probe=ms+i*86400000;const{y,mo,d}=getMTComp(probe);for(const off of[6,7]){const c=Date.UTC(y,mo,d,9+off,0,0);const ck=getMTComp(c);if(ck.h!==9||c<=ms)continue;if(ck.wd>=1&&ck.wd<=5)return c;}}return ms+86400000;};
+const fmtMT=(ms)=>{if(!ms)return'';const{h,min,wd,mo,d,y}=getMTComp(ms);const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];return`${days[wd]} ${months[mo]} ${d}, ${h%12||12}:${String(min).padStart(2,'0')}${h>=12?'pm':'am'} MT`;};
+const parseMTLocalStr=(localStr)=>{const[dp,tp]=localStr.split('T');const[yr,mo,da]=dp.split('-').map(Number);const[hr,mi]=(tp||'09:00').split(':').map(Number);for(const off of[6,7]){const c=Date.UTC(yr,mo-1,da,hr+off,mi,0);if(getMTComp(c).h===hr)return c;}return Date.UTC(yr,mo-1,da,hr+6,mi,0);};
 // Local "now + N minutes" as HH:MM string
 const nowPlusMin = n => { const d=new Date(Date.now()+n*60000); return `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`; };
 const dAgo   = (d) => Math.floor((Date.now()-new Date(d))/86400000);
@@ -451,6 +459,7 @@ function reducer(prev, action, payload) {
     case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next[payload];return {...prev,competeIntel:next};}
     case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
     case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
+    case "SET_CRM_NAV":         return {...prev, crmNav:payload}; // {id, school} — consumed by ModCRM on mount
     case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
     case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
     case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
@@ -498,7 +507,7 @@ function reducer(prev, action, payload) {
 
 // ─── GMAIL STATUS BANNER ──────────────────────────────────────────────────────
 // Auto-checks Gmail connectivity on mount. Used in the campaign execute tab.
-function GmailStatusBanner({repKey=""}) {
+function GmailStatusBanner({repKey="",repEmail=""}) {
   const [status,setStatus]=React.useState(null); // null=checking | {ok,email} | {ok:false,error,type}
   const check=React.useCallback(()=>{
     setStatus(null);
@@ -530,11 +539,12 @@ function GmailStatusBanner({repKey=""}) {
       <button onClick={check} style={{marginLeft:"auto",background:"none",border:"1px solid #bbf7d0",borderRadius:3,padding:"1px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:"#15803d",cursor:"pointer"}}>RECHECK</button>
     </div>
   );
+  const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}${repEmail?`&hint=${encodeURIComponent(repEmail)}`:""}`:"/api/gmail-setup";
   const fixes={
     network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
-    setup:<>Gmail is not configured. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Click here to connect Gmail →</a></>,
-    expired:<>Your Gmail authorization has expired. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
-    auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href="/api/gmail-setup" target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+    setup:<>Gmail not connected. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
+    expired:<>Gmail authorization has expired for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+    auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
   };
   return(
     <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:5,marginBottom:8}}>
@@ -563,9 +573,9 @@ const RSC = {
   // legacy stage names kept for backward compat
   Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow,Submitted:B.teal,Won:B.green,Lost:B.red,
 };
-const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches.`;
+const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches. Brand voice: warm/direct, athlete-first, relationship before product. Owns: Human Contact ("I pick up the phone"), All-Sport Breadth, Exclusive Culture (graphic tee drops). Avoid efficiency-first hooks, corporate tone, generic inspiration.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
-const STATES_LIST = ["IA","CO","MN","ND","WI","NE","SD","KS","IL","MO"];
+const STATES_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const US_REGIONS = {
   "Midwest":       {states:["IA","MN","WI","MO","IL","IN","MI","OH","ND","SD","NE","KS"],color:"#1A5FA8"},
   "Southeast":     {states:["FL","GA","TN","AL","MS","SC","NC","VA","KY","AR","LA"],color:"#1E8F4E"},
@@ -624,6 +634,9 @@ export default function App() {
   }, []);
 
   const cu = (() => {
+    if (s.currentUserId === "__owner__") {
+      return { id:"__owner__", name:"Admin", email:"", initials:"AD", color:B.orange, role:"owner", isAdmin:true };
+    }
     const rep = (s.reps||[]).find(r=>r.id===s.currentUserId);
     if (!rep) return null;
     const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
@@ -697,8 +710,6 @@ export default function App() {
     return()=>window.removeEventListener("keydown",handler);
   },[]);
 
-  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
-
   const NAV = useMemo(()=>[
     // ── SALES ──────────────────────────────────────────────────────────
     {id:"_s_sales"},
@@ -730,6 +741,10 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
+  usePrefetchPanels();
+
+  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
+
   // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
     for (const n of NAV) {
@@ -738,8 +753,6 @@ export default function App() {
     }
     return "";
   };
-
-  usePrefetchPanels();
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -955,7 +968,7 @@ export default function App() {
                 ):null;
                 return(
                   <div style={{maxHeight:400,overflowY:"auto"}}>
-                    <Grp title="CONTACTS" items={contacts} go={()=>setMod("prospecting")} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
+                    <Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
                     <Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
                     <Grp title="CAMPAIGNS" items={campaigns} go={()=>setMod("marketing")} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
                     <Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
@@ -1056,6 +1069,16 @@ function Login({dispatch, reps=[], appUsers=[]}) {
           style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
           {loading?"CHECKING…":"SIGN IN →"}
         </button>
+        {/* Admin bypass — only visible when no admin accounts are set up */}
+        {!appUsers.some(au=>au.isAdmin)&&(
+          <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>No admin account configured yet</div>
+            <button onClick={()=>dispatch("LOGIN","__owner__")}
+              style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+              ADMIN ACCESS →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1809,6 +1832,7 @@ function ModHome() {
         items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
+      brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
     };
 
     try{
@@ -1848,7 +1872,7 @@ function ModHome() {
         }
         if(a.type==="store_competitor_intel"&&a.competitor_name&&a.intel){
           dispatch("SET_COMPETE_INTEL",{[a.competitor_name]:a.intel});
-          toast(`⊗ Intel saved: ${a.competitor_name}`,  "info");
+          toast(`⊗ Intel saved: ${a.competitor_name}`,"info");
         }
       });
 
@@ -2527,7 +2551,7 @@ function TalkTrack({onClose,linkedContact}){
   const doDraftEmail=async()=>{
     setDrafting(true);
     const activePains=PAIN_CARDS.filter(c=>pains.includes(c.id)).map(c=>c.title).join(", ");
-    const prompt=`Write a follow-up sales email from Matt Stone at ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Conversational, not salesy.`;
+    const prompt=`Write a follow-up sales email from ST1 Sports to the AD/coach at ${linked?.name||"this school"}.${activePains?` Key challenges identified: ${activePains}.`:""}${calcResult?` Sponsorship potential: $${calcResult.guaranteedMin} guaranteed minimum.`:""} Under 80 words. Include subject line. Warm, direct, conversational — not salesy. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`;
     const t=await aiCall(prompt);
     setDraftEmail(t||"");setDrafting(false);
     if(t&&sessRef.current){
@@ -2675,11 +2699,16 @@ function ModCRM() {
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
   const [leftMode,setLeftMode]=useState("contacts");
   const [selSchool,setSelSchool]=useState(null);
+  const [profileForm,setProfileForm]=useState({});
+  const [profileDirty,setProfileDirty]=useState(false);
+  const [zohoSyncing,setZohoSyncing]=useState(false);
   const contacts=s.contacts||[];
   const deals=s.deals||[];
   const orders=s.orders||[];
 
   const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+  const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
+  const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 
   // Build phase map once per deals/orders change — O(n) instead of O(n*m) per render
   const cdMap=useMemo(()=>{
@@ -2700,6 +2729,15 @@ function ModCRM() {
   const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 
   const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
+
+  // Navigate to a specific contact when coming from another module (e.g. Prospecting)
+  useEffect(()=>{
+    if(!s.crmNav) return;
+    const {id,school}=s.crmNav;
+    if(id){setLeftMode("contacts");setSelId(id);setSelSchool(null);setCrmTab("overview");}
+    else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
+    dispatch("SET_CRM_NAV",null);
+  },[s.crmNav]);
 
   const filtered=useMemo(()=>{
     const q=search.toLowerCase();
@@ -2730,6 +2768,9 @@ function ModCRM() {
     setDealValueSaved(false);
     setQuoteItems(activeDeal?.quoteItems||[]);
     setOverviewEditDealId(null);
+    const c=selId?(contacts.find(x=>x.id===selId)||null):null;
+    if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
+    setProfileDirty(false);
   },[selId]);
 
   const logTouch=()=>{
@@ -2739,10 +2780,35 @@ function ModCRM() {
     setTouchNote("");toast("Touch logged","success");
   };
 
+  const saveProfile=async()=>{
+    if(!sel)return;
+    const pf=profileForm;
+    const patch={...pf,numAthletes:pf.numAthletes?Number(pf.numAthletes)||pf.numAthletes:undefined,numSports:pf.numSports?Number(pf.numSports)||pf.numSports:undefined};
+    if(patch.firstName||patch.lastName) patch.fullName=`${patch.firstName||""} ${patch.lastName||""}`.trim();
+    dispatch("UPDATE_CONTACT",{id:sel.id,...patch});
+    setProfileDirty(false);
+    if(sel.zohoId){
+      setZohoSyncing(true);
+      const isLead=sel.id?.startsWith("zoho_l_");
+      const mod=isLead?"Leads":"Contacts";
+      try{
+        const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,Account_Name:pf.school,Mailing_State:pf.state,Mailing_City:pf.city};
+        await crmUpdate(mod,sel.zohoId,fields);
+        if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,sel.zohoId,`Sport / primary contact sport: ${pf.sport}`);
+        toast("Profile saved + synced to Zoho","success");
+      }catch(e){
+        toast("Saved locally (Zoho sync failed)","info");
+      }
+      setZohoSyncing(false);
+    } else {
+      toast("Profile saved","success");
+    }
+  };
+
   const doDraftEmail=async()=>{
     if(!sel||!activeDeal) return;
     setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line.`);
+    const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
 
@@ -2872,57 +2938,171 @@ function ModCRM() {
         const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
         const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
         const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
-        const totalValue=openDeals.reduce((a,d)=>a+(d.value||0),0);
-        const schoolOrgType=schoolContacts[0]?.orgType||"";
-        const schoolClass=schoolContacts[0]?.schoolClass||"";
-        const numAthletes=schoolContacts[0]?.numAthletes||"";
-        const sponsorshipMin=schoolContacts[0]?.sponsorshipMin||null;
-        const sponsorshipMax=schoolContacts[0]?.sponsorshipMax||null;
+        const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
+        const allDeals=schoolDeals;
+        const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
+        const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
+        const primaryC=schoolContacts[0]||null;
+        const schoolOrgType=primaryC?.orgType||"";
+        const schoolClass=primaryC?.schoolClass||"";
+        const numAthletes=primaryC?.numAthletes||"";
+        const numSports=primaryC?.numSports||"";
+        const state=primaryC?.state||"";
+        const city=primaryC?.city||"";
+        const sponsorshipMin=primaryC?.sponsorshipMin||null;
+        const sponsorshipMax=primaryC?.sponsorshipMax||null;
+        const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
+        const sponsorshipConfirmed=primaryC?.sponsorshipConfirmedAmount||null;
+        const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
+        const hasOnlineStore=primaryC?.hasOnlineStore||false;
+        const hasBoosterClub=primaryC?.hasBoosterClub||false;
+        // Invoices / payments
+        const schoolInvoices=(s.invoices||[]).filter(inv=>{
+          const cust=(inv.customer||"").toLowerCase();
+          const school=(selSchool||"").toLowerCase();
+          return cust.includes(school.slice(0,6))||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
+        });
+        const totalInvoiced=schoolInvoices.reduce((a,i)=>a+(i.total||0),0);
+        const totalPaid=schoolInvoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
+        const totalOwed=schoolInvoices.filter(i=>i.status!=="paid").reduce((a,i)=>a+(i.balance||i.total||0),0);
+        // All line items ever purchased
+        const allItems=schoolInvoices.flatMap(inv=>(inv.items||[]).map(it=>({...it,invoiceNum:inv.number,date:inv.date})));
+        const itemMap={};
+        allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
+        const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
+        // School orders
+        const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===(selSchool||"").toLowerCase());
+        // Expansion opportunities
+        const expandOps=[];
+        if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
+        if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
+        if(sponsorshipMin&&!sponsorshipStatus) expandOps.push({icon:"★",title:"Sponsorship",desc:`Estimated sponsorship potential ${fmt$(sponsorshipMin)}${sponsorshipMax?` – ${fmt$(sponsorshipMax)}`:""}`});
+        if(numSports&&Number(numSports)>0&&closedWon.length>0){
+          const sportsWithOrders=new Set(closedWon.map(d=>d.sport||"").filter(Boolean)).size;
+          if(sportsWithOrders<Number(numSports)) expandOps.push({icon:"🏆",title:"More Sports",desc:`${numSports} sports on file, orders only tracked for ${sportsWithOrders} — expand to other programs`});
+        }
+        if(schoolInvoices.length>0&&closedWon.length>0) expandOps.push({icon:"🔄",title:"Reorder Timing",desc:`Last order ${schoolInvoices[0]?.date||"on file"} — check if next season procurement is open`});
+        const SectionHdr=({children,sub})=>(
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,marginTop:20,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5}}>{children}</div>
+            {sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sub}</div>}
+          </div>
+        );
         return(
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            {/* School header */}
+            {/* Header */}
             <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                <div>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":"ORGANIZATION"}</div>
-                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black}}>{selSchool}</div>
-                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selSchool}</div>
+                  <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                     {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+                    {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
                     {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{schoolContacts.length} contact{schoolContacts.length!==1?"s":""}</span>
-                    {openDeals.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{openDeals.length} open deal{openDeals.length!==1?"s":""} · {fmt$(totalValue)}</span>}
+                    {numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
+                    {hasOnlineStore&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>}
+                    {hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
                   </div>
                 </div>
-                {sponsorshipMin&&(
-                  <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 14px"}}>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>SPONSORSHIP EST.</div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{fmt$(sponsorshipMin)}</div>
-                    {sponsorshipMax&&sponsorshipMax>sponsorshipMin&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>up to {fmt$(sponsorshipMax)}</div>}
-                  </div>
-                )}
+                {/* Revenue summary */}
+                <div style={{display:"flex",gap:8,flexShrink:0}}>
+                  {totalWon>0&&(
+                    <div style={{textAlign:"right",background:B.greenBg||`${B.green}10`,border:`1px solid ${B.green}30`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,letterSpacing:1}}>WON</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(totalWon)}</div>
+                    </div>
+                  )}
+                  {totalOpen>0&&(
+                    <div style={{textAlign:"right",background:`${B.orange}08`,border:`1px solid ${B.orange}25`,borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:1}}>PIPELINE</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(totalOpen)}</div>
+                    </div>
+                  )}
+                  {sponsorshipMin&&(
+                    <div style={{textAlign:"right",background:"#7c3aed08",border:"1px solid #7c3aed25",borderRadius:6,padding:"8px 12px"}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#7c3aed",letterSpacing:1}}>SPONS. EST.</div>
+                      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin)}</div>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
+            <div style={{flex:1,overflowY:"auto",padding:"12px 22px 30px"}}>
               {/* Action bar */}
-              <div style={{display:"flex",gap:8,marginBottom:18}}>
+              <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6}}>
                 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
                 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
               </div>
 
-              {/* Contacts (coaches) list */}
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>CONTACTS / COACHES</div>
-              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet — add a coach or AD above.</div>}
-              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:22}}>
+              {/* ── KPI STRIP ── */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
+                <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
+                <KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
+                <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
+                <KCard l="Open Deals" v={openDeals.length} c={B.blue} sub={fmt$K(totalOpen)}/>
+                <KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
+              </div>
+
+              {/* ── ACCOUNT INFO ── */}
+              <SectionHdr>ACCOUNT INFO</SectionHdr>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+                {[
+                  ["School Class",schoolClass||"—"],
+                  ["Location",[city,state].filter(Boolean).join(", ")||"—"],
+                  ["Org Type",schoolOrgType||"—"],
+                  ["# Athletes",numAthletes||"—"],
+                  ["# Sports",numSports||"—"],
+                  ["Team Store",hasOnlineStore?"Yes":"No"],
+                  ["Booster Club",hasBoosterClub?"Yes":"No"],
+                  ["Contacts",schoolContacts.length],
+                  ["Open Deals",openDeals.length],
+                ].map(([k,v])=>(
+                  <div key={k}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>{k}</div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── SPONSORSHIP ── */}
+              {(sponsorshipMin||sponsorshipStatus)&&(
+                <>
+                  <SectionHdr sub={sponsorshipStatus?sponsorshipStatus.toUpperCase():""}>SPONSORSHIP</SectionHdr>
+                  <div style={{background:sponsorshipPaid?B.greenBg||`${B.green}10`:sponsorshipStatus==="confirmed"?`${B.orange}08`:`#7c3aed08`,border:`1px solid ${sponsorshipPaid?B.green:sponsorshipStatus==="confirmed"?B.orange:"#7c3aed"}30`,borderRadius:6,padding:14}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>ESTIMATED MIN</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#7c3aed"}}>{fmt$(sponsorshipMin||0)}</div>
+                      </div>
+                      {sponsorshipMax&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>UPSIDE MAX</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.orange}}>{fmt$(sponsorshipMax)}</div>
+                      </div>}
+                      {sponsorshipConfirmed&&<div>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>CONFIRMED AMT</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.green}}>{fmt$(sponsorshipConfirmed)}</div>
+                      </div>}
+                    </div>
+                    {sponsorshipPaid&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:8}}>✓ PAID</div>}
+                  </div>
+                </>
+              )}
+
+              {/* ── CONTACTS ── */}
+              <SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
+              {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
                 {schoolContacts.map(c=>{
                   const {cd,phase}=getCD(c);
                   const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
                   const pc=PCOL[phase];
                   return(
                     <div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{c.title||""}{c.sport?` · ${c.sport}`:""}{c.email?` · ${c.email}`:""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
                       </div>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
                         {top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
@@ -2933,19 +3113,96 @@ function ModCRM() {
                 })}
               </div>
 
-              {/* Open deals for this school */}
-              {openDeals.length>0&&(<>
-                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>OPEN DEALS</div>
+              {/* ── ALL DEALS ── */}
+              {allDeals.length>0&&(<>
+                <SectionHdr sub={`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}>DEALS</SectionHdr>
                 <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {openDeals.map(d=>(
-                    <div key={d.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
+                  {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
+                    <div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div style={{flex:1,minWidth:0}}>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}{d.quoteNumber?` · Quote #${d.quoteNumber}`:""}</div>
                       </div>
-                      <div style={{textAlign:"right"}}>
+                      <div style={{textAlign:"right",flexShrink:0}}>
                         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
                         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── INVOICES & PAYMENTS ── */}
+              {schoolInvoices.length>0&&(<>
+                <SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolInvoices.map(inv=>(
+                    <div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
+                      </div>
+                      <div style={{display:"flex",gap:12,alignItems:"center"}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
+                        <div style={{textAlign:"right"}}>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
+                          {inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ITEMS PURCHASED ── */}
+              {purchasedItems.length>0&&(<>
+                <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0}}>
+                    {["ITEM","QTY","TOTAL","LAST"].map(h=>(
+                      <div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>{h}</div>
+                    ))}
+                  </div>
+                  {purchasedItems.map((it,i)=>(
+                    <div key={i} style={{display:"grid",gridTemplateColumns:"1fr 60px 80px 60px",gap:0,borderBottom:i<purchasedItems.length-1?`1px solid ${B.border}`:"none"}}>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"7px 12px"}}>{it.name}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"7px 12px",textAlign:"center"}}>{it.qty}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,padding:"7px 12px",textAlign:"right",fontWeight:500}}>{fmt$(it.total)}</div>
+                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"7px 12px"}}>{it.lastDate||"—"}</div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── ORDERS ── */}
+              {schoolOrders.length>0&&(<>
+                <SectionHdr sub={`${schoolOrders.length} order${schoolOrders.length!==1?"s":""}`}>ORDERS</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {schoolOrders.map(o=>(
+                    <div key={o.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{o.name||"Order"}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{o.contact||""}{o.createdAt?` · ${new Date(o.createdAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}`:""}</div>
+                      </div>
+                      <div style={{textAlign:"right"}}>
+                        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{o.stage||o.status||""}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>)}
+
+              {/* ── EXPANSION OPPORTUNITIES ── */}
+              {expandOps.length>0&&(<>
+                <SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {expandOps.map((op,i)=>(
+                    <div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
+                      <span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+                      <div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
                       </div>
                     </div>
                   ))}
@@ -3040,10 +3297,22 @@ function ModCRM() {
               <div>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>{cName(sel)}</div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{sel.title}{sel.title&&sel.school?" · ":""}{sel.school}{sel.state?` · ${sel.state}`:""}</div>
-                <div style={{display:"flex",gap:12,marginTop:5,flexWrap:"wrap"}}>
+                <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
                   {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
                   {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
-                  {sel.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>{sel.sport}</span>}
+                  <select
+                    value={sel.sport||""}
+                    onChange={e=>{
+                      const sp=e.target.value;
+                      dispatch("UPDATE_CONTACT",{id:sel.id,sport:sp});
+                      setPF("sport",sp);
+                      if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,`Sport: ${sp}`);}
+                    }}
+                    style={{background:sel.sport?B.purpleBg:B.surface,border:`1px solid ${sel.sport?B.purple:B.border}30`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:sel.sport?B.purple:B.muted,letterSpacing:.5,cursor:"pointer"}}
+                  >
+                    <option value="">+ SET SPORT</option>
+                    {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                  </select>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
                   <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Owner:</span>
@@ -3088,7 +3357,7 @@ function ModCRM() {
           </div>
           {/* Tabs */}
           <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-            {[["overview","Overview"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],["notes","Notes"]].map(([id,label])=>(
+            {[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"]].map(([id,label])=>(
               <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
                 {label}
                 {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
@@ -3098,61 +3367,136 @@ function ModCRM() {
           {/* Tab content */}
           <div style={{flex:1,overflowY:"auto",padding:"18px 22px"}}>
 
-            {crmTab==="overview"&&(
+            {crmTab==="overview"&&(()=>{
+              const iS={width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"};
+              return(
               <div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:11,marginBottom:18}}>
-                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
-                  <KCard l="Pipeline" v={fmt$(selCD.cd.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+(d.value||0),0))} c={B.orange}/>
-                  <KCard l="Deals" v={selCD.cd.length} c={B.blue}/>
-                  <KCard l="Orders" v={selCD.co.length} c={B.green}/>
+                {/* ── CONTACT PROFILE ── */}
+                <div className="card" style={{padding:14,marginBottom:14}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+                    <Lbl>CONTACT PROFILE</Lbl>
+                    <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                      {profileDirty&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Unsaved changes</span>}
+                      <OBtn sm onClick={saveProfile} disabled={zohoSyncing||!profileDirty}>
+                        {zohoSyncing?"SYNCING…":sel.zohoId?"SAVE + SYNC TO ZOHO":"SAVE"}
+                      </OBtn>
+                    </div>
+                  </div>
+
+                  {/* Name */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>First Name</Lbl><input value={profileForm.firstName||""} onChange={e=>setPF("firstName",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Last Name</Lbl><input value={profileForm.lastName||""} onChange={e=>setPF("lastName",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Title + Sport (prominent) */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8,color:B.purple,letterSpacing:1}}>★ SPORT</Lbl>
+                      <select value={profileForm.sport||""} onChange={e=>setPF("sport",e.target.value)}
+                        style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:profileForm.sport?B.purple:B.muted,fontWeight:profileForm.sport?600:400}}>
+                        <option value="">— Select sport —</option>
+                        {COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* School + State + City */}
+                  <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>School / Organization</Lbl><input value={profileForm.school||""} onChange={e=>setPF("school",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>State</Lbl><select value={profileForm.state||""} onChange={e=>setPF("state",e.target.value)} style={iS}><option value="">—</option>{STATES_LIST.map(st=><option key={st}>{st}</option>)}</select></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>City</Lbl><input value={profileForm.city||""} onChange={e=>setPF("city",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Email + Phone */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Email</Lbl><input type="email" value={profileForm.email||""} onChange={e=>setPF("email",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}>Phone</Lbl><input type="tel" value={profileForm.phone||""} onChange={e=>setPF("phone",e.target.value)} style={iS}/></div>
+                  </div>
+
+                  {/* Org details */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>School Class</Lbl>
+                      <select value={profileForm.schoolClass||""} onChange={e=>setPF("schoolClass",e.target.value)} style={iS}>
+                        <option value="">—</option>
+                        {["1A","2A","3A","4A","5A","6A","7A","College","Other"].map(c=><option key={c}>{c}</option>)}
+                      </select>
+                    </div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Athletes</Lbl><input type="number" value={profileForm.numAthletes||""} onChange={e=>setPF("numAthletes",e.target.value)} style={iS}/></div>
+                    <div><Lbl s={{marginBottom:3,fontSize:8}}># Sports</Lbl><input type="number" value={profileForm.numSports||""} onChange={e=>setPF("numSports",e.target.value)} style={iS}/></div>
+                    <div>
+                      <Lbl s={{marginBottom:3,fontSize:8}}>Priority</Lbl>
+                      <select value={profileForm.priority||"medium"} onChange={e=>setPF("priority",e.target.value)} style={iS}>
+                        {["hot","warm","medium","cold"].map(p=><option key={p}>{p}</option>)}
+                      </select>
+                    </div>
+                  </div>
                 </div>
-                {selCD.cd.length===0&&selCD.co.length===0?(
-                  <div style={{textAlign:"center",padding:"40px 0"}}>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>No deals or orders yet</div>
-                    <OBtn onClick={()=>{setCrmTab("deal");setShowNewDeal(true);}}>+ START A DEAL</OBtn>
+
+                {/* ── ACTIVITY SUMMARY ── */}
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
+                  <KCard l="Score" v={sel.score||0} c={B.orange}/>
+                  <KCard l="Status" v={(sel.outreachStatus||"new").toUpperCase()} c={B.blue}/>
+                  <KCard l="Phase" v={selCD.phase.toUpperCase()} c={PCOL[selCD.phase]}/>
+                </div>
+
+                {/* Source + last contact */}
+                {(sel.source||sel.lastOutreach||sel.importedAt)&&(
+                  <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap"}}>
+                    {sel.source&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Source: <strong>{sel.source}</strong></span>}
+                    {sel.lastOutreach&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Last contacted: <strong>{sel.lastOutreach}</strong></span>}
+                    {sel.importedAt&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Added: <strong>{new Date(sel.importedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</strong></span>}
+                  </div>
+                )}
+
+                {/* ── PIPELINE SUMMARY ── */}
+                {(selCD.cd.length>0||selCD.co.length>0)?(
+                  <div className="card" style={{padding:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <Lbl>PIPELINE</Lbl>
+                      <OBtn sm onClick={()=>setCrmTab("deal")}>+ NEW DEAL</OBtn>
+                    </div>
+                    {selCD.cd.map(d=>(
+                      <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
+                          <div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
+                        </div>
+                        <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
+                          {overviewEditDealId===d.id?(
+                            <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                              <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+                              <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
+                              <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer"}}>✕</button>
+                            </div>
+                          ):(
+                            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                              <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
+                              <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer"}}>✎</button>
+                            </div>
+                          )}
+                          {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
+                        </div>
+                      </div>
+                    ))}
+                    {selCD.co.map(o=>(
+                      <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                        <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>ORDER</span></div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
+                      </div>
+                    ))}
                   </div>
                 ):(
-                  <>
-                    {selCD.cd.length>0&&(
-                      <div className="card" style={{padding:14,marginBottom:12}}>
-                        <Lbl s={{marginBottom:10}}>Deals</Lbl>
-                        {selCD.cd.map(d=>(
-                          <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div><div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div></div>
-                            <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
-                              {overviewEditDealId===d.id?(
-                                <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                                  <input type="number" value={overviewEditValue} onChange={e=>setOverviewEditValue(e.target.value)} autoFocus style={{width:80,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"3px 6px",fontSize:12,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
-                                  <OBtn sm onClick={()=>{const v=Number(overviewEditValue||0);dispatch("UPDATE_DEAL",{id:d.id,value:v});crmUpdate("Deals",d.zohoId,{Amount:v});setOverviewEditDealId(null);toast("Updated","success");}}>SAVE</OBtn>
-                                  <button onClick={()=>setOverviewEditDealId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:"2px 4px"}}>✕</button>
-                                </div>
-                              ):(
-                                <div style={{display:"flex",gap:5,alignItems:"center"}}>
-                                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(d.value||0)}</div>
-                                  <button onClick={()=>{setOverviewEditDealId(d.id);setOverviewEditValue(String(d.value||0));}} title="Edit value" style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",padding:"2px 3px",lineHeight:1}}>✎</button>
-                                </div>
-                              )}
-                              {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {selCD.co.length>0&&(
-                      <div className="card" style={{padding:14}}>
-                        <Lbl s={{marginBottom:10}}>Orders</Lbl>
-                        {selCD.co.map(o=>(
-                          <div key={o.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-                            <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{o.name}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{o.stage}</span></div>
-                            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.green}}>{fmt$(o.value||0)}</div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </>
+                  <div style={{background:B.surface,borderRadius:6,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${B.border}`}}>
+                    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals or orders yet</span>
+                    <OBtn sm onClick={()=>setCrmTab("deal")}>+ START DEAL</OBtn>
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {crmTab==="discovery"&&(
               <div>
@@ -3372,6 +3716,28 @@ function ModCRM() {
                     </>
                   ):<div style={{textAlign:"center",padding:"20px 0",color:B.muted,fontSize:11}}><OBtn onClick={()=>setCrmTab("deal")}>Create a deal first →</OBtn></div>}
                 </div>
+                {/* Past quotes across all deals */}
+                {(()=>{
+                  const pastDeals=(s.deals||[]).filter(d=>d.contactId===sel.id&&d.quoteNumber);
+                  if(pastDeals.length===0) return null;
+                  return(
+                    <div className="card" style={{padding:14}}>
+                      <Lbl s={{marginBottom:10}}>Quote History</Lbl>
+                      {pastDeals.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).map(d=>(
+                        <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{d.quoteNumber||"—"}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.stage||""}{d.quoteAmount?` · ${fmt$(d.quoteAmount)}`:""}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:d.stage==="Closed Won"?B.green:d.stage==="Closed Lost"?"#ef4444":B.orange,fontWeight:600}}>{d.quoteAmount?fmt$(d.quoteAmount):""}</div>
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.updatedAt?new Date(d.updatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):""}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
               );
             })()}
@@ -3410,40 +3776,80 @@ function ModCRM() {
               </div>
             )}
 
-            {crmTab==="notes"&&(
+            {crmTab==="history"&&(()=>{
+              const srcMeta={
+                note:{label:"NOTE",color:B.orange,icon:"📝"},
+                deal:{label:"DEAL NOTE",color:B.blue,icon:"💼"},
+                touch:{label:"TOUCH",color:B.green,icon:"🤝"},
+                email:{label:"EMAIL",color:B.purple||"#7c3aed",icon:"✉️"},
+                campaign:{label:"CAMPAIGN",color:"#0ea5e9",icon:"⚡"},
+                quote:{label:"QUOTE",color:"#f59e0b",icon:"📄"},
+                order:{label:"ORDER",color:"#10b981",icon:"🏆"},
+              };
+              const allEvents=[
+                ...(sel.notes||[]).map(n=>({...n,src:"note"})),
+                ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
+                ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note||t.type,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
+                ...(sel.activity||[]).filter(a=>a.type==="email"||a.type==="email_sent"||a.type==="email_opened").map(a=>({id:a.id||mkId(),text:a.subject||a.text||"Email sent",ts:a.ts||a.sentAt||Date.now(),author:a.author||a.from||"",src:"email",meta:a.status})),
+                ...(sel.campaigns||[]).map(c=>({id:c.id||mkId(),text:`Added to campaign: ${c.name||c.campaignId||""}`,ts:c.addedAt||Date.now(),author:"System",src:"campaign"})),
+                ...(activeDeal?.quotes||[]).map(q=>({id:q.id,text:`Quote sent — ${q.title||"Untitled"} (${q.status||"draft"})`,ts:q.createdAt||Date.now(),author:q.author||"",src:"quote"})),
+                ...(s.orders||[]).filter(o=>o.contactId===sel.id).map(o=>({id:o.id,text:`Order ${o.status||"placed"} — ${o.title||"Order"}`,ts:o.createdAt||Date.now(),author:"",src:"order"})),
+              ].sort((a,b)=>b.ts-a.ts);
+              return(
               <div>
-                <div style={{display:"flex",gap:6,marginBottom:14}}>
-                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note..." rows={2} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
+                {/* Add note */}
+                <div style={{display:"flex",gap:6,marginBottom:16}}>
+                  <textarea value={noteText} onChange={e=>setNoteText(e.target.value)} placeholder="Add a note about this contact…" rows={2}
+                    style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
                   <OBtn sm col={B.orange} onClick={()=>{
                     if(!noteText.trim()) return;
                     const nt=noteText.trim();
                     dispatch("UPDATE_CONTACT",{id:sel.id,notes:[...(sel.notes||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
                     if(activeDeal) dispatch("UPDATE_DEAL",{id:activeDeal.id,notes_list:[...(activeDeal.notes_list||[]),{id:mkId(),text:nt,ts:Date.now(),author:cu?.name||"Matt"}]});
-                    crmAddNote("Leads",sel.zohoId,nt);
+                    if(sel.zohoId){const isLead=sel.id?.startsWith("zoho_l_");crmAddNote(isLead?"Leads":"Contacts",sel.zohoId,nt);}
                     setNoteText("");toast("Note added","success");
                   }}>ADD</OBtn>
                 </div>
-                {[
-                  ...(sel.notes||[]).map(n=>({...n,src:"contact"})),
-                  ...(activeDeal?.notes_list||[]).map(n=>({...n,src:"deal"})),
-                  ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
-                ].sort((a,b)=>b.ts-a.ts).map(n=>(
-                  <div key={n.id} style={{display:"flex",gap:10,padding:"9px 0",borderBottom:`1px solid ${B.border}`}}>
-                    <div style={{width:7,height:7,borderRadius:"50%",background:{contact:B.orange,deal:B.blue,touch:B.green}[n.src]||B.muted,marginTop:4,flexShrink:0}}/>
-                    <div style={{flex:1}}>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{n.text}</div>
-                      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>
-                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:{contact:B.orange,deal:B.blue,touch:B.green}[n.src],marginRight:6}}>{n.src.toUpperCase()}</span>
-                        {new Date(n.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})} · {n.author}
-                      </div>
-                    </div>
+                {/* Timeline */}
+                {allEvents.length===0?(
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"40px 0"}}>
+                    <div style={{fontSize:24,marginBottom:8}}>📋</div>
+                    No history yet — add a note or send a quote to get started
                   </div>
-                ))}
-                {(sel.notes||[]).length===0&&(activeDeal?.notes_list||[]).length===0&&(activeDeal?.touchHistory||[]).length===0&&(
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:"30px 0"}}>No notes yet</div>
+                ):(
+                  <div style={{position:"relative"}}>
+                    <div style={{position:"absolute",left:11,top:0,bottom:0,width:2,background:B.border,borderRadius:2}}/>
+                    {allEvents.map((ev,i)=>{
+                      const sm=srcMeta[ev.src]||{label:ev.src.toUpperCase(),color:B.muted,icon:"•"};
+                      return(
+                      <div key={ev.id||i} style={{display:"flex",gap:14,paddingBottom:16,position:"relative"}}>
+                        <div style={{width:24,height:24,borderRadius:"50%",background:B.white,border:`2px solid ${sm.color}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,flexShrink:0,zIndex:1}}>
+                          {sm.icon}
+                        </div>
+                        <div style={{flex:1,background:B.surface,borderRadius:6,padding:"8px 12px",border:`1px solid ${B.border}`}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:3}}>
+                            <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sm.color,letterSpacing:1,fontWeight:700}}>{sm.label}</span>
+                            <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,whiteSpace:"nowrap"}}>
+                              {new Date(ev.ts).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                            </span>
+                          </div>
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>{ev.text}</div>
+                          {(ev.author||ev.meta)&&(
+                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>
+                              {ev.author&&<span>{ev.author}</span>}
+                              {ev.author&&ev.meta&&<span> · </span>}
+                              {ev.meta&&<span style={{color:ev.meta==="opened"?B.green:B.muted}}>{ev.meta}</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
                 )}
               </div>
-            )}
+              );
+            })()}
           </div>
         </div>
       )}
@@ -3822,11 +4228,11 @@ function ModDeals() {
   };
   const draftEmail=async()=>{
     if(!sel_d) return;setDrafting(true);setDraft("");
-    const t=await aiCall(`Write a follow-up email from Matt Stone at ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
+    const t=await aiCall(`Write a follow-up email from ST1 Sports (matt@st1sports.com, 719-256-0275, st1sports.com).
 Deal: ${sel_d.name} | Contact: ${sel_d.contact} at ${sel_d.school}, ${sel_d.state}
 Stage: ${sel_d.stage} | Value: ${fmt$(sel_d.value)} | Notes: ${sel_d.notes}
 Recent touches: ${(sel_d.touchHistory||[]).slice(-2).map(t=>t.note).join("; ")}
-Under 80 words. Include subject line. Warm tone.`);
+Under 80 words. Include subject line. Brand voice: warm, direct, relationship-first — lead with the person or their program, not the product. No "hope this finds you well", no efficiency-first hooks ("2 weeks", "no minimums"). Athlete-aware tone. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
     setDraft(t||"");setDrafting(false);
   };
   const pipe=pool.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((a,d)=>a+d.value,0);
@@ -4622,7 +5028,7 @@ function ModReorder() {
 School: ${r.school} | Contact: ${r.contact}${r.state?", "+r.state:""} | Sport: ${r.sport}
 Last order: ${fmtD(r.lastOrderDate)} (${r.daysSince} days ago) — ${(r.lastItems||[]).join(", ")||"previous order"} — ${fmt$(r.lastOrderValue)}
 ${draftPrompt(r)}
-Under 80 words. Reference the exact last order. Warm, direct tone. Sign off as Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-0275`);
+Under 80 words. Reference the exact last order. Brand voice: warm, direct, athlete-aware — reference the sport, the team, or the season coming up. No "hope this finds you well", no efficiency-first hooks. Lead with the relationship, then the reorder reason. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275`);
     setDrafts(d=>({...d,[r.id]:t||""}));
     setDrafting(null);
   };
@@ -5353,15 +5759,20 @@ function ModProspecting() {
 
   const commitListImport=async(pushZoho=false)=>{
     const selected=importRows.filter(c=>importSel.has(c.id));
-    const existingEmails=new Set((s.contacts||[]).map(c=>c.email?.toLowerCase()).filter(Boolean));
-    const toAdd=selected.filter(c=>!c.email||!existingEmails.has(c.email.toLowerCase()));
+    // Build email→id map for existing contacts so dupes can be added to the list by their real ID
+    const existingByEmail=Object.fromEntries((s.contacts||[]).filter(c=>c.email).map(c=>[c.email.toLowerCase(),c.id]));
+    const toAdd=selected.filter(c=>!c.email||!existingByEmail[c.email.toLowerCase()]);
     const dupes=selected.length-toAdd.length;
     dispatch("ADD_CONTACTS",toAdd);
-    // Save as a named contact list for easy campaign use
+    // List includes NEW contacts (their new IDs) + EXISTING dupes (their real IDs)
     const listName=(importListName||"Imported List").trim();
-    const newList={id:mkId(),name:listName,contactIds:toAdd.map(c=>c.id),createdAt:Date.now(),source:"import"};
+    const allListIds=[
+      ...toAdd.map(c=>c.id),
+      ...selected.filter(c=>c.email&&existingByEmail[c.email.toLowerCase()]).map(c=>existingByEmail[c.email.toLowerCase()]),
+    ];
+    const newList={id:mkId(),name:listName,contactIds:allListIds,createdAt:Date.now(),source:"import"};
     dispatch("ADD_CONTACT_LIST",newList);
-    toast(`Imported ${toAdd.length} contacts → saved as list "${listName}"${dupes>0?` · ${dupes} dupes skipped`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
+    toast(`Saved list "${listName}" with ${allListIds.length} contacts${dupes>0?` · ${dupes} already in DB (included in list)`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
     setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
     setView("lists"); // jump straight to the lists view
     if(pushZoho&&toAdd.length>0){
@@ -5372,7 +5783,7 @@ function ModProspecting() {
   const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
   const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 
-  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`CONTACT DB (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+  const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 
   return (
     <div style={{padding:"22px 26px"}}>
@@ -5896,14 +6307,17 @@ function ModProspecting() {
                         <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
                           {((typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""])&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,fontWeight:500}}>{(typeof c.outreachWindow==="string"?c.outreachWindow:"")||SPORT_WINDOWS[typeof c.sport==="string"?c.sport:c.sport?.name||""]}</div>}
                           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:{high:B.green,medium:B.blue,low:B.muted}[c.priority]||B.muted,letterSpacing:.5,marginTop:2}}>{c.priority?.toUpperCase()||"MED"}</div>
-                          <button onClick={()=>{
-                            const school=typeof c.school==="string"?c.school:c.school?.name||"";
-                            const title=typeof c.title==="string"?c.title:c.title?.name||"";
-                            const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-                            const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
-                            dispatch("SET_AGENT_DRAFT",draft);
-                            setMod("agent");
-                          }} style={{marginTop:5,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",display:"block",width:"100%",textAlign:"center"}}>→ AGENT</button>
+                          <div style={{display:"flex",gap:4,marginTop:5}}>
+                            <button onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} style={{flex:1,background:B.surface,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ CRM</button>
+                            <button onClick={()=>{
+                              const school=typeof c.school==="string"?c.school:c.school?.name||"";
+                              const title=typeof c.title==="string"?c.title:c.title?.name||"";
+                              const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+                              const draft=`Draft an outreach email for ${c.fullName||c.firstName}, ${title}${school?` at ${school}`:""}${c.state?`, ${c.state}`:""}${sport?`. Sport: ${sport}`:""}${c.outreachWindow?`. Best outreach window: ${c.outreachWindow}`:""}. Personalize it to build a relationship and introduce ST1 Sports.`;
+                              dispatch("SET_AGENT_DRAFT",draft);
+                              setMod("agent");
+                            }} style={{flex:1,background:B.surface,color:B.blue,border:`1px solid ${B.border}`,borderRadius:3,padding:"3px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",textAlign:"center"}}>→ AGENT</button>
+                          </div>
                           <div style={{marginTop:5,position:"relative"}}>
                             {flaggingContact===c.id?(
                               <div style={{position:"absolute",right:0,top:"100%",zIndex:20,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.12)",minWidth:160,padding:6}}>
@@ -6248,14 +6662,12 @@ function ModProspecting() {
 const DEFAULT_TEMPLATES=[
   {id:"tpl_intro",name:"Cold Intro — Track & Field",tags:["cold","t&f"],subject:"ST1 Sports — Equipment for {{school}} T&F Program",body:`Hi {{name}},
 
-I wanted to reach out about ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
+Reaching out from ST1 Sports — we specialize in competition-grade track & field equipment (hurdles, starting blocks, shot puts, throws equipment) sold directly to programs like yours.
 
-We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and I personally handle every order.
+We work with schools across the country and hear the same thing: overpriced, slow-shipping distributors. We ship fast, price fairly, and every order gets personal attention.
 
 Would it be worth a quick 10-minute call to see if we can help {{school}} this season?
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
   {id:"tpl_fu1",name:"Follow-Up 1 — After Quote",tags:["followup","quote"],subject:"Re: ST1 Sports Quote — {{school}}",body:`Hi {{name}},
 
@@ -6263,17 +6675,13 @@ Just following up on the quote I sent over. Did you get a chance to review it?
 
 Happy to adjust quantities, add items, or answer any questions. We can also split the order across two POs if that's easier for your budget cycle.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275`},
   {id:"tpl_fu2",name:"Follow-Up 2 — Final Check-in",tags:["followup"],subject:"Quick check-in — {{school}} equipment",body:`Hi {{name}},
 
 I don't want to be a pest, so this will be my last follow-up for now. If the timing isn't right or you've gone a different direction, no worries at all — just let me know so I can close this out on my end.
 
-If you're still interested, I can hold current pricing for one more week.
+If you're still interested, we can hold current pricing for one more week.
 
-Best,
-Matt Stone
 ST1 Sports | 719-256-0275`},
   {id:"tpl_po",name:"PO Confirmation",tags:["order","confirmation"],subject:"ST1 Sports — Order Confirmation for {{school}}",body:`Hi {{name}},
 
@@ -6284,18 +6692,15 @@ Thank you for your order! Here's a summary:
 Estimated ship date: {{ship_date}}
 Tracking will be emailed once shipped.
 
-Questions? Reply here or call me directly at 719-256-0275.
+Questions? Reply here or call us directly at 719-256-0275.
 
-Matt Stone
 ST1 Sports | matt@st1sports.com | st1sports.com`},
   {id:"tpl_winback",name:"Win-Back — Lapsed Customer",tags:["winback","cold"],subject:"It's been a while — new equipment for {{school}}?",body:`Hi {{name}},
 
-It's Matt from ST1 Sports — it's been a while since we last worked together, and I wanted to check in.
+ST1 Sports here — it's been a while since we last worked together, and we wanted to check in.
 
-We've added some new items this season, and I'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
+We've added some new items this season, and we'd love to put together a quote for {{school}} if you're gearing up for a new season. No pressure — just want to make sure you know we're here when you need us.
 
-Best,
-Matt Stone
 ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`},
 ];
 
@@ -6683,6 +7088,7 @@ function ModMarketing() {
   const [showNewCampForm,setShowNewCampForm]=useState(false);
   const [showTemplateSelect,setShowTemplateSelect]=useState(false);
   const [campDraft,setCampDraft]=useState(null);
+  const [campListUploading,setCampListUploading]=useState(false);
   // Campaign detail sub-tabs: strategy | assets | execute | report
   const [campSubTab,setCampSubTab]=useState("strategy");
   // Wizard steps: 1=define 2=icp 3=assets_checklist 4=build_assets 5=launch
@@ -6724,6 +7130,20 @@ function ModMarketing() {
     },700);
     return ()=>clearTimeout(touchSaveTimer.current);
   },[touchDraft]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Restore schedule state from campaign record when campaign changes
+  useEffect(()=>{
+    const camp=(s.campaigns||[]).find(c=>c.id===selCampId);
+    if(!camp){setBatchSchedules({});setBatchSentMap({});setTouchSchedStarts({});return;}
+    if(camp.scheduledBatches){
+      const uiBatches={};
+      Object.entries(camp.scheduledBatches).forEach(([bk,info])=>{uiBatches[bk]=info.scheduledAt;});
+      setBatchSchedules(uiBatches);
+    } else {
+      setBatchSchedules({});
+    }
+    if(camp.sentBatches) setBatchSentMap(camp.sentBatches);
+    setTouchSchedStarts({});
+  },[selCampId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Execute tab
   const [filterSport,setFilterSport]=useState("all");
   const [executeFilter,setExecuteFilter]=useState("all"); // status filter for enrolled contacts
@@ -6739,6 +7159,13 @@ function ModMarketing() {
   const [pendingBatch,setPendingBatch]=useState(null);
   const [batchExpanded,setBatchExpanded]=useState({0:true}); // batch 0 open by default
   const [batchSentMap,setBatchSentMap]=useState({}); // key="${campId}-${ti}-${firstContactId}" → {sent,failed}
+  const [batchSchedules,setBatchSchedules]=useState({}); // key→scheduledAt ISO string (UI display)
+  const [touchSchedStarts,setTouchSchedStarts]=useState({}); // touchIdx→ISO string of first batch start
+  const [schedStartDt,setSchedStartDt]=useState(()=>{const c=getMTComp(nextMTBizStart(Date.now()));return`${c.y}-${String(c.mo+1).padStart(2,'0')}-${String(c.d).padStart(2,'0')}T09:00`;}); // datetime-local value (interpreted as MT)
+  const [schedDelay,setSchedDelay]=useState(60); // minutes between batches
+  const [schedTouchGap,setSchedTouchGap]=useState(7); // business days between touches
+  const [maxPerDay,setMaxPerDay]=useState(0); // 0 = unlimited; >0 caps daily contacts sent
+  const [schedStatus,setSchedStatus]=useState(null); // null | 'applying' | 'done'
   const [lastSendErr,setLastSendErr]=useState(null); // persistent error from last send attempt
   const [intCollapsed,setIntCollapsed]=useState(false);
   // Audience segmentation (wizard step 5)
@@ -6747,9 +7174,66 @@ function ModMarketing() {
   const [selectedContacts,setSelectedContacts]=useState(new Set());
   const [enrollSearch,setEnrollSearch]=useState(""); // filter text for enroll-from-execute panel
   const [enrollListId,setEnrollListId]=useState(""); // contact list picker in execute tab
+  const [quickAddEmail,setQuickAddEmail]=useState(""); // manual email quick-add in execute tab
+  const [nowTick,setNowTick]=useState(Date.now()); // updates every 15s for countdown display
+  // Refs so the interval callback always sees fresh values without being recreated
+  const pendingSendFnsRef=useRef({}); // populated each render: {batchKey: ()=>void}
+  const batchSchedulesRef=useRef({});
+  const touchSchedStartsRef=useRef({});
+  const schedDelayRef=useRef(60);
+  const batchSentMapRef=useRef({});
+  const sendingRef=useRef(false);
+  // Keep refs in sync
+  useEffect(()=>{batchSchedulesRef.current=batchSchedules;},[batchSchedules]);
+  useEffect(()=>{touchSchedStartsRef.current=touchSchedStarts;},[touchSchedStarts]);
+  useEffect(()=>{schedDelayRef.current=schedDelay;},[schedDelay]);
+  useEffect(()=>{batchSentMapRef.current=batchSentMap;},[batchSentMap]);
+  useEffect(()=>{sendingRef.current=sending;},[sending]);
+  // 15-second ticker for countdown display
+  useEffect(()=>{const id=setInterval(()=>setNowTick(Date.now()),15000);return()=>clearInterval(id);},[]);
+  // Scheduled send engine — fires due batches during Mon-Fri 9am-5pm
+  useEffect(()=>{
+    const isWorkingHours=()=>{const d=new Date();const h=d.getHours();const wd=d.getDay();return wd>=1&&wd<=5&&h>=9&&h<17;};
+    const id=setInterval(()=>{
+      if(sendingRef.current||!isWorkingHours()) return;
+      const now=Date.now();
+      for(const [bk,dt] of Object.entries(batchSchedulesRef.current)){
+        if(dt&&new Date(dt).getTime()<=now){
+          const fn=pendingSendFnsRef.current[bk];
+          if(fn){fn();setBatchSchedules(s=>{const n={...s};delete n[bk];return n;});return;}
+        }
+      }
+    },15000);
+    return()=>clearInterval(id);
+  },[]); // empty deps — all state read via refs
+  // Auto-stamp batch keys when contacts advance into a touch that has a planned start time
+  useEffect(()=>{
+    if(!selCampId||!Object.keys(touchSchedStartsRef.current).length) return;
+    const camp=(s.campaigns||[]).find(c=>c.id===selCampId);
+    if(!camp) return;
+    const sz=camp.batchSize||25;
+    const enrs=camp.enrollments||[];
+    const cmap=Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+    const updates={};
+    Object.entries(touchSchedStartsRef.current).forEach(([tiStr,startIso])=>{
+      const t=parseInt(tiStr);
+      const startMs=new Date(startIso).getTime();
+      const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!cmap[e.contactId]?.optedOut);
+      const tPending=tActive.filter(e=>cmap[e.contactId]?.email);
+      const tBatches=[];
+      for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+      tBatches.forEach((batch,bi)=>{
+        const bk=`${selCampId}-${t}-${batch[0]?.contactId||bi}`;
+        if(!batchSentMapRef.current[bk]&&!batchSchedulesRef.current[bk]){
+          updates[bk]=new Date(startMs+bi*schedDelayRef.current*60000).toISOString();
+        }
+      });
+    });
+    if(Object.keys(updates).length) setBatchSchedules(prev=>({...prev,...updates}));
+  },[selCampId,s.campaigns]); // re-run when campaign changes — s.campaigns reference changes when enrollments update
   // Social tab / add post
   const [showAddPost,setShowAddPost]=useState(false);
-  const [postDraft,setPostDraft]=useState({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+  const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
   // Matching contacts (ICP filter)
   const [matchingContacts,setMatchingContacts]=useState(null);
   // Flighting (plan detail multi-select)
@@ -6821,6 +7305,62 @@ function ModMarketing() {
     setCampStep(1);
     setShowNewCampForm(true);
     setShowTemplateSelect(false);
+  };
+
+  const handleCampListUpload=async(e)=>{
+    const f=e.target.files?.[0];
+    if(!f) return;
+    setCampListUploading(true);
+    try{
+      const isCsv=f.name.toLowerCase().endsWith(".csv");
+      let rows;
+      if(isCsv){
+        const text=await f.text();
+        // Simple CSV parse
+        const lines=text.split(/\r?\n/).filter(l=>l.trim());
+        const hdrs=lines[0].split(",").map(h=>h.replace(/^"|"$/g,"").trim().toLowerCase());
+        rows=lines.slice(1).map(l=>{const cells=l.split(",").map(c=>c.replace(/^"|"$/g,"").trim());return Object.fromEntries(hdrs.map((h,i)=>[h,cells[i]||""]));});
+      }else{
+        const XLSX=await import("xlsx");
+        const buf=await new Promise((res)=>{const r=new FileReader();r.onload=ev=>res(new Uint8Array(ev.target.result));r.readAsArrayBuffer(f);});
+        const wb=XLSX.read(buf,{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json(ws,{defval:""});
+        rows=raw.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k.toLowerCase().trim(),String(v).trim()])));
+      }
+      const g=(row,...keys)=>{for(const k of keys){const v=row[k]||row[k.replace(/_/," ")]||"";if(v) return String(v).trim();}return"";};
+      const contacts=rows.filter(r=>Object.values(r).some(v=>v)).map(r=>({
+        id:mkId(),
+        firstName:g(r,"first name","firstname","first_name"),
+        lastName:g(r,"last name","lastname","last_name"),
+        fullName:(g(r,"full name","fullname","name")||[g(r,"first name","firstname","first_name"),g(r,"last name","lastname","last_name")].filter(Boolean).join(" ")).trim(),
+        email:g(r,"email","email address"),
+        phone:g(r,"phone","phone number","mobile"),
+        title:g(r,"title","job title","role","position"),
+        school:g(r,"school","organization","company","org","account"),
+        state:g(r,"state","st"),
+        city:g(r,"city"),
+        sport:g(r,"sport","sports"),
+        source:"import",confidence:"medium",outreachStatus:"new",importedAt:Date.now(),
+      }));
+      if(contacts.length===0){toast("No contacts found in file","error");return;}
+      // Dedup by email — skip adding contacts already in DB, but still include them in the list
+      const existingByEmail=Object.fromEntries((s.contacts||[]).filter(c=>c.email).map(c=>[c.email.toLowerCase(),c.id]));
+      const toAdd=contacts.filter(c=>!c.email||!existingByEmail[c.email.toLowerCase()]);
+      const dupes=contacts.length-toAdd.length;
+      if(toAdd.length>0) dispatch("ADD_CONTACTS",toAdd);
+      const allListIds=[
+        ...toAdd.map(c=>c.id),
+        ...contacts.filter(c=>c.email&&existingByEmail[c.email.toLowerCase()]).map(c=>existingByEmail[c.email.toLowerCase()]),
+      ];
+      const listName=f.name.replace(/\.[^.]+$/,"");
+      const newList={id:mkId(),name:listName,contactIds:allListIds,createdAt:Date.now(),source:"import"};
+      dispatch("ADD_CONTACT_LIST",newList);
+      setCampDraft(c=>({...c,audienceListId:newList.id,audienceMode:"list"}));
+      toast(`List "${listName}" ready — ${allListIds.length} contacts${dupes>0?` · ${dupes} already in DB (included)`:""}  `,"success");
+    }catch(err){toast("Upload failed: "+err.message,"error");}
+    setCampListUploading(false);
+    e.target.value="";
   };
 
   const findMatchingContacts = (icp) => {
@@ -7026,10 +7566,13 @@ function ModMarketing() {
   };
 
   const saveCampaign = () => {
-    const types = campDraft?.assetTypes||[];
-    const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
     if(!campDraft) return;
-    if(types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching","error");return;}
+    const audienceModeCheck = campDraft.audienceMode||"ai";
+    const hasListSelected = audienceModeCheck==="list"&&campDraft.audienceListId;
+    const hasAnyContent = (campDraft?.touches||[]).length>0||(campDraft?.adCopy||"").trim()||(campDraft?.callScript||"").trim()||(campDraft?.directMail||"").trim()||(campDraft?.socialDrafts||[]).length>0;
+    const types = campDraft?.assetTypes||[];
+    // Only block if no list and selected asset types but generated nothing — if they have a list, let them proceed and add email templates later
+    if(!hasListSelected&&types.length>0&&!hasAnyContent){toast("Generate at least one asset before launching, or switch to FROM LIST mode to launch and add email templates later.","error");return;}
     const contacts = s.contacts||[];
     const todayStr = today();
     const startDate = campDraft.startDate||todayStr;
@@ -7040,7 +7583,7 @@ function ModMarketing() {
     if(audienceMode==="list"&&campDraft.audienceListId){
       const list=(s.contactLists||[]).find(l=>l.id===campDraft.audienceListId);
       const listIds=list?.contactIds||[];
-      seg=contacts.filter(c=>listIds.includes(c.id)&&c.email);
+      seg=contacts.filter(c=>listIds.includes(c.id));
       // Stagger: contact at index i gets startDate + floor(i/batchSize) days
       enrollments=seg.map((c,i)=>{
         const dayOffset=Math.floor(i/batchSize);
@@ -7197,10 +7740,10 @@ function ModMarketing() {
           subject,
           body:plainBody,
           htmlBody,
-          // Send from the rep's own Gmail if they have a key, otherwise shared account
+          // Use rep's own OAuth token if configured, otherwise use shared account
           ...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
-          // Reply-To = rep's email so replies land in their inbox (fallback if no own Gmail)
-          ...(!rep?.gmailEnvKey && rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+          // Reply-To = rep's email so replies land in their inbox
+          ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
           // BCC quote tracker if this touch is marked as a pricing email
           ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
         })});
@@ -7359,9 +7902,9 @@ function ModMarketing() {
     if(!postDraft.caption.trim()) return;
     const camp = campaigns.find(c=>c.id===campId);
     if(!camp) return;
-    const post = {id:mkId(),...postDraft,campId,createdAt:today()};
+    const post = {id:mkId(),...postDraft,campId,createdAt:today(),scheduledDate:postDraft.date||""};
     dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-    setPostDraft({date:"",platforms:[],caption:"",imageUrl:"",type:"post"});
+    setPostDraft({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
     setShowAddPost(false);
     toast("Post added to campaign","success");
   };
@@ -8240,25 +8783,31 @@ function ModMarketing() {
                         <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
                           {["instagram","facebook","linkedin","twitter","tiktok"].map(pl=>{const sel=(p.platforms||[]).includes(pl);return<button key={pl} onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,platforms:sel?x.platforms.filter(v=>v!==pl):[...(x.platforms||[]),pl]}:x)}))} style={{background:sel?`${B.purple}14`:B.surface,color:sel?B.purple:B.muted,border:`1px solid ${sel?B.purple:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{pl}</button>;})}
                         </div>
-                        {/* Image generation */}
+                        {/* Image */}
                         <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${B.border}`}}>
-                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE GENERATION</div>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>IMAGE</div>
                           <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="Image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                            <input value={p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`} onChange={e=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imagePrompt:e.target.value}:x)}))} placeholder="AI image prompt..." style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
                             <button onClick={async()=>{
                               const prompt=p.imagePrompt||`${campDraft.product||"sports equipment"} for ${(campDraft.icp?.sports||["sports"])[0]} — social post visual`;
-                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true}:x)}));
+                              setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:true,imageError:""}:x)}));
                               try{
-                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"lifestyle",sizeKey:"square"})});
+                                const r=await fetch("/api/adengine/generate-product-image",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({prompt,style:"REALISTIC",sizeKey:"square"})});
                                 const d=await r.json();
-                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl||"",imageGenerating:false}:x)}));
-                              }catch(err){setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false}:x)}));}
+                                if(!r.ok||!d.imageUrl){const errMsg=d.error||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:errMsg}:x)}));toast(errMsg,"error");return;}
+                                setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:d.imageUrl,imageGenerating:false,imageError:""}:x)}));
+                              }catch(err){const msg=err.message||"Image generation failed";setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageGenerating:false,imageError:msg}:x)}));toast(msg,"error");}
                             }} disabled={p.imageGenerating} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,opacity:p.imageGenerating?.7:1}}>
-                              {p.imageGenerating?"GENERATING...":"🎨 GENERATE IMAGE"}
+                              {p.imageGenerating?"GENERATING...":"🎨 AI IMAGE"}
                             </button>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:ev.target.result,imageError:""}:x)}));r.readAsDataURL(f);}}/>
+                            </label>
                           </div>
                           {p.imageGenerating&&<div style={{display:"flex",gap:6,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.purple}}><Spin/>Generating image…</div>}
-                          {p.imageUrl&&<img src={p.imageUrl} alt="Generated social post visual" style={{maxWidth:200,borderRadius:5,marginTop:4,border:`1px solid ${B.border}`}}/>}
+                          {p.imageError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginTop:4}}>{p.imageError}</div>}
+                          {p.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={p.imageUrl} alt="Post visual" style={{maxWidth:200,borderRadius:5,border:`1px solid ${B.border}`,display:"block"}}/><button onClick={()=>setCampDraft(c=>({...c,socialDrafts:c.socialDrafts.map((x,j)=>j===i?{...x,imageUrl:""}:x)}))} style={{position:"absolute",top:4,right:4,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"2px 6px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
                         </div>
                       </div>
                     ))}
@@ -8401,6 +8950,24 @@ function ModMarketing() {
               {campStep===5&&(
               <div className="card" style={{padding:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:16}}>5 — LAUNCH</div>
+                {/* Send-from rep selector */}
+                <div style={{marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — who does this campaign send as?</div>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {(s.reps||[]).map(r=>{const sel=campDraft?.repId===r.id;return(
+                      <button key={r.id} onClick={()=>setCampDraft(c=>({...c,repId:r.id}))}
+                        style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:sel?`${B.orange}10`:B.white,border:`2px solid ${sel?B.orange:B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:sel?B.orange:B.text}}>
+                        <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                        <div>
+                          <div style={{fontWeight:sel?700:500}}>{r.name}</div>
+                          {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                        </div>
+                        {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3}}>GMAIL ✓</span>}
+                      </button>
+                    );})}
+                    {!(s.reps||[]).length&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No reps configured — <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>add in Settings</a>.</span>}
+                  </div>
+                </div>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
@@ -8469,9 +9036,7 @@ function ModMarketing() {
                   </div>
                   {(campDraft.audienceMode||"ai")==="list"&&(
                     <div>
-                      {(s.contactLists||[]).length===0?(
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>No contact lists found — create lists in the Contacts section first.</div>
-                      ):(
+                      {(s.contactLists||[]).length>0&&(
                         <select value={campDraft.audienceListId||""} onChange={e=>setCampDraft(c=>({...c,audienceListId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:campDraft.audienceListId?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",marginBottom:8}}>
                           <option value="">— select a contact list —</option>
                           {(s.contactLists||[]).map(list=>(
@@ -8479,13 +9044,20 @@ function ModMarketing() {
                           ))}
                         </select>
                       )}
+                      <label style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,width:"100%",background:B.surface,border:`1px dashed ${B.orange}60`,borderRadius:4,padding:"8px 12px",cursor:"pointer",boxSizing:"border-box",opacity:campListUploading?.6:1}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.4}}>{campListUploading?"IMPORTING…":"⬆ UPLOAD NEW LIST (.csv / .xlsx)"}</span>
+                        <input type="file" accept=".csv,.xlsx,.xls" style={{display:"none"}} disabled={campListUploading} onChange={handleCampListUpload}/>
+                      </label>
                     </div>
                   )}
                 </div>
                 {/* Batch size */}
                 <div style={{marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,flexShrink:0}}>BATCH SIZE</div>
-                  <input type="number" min={1} max={500} value={campDraft.batchSize||25} onChange={e=>setCampDraft(c=>({...c,batchSize:Math.max(1,parseInt(e.target.value)||25)}))} style={{width:80,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                  <input type="number" min={1} max={500} value={campDraft.batchSize||25}
+                    onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setCampDraft(c=>({...c,batchSize:v}));}}
+                    onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)setCampDraft(c=>({...c,batchSize:25}));}}
+                    style={{width:80,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
                   <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>contacts per day — stagger enrollment (first batch starts day 0, next on day 1, etc.)</span>
                 </div>
                 <div style={{padding:"10px 14px",background:`${B.green}08`,border:`1px solid ${B.green}20`,borderRadius:6,marginBottom:18}}>
@@ -8656,6 +9228,8 @@ function ModMarketing() {
               {/* EXECUTE TAB */}
               {campSubTab==="execute"&&(<>
               {(()=>{
+                // Reset and repopulate batch send callbacks this render
+                pendingSendFnsRef.current={};
                 const enrs=selCamp.enrollments||[];
                 const touches=selCamp.touches||[];
                 const rep=selCamp.repId?(s.reps||[]).find(r=>r.id===selCamp.repId):null;
@@ -8674,7 +9248,7 @@ function ModMarketing() {
                 // One-batch sender — sends exactly this list of enrollments for their current step.
                 // Guards against duplicate sends via the sentSteps array on each enrollment.
                 // noEmailEnrs: contacts at this step with no email — auto-advanced without sending.
-                const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[])=>{
+                const sendOneBatch=async(batchEnrollments,batchKey,noEmailEnrs=[],forceResend=false)=>{
                   const camp=campaigns.find(c=>c.id===selCamp.id);
                   if(!camp){ toast("Campaign not found — try refreshing","error"); return; }
                   if(sending){ toast("Send already in progress — wait for it to finish","warn"); return; }
@@ -8689,14 +9263,16 @@ function ModMarketing() {
                   for(const enroll of batchEnrollments){
                     if(enroll.status==="interested"){ skipped++; continue; }
                     const guardIdx=updEnr.findIndex(e=>e.contactId===enroll.contactId);
-                    // Hard dedup guards — skip if step already advanced or already sent this touch
-                    if(guardIdx>=0 && updEnr[guardIdx].step!==enroll.step){ skipped++; continue; }
+                    // Hard dedup: never re-send a step already in sentSteps
                     if(guardIdx>=0 && (updEnr[guardIdx].sentSteps||[]).includes(enroll.step)){ skipped++; continue; }
+                    // Step-advance guard — bypassed on forceResend (contacts skipped by step mismatch)
+                    if(!forceResend && guardIdx>=0 && updEnr[guardIdx].step!==enroll.step){ skipped++; continue; }
                     const res=await sendOneEmail(camp,enroll);
                     if(res.ok){
                       // Record sent step BEFORE advancing so dedup survives any re-render between sends
-                      if(guardIdx>=0) updEnr[guardIdx]={...updEnr[guardIdx],sentSteps:[...(updEnr[guardIdx].sentSteps||[]),enroll.step]};
-                      advanceEnroll(updEnr,enroll,todStr,camp);
+                      if(guardIdx>=0) updEnr[guardIdx]={...updEnr[guardIdx],sentSteps:[...(updEnr[guardIdx].sentSteps||[]),enroll.step],lastContacted:todStr,lastSentAt:todStr};
+                      // On force-resend don't reset step (contact may be further ahead)
+                      if(!forceResend) advanceEnroll(updEnr,enroll,todStr,camp);
                       dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:selCamp.id,note:`Touch ${enroll.step+1} sent`});
                       const _zc=contactMap[enroll.contactId];if(_zc?.zohoId)pushActivityToZoho(_zc,`Campaign email sent: ${camp.name}`);
                       sent++;
@@ -8724,8 +9300,26 @@ function ModMarketing() {
                     }
                   }
                   const finalCamp=campaignsRef.current.find(c=>c.id===camp.id)||camp;
-                  dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
-                  if(batchKey) setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
+                  if(batchKey){
+                    const totalProcessed=sent+skipped+noEmailAdv;
+                    if(totalProcessed>0){
+                      // At least something was processed — mark batch done
+                      setBatchSentMap(m=>({...m,[batchKey]:{sent,failed}}));
+                      const newSched={...(finalCamp.scheduledBatches||{})};
+                      delete newSched[batchKey];
+                      dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched,sentBatches:{...(finalCamp.sentBatches||{}),[batchKey]:{sent,failed,sentAt:new Date().toISOString()}}});
+                    } else {
+                      // Total failure — reschedule to next 9am MT so cron/engine can retry
+                      const retryMs=nextMTBizStart(Date.now());
+                      const retryIso=new Date(retryMs).toISOString();
+                      setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                      const prevInfo=finalCamp.scheduledBatches?.[batchKey]||{};
+                      const newSched={...(finalCamp.scheduledBatches||{}),[batchKey]:{...prevInfo,scheduledAt:retryIso}};
+                      dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr,scheduledBatches:newSched});
+                    }
+                  } else {
+                    dispatch("UPDATE_CAMPAIGN",{...finalCamp,enrollments:updEnr});
+                  }
                   const skipNote=skipped?` · ${skipped} already sent/interested`:"";
                   const noEmailNote=noEmailAdv?` · ${noEmailAdv} skipped (no email)`:"";
                   const msg=`${sent} sent${failed?`, ${failed} failed — ${firstErr}`:""}${skipNote}${noEmailNote}`;
@@ -8788,20 +9382,39 @@ function ModMarketing() {
 
                 return(<>
                   {/* Always-visible Gmail connectivity check — auto-runs on mount */}
-                  <GmailStatusBanner repKey={rep?.gmailEnvKey||""} />
+                  <GmailStatusBanner repKey={rep?.gmailEnvKey||""} repEmail={rep?.email||""} />
 
-                  {/* Rep + Gmail status */}
-                  {rep&&(
+                  {/* Rep sender selector */}
+                  {rep?(
                     <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:rep.gmailEnvKey?`${B.green}08`:`${B.yellow}10`,border:`1px solid ${rep.gmailEnvKey?B.green+"30":B.yellow+"60"}`,borderRadius:5,marginBottom:8}}>
                       <div style={{width:26,height:26,borderRadius:"50%",background:rep.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
                       <div style={{flex:1}}>
                         {rep.gmailEnvKey
-                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail account ({rep.gmailEnvKey})</span>
-                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured — emails will send from your account with their signature. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Settings → Sales Reps → Edit → set Gmail Key</a>.</span>
+                          ?<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>Sending from <strong>{rep.name}</strong>'s Gmail ({rep.email||rep.gmailEnvKey})</span>
+                          :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>⚠️ <strong>{rep.name}</strong> has no personal Gmail configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Set a Gmail Key in Settings</a>, then have {rep.name.split(" ")[0]} open <a href={rep.gmailEnvKey?`/api/gmail-setup?repKey=${rep.gmailEnvKey}&hint=${encodeURIComponent(rep.email||"")}`:"/api/gmail-setup"} target="_blank" rel="noreferrer" style={{color:B.blue,fontWeight:600}}>this link on their own computer →</a></span>
                         }
                       </div>
                       <button onClick={testGmailConn} style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",whiteSpace:"nowrap"}}>TEST GMAIL</button>
-                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE REP</button>
+                      <button onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:""})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>CHANGE</button>
+                    </div>
+                  ):(
+                    <div style={{padding:"10px 12px",background:B.surface,border:`1px solid ${B.orange}40`,borderRadius:5,marginBottom:8}}>
+                      <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginBottom:6}}>SEND FROM — select who this campaign sends as</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {(s.reps||[]).length===0?(
+                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No sales reps configured. <a href="#settings" onClick={()=>setMod("settings")} style={{color:B.blue}}>Add reps in Settings.</a></span>
+                        ):(s.reps||[]).map(r=>(
+                          <button key={r.id} onClick={()=>dispatch("UPDATE_CAMPAIGN",{...selCamp,repId:r.id})}
+                            style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                            <div style={{width:22,height:22,borderRadius:"50%",background:r.gmailEnvKey?B.green:B.yellow,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:8,color:B.white}}>{(r.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span></div>
+                            <div>
+                              <div style={{fontWeight:600}}>{r.name}</div>
+                              {r.email&&<div style={{fontSize:9,color:B.muted}}>{r.email}</div>}
+                            </div>
+                            {r.gmailEnvKey&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"1px 5px",borderRadius:3,marginLeft:2}}>GMAIL ✓</span>}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
 
@@ -8839,6 +9452,13 @@ function ModMarketing() {
                       );
                     })}
                     <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"4px 10px"}}>
+                        <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,whiteSpace:"nowrap"}}>BATCH SZ</span>
+                        <input type="number" min={1} max={500} value={selCamp.batchSize||25}
+                          onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:v});}}
+                          onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:25});}}
+                          style={{width:44,background:"transparent",border:"none",color:B.text,fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",textAlign:"center"}}/>
+                      </div>
                       <button onClick={()=>checkReplies(selCamp.id)} disabled={checkingReplies||checkingOpens} style={{background:B.surface,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingReplies?"CHECKING...":"↻ REPLIES"}</button>
                       <button onClick={()=>checkOpens(selCamp.id)} disabled={checkingOpens||checkingReplies} style={{background:B.surface,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:5,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{checkingOpens?"CHECKING...":"👁 OPENS"}</button>
                     </div>
@@ -8911,6 +9531,132 @@ function ModMarketing() {
                     </div>
                   )}
 
+                  {/* ── Batch Schedule Panel ── */}
+                  {touches.length>0&&(()=>{
+                    const sz=selCamp.batchSize||25;
+                    // Starting touch index: first touch that has unsent batches
+                    const ti=touches.findIndex((_,idx)=>enrs.some(e=>e.step===idx&&e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email));
+                    const startTi=ti<0?0:ti;
+                    const pendingScheduledCount=Object.keys(selCamp.scheduledBatches||{}).length;
+                    const sentBatchCount=Object.keys(selCamp.sentBatches||{}).length;
+
+                    const applySchedule=()=>{
+                      const startMs=parseMTLocalStr(schedStartDt);
+                      if(!startMs||isNaN(startMs))return;
+                      const batchUpdates={};
+                      const startUpdates={};
+                      const campBatches={};
+                      let currentMs=startMs;
+                      let batchesThisDay=0;
+                      const maxBpd=maxPerDay>0?Math.max(1,Math.floor(maxPerDay/sz)):Infinity;
+                      const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
+                      for(let t=startTi;t<touches.length;t++){
+                        startUpdates[t]=new Date(currentMs).toISOString();
+                        const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                        const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
+                        const tBatches=[];
+                        for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                        const touchStartMs=currentMs; // next touch advances from HERE, not from last batch
+                        const unsentBatchInfos=tBatches
+                          .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
+                          // Skip only successfully-sent batches; failed batches (sent===0 && failed>0) get rescheduled
+                          .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
+                        unsentBatchInfos.forEach(({bk,contactIds})=>{
+                          const firesAt=new Date(currentMs).toISOString();
+                          batchUpdates[bk]=firesAt;
+                          campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
+                          batchesThisDay++;
+                          const tentNext=currentMs+schedDelay*60000;
+                          const nc=getMTComp(tentNext);
+                          const afterHours=nc.h>=17||nc.wd===0||nc.wd===6;
+                          const hitDayCap=maxBpd<Infinity&&batchesThisDay>=maxBpd;
+                          if(afterHours||hitDayCap){currentMs=nextMTBizStart(currentMs);batchesThisDay=0;}
+                          else currentMs=tentNext;
+                        });
+                        if(t<touches.length-1){
+                          // Advance from touch START so email 2 begins N days after email 1 started
+                          // — batches from different touches run in parallel, no waiting for last batch
+                          currentMs=addBusinessDays(touchStartMs,schedTouchGap);
+                          const gc=getMTComp(currentMs);
+                          if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
+                          batchesThisDay=0;
+                        }
+                      }
+                      setBatchSchedules(prev=>({...prev,...batchUpdates}));
+                      setTouchSchedStarts(prev=>({...prev,...startUpdates}));
+                      // Clear sentBatches entries for (re)scheduled batches so failed state is wiped
+                      const rescheduledKeys=Object.keys(campBatches);
+                      const updSentBatches={...(selCamp.sentBatches||{})};
+                      rescheduledKeys.forEach(k=>delete updSentBatches[k]);
+                      if(rescheduledKeys.length>0) setBatchSentMap(prev=>{const n={...prev};rescheduledKeys.forEach(k=>delete n[k]);return n;});
+                      const newScheduledBatches={...(selCamp.scheduledBatches||{}),...campBatches};
+                      dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches});
+                      // Immediate DB save — don't wait for debounce (set-and-forget)
+                      const _uc=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches}:c);
+                      const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
+                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                    };
+
+                    const handleScheduleClick=()=>{
+                      setSchedStatus('applying');
+                      setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);
+                    };
+
+                    return(
+                      <div className="card" style={{padding:"12px 14px",marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
+                        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                          <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1}}>BATCH SCHEDULE</div>
+                          {pendingScheduledCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{pendingScheduledCount} PENDING</span>}
+                          {sentBatchCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>{sentBatchCount} SENT</span>}
+                        </div>
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"flex-end",marginBottom:8}}>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>START (MOUNTAIN TIME)</div>
+                            <input type="datetime-local" value={schedStartDt} onChange={e=>setSchedStartDt(e.target.value)}
+                              style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>CONTACTS / BATCH</div>
+                            <input type="number" min={1} max={500} value={selCamp.batchSize||25}
+                              onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,batchSize:v});}}
+                              style={{width:65,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>MAX / DAY (0=∞)</div>
+                            <input type="number" min={0} max={10000} value={maxPerDay}
+                              onChange={e=>setMaxPerDay(parseInt(e.target.value)||0)}
+                              style={{width:75,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>MINS BETWEEN BATCHES</div>
+                            <input type="number" min={5} max={1440} value={schedDelay} onChange={e=>setSchedDelay(parseInt(e.target.value)||60)}
+                              style={{width:70,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <div>
+                            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:3}}>BIZ DAYS BETWEEN TOUCHES</div>
+                            <input type="number" min={1} max={60} value={schedTouchGap} onChange={e=>setSchedTouchGap(parseInt(e.target.value)||7)}
+                              style={{width:60,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                          </div>
+                          <button onClick={handleScheduleClick} disabled={schedStatus==='applying'}
+                            style={{background:schedStatus==='done'?B.green:schedStatus==='applying'?B.muted:B.blue,color:B.white,border:"none",borderRadius:5,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:schedStatus==='applying'?"not-allowed":"pointer",whiteSpace:"nowrap",transition:"background .2s"}}>
+                            {schedStatus==='applying'?"⟳ SCHEDULING…":schedStatus==='done'?"✓ SCHEDULED":"SCHEDULE ALL BATCHES"}
+                          </button>
+                          {pendingScheduledCount>0&&(
+                            <button onClick={()=>{dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:{}});setBatchSchedules({});setTouchSchedStarts({});}}
+                              style={{background:"none",border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,cursor:"pointer",whiteSpace:"nowrap"}}>
+                              CLEAR SCHEDULE
+                            </button>
+                          )}
+                        </div>
+                        {pendingScheduledCount>0&&(
+                          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+                            {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} pending · cron fires every 15 min Mon–Fri 9am–5pm MT · batches outside hours shift to next 9am MT automatically.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Per-touch sections */}
                   {touches.map((touch,ti)=>{
                     // Only contacts at exactly this step are eligible to receive this touch
@@ -8919,8 +9665,9 @@ function ModMarketing() {
                     const noEmail=allActive.filter(e=>!contactMap[e.contactId]?.email);
                     // Contacts who already received this touch (step has moved past ti)
                     const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","not_interested","unsubscribed"].includes(e.status))).length;
+                    const campBatchSz=selCamp.batchSize||25;
                     const touchBatches=[];
-                    for(let i=0;i<pending.length;i+=BATCH_SIZE) touchBatches.push(pending.slice(i,i+BATCH_SIZE));
+                    for(let i=0;i<pending.length;i+=campBatchSz) touchBatches.push(pending.slice(i,i+campBatchSz));
                     const allDone=pending.length===0&&noEmail.length===0;
 
                     return(
@@ -8946,6 +9693,145 @@ function ModMarketing() {
                         {/* Batches for this touch */}
                         {!allDone&&(
                           <div style={{padding:"10px 14px",display:"flex",flexDirection:"column",gap:6,borderTop:`1px solid ${B.border}`}}>
+                            {/* ── Batch schedule panel ── */}
+                            {touchBatches.length>0&&(()=>{
+                              const sz=selCamp.batchSize||25;
+                              const unsentBatches=touchBatches.map((batch,bi)=>({bk:`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`,bi})).filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
+                              const anyScheduled=unsentBatches.some(({bk})=>batchSchedules[bk]);
+                              const hasMoreTouches=ti<touches.length-1;
+                              // Count how many subsequent touches also have pending batches
+                              let touchesQueued=anyScheduled?1:0;
+                              for(let t=ti+1;t<touches.length;t++){
+                                const tp=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email);
+                                const firstBk=tp.length?`${selCamp.id}-${t}-${tp.slice(0,sz)[0]?.contactId||0}`:null;
+                                if(firstBk&&batchSchedules[firstBk]) touchesQueued++;
+                              }
+                              const applySchedule=()=>{
+                                const startMs=parseMTLocalStr(schedStartDt);
+                                if(!startMs||isNaN(startMs))return;
+                                const batchUpdates={};
+                                const startUpdates={};
+                                const campBatches={};
+                                let currentMs=startMs;
+                                let batchesThisDay=0;
+                                const maxBpd=maxPerDay>0?Math.max(1,Math.floor(maxPerDay/sz)):Infinity;
+                                const totalWithEmail=enrs.filter(e=>e.status==="active"&&!contactMap[e.contactId]?.optedOut&&contactMap[e.contactId]?.email).length;
+                                for(let t=ti;t<touches.length;t++){
+                                  startUpdates[t]=new Date(currentMs).toISOString();
+                                  const tActive=enrs.filter(e=>e.step===t&&e.status==="active"&&!contactMap[e.contactId]?.optedOut);
+                                  const tPending=tActive.filter(e=>contactMap[e.contactId]?.email);
+                                  const tBatches=[];
+                                  for(let i=0;i<tPending.length;i+=sz)tBatches.push(tPending.slice(i,i+sz));
+                                  const touchStartMs=currentMs;
+                                  const unsentBatchInfos=tBatches
+                                    .map((batch,bi)=>({bk:`${selCamp.id}-${t}-${batch[0]?.contactId||bi}`,contactIds:batch.map(e=>e.contactId)}))
+                                    // Skip only successfully-sent batches; failed batches get rescheduled
+                                    .filter(({bk})=>{const si=batchSentMap[bk];return !(si&&si.sent>0);});
+                                  unsentBatchInfos.forEach(({bk,contactIds})=>{
+                                    const firesAt=new Date(currentMs).toISOString();
+                                    batchUpdates[bk]=firesAt;
+                                    campBatches[bk]={scheduledAt:firesAt,touchIdx:t,contactIds};
+                                    batchesThisDay++;
+                                    const tentNext=currentMs+schedDelay*60000;
+                                    const nc=getMTComp(tentNext);
+                                    const afterHours=nc.h>=17||nc.wd===0||nc.wd===6;
+                                    const hitDayCap=maxBpd<Infinity&&batchesThisDay>=maxBpd;
+                                    if(afterHours||hitDayCap){currentMs=nextMTBizStart(currentMs);batchesThisDay=0;}
+                                    else currentMs=tentNext;
+                                  });
+                                  if(t<touches.length-1){
+                                    currentMs=addBusinessDays(touchStartMs,schedTouchGap);
+                                    const gc=getMTComp(currentMs);
+                                    if(gc.h<9){for(const off of[6,7]){const c=Date.UTC(gc.y,gc.mo,gc.d,9+off,0,0);if(getMTComp(c).h===9){currentMs=c;break;}}}
+                                    batchesThisDay=0;
+                                  }
+                                }
+                                setBatchSchedules(s=>({...s,...batchUpdates}));
+                                setTouchSchedStarts(prev=>({...prev,...startUpdates}));
+                                // Clear sentBatches for rescheduled batches + immediate DB save
+                                const rescheduledKeys2=Object.keys(campBatches);
+                                const updSentBatches2={...(selCamp.sentBatches||{})};
+                                rescheduledKeys2.forEach(k=>delete updSentBatches2[k]);
+                                if(rescheduledKeys2.length>0) setBatchSentMap(prev=>{const n={...prev};rescheduledKeys2.forEach(k=>delete n[k]);return n;});
+                                const newScheduledBatches2={...(selCamp.scheduledBatches||{}),...campBatches};
+                                dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2});
+                                const _uc2=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2}:c);
+                                const{currentUserId:_cid2,contacts:_cc2,agentHistory:_ah2,..._ts2}={...s,campaigns:_uc2};
+                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts2})}).catch(()=>{});
+                              };
+                              const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
+                              const clearSchedule=()=>{
+                                const keys=new Set(unsentBatches.map(({bk})=>bk));
+                                setBatchSchedules(s=>{const n={...s};keys.forEach(k=>delete n[k]);return n;});
+                              };
+                              const inputStyle={background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",color:B.text,outline:"none"};
+                              const labelStyle={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5};
+                              return(
+                                <div style={{marginBottom:4,padding:"12px 14px",background:anyScheduled?`${B.blue}06`:B.surface,border:`1px solid ${anyScheduled?B.blue:B.border}`,borderRadius:7}}>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:1,marginBottom:10}}>⏱ SCHEDULE BATCHES</div>
+                                  <div style={{display:"flex",alignItems:"flex-end",gap:10,flexWrap:"wrap"}}>
+                                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                      <label style={labelStyle}>START DATE & TIME</label>
+                                      <input type="datetime-local" value={schedStartDt} min={dtLocalStr(Date.now())}
+                                        onChange={e=>setSchedStartDt(e.target.value)} style={inputStyle}/>
+                                    </div>
+                                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                      <label style={labelStyle}>DELAY BETWEEN BATCHES</label>
+                                      <select value={schedDelay} onChange={e=>setSchedDelay(Number(e.target.value))}
+                                        style={{...inputStyle,cursor:"pointer"}}>
+                                        <option value={15}>15 minutes</option>
+                                        <option value={30}>30 minutes</option>
+                                        <option value={60}>1 hour</option>
+                                        <option value={120}>2 hours</option>
+                                        <option value={240}>4 hours</option>
+                                        <option value={480}>8 hours</option>
+                                        <option value={1440}>1 day</option>
+                                      </select>
+                                    </div>
+                                    {hasMoreTouches&&(
+                                      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                                        <label style={labelStyle}>DAYS UNTIL NEXT TOUCH</label>
+                                        <div style={{display:"flex",alignItems:"center",gap:5}}>
+                                          <input type="number" min={1} max={60} value={schedTouchGap}
+                                            onChange={e=>{const v=parseInt(e.target.value);if(!isNaN(v)&&v>=1)setSchedTouchGap(v);}}
+                                            onBlur={e=>{if(!parseInt(e.target.value)||parseInt(e.target.value)<1)setSchedTouchGap(3);}}
+                                            style={{...inputStyle,width:52,textAlign:"center"}}/>
+                                          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>business days</span>
+                                        </div>
+                                      </div>
+                                    )}
+                                    <button onClick={handleSchedClick} disabled={!schedStartDt||schedStatus==='applying'}
+                                      style={{background:schedStatus==='done'?B.green:schedStatus==='applying'?B.muted:anyScheduled?B.green:B.blue,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:(schedStartDt&&schedStatus!=='applying')?"pointer":"not-allowed",whiteSpace:"nowrap",alignSelf:"flex-end",transition:"background .2s"}}>
+                                      {schedStatus==='applying'?"⟳ SCHEDULING…":schedStatus==='done'?"✓ SCHEDULED":anyScheduled?"✓ SCHEDULED":`SCHEDULE ${unsentBatches.length} BATCH${unsentBatches.length!==1?"ES":""}`}
+                                    </button>
+                                    {anyScheduled&&(
+                                      <button onClick={clearSchedule}
+                                        style={{background:"none",color:B.muted,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap",alignSelf:"flex-end"}}>
+                                        CLEAR
+                                      </button>
+                                    )}
+                                  </div>
+                                  <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:anyScheduled?B.blue:B.muted}}>
+                                    {anyScheduled
+                                      ?`✓ Queued across ${touchesQueued} touch${touchesQueued!==1?"es":""} · Mon–Fri 9am–5pm MT · batches past 5pm auto-shift to next 9am`
+                                      :`Set a start time (Mountain Time), delay${hasMoreTouches?", and days between touches":""}, then click SCHEDULE · batches wrap at 5pm MT`
+                                    }
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                            {/* Pre-scheduled banner for future touches that have no contacts yet */}
+                            {touchBatches.length===0&&noEmail.length===0&&touchSchedStarts[ti]&&(
+                              <div style={{padding:"10px 14px",background:`${B.blue}06`,border:`1px solid ${B.blue}40`,borderRadius:5,display:"flex",alignItems:"center",gap:10}}>
+                                <span style={{fontSize:16,flexShrink:0}}>⏱</span>
+                                <div>
+                                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:2}}>PRE-SCHEDULED</div>
+                                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                                    Queued to start <strong>{fmtSchedDt(touchSchedStarts[ti])}</strong> — batches will be auto-stamped as contacts advance from the previous touch.
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                             {/* No email contacts only — nothing to send, show skip button */}
                             {touchBatches.length===0&&noEmail.length>0&&(
                               <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:`${B.yellow}10`,border:`1px solid ${B.yellow}60`,borderRadius:5}}>
@@ -8962,18 +9848,81 @@ function ModMarketing() {
                               const isExp=batchExpanded[expKey]??(bi===0);
                               // Stable key based on first contact ID so it survives re-indexing
                               const batchKey=`${selCamp.id}-${ti}-${batch[0]?.contactId||bi}`;
-                              const wasSent=!!batchSentMap[batchKey];
+                              const sentInfo=batchSentMap[batchKey];
+                              const wasSent=!!(sentInfo&&sentInfo.sent>0); // only truly locked if at least 1 sent
+                              const scheduledDt=batchSchedules[batchKey]?new Date(batchSchedules[batchKey]):null;
+                              // Suppress failed/skipped states when a new schedule is set
+                              const totalFailed=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed>0&&!scheduledDt);
+                              const wasSkipped=!!(sentInfo&&sentInfo.sent===0&&sentInfo.failed===0&&!scheduledDt);
+                              const schedMs=scheduledDt?scheduledDt.getTime()-nowTick:null;
+                              // Register this batch's send callback for the auto-send timer
+                              if(!wasSent) pendingSendFnsRef.current[batchKey]=()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[],wasSkipped);
                               return(
-                                <div key={batchKey} style={{border:`1px solid ${wasSent?B.green:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:wasSent?`${B.green}08`:isFirst?`${B.orange}06`:B.white}}>
+                                <div key={batchKey} style={{border:`1px solid ${totalFailed?B.red:wasSkipped?B.orange:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.border}`,borderRadius:5,overflow:"hidden"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",background:totalFailed?`${B.red}06`:wasSkipped?`${B.orange}06`:wasSent?`${B.green}08`:scheduledDt?`${B.blue}06`:isFirst?`${B.orange}06`:B.white,flexWrap:"wrap"}}>
                                     <div style={{flex:1,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:wasSent?B.green:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
+                                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:totalFailed?B.red:wasSkipped?B.orange:wasSent?B.green:scheduledDt?B.blue:isFirst?B.orange:B.muted,letterSpacing:.5}}>BATCH {bi+1}</span>
                                       <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{batch.length} contacts</span>
-                                      {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {batchSentMap[batchKey].sent}{batchSentMap[batchKey].failed>0?` · ${batchSentMap[batchKey].failed} failed`:""}</span>}
+                                      {wasSent&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:`${B.green}15`,padding:"2px 7px",borderRadius:3}}>✓ SENT {sentInfo.sent}{sentInfo.failed>0?` · ${sentInfo.failed} failed`:""}</span>}
+                                      {wasSkipped&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>⚠ SENT 0 — contacts skipped</span>}
+                                      {totalFailed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:`${B.red}15`,padding:"2px 7px",borderRadius:3}}>✗ {sentInfo.failed} FAILED — rescheduled to next 9am MT</span>}
+                                      {scheduledDt&&!wasSent&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>⏱ {fmtSchedDt(scheduledDt)}{schedMs>0?` · ${fmtCountdown(schedMs)}`:" · firing…"}</span>}
                                       <button onClick={()=>setBatchExpanded(x=>({...x,[expKey]:!isExp}))} style={{background:"none",border:"none",fontSize:10,color:B.muted,cursor:"pointer",padding:0}}>{isExp?"▲ hide":"▼ show"}</button>
                                     </div>
-                                    {!wasSent&&(
-                                      <div style={{display:"flex",gap:5,flexShrink:0}}>
+                                    {totalFailed&&(
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
+                                        <button onClick={()=>{
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const retryMs=nextMTBizStart(Date.now());
+                                          const retryIso=new Date(retryMs).toISOString();
+                                          setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const prevInfo2=fc.scheduledBatches?.[batchKey]||{};
+                                          const ns={...(fc.scheduledBatches||{}),[batchKey]:{...prevInfo2,scheduledAt:retryIso}};
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
+                                        }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                          ↺ RETRY AT 9AM MT
+                                        </button>
+                                        <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
+                                          style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          ▶ SEND NOW
+                                        </button>
+                                      </div>
+                                    )}
+                                    {wasSkipped&&(
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
+                                        <button onClick={()=>{
+                                          // Clear sentBatches record + schedule resend at next 9am MT with forceResend flag
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const retryMs=nextMTBizStart(Date.now());
+                                          const retryIso=new Date(retryMs).toISOString();
+                                          setBatchSchedules(s=>({...s,[batchKey]:retryIso}));
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const prevInfo2=fc.scheduledBatches?.[batchKey]||{touchIdx:ti,contactIds:batch.map(e=>e.contactId)};
+                                          const ns={...(fc.scheduledBatches||{}),[batchKey]:{...prevInfo2,scheduledAt:retryIso,forceResend:true}};
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
+                                          const _uc=(campaignsRef.current||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:ns,sentBatches:ns2}:c);
+                                          const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
+                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                                        }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                                          ↺ RESEND AT 9AM MT
+                                        </button>
+                                        <button onClick={()=>{
+                                          setBatchSentMap(m=>{const n={...m};delete n[batchKey];return n;});
+                                          const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
+                                          const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
+                                          dispatch("UPDATE_CAMPAIGN",{...fc,sentBatches:ns2});
+                                          sendOneBatch(batch,batchKey,bi===0?noEmail:[],true);
+                                        }} disabled={sending}
+                                          style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+                                          ▶ RESEND NOW
+                                        </button>
+                                      </div>
+                                    )}
+                                    {!wasSent&&!totalFailed&&!wasSkipped&&(
+                                      <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
                                         <button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
                                           style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
                                           {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
@@ -8983,6 +9932,17 @@ function ModMarketing() {
                                           style={{background:B.surface,color:B.green,border:`1px solid ${B.green}50`,borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
                                           ✓ MARK SENT
                                         </button>
+                                        {/* Per-batch datetime schedule picker */}
+                                        <div style={{display:"flex",alignItems:"center",gap:3,background:B.surface,border:`1px solid ${scheduledDt?B.blue:B.border}`,borderRadius:4,padding:"3px 8px"}}>
+                                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:scheduledDt?B.blue:B.muted,letterSpacing:.5}}>SCHED</span>
+                                          <input type="datetime-local" value={scheduledDt?dtLocalStr(scheduledDt):""} min={dtLocalStr(Date.now())}
+                                            onChange={e=>{
+                                              if(!e.target.value){setBatchSchedules(s=>{const n={...s};delete n[batchKey];return n;});return;}
+                                              setBatchSchedules(s=>({...s,[batchKey]:new Date(e.target.value).toISOString()}));
+                                            }}
+                                            style={{background:"transparent",border:"none",color:scheduledDt?B.blue:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",outline:"none",cursor:"pointer",width:scheduledDt?130:100}}/>
+                                          {scheduledDt&&<button onClick={()=>setBatchSchedules(s=>{const n={...s};delete n[batchKey];return n;})} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,padding:0,lineHeight:1}}>×</button>}
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -9067,18 +10027,46 @@ function ModMarketing() {
                   if(!toEnroll.length){toast("No contacts to enroll","warn");return;}
                   const todayStr=today();
                   const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
-                  let count=0;
+                  let count=0; let noEmail=0;
                   toEnroll.forEach(c=>{
-                    if(!c.email) return;
                     if(!updated.enrollments.some(e=>e.contactId===c.id)){
                       updated.enrollments=[...updated.enrollments,{contactId:c.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}];
                       dispatch("SCORE_CONTACT",{contactId:c.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
                       count++;
+                      if(!c.email) noEmail++;
                     }
                   });
                   dispatch("UPDATE_CAMPAIGN",updated);
-                  toast(`${count} contacts enrolled in ${selCamp.name}`,"success");
+                  const already=toEnroll.length-count;
+                  const alreadyNote=already>0?` · ${already} were already enrolled`:"";
+                  const noEmailNote=noEmail>0?` · ${noEmail} have no email (add emails to reach them)`:"";
+                  toast(`✓ ${count} contact${count!==1?"s":""} enrolled in ${selCamp.name}${alreadyNote}${noEmailNote}`,"success");
                   setEnrollSearch(""); setEnrollListId("");
+                  setExecuteFilter("all");
+                };
+
+                const doQuickAdd=()=>{
+                  const email=(quickAddEmail||"").trim().toLowerCase();
+                  if(!email||!email.includes("@")){toast("Enter a valid email address","warn");return;}
+                  const todayStr=today();
+                  const updated={...selCamp,enrollments:[...(selCamp.enrollments||[])]};
+                  // Find existing contact by email
+                  let contact=(s.contacts||[]).find(c=>(c.email||"").toLowerCase()===email);
+                  let isNew=false;
+                  if(!contact){
+                    contact={id:mkId(),firstName:"",lastName:"",fullName:email,email,phone:"",title:"",school:"",state:"",sport:"",orgType:"school",priority:"medium",confidence:"medium",source:"manual",importedAt:Date.now()};
+                    dispatch("ADD_CONTACTS",[contact]);
+                    isNew=true;
+                  }
+                  if(updated.enrollments.some(e=>e.contactId===contact.id)){
+                    toast(`${email} is already enrolled in this campaign`,"warn");
+                    setQuickAddEmail(""); return;
+                  }
+                  updated.enrollments=[...updated.enrollments,{contactId:contact.id,step:0,status:"active",enrolledAt:todayStr,nextDate:todayStr,sentSteps:[]}];
+                  dispatch("SCORE_CONTACT",{contactId:contact.id,type:"enrolled",campaignId:selCamp.id,note:`Enrolled in ${selCamp.name}`});
+                  dispatch("UPDATE_CAMPAIGN",updated);
+                  toast(`${isNew?"New contact created and enrolled":"Contact enrolled"}: ${email}`,"success");
+                  setQuickAddEmail("");
                 };
 
                 return(
@@ -9092,8 +10080,20 @@ function ModMarketing() {
                       <select value={enrollListId} onChange={e=>{setEnrollListId(e.target.value);setEnrollSearch("");}}
                         style={{flex:1,minWidth:160,background:B.surface,border:`1px solid ${B.border}`,color:enrollListId?B.text:B.muted,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
                         <option value="">— pick a contact list —</option>
-                        {(s.contactLists||[]).map(l=><option key={l.id} value={l.id}>{l.name} ({(l.contactIds||[]).length})</option>)}
+                        {(s.contactLists||[]).map(l=>{
+                          const total=(l.contactIds||[]).length;
+                          const alreadyIn=(l.contactIds||[]).filter(id=>enrolledIds.has(id)).length;
+                          const newCount=total-alreadyIn;
+                          return <option key={l.id} value={l.id}>{l.name} — {newCount} new{alreadyIn>0?`, ${alreadyIn} already enrolled`:""}</option>;
+                        })}
                       </select>
+                    </div>
+                    <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center"}}>
+                      <input value={quickAddEmail} onChange={e=>setQuickAddEmail(e.target.value)}
+                        onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();doQuickAdd();}}}
+                        placeholder="Or type an email and press Enter to add & enroll…"
+                        style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+                      <OBtn sm onClick={doQuickAdd} disabled={!quickAddEmail.trim()}>ADD</OBtn>
                     </div>
                     {(q||enrollListId)&&(
                       <div style={{marginBottom:10}}>
@@ -9330,7 +10330,21 @@ function ModMarketing() {
                           </div>
                         </div>
                         <div style={{marginBottom:10}}><Lbl s={{marginBottom:4}}>Caption</Lbl><textarea value={postDraft.caption} onChange={e=>setPostDraft(d=>({...d,caption:e.target.value}))} rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/></div>
-                        <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Image URL (optional)</Lbl><input value={postDraft.imageUrl} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
+                        <div style={{marginBottom:10}}>
+                          <Lbl s={{marginBottom:4}}>Image (optional)</Lbl>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                            <input value={typeof postDraft.imageUrl==="string"&&!postDraft.imageUrl.startsWith("data:")?postDraft.imageUrl:""} onChange={e=>setPostDraft(d=>({...d,imageUrl:e.target.value}))} placeholder="https://... or upload →" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+                            <label style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
+                              📎 UPLOAD
+                              <input type="file" accept="image/*" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();r.onload=ev=>setPostDraft(d=>({...d,imageUrl:ev.target.result}));r.readAsDataURL(f);}}/>
+                            </label>
+                          </div>
+                          {postDraft.imageUrl&&<div style={{marginTop:6,position:"relative",display:"inline-block"}}><img src={postDraft.imageUrl} alt="" style={{maxHeight:80,borderRadius:4,border:`1px solid ${B.border}`}}/><button onClick={()=>setPostDraft(d=>({...d,imageUrl:""}))} style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,.6)",color:"#fff",border:"none",borderRadius:3,padding:"1px 5px",fontSize:9,cursor:"pointer"}}>✕</button></div>}
+                        </div>
+                        <div style={{marginBottom:12,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                          <div><Lbl s={{marginBottom:4}}>Schedule Date</Lbl><input type="date" value={postDraft.date} min={new Date().toISOString().slice(0,10)} onChange={e=>setPostDraft(d=>({...d,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                          <div><Lbl s={{marginBottom:4}}>Time</Lbl><input type="time" value={postDraft.time||"09:00"} onChange={e=>setPostDraft(d=>({...d,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
+                        </div>
                         <div style={{display:"flex",gap:8}}><OBtn sm onClick={()=>addCampPost(selCamp.id)}>✓ ADD TO CAMPAIGN</OBtn><GBtn onClick={()=>setShowAddPost(false)}>CANCEL</GBtn></div>
                       </div>
                     )}
@@ -12043,14 +13057,83 @@ function AssetGallery({toast}) {
 // ════════════════════════════════════════════════════════════════════════════
 //  COMPETE
 // ════════════════════════════════════════════════════════════════════════════
+const COMPETE_SEED={
+intel:{
+"Dick's Sporting Goods":`OVERVIEW: $14.1B revenue, 850+ stores nationwide (NYSE: DKS). Largest US sporting goods retailer. Founded 1948, Coraopolis PA.\n\nTARGET MARKET: Active families (25–50yo, HHI $100k+), youth sports orgs, schools, clubs.\n\nPOSITIONING: "Every Season Starts at DICK'S" — Experiential lifestyle hub moving from retailer to community destination via House of Sport and GameChanger ecosystem.\n\nSTRENGTHS:\n• Unmatched physical footprint — 850+ stores nationwide\n• GameChanger app = direct pipeline to 6.5M+ youth team users\n• House of Sport experiential retail (batting cages, climbing walls, simulators)\n• ScoreCard loyalty in 70% of transactions\n• Deep brand portfolio: Nike, Under Armour, Adidas, DeMarini, Rawlings, Wilson\n• 40 new House of Sport + 60 Field House locations planned by 2028\n• PROLOOK custom uniforms (~2-week turnaround)\n\nWEAKNESSES:\n• Trustpilot/Yelp avg 1.7–2.6 stars — poor customer service, unhelpful staff\n• Strict no-retroactive price adjustment policy frustrates customers\n• Big box impersonal feel — not relationship-based\n• Coaches routed to call centers, not dedicated program reps\n• PROLOOK custom uniform partnership still maturing\n\nPRICING: Competitive retail with Best Price Guarantee (matches Amazon/Walmart/Nike). Private labels for budget tier.\n\nSALES MODEL: Hybrid — retail stores, e-commerce, dedicated Team Sales Reps, Team Sports HQ self-serve platform.\n\nAD INTELLIGENCE (April 2026): ~780 active Meta ads — highest volume in competitive set. Heavy video (reels) + static product shots. Vibrant brand colors, punchy urgency copy ("before they're sold out"). Celebrity/influencer-driven, aspirational Gen Z energy. "The Scouts Are Out" cinematic campaign (Jordan Brand/Wieden+Kennedy). ST1 OPPORTUNITY: Dick's is so big it has lost all human warmth — zero 'real person who knows your kid' energy.`,
+
+"gearUP":`OVERVIEW: Hillsboro OR. Regional growing national. Nike & Under Armour authorized youth team dealer.\n\nTARGET MARKET: Youth club sports, travel teams, K-12 schools, leagues.\n\nPOSITIONING: "Remove every time-wasting hurdle to getting the best uniforms" — Premium uniform and apparel experience without administrative headache.\n\nSTRENGTHS:\n• Nike Team Dealer authorization — rare national credential\n• 24/7 always-open stores with direct-to-athlete shipping\n• Premium brand access: Nike, Under Armour, Momentec, Carhartt\n• ArmourFuse sublimation via Under Armour\n• Direct shipping removes coach logistics burden\n\nWEAKNESSES:\n• Serious BBB and Yelp CS complaints — inaccurate sizing, poor communication\n• Hard to reach support when issues arise — multiple documented complaint threads\n• Limited equipment depth — primarily apparel and uniform focused\n• Regional roots limit national credibility and service coverage\n\nPRICING: Premium positioning, quote-based.\n\nSALES MODEL: Hybrid — dedicated sales team + self-serve 24/7 store platform.`,
+
+"Anthem Sports":`OVERVIEW: Founded 2002, Pawcatuck CT. Family-owned (Mark Ferrara). National online distributor. Wilson 2018 Dealer of the Year (NE). Newsweek Top 4 online retailer.\n\nTARGET MARKET: Coaches, Athletic Directors, schools, youth leagues, clubs, municipalities, rec teams.\n\nPOSITIONING: "Building Champions™ — Brand names you trust. The value you expect." Best customer service in industry, same-day shipping, budget-friendly.\n\nSTRENGTHS:\n• Exceptional CS — 4.8/5 on Trustpilot with 4,000+ reviews\n• Same-day shipping on in-stock items placed by 2pm EST\n• Deep equipment catalog including hard-to-find institutional equipment\n• Accepts school POs — critical for institutional purchasing\n• Wilson-authorized dealer with 20+ top-brand relationships\n• 10% coach/AD discount on orders $100+\n\nWEAKNESSES:\n• Limited custom apparel depth — mostly branded accessories, not uniforms\n• Items damaged in transit with limited recourse\n• Not a full uniform/custom gear provider — can't outfit a team head to toe\n• No exclusive product lines\n\nPRICING: Retail + quantity discounts; 10% coach/AD discount; accepts school/municipal POs.\n\nSALES MODEL: Hybrid — self-serve e-commerce + Team Sales department for bulk/custom quotes.\n\nAD INTELLIGENCE (April 2026): ~110 active Meta ads — most active advertiser per-volume in category. Almost entirely white-background product shots (benches, bleachers, bases, fencing, gloves). No lifestyle, no athletes, no energy — pure B2B equipment catalog. A/B testing taglines: "Building Champions" / "Trusted Brands" / "Top Brands" / "Free Returns". ST1 OPPORTUNITY: Anthem is invisible as a brand — 110 ads running and you still wouldn't recognize their brand.`,
+
+"BSN Sports":`OVERVIEW: Founded 1972, Dallas TX. Subsidiary of Varsity Brands (KKR-backed private equity). ~$1B+ revenue. 3,000+ sales reps. Largest team sports dealer in the US, 38+ states.\n\nTARGET MARKET: K-12 athletic departments, coaches, ADs, league directors, youth clubs.\n\nPOSITIONING: "Be Seen. Be Heard. Belong." America's #1 team sports dealer — unmatched rep network, broadest catalog, deepest institutional relationships.\n\nSTRENGTHS:\n• Largest team sports dealer network in the US — 3,000+ sales reps\n• Broadest catalog: all sports, all categories, all price points\n• Deep institutional relationships with K-12 ADs across the country\n• Full-service capability: equipment + apparel + team stores\n• Varsity Brands ecosystem (Varsity Spirit + Herff Jones) amplifies reach\n• My Team Shop+ dashboard, Sideline Stores, SPRINT rapid fulfillment (1–2 day)\n• Club Direct division launched 2025 targeting youth clubs\n• Fundraising via Snap! Raise partnership\n\nWEAKNESSES:\n• Shipping delays of 5+ weeks — consistent complaint, uniforms arriving after season\n• Customer service rated poor: unresponsive reps, hard to escalate\n• BSN-branded apparel runs significantly smaller than standard US sizing\n• Custom items classified as non-returnable even when BSN fulfills incorrectly\n• Extremely high rep turnover — coaches lose dedicated contacts repeatedly\n• Large bureaucratic structure — schools feel like accounts, not relationships\n• KKR private equity ownership drives margin pressure and service cuts\n• Antitrust/legal issues at Varsity Brands parent level create reputational drag\n\nPRICING: Quote-based, volume-driven institutional pricing. School PO accepted. Annual contracts with ADs.\n\nSALES MODEL: Field-based B2B — local rep network is primary channel, supported by inside sales and e-commerce.\n\nAD INTELLIGENCE (April 2026): ~42 active Meta ads. #ClubDirect B2B targeting club volleyball, softball, lacrosse coaches. Standout: "NO MORE LATE UNIFORMS" — dark background, orange player, bold white text. Short punchy coach-directed copy ("Lock In Your Club's Shop"). Dark navy + white + brand partner colors. ST1 OPPORTUNITY: BSN's creative is cold and transactional. The coach sees another vendor, not a partner.`,
+
+"Game One":`OVERVIEW: 2022 rebrand (legacy companies dating to 1970s). Formed from 8 merged regional dealers (Athletic Supply, Barcelona Sports, Bumblebee, Cardinal Sports, Team Sports, The Graphic Edge, Universal Athletic, Williams). 13,000+ customers, 38 states, 180+ field sales reps. 30%+ growth since rebrand.\n\nTARGET MARKET: High school athletic departments, youth leagues, club sports, community rec programs.\n\nPOSITIONING: "The Brand Behind Your Brand" — National scale with local roots. Claims only national dealer authorized to carry Nike, Adidas, AND Under Armour simultaneously.\n\nSTRENGTHS:\n• Local rep relationships — coaches get a person, not a 1-800 number\n• Full service: equipment + apparel + team stores\n• Only national dealer with Nike + Adidas + Under Armour simultaneously\n• Faster turnaround on quotes vs BSN bureaucracy\n• Smaller feel — programs feel like more than a revenue number\n\nWEAKNESSES:\n• Limited geographic coverage vs BSN's national footprint\n• Smaller brand portfolio and catalog depth vs major dealers\n• Less institutional buying power — pricing may not match BSN volume contracts\n• Less known brand — ADs default to BSN for familiarity\n\nPRICING: Quote-based institutional pricing. School PO accepted. Volume discounts for multi-sport programs.\n\nSALES MODEL: Field-based B2B rep model — local sales reps for school and league accounts.`,
+
+"SquadLocker":`OVERVIEW: Founded 2013, Providence RI (Gary Goldberg). Raised $50M+. National tech-forward team store platform.\n\nTARGET MARKET: Coaches, league directors, school ADs, club managers — anyone running team stores.\n\nPOSITIONING: "The easiest way to get your team's gear" — Technology-first platform. Free team store in minutes. No inventory. No minimums. Direct-to-athlete shipping.\n\nSTRENGTHS:\n• Best-in-class team store UX — genuinely easy for coaches to set up\n• No inventory, no minimums, no money collection by coaches\n• Direct-to-athlete shipping eliminates distribution headaches\n• Wide product catalog: 70+ major brands + 16,000+ products\n• 100,000+ team shops opened in the last year alone\n\nWEAKNESSES:\n• Primarily apparel/spirit wear — limited equipment catalog\n• No custom sublimated performance uniforms at meaningful quality\n• Customer service complaints about late deliveries during peak seasons\n• No dedicated rep — tech-first means relationship is with the platform\n\nPRICING: Free store setup. Products priced at retail; SquadLocker keeps margin.\n\nSALES MODEL: Primarily self-serve digital — coaches launch stores online; customer success for larger accounts.\n\nAD INTELLIGENCE (April 2026): ~5 active Meta ads, hyper-focused enterprise team store pitch. Static hero: navy bg, bold "NO FEES. NO MINIMUMS." + green checkmarks. Video: UGC/talking head style, warehouse walkthroughs. Hook: objection crusher ("Her AAU team waited HOW LONG?"). ST1 OPPORTUNITY: SquadLocker's creative is smart but cold — it sells logistics, not a relationship.`,
+
+"Team Sports Planet":`OVERVIEW: National e-commerce dealer. Mid-tier online dealer — institutional and consumer focus.\n\nTARGET MARKET: Schools, leagues, clubs, athletic directors, coaches, individual athletes.\n\nPOSITIONING: "Your one-stop team sports source" — Online-first, broad catalog, competitive pricing.\n\nSTRENGTHS:\n• Wide catalog across equipment and apparel categories\n• Accepts school POs — institutional procurement-friendly\n• Competitive pricing with volume breaks\n• Accessible to small programs with no minimums on most items\n\nWEAKNESSES:\n• Generic online catalog feel — no specialized expertise or consultation\n• Limited custom apparel depth vs dedicated custom dealers\n• No exclusive product lines or differentiating merchandise\n• No local rep — purely transactional online relationship\n\nPRICING: Competitive retail + volume discounts. School PO accepted. Quantity break pricing.\n\nSALES MODEL: Primarily online self-serve + phone-based sales team for institutional accounts.`,
+
+"Boombah":`OVERVIEW: Founded 2003, Yorkville IL. 250,000 sq ft facility + factory in Dominican Republic. Vertically integrated manufacturing. Official NFCA Sponsor.\n\nTARGET MARKET: Youth leagues, travel baseball/softball, HS athletic departments, club sports, adult rec.\n\nPOSITIONING: "Be what no one else is and give what no one else will." High-quality gear at affordable prices via direct-to-consumer; own factory for speed and cost advantage.\n\nSTRENGTHS:\n• Vertically integrated = 2-week custom turnaround (industry-leading speed)\n• Direct pricing by eliminating distributor markup\n• Massive style variety — 3D online builder with hundreds of combinations\n• Strong brand recognition in travel baseball/softball community\n• NFCA and Perfect Game partnerships\n• Boombah Sports Complex #1 youth baseball complex (Newsweek 2025)\n\nWEAKNESSES:\n• PissedConsumer 1.9 stars — poor CS responsiveness, difficult returns\n• Strict return policy makes sizing errors painful and costly\n• Durability issues reported with rolling bat bags and cleats\n• Sizing inconsistencies across multiple complaint threads\n• Own-brand only equipment — no Rawlings, Marucci, Wilson, or Easton\n\nPRICING: Direct-to-consumer. 5% off $2,500+, up to 15% off $15,000+. Free ground shipping over $99.99.\n\nSALES MODEL: Hybrid — primarily self-serve e-commerce with 3D builder + CS/Sales for org-level support.\n\nINSTAGRAM INTELLIGENCE (April 2026): 46K followers, 2,852 posts. Strongest visual brand in the category. Themed novelty collection drops: Graffiti Drip, Fruit Collection, Ice Cream Turfs — treated like streetwear drops with hype launches. National team flag-colorway collabs (Colombia, Dominican Republic, Nicaragua). Speaks to the ATHLETE not the coach. Only competitor with a genuine brand personality people follow for fun. ST1 LESSON: Graphic tee drops ('I Hit Dingers', 'Oppo Taco') should be marketed EXACTLY like Boombah's novelty collections — named drops, launch posts, limited runs.`,
+
+"Smash It Sports":`OVERVIEW: Founded 2013/2014, Rochester NY (Rick Schiffhauer, family-owned). National — flagship store + major warehouse + e-commerce. Official Uniform Provider for USA Softball Slow Pitch National Teams (2025).\n\nTARGET MARKET: Youth rec leagues, travel ball, high schools, colleges, adult slowpitch leagues, individual athletes.\n\nPOSITIONING: "Your Baseball and Softball Super Store — by players, for players." Largest online bat selection. Price match guarantee.\n\nSTRENGTHS:\n• Unrivaled bat selection — BBCOR, USSSA, USA, Senior; nation's largest softball retailer\n• 'Ridiculously fast' shipping consistently praised by reviewers\n• Strong brand relationships with exclusive limited-edition bat drops\n• USA Softball Slow Pitch National Team partnership 2025\n• Smash Cash loyalty program drives repeat purchases\n\nWEAKNESSES:\n• Customer service described as 'rude' or 'unprofessional' in disputes\n• Strict return policy — 15–20% restocking fee + no return shipping covered\n• Warranty friction — refers bat damage to manufacturer instead of resolving\n• Custom jersey color quality consistency issues\n• Primarily diamond sports only — no multi-sport capability\n\nPRICING: Competitive retail + Lowest Price Guarantee. Bats $100–$500+. Custom uniforms up to 50% off retail.\n\nSALES MODEL: Hybrid — high-volume B2C e-commerce, SIS Rep network, Team Sales dept, physical retail.`,
+
+"Extra Innings Direct":`OVERVIEW: Founded 1996, Middleton MA. 400+ travel programs and facilities as members. $4M+ inventory on partner site.\n\nTARGET MARKET: Travel baseball/softball organizations, youth leagues, indoor training facilities, high school programs.\n\nPOSITIONING: "The Exclusive Diamond Sports Benefits Group" — Cuts out the dealer entirely. Clubs become their own dealer at wholesale pricing. No minimums, no inventory.\n\nSTRENGTHS:\n• Truly unique model — eliminates the middleman for diamond sports orgs\n• Collective buying power of 400+ programs at genuine wholesale pricing\n• No minimums — access to 40+ manufacturers without carrying inventory\n• Launch Nike/UA/Adidas stores without being an authorized dealer\n• Ancillary value: insurance and payment processing discounts for members\n\nWEAKNESSES:\n• BBB complaints about wholesale prices sometimes exceeding retail\n• Baseball/softball only — zero coverage for other sports\n• Requires membership commitment — not free to access\n• BSN dependence means BSN's shipping delays become your members' problems\n\nPRICING: Membership-based (fees not public, risk-free trial available). Members set their own retail prices.\n\nSALES MODEL: Hybrid — in-house support/design team + self-serve 24/7 live dashboard.`,
+
+"GoBallistic Sports":`OVERVIEW: Founded 2012, East Hanover NJ (Kathy and Scott Gorski — advertising industry veterans). Regional NJ focus with national clients.\n\nTARGET MARKET: HS and middle schools, youth sports orgs (rec and travel), AAU teams, clubs.\n\nPOSITIONING: "Change YOUR Game — Go Big — no templates, no cookie-cutter graphics." Completely original custom designs. In-house production for quality control.\n\nSTRENGTHS:\n• Strong design pedigree from advertising background — truly unique custom designs\n• No templates — completely original graphics that differentiate programs\n• In-house printing and production for quality control\n• Broad sport coverage across 18+ sports\n• Turn-key online team stores eliminate manual form collection\n\nWEAKNESSES:\n• 4–5 week production times — supply chain issues acknowledged\n• Regional NJ focus limits credibility and coverage outside the area\n• Limited equipment catalog — apparel and uniform focused only\n• 25-piece minimum for sublimation limits very small teams\n\nPRICING: Quote-based. Tees $18–21, Performance Shirts $21–44, Hoodies $41–58. 50% deposit. 25-piece minimum for sublimation.`,
+
+"Wooter Apparel":`OVERVIEW: Founded 2014, Staten Island NY (Alex Aleksandrovski, David Kleyman, Alex Kagan). 40+ countries. Clients include AAU, NFL Alumni, DoD, YMCA, MTV, JetBlue, FDNY.\n\nTARGET MARKET: AAU teams, youth leagues, schools K-12 and collegiate, rec teams, sports facilities.\n\nPOSITIONING: "The #1 Shop for Custom Team Gear — professional quality at unbeatable prices." Lowest Price Guarantee + Name Your Own Price budget tool.\n\nSTRENGTHS:\n• Competitive pricing — among the lowest for custom sublimated uniforms (basketball sets from $39.99)\n• High-quality sublimation designs praised by initial buyers\n• Global scale — 40+ countries, wide sport coverage\n• Free fan shop with 10–50% commission\n• Accepts cryptocurrency\n\nWEAKNESSES:\n• Post-payment customer service described as 'ghosting' across multiple platforms\n• Significant delivery delays causing teams to miss season starts\n• Sizing runs small — consistent complaint\n• Difficult refund process — high complaint volume on BBB and Trustpilot\n• No major brand licensing — own-brand sublimation only\n• Zero hard equipment — apparel-only\n\nPRICING: Tiered/package deals. Basketball sets from $39.99, Football from $59.99, Soccer from $27.99. Lowest Price Guarantee.\n\nAD INTELLIGENCE (April 2026): ~21 active Meta ads, all UGC talking head videos (0:12–0:54). Sponsorship program focused (wooter.com/sponsorships). Core hook: "Custom Sports Uniforms Sponsorships. Please note this is NOT free apparel." 21 variants of one concept — testing video length and presenter. ST1 OPPORTUNITY: Wooter's creative screams 'scrappy startup.' ST1 can own the premium, relationship-first alternative.`,
+
+"Sports Gear Swag":`OVERVIEW: Founded 2018, Sugar Land TX. 140,000+ orders completed, 170,000+ athletes outfitted globally.\n\nTARGET MARKET: Youth/adult sports leagues, K-12 schools, colleges, corporate teams, non-profits.\n\nPOSITIONING: "Experts in Custom Sports Jerseys, Uniforms & Gear — Lowest Price Guaranteed." No minimums, fast rush options, free design assist.\n\nSTRENGTHS:\n• Fast rush options — Super Rush 3-day delivery available\n• No order minimums — accessible to smallest programs\n• User-friendly online design tool with quick digital proofs\n• Broad 60+ sport coverage\n• Pay-after-proof-approval option\n\nWEAKNESSES:\n• Sizing inaccuracy complaints — runs small, odd fits consistently reported\n• Non-stretchy material complaints for performance athletic use\n• Shipping delays despite paying for expedited options\n• Difficult customer service for refunds and remakes\n• No major brand licensing — own-brand templates only\n• Apparel-only at meaningful depth, no equipment\n\nPRICING: Tiered bulk discounts: 10% off 1+, up to 20% off 100+. Base jerseys ~$15.99–$25.99.`,
+
+"Custom Ink":`OVERVIEW: Founded 2000, Fairfax VA. Major consumer brand. Very large scale — household name.\n\nTARGET MARKET: Individuals, families, friend groups, corporate teams, non-profits, schools — any group wanting custom apparel. Not sport-specific.\n\nPOSITIONING: "Bringing people together through custom apparel." Easy design tool, group order coordination, 100% quality guarantee.\n\nSTRENGTHS:\n• Extremely user-friendly design tool — accessible to anyone\n• Massive brand recognition — every parent and coach knows Custom Ink\n• 100% satisfaction guarantee with no-hassle remake/refund\n• Fast turnaround options for spirit wear and casual apparel\n• FundraisingHub for organizations\n\nWEAKNESSES:\n• Cotton/fashion apparel only — not moisture-wicking performance gear\n• No sports equipment whatsoever — fundamentally different business\n• No team store infrastructure for ongoing season-long sales\n• No sport-specific expertise in uniforms, sizing, or performance needs\n• No sublimated uniforms — printed apparel peels/cracks over seasons\n\nPRICING: Per-item pricing decreasing with volume. T-shirts start ~$16+ for small quantities. No setup fees.\n\nNOTE: Custom Ink is NOT a sports dealer — it's a t-shirt printer that coaches sometimes use for casual spirit wear. Not a real competitive threat for uniforms or equipment.`,
+
+"Trigon Sports":`OVERVIEW: Founded 2007 (business since 2001), Memphis TN. Family-owned. National distribution. Acquired Proper Pitch Inc. (pitching mounds) November 2025.\n\nTARGET MARKET: ADs and coaches at high schools and colleges, facility managers, youth league organizers.\n\nPOSITIONING: "Make Winning Possible™" — Premier source for durable professional-grade athletic training and facility equipment.\n\nSTRENGTHS:\n• A+ BBB rating — outstanding customer service reputation\n• 98% Facebook recommendation rate — very high satisfaction\n• ProCage batting cage line highly praised for durability\n• Deep facility equipment expertise: bleachers, batting cages, field covers\n• Acquired Proper Pitch Inc. (pitching mounds) 2025 — expands product line\n• Same-day shipping on in-stock orders\n\nWEAKNESSES:\n• Virtually zero apparel capability — pure equipment play\n• No team stores, no custom uniforms — can't outfit a team\n• Niche facility/training equipment positioning limits overall breadth\n\nPRICING: Multi-tier — retail from $0.80/sq ft (netting) to $8,000+ (batting cages). Wholesale/dealer via quote.\n\nSALES MODEL: Hybrid — DTC online, national catalog, authorized dealer network (B2B).`,
+
+"Gopher Sport":`OVERVIEW: Founded 1947, Owatonna MN. Privately held (The Prophet Corporation). $31–51M annual revenue, 150–500 employees. 75+ years in operation.\n\nTARGET MARKET: K-12 PE teachers, athletic directors, school coaches, YMCAs, recreation centers, government agencies.\n\nPOSITIONING: "Unconditional 100% Satisfaction Guarantee" — Premier PE/athletics partner for educational institutions — easiest company to work with for teachers and coaches.\n\nSTRENGTHS:\n• A+ BBB rating — 75+ years of institutional trust\n• Unconditional satisfaction guarantee — any time, any reason, no questions\n• Same-day shipping 99%+ of in-stock orders\n• Deep PE/rec equipment expertise unavailable at general retailers\n• Government contract access: GSA, DoDEA, Sourcewell, OMNIA Partners\n• 75+ year catalog covering archery, badminton, floor hockey, and more\n\nWEAKNESSES:\n• Custom apparel limited to spirit wear — no performance uniforms\n• No team store platform for individual parent/fan ordering\n• Institution-focused — limited flexibility for youth clubs and travel teams\n• Occasional complaints about guarantee requiring original receipts\n\nPRICING: Catalog-based tiered pricing. Contract pricing via Sourcewell and OMNIA Partners. $5.95 (whistles) to $1,699+ (archery packs).\n\nSALES MODEL: Multi-channel — e-commerce, direct-mail catalog, outside sales force, government cooperative purchasing contracts.`
+},
+battlecards:{
+"Dick's Sporting Goods":{competitor:"Dick's Sporting Goods",category:"Do It All",our_strengths:["Personal relationship vs account number — we know your program and athletes by name","Direct access to a rep who responds same day — no call center routing","Exclusive ST1 graphic tee designs coaches and athletes actually want","Equipment expertise without retail commission-floor upsell pressure","When something goes wrong, you reach a human who fixes it — not a 1-800 number"],their_strengths:["Unmatched 850+ store physical footprint nationwide","GameChanger app reaches 6.5M+ youth team users directly","House of Sport experiential retail (batting cages, simulators, climbing walls)","ScoreCard loyalty in 70% of all transactions","Deep brand relationships with every major manufacturer"],key_messages:["Dick's is a mall experience. We're a team experience.","GameChanger gets them to the parents. It doesn't serve the coach.","850 stores and 1.7 stars on Trustpilot — big doesn't mean good."],objection_handlers:[{objection:"Dick's has GameChanger and every parent already shops there",response:"GameChanger is how they find parents — it's not how they serve teams. A coach who needs customized gear, accurate sizing, and someone to answer the phone gets none of that at Dick's. We give you a person, not a platform."},{objection:"Dick's has every brand",response:"So do we — and we don't make you drive to a store and hunt through aisles. We bring the right product to you and stand behind it."},{objection:"Dick's prices are hard to beat",response:"Their retail prices are competitive on commodity items. On custom gear, team stores, and equipment bundles, we compete directly — and we don't charge you for the relationship."},{objection:"They have House of Sport with batting cages and simulators",response:"A batting cage at a retail store doesn't set up your team store, source your helmets, or design your uniforms. We do all three."}],discovery_landmines:["Have you ever had a coach issue at Dick's that required a human to solve?","Do you get a dedicated rep from Dick's or do you start over every call?","Have your athletes used GameChanger — and does Dick's follow up with your program?","How long does it take to get custom uniforms through their PROLOOK program?"]},
+"gearUP":{competitor:"gearUP",category:"Do It All",our_strengths:["We pick up the phone — gearUP's CS reviews are consistently brutal","Full equipment catalog alongside apparel — gearUP can't source bats and helmets","Proven track record without the CS nightmare plaguing gearUP accounts","Local-style relationship with actual accountability when orders go wrong"],their_strengths:["Nike Team Dealer authorization — rare national credential","24/7 always-open stores with direct-to-athlete shipping","Premium brand access: Nike, Under Armour, Momentec"],key_messages:["gearUP can get you Nike. We can get you Nike AND actually answer the phone.","Their stores are always open. Their support isn't.","Being authorized doesn't mean being accountable."],objection_handlers:[{objection:"gearUP is a Nike authorized dealer",response:"So is ST1 — and we actually answer the phone when your order has an issue. Check their BBB reviews before committing a full season's uniforms."},{objection:"Their stores are always open 24/7",response:"So are ours. The difference is when something goes wrong, we have a process to fix it. They have a voicemail."}],discovery_landmines:["Have you had to contact gearUP support for an issue — how was the experience?","What happens with your store when a sizing error comes in for 30 jerseys?","Do you have a direct rep or do you use a general support inbox?"]},
+"Anthem Sports":{competitor:"Anthem Sports",category:"Do It All",our_strengths:["We do equipment AND full custom uniforms + team stores — Anthem can't outfit your team head to toe","Relationship-based vs pure transactional online catalog experience","Our exclusive graphic tee line gives teams identity beyond just equipment","We handle the full program — not just the gear closet"],their_strengths:["Exceptional CS — 4.8/5 on Trustpilot with 4,000+ reviews","Same-day shipping on in-stock items placed by 2pm EST","Deep equipment catalog including hard-to-find institutional items","Accepts school POs","Wilson-authorized dealer with 20+ top-brand relationships"],key_messages:["Anthem ships fast. They can't dress your team.","4.8 stars on equipment. Zero stars on custom uniforms — they don't offer them.","We're Anthem plus everything Anthem can't do."],objection_handlers:[{objection:"Anthem has everything we need for equipment",response:"For a gear closet, yes. But when the coach wants custom uniforms, team stores, and spirit wear, they're calling someone else. We handle it all so you're not juggling vendors."},{objection:"Anthem ships same-day",response:"So can we on in-stock items. And when you need something custom, you get a person who knows your sport — not a search bar."}],discovery_landmines:["Do you need custom uniforms or apparel in addition to equipment?","When something arrives damaged, how easy is it to get resolution from Anthem?","Does Anthem have a rep who knows your program, or do you start fresh every time?"]},
+"BSN Sports":{competitor:"BSN Sports",category:"Do It All",our_strengths:["We don't have rep turnover — you get the same person year after year","No minimum orders — we serve small leagues and large schools equally","Your order doesn't disappear into a 3,000-rep corporate machine","We're accountable to you directly — not to a KKR earnings call","Youth-first focus: we know baseball and softball at the grassroots level"],their_strengths:["Largest team sports dealer network in the US — 3,000+ sales reps","Broadest catalog: all sports, all categories, all price points","Deep institutional relationships with K-12 ADs","Full-service capability: equipment + apparel + team stores","SPRINT service: custom gear in 1–2 days"],key_messages:["BSN has 3,000 reps. You can't reach any of them.","The largest team sports dealer has a 5-week shipping problem.","Contracts renew. Relationships don't have to."],objection_handlers:[{objection:"BSN has a rep in our area and knows our school",response:"Until that rep leaves — and BSN rep turnover is notoriously high. With ST1, the relationship is with the company, not a transient salesperson."},{objection:"BSN is the biggest — they must be the best",response:"Size creates complexity. BSN's complaints are about late shipments and reps who disappear. We're big enough to carry everything you need, small enough to actually care."},{objection:"Our AD has a BSN contract",response:"Contracts renew. When your AD is frustrated with late gear and a revolving-door rep, that's the moment to have this conversation. We're ready."},{objection:"They have Nike and Under Armour contracts we can't get",response:"True — but brand names don't score runs. Our custom sublimation and graphic tees are higher quality per dollar, and we don't disappear after the sale. Ask to see BSN's Trustpilot reviews."}],discovery_landmines:["How many different BSN reps have you had in the past 3 years?","Has a BSN order ever arrived late for a game or season opener?","Do small programs at your school get the same attention as football or basketball?","What happens when you call BSN with an urgent in-season need?","When did you last receive an order on time from your current supplier?"]},
+"Game One":{competitor:"Game One",category:"Do It All",our_strengths:["ST1 is a complete sporting goods company — equipment, custom apparel, team stores, graphic tees, all in one","Our exclusive graphic tee and spirit wear line is something Game One can't offer","National brand relationships (Nike, UA, Adidas, Rawlings, Easton, Marucci, Wilson)","We serve youth through high school with no program too small or too large"],their_strengths:["Local rep relationships — coaches get a person, not a 1-800 number","Only national dealer with Nike + Adidas + Under Armour simultaneously","Full service: equipment + apparel + team stores","Smaller than BSN — programs feel valued"],key_messages:["Game One is a good local dealer. ST1 is that — plus exclusive products they can't touch.","Local relationships are our specialty too. And we bring more to the table.","They grew through mergers. We grew through coaches trusting us."],objection_handlers:[{objection:"Game One knows our community and our coaches",response:"Local relationships are valuable — and ST1 builds the same local relationship while adding equipment, custom apparel, exclusive tee designs, and team stores that Game One can't match."},{objection:"We already have a Game One rep we like",response:"Keep that relationship for what they do well. Let us show you what they can't do — our exclusive product lines, faster customs, and full-service team store platform."}],discovery_landmines:["Does your current dealer offer exclusive graphic tee and spirit wear designs unique to your school?","Can you get equipment, custom uniforms, AND team stores all from Game One?","When you need something custom, how long does turnaround take?"]},
+"SquadLocker":{competitor:"SquadLocker",category:"Do It All",our_strengths:["Full equipment catalog — SquadLocker is apparel only at meaningful depth","Human relationship + technology — we provide both, not just a platform","Exclusive ST1 graphic tee line available only through our stores","Custom performance uniforms with sublimation — SquadLocker can't compete"],their_strengths:["Best-in-class team store UX — genuinely easy for coaches to set up","No inventory, no minimums, no money collection by coaches","Direct-to-athlete shipping eliminates distribution headaches","70+ major brands, 16,000+ products"],key_messages:["SquadLocker makes the admin easy. We make the whole program easy.","A platform answers tickets. We answer phones.","Coaches love not handling money. We give them that AND equipment AND uniforms."],objection_handlers:[{objection:"SquadLocker makes it so easy — coaches love it",response:"Coaches love not handling money. We give them the same freedom with our team store platform — plus equipment, custom uniforms, and exclusive designs that SquadLocker doesn't have."},{objection:"They have no minimums and free setup",response:"So do we. And when something goes wrong, you call a person who knows your program — not a chatbot."}],discovery_landmines:["Does your team need custom performance uniforms, not just spirit wear?","Do you also need equipment sourcing beyond the team store?","When something goes wrong with a SquadLocker order, who do you call?"]},
+"Team Sports Planet":{competitor:"Team Sports Planet",category:"Do It All",our_strengths:["Dedicated rep who knows your program vs anonymous online catalog","Exclusive ST1 graphic tee and spirit wear line unavailable elsewhere","Custom uniform expertise with sublimation — Team Sports Planet can't deliver this","Full-service team store platform with exclusive designs and program support"],their_strengths:["Wide catalog across equipment and apparel categories","Accepts school POs","Competitive pricing with volume breaks","Accessible to small programs with no minimums"],key_messages:["An online catalog ships quickly. A partner shows up.","Team Sports Planet has everything. We have everything plus a relationship.","Anonymous vendors are fine — until something goes wrong."],objection_handlers:[{objection:"Team Sports Planet has everything and ships quickly",response:"An online catalog ships quickly. But when you need customization, a team store, or advice on what works for your sport, you need ST1. We're the difference between a vendor and a partner."}],discovery_landmines:["Do you get custom design support for uniforms or are you picking from templates?","Who is your dedicated contact when something goes wrong with an order?","Does Team Sports Planet carry any exclusive products your athletes actually want to wear?"]},
+"Boombah":{competitor:"Boombah",category:"Sport Specialist",our_strengths:["We carry all major brands (Rawlings, Easton, Marucci, Wilson) — Boombah only does their own brand","Our CS is actually responsive — Boombah's 1.9-star PissedConsumer rating speaks for itself","Better accountability when orders go wrong — no stone wall on returns","We're multi-sport experts, not baseball/softball specialists who expanded","Our graphic tee drops create the same athlete identity buzz as their novelty collections — across ALL sports"],their_strengths:["Own factory = 2-week custom turnaround (industry fastest)","Direct pricing eliminates distributor markup","Massive style variety via 3D online builder","Strong brand recognition in travel baseball/softball","NFCA and Perfect Game institutional partnerships","Strongest visual brand and Instagram presence in category"],key_messages:["Two weeks means nothing if the return policy stonewalls you on wrong sizing.","They speak to the athlete. So do we — and we do it for every sport, not just baseball.","Boombah's brand playbook (collection drops, athlete identity) is exactly what ST1 does with graphic tees."],objection_handlers:[{objection:"Boombah's 2-week custom turnaround is very fast",response:"Speed matters only if the product is right. With Boombah's return policy and sizing complaints, a wrong order at 2 weeks is worse than a right order at 3. We get it right and stand behind it."},{objection:"Their direct pricing is competitive",response:"We offer team pricing that's equally competitive — and you get to choose from every major brand, not just theirs."},{objection:"They're an NFCA sponsor — gives them credibility",response:"Sponsorship buys visibility, not service. Ask coaches who've dealt with their customer service what they actually think."}],discovery_landmines:["Have you ever had to return or exchange something from Boombah — how did that go?","Do you need brand-name bats and helmets, or are you open to an unknown brand?","What happens when a cleat breaks mid-season and you need an immediate replacement?"]},
+"Smash It Sports":{competitor:"Smash It Sports",category:"Sport Specialist",our_strengths:["We serve all sports — not just baseball and softball","Better customer service when things go wrong — no restocking fees, real accountability","Multi-sport team program capability Smash It simply doesn't have","Our reps know your whole program, not just your bat preferences"],their_strengths:["Unrivaled bat selection — nation's largest softball retailer","Ridiculously fast shipping consistently praised by reviewers","Strong brand relationships with exclusive limited-edition bat drops","USA Softball Slow Pitch National Team partnership 2025","Smash Cash loyalty program"],key_messages:["The best bat store in the country. Not the best team dealer.","We do everything Smash It does for diamond sports — plus everything else.","A 15–20% restocking fee is how you discover who your vendor really is."],objection_handlers:[{objection:"Smash It has the best bat selection",response:"For bats, yes. When your program also needs soccer goals, basketball uniforms, and a team store for all your sports, you need ST1. We do everything they do for diamond sports — plus everything else."},{objection:"They're the official USA Softball supplier",response:"Official partnerships are marketing. Ask their customers about returning an item — that's where the relationship actually shows."},{objection:"Their price match guarantee is compelling",response:"We match prices too. But we also match expectations on service, returns, and accountability — areas where Smash It consistently falls short."}],discovery_landmines:["Do you also need equipment and uniforms for sports beyond baseball and softball?","Have you ever tried to return something to Smash It — what was the experience?","When a bat gets damaged, who do they direct you to for resolution?"]},
+"Extra Innings Direct":{competitor:"Extra Innings Direct",category:"Sport Specialist",our_strengths:["We are the dealer — no membership fee, no wholesale complexity to manage","We cover ALL sports, not just diamond sports","No dependence on BSN Sports' well-documented service problems","A real relationship with a human who knows your program — no dashboard substitute","We handle team stores, custom gear, AND equipment without making you your own purchasing department"],their_strengths:["Truly unique model — eliminates the middleman for members","Collective buying power of 400+ programs at genuine wholesale pricing","No minimums — access to 40+ manufacturers without carrying inventory","Nike/UA/Adidas stores without being an authorized dealer"],key_messages:["EID makes your club director a purchasing manager. We do that for you.","Membership in a buying group is a job. Being our customer isn't.","No BSN middleman — except that EID runs entirely through BSN."],objection_handlers:[{objection:"EID gives us wholesale pricing — cuts you out",response:"It also makes your club director a purchasing manager, inventory analyst, and vendor relationship manager. We do all of that for you, for free, with no membership fee. And we cover every sport, not just baseball."},{objection:"They have 40+ manufacturer relationships",response:"We do too — and you benefit from ours without paying a membership. Plus your orders don't go through BSN Sports, which means no 5-week shipping delays."},{objection:"The BSN Club Direct integration is powerful",response:"It is — until BSN is late on a uniform order and your team misses Opening Day. We're accountable directly to you."}],discovery_landmines:["What sports does your organization run beyond baseball and softball?","Have you calculated the true cost of EID membership vs. the actual savings?","What happens to your team stores if EID's BSN partnership changes?","How much time does your club director spend managing vendor relationships vs. coaching?"]},
+"GoBallistic Sports":{competitor:"GoBallistic Sports",category:"Apparel Specialist",our_strengths:["National reach vs their regional New Jersey focus","Full equipment catalog GoBallistic doesn't carry","Faster turnaround with fewer supply chain excuses","No minimum order constraints for smaller programs and rec leagues"],their_strengths:["Strong design pedigree from advertising background — truly original custom designs","No templates — completely original graphics","In-house printing and production for quality control","Broad sport coverage across 18+ sports"],key_messages:["Original designs are great. 4–5 week timelines aren't.","GoBallistic does great creative. We do great creative AND equipment AND we're national.","25-piece minimum is a real barrier. We don't have one."],objection_handlers:[{objection:"GoBallistic does fully custom original designs",response:"So do we — and we don't have the 4–5 week backlog or the 25-piece minimums that limit smaller programs."},{objection:"They're local to us",response:"Local matters for relationships — but ST1 gives you that same relationship regardless of geography, with broader inventory and faster execution."}],discovery_landmines:["Do you need equipment alongside custom uniforms?","What's your timeline for uniforms — can you wait 4–5 weeks?","Do you have enough players to meet the 25-piece sublimation minimum every time?"]},
+"Wooter Apparel":{competitor:"Wooter Apparel",category:"Apparel Specialist",our_strengths:["We don't ghost clients after payment — real accountability from order to delivery","Full equipment catalog — Wooter has zero hard equipment","Major brand options (Nike, UA, Adidas) vs Wooter's own-brand sublimation","Our fan stores carry exclusive ST1 graphic tee line that actually sells"],their_strengths:["Among the lowest prices for custom sublimated uniforms","High-quality sublimation designs praised initially","Global scale — 40+ countries","Free fan shop with 10–50% commission"],key_messages:["Cheap uniforms and no accountability is an expensive combination.","Wooter gets you in the door at $39. We keep you coming back for 10 years.","Their creative screams startup. Ours says partner."],objection_handlers:[{objection:"Wooter prices are very low",response:"You get what you pay for — and their BBB and Trustpilot reviews show what happens when something goes wrong. We stand behind our products with real accountability."},{objection:"Their fan shop earns us commission",response:"So does ours — plus our fan stores carry our exclusive graphic tee line that actually sells beyond just uniforms."}],discovery_landmines:["Do you also need equipment or are you purely looking for apparel?","Have you or another coach had issues getting responses from Wooter after ordering?","Does your team need gear from recognized major brands like Nike or Under Armour?"]},
+"Sports Gear Swag":{competitor:"Sports Gear Swag",category:"Apparel Specialist",our_strengths:["Major brand access (Nike, UA, Adidas) vs SGS's no-name sublimation","Equipment alongside apparel — SGS is apparel-only at meaningful depth","Relationship and accountability vs pure online transactional model","Our graphic tee line has sport-specific original designs vs generic templates"],their_strengths:["Super Rush 3-day delivery available","No order minimums","User-friendly online design tool with quick digital proofs","Broad 60+ sport coverage"],key_messages:["3-day rush means nothing when sizing is wrong.","Generic templates for 60 sports. We do original designs for your sport.","Entry-level pricing attracts teams. Quality complaints follow."],objection_handlers:[{objection:"No minimums and 3-day rush is very appealing",response:"Rush matters — but not when sizing is wrong or material is stiff. We can turn custom orders quickly too, with better quality control and major brands behind the product."},{objection:"Their pricing is very low",response:"Entry-level pricing attracts teams, then the quality complaints follow. We're competitive on price for the quality tier that holds up a full season."}],discovery_landmines:["Do you need equipment as well as apparel for your program?","What brands do your athletes or parents expect to see on their gear?","Have you had sizing issues with ultra-cheap custom apparel before?"]},
+"Custom Ink":{competitor:"Custom Ink",category:"Apparel Only",our_strengths:["We're an actual sports dealer — Custom Ink is a t-shirt printer","Performance athletic fabrics vs cotton fashion apparel that cracks and peels","Equipment + uniforms + team stores in one relationship vs apparel only","Sport-specific expertise vs generic design templates for any group"],their_strengths:["Extremely user-friendly design tool — accessible to anyone","Massive brand recognition — every parent and coach knows Custom Ink","100% satisfaction guarantee","Fast turnaround options for spirit wear and casual apparel"],key_messages:["Custom Ink is great for the school picnic. Not for game day.","We start where Custom Ink ends.","Everyone knows Custom Ink. Coaches who know the difference choose ST1."],objection_handlers:[{objection:"Custom Ink is easy and everyone knows them",response:"For custom tees with your team name — great. For performance uniforms that survive a season, catcher's gear, batting helmets, and a team store that sells all year, you need a sports dealer."},{objection:"Their guarantee is risk-free",response:"So is ours. But we start with performance fabrics and sports-specific designs that don't need to be guaranteed because they're right the first time."}],discovery_landmines:["Are you looking for cotton fashion tees or performance athletic uniforms?","Do you need equipment alongside the apparel?","Does your team need individual name/number customization on moisture-wicking fabric?"]},
+"Trigon Sports":{competitor:"Trigon Sports",category:"Equipment Only",our_strengths:["We handle equipment AND apparel AND team stores — Trigon can't outfit your team","We carry major brand equipment (Rawlings, Easton, Wilson) alongside facility gear","One vendor relationship for the entire program — not a specialty equipment-only vendor"],their_strengths:["A+ BBB rating — outstanding CS reputation","98% Facebook recommendation rate","ProCage batting cage line highly praised for durability","Deep facility equipment expertise: bleachers, batting cages, field covers","Acquired Proper Pitch Inc. (pitching mounds) 2025"],key_messages:["The best batting cage vendor. Not the best team dealer.","A+ rating on equipment they specialize in. Zero capability on everything else you need.","One more specialty vendor is one more relationship to manage."],objection_handlers:[{objection:"Trigon has the batting cages and field equipment we need",response:"We can source that too — and when you need uniforms, team stores, and spirit wear, you don't need to call a second vendor. We handle everything."},{objection:"They specialize in facility equipment",response:"Specialty is valuable. But for a complete program, you need a partner who handles equipment, apparel, and team gear without multiple vendor relationships."}],discovery_landmines:["Who handles your uniform and team store needs separately from equipment?","How many vendors do you currently manage for your program?","When budget is tight, which vendor is easiest to consolidate?"]},
+"Gopher Sport":{competitor:"Gopher Sport",category:"Equipment Only",our_strengths:["We offer performance custom uniforms Gopher doesn't — full sublimation program","Team store capability for individual parent ordering vs Gopher's bulk-only model","Multi-sport equipment expertise with major brands alongside institutional gear","More flexible for youth clubs and travel teams — Gopher is institution-only focused"],their_strengths:["A+ BBB rating — 75+ years of institutional trust","Unconditional satisfaction guarantee — any time, any reason","Same-day shipping 99%+ of in-stock orders","Deep PE/rec equipment expertise — archery, badminton, floor hockey","Government contract access: GSA, DoDEA, Sourcewell, OMNIA Partners"],key_messages:["The best PE equipment catalog in the business. The worst fit for a competitive team program.","Government contracts close doors. We open new ones.","Gopher has the guarantee. We have the guarantee plus everything Gopher can't do."],objection_handlers:[{objection:"We buy through Gopher because of our school's cooperative purchasing contract",response:"Many of our school clients use cooperative pricing through us too — and we combine that with full uniform programs and team stores that Gopher can't provide."},{objection:"Gopher's unconditional guarantee is great",response:"Ours matches it — and we add team stores, custom uniforms, and major brand equipment to the package."}],discovery_landmines:["Does your school need custom performance uniforms in addition to PE equipment?","Do coaches or parents want individual ordering through a team store?","Is your current equipment setup missing any gap Gopher doesn't cover?"]}
+}};
+
 function ModCompete() {
   const {s,dispatch,setMod}=useApp();
-  const HARDCODED=["BSN Sports","VS Athletics","MF Athletic","School Specialty","Varsity Group","Gopher Sport","Anderson's","Epic Sports"];
+  const HARDCODED=["Dick's Sporting Goods","gearUP","Anthem Sports","BSN Sports","Game One","SquadLocker","Team Sports Planet","Boombah","Smash It Sports","Extra Innings Direct","GoBallistic Sports","Wooter Apparel","Sports Gear Swag","Custom Ink","Trigon Sports","Gopher Sport","VS Athletics","MF Athletic","School Specialty","Varsity Group","Anderson's","Epic Sports"];
   const [sel,setSel]=useState(null);
   const intel=s.competeIntel||{};
   const bc=s.battlecards||{};
   const [running,setRunning]=useState(null);
   const [bcRunning,setBcRunning]=useState(null);
+
+  // Seed PDF data on first load — only fills gaps, never overwrites existing intel
+  useEffect(()=>{
+    const missingIntel=Object.keys(COMPETE_SEED.intel).filter(k=>!intel[k]);
+    const missingBc=Object.keys(COMPETE_SEED.battlecards).filter(k=>!bc[k]);
+    if(missingIntel.length>0){
+      const patch={};
+      missingIntel.forEach(k=>{patch[k]=COMPETE_SEED.intel[k];});
+      dispatch("SET_COMPETE_INTEL",patch);
+    }
+    if(missingBc.length>0){
+      const patch={};
+      missingBc.forEach(k=>{patch[k]=COMPETE_SEED.battlecards[k];});
+      dispatch("SET_BATTLECARD",patch);
+    }
+  },[]);
   const [editingIntel,setEditingIntel]=useState(null); // competitor name being edited
   const [editText,setEditText]=useState("");
 
@@ -12087,7 +13170,7 @@ function ModCompete() {
       <div style={{width:220,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0,background:B.surface}}>
         <div style={{padding:"14px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
           <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.text,letterSpacing:.5,marginBottom:6}}>COMPETITOR INTEL</div>
-          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>Ask the home chat about any competitor to auto-save intel here.</div>
+          <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>15 battle cards loaded from April 2026 research. Use REFRESH to update any card with live AI search.</div>
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"8px 0"}}>
           {withIntel.length>0&&(
@@ -12180,6 +13263,7 @@ function ModCompete() {
                   <Lbl s={{marginBottom:8}}>Key Messages</Lbl>
                   {(bc[sel].key_messages||[]).map((m,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,marginBottom:4}}>"{m}"</div>)}
                 </div>
+                {bc[sel].category&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"3px 10px",borderRadius:4,display:"inline-block",marginBottom:10}}>{bc[sel].category.toUpperCase()}</div>}
                 {(bc[sel].objection_handlers||[]).map((oh,i)=>(
                   <div key={i} style={{marginBottom:8,padding:"10px 12px",background:B.white,border:`1px solid ${B.border}`,borderRadius:6}}>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>OBJECTION</div>
@@ -12188,6 +13272,14 @@ function ModCompete() {
                     <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.6}}>{oh.response}</div>
                   </div>
                 ))}
+                {(bc[sel].discovery_landmines||[]).length>0&&(
+                  <div style={{marginTop:12,padding:"12px 14px",background:`${B.orange}06`,border:`1px solid ${B.orange}25`,borderRadius:6}}>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:8}}>💣 DISCOVERY LANDMINES — ask early to surface pain</div>
+                    {(bc[sel].discovery_landmines||[]).map((q,i)=>(
+                      <div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,paddingLeft:10,borderLeft:`2px solid ${B.orange}40`,marginBottom:6}}>■ {q}</div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -12603,17 +13695,12 @@ function ModAlerts() {
   const sendToSlack=async(msg)=>{
     const ch=channel||"C0AQ7CMB01X";
     try{
-      const r=await fetch("/api/claude",{
+      const r=await fetch("/api/slack-message",{
         method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-          model:"claude-sonnet-4-6",max_tokens:200,
-          mcp_servers:[{type:"url",url:"https://mcp.slack.com/mcp",name:"slack"}],
-          messages:[{role:"user",content:`Send this exact message to Slack channel ${ch}:\n\n${msg}\n\nUse the slack_send_message tool with channel_id="${ch}". Reply with just "sent" when done.`}]
-        })
+        body:JSON.stringify({channel:ch,text:msg})
       });
       const d=await r.json();
-      const text=(d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("").toLowerCase();
-      return text.includes("sent")||d.content?.some(b=>b.type==="tool_use");
+      return d.ok===true;
     }catch{return false;}
   };
 
@@ -13351,19 +14438,57 @@ function PLUploadModal({onClose, onSave, existingLists}) {
         const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
         setLoadMsg("Extracting data with AI...");
         const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-          model:"claude-sonnet-4-6",max_tokens:8000,
-          system:"Return ONLY valid JSON, no markdown.",
+          model:"claude-sonnet-4-6",max_tokens:16000,stream:true,
+          system:"Return ONLY valid JSON, no markdown, no code fences.",
           messages:[{role:"user",content:[
             {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-            {type:"text",text:`Extract this supplier price list. Return JSON:
-{"supplierName":"","repName":null,"repEmail":null,"repPhone":null,
- "products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]}
-cost = dealer/wholesale price. price = suggested sell price or null. map = MAP price or null.`}
+            {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
           ]}]
         })});
-        const data=await resp.json();
-        const txt=(data.content?.[0]?.text||"").trim();
-        const parsed=JSON.parse(txt);
+        if(!resp.ok){
+          let e=`HTTP ${resp.status}`;
+          try{const j=await resp.json();e=j.error||j.message||e;}
+          catch{try{const t=await resp.text();e=`HTTP ${resp.status}: ${t.slice(0,200)}`;}catch{}}
+          throw new Error(e);
+        }
+        // Stream the SSE response and accumulate text
+        setLoadMsg("Extracting data with AI (this may take a minute for large files)...");
+        const reader=resp.body.getReader();const decoder=new TextDecoder();
+        let accumulated="";let buf="";
+        while(true){
+          const{done,value}=await reader.read();
+          if(done) break;
+          buf+=decoder.decode(value,{stream:true});
+          const lines=buf.split("\n");
+          buf=lines.pop()||"";
+          for(const line of lines){
+            if(!line.startsWith("data: ")) continue;
+            const raw=line.slice(6).trim();
+            if(!raw||raw==="[DONE]") continue;
+            try{
+              const ev=JSON.parse(raw);
+              if(ev.type==="content_block_delta"&&ev.delta?.type==="text_delta") accumulated+=ev.delta.text;
+              else if(ev.type==="error") throw new Error(ev.error?.message||ev.error?.type||"Anthropic stream error");
+            }catch(parseErr){if(!(parseErr instanceof SyntaxError)) throw parseErr;}
+          }
+        }
+        let txt=accumulated.trim();
+        if(!txt) throw new Error("AI returned empty response — the PDF may be too large or unsupported");
+        // Strip markdown code fences if present
+        txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/,"").trim();
+        // Parse — if truncated, salvage complete entries
+        let parsed;
+        try{
+          parsed=JSON.parse(txt);
+        }catch{
+          const lastBrace=txt.lastIndexOf("}");
+          if(lastBrace>0) txt=txt.slice(0,lastBrace+1);
+          txt=txt.replace(/,(\s*[}\]])/g,"$1");
+          const openBrackets=(txt.match(/\[/g)||[]).length-(txt.match(/\]/g)||[]).length;
+          const openBraces=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
+          txt+="]".repeat(Math.max(0,openBrackets))+"}".repeat(Math.max(0,openBraces));
+          parsed=JSON.parse(txt);
+        }
         if(!name&&parsed.supplierName) setName(parsed.supplierName);
         if(!supplierName&&parsed.supplierName) setSupplierName(parsed.supplierName);
         if(!repName&&parsed.repName) setRepName(parsed.repName||"");
@@ -13383,9 +14508,9 @@ cost = dealer/wholesale price. price = suggested sell price or null. map = MAP p
         if(isCsv){
           rows=parseCSVRows(await f.text());
         }else{
-          const {default:XLSX}=await import("xlsx");
+          const XLSX=await import("xlsx");
           const buf=await toBuffer(f);
-          const wb=XLSX.read(buf,{type:"array"});
+          const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
           const ws=wb.Sheets[wb.SheetNames[0]];
           rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:""});
         }
@@ -13654,8 +14779,41 @@ cost = dealer/wholesale price. price = suggested sell price or null. map = MAP p
   );
 }
 
+function RepGmailConnector({repKey, email, name}) {
+  const {toast} = useApp();
+  const [info, setInfo] = React.useState(null);
+  const [checking, setChecking] = React.useState(false);
+  const check = React.useCallback(async()=>{
+    setChecking(true); setInfo(null);
+    try {
+      const d = await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:repKey})}).then(r=>r.json());
+      setInfo(d);
+    } catch(e){ setInfo({found:false,error:e.message}); }
+    setChecking(false);
+  },[repKey]);
+  React.useEffect(()=>{check();},[check]);
+  const setupUrl = `/api/gmail-setup?repKey=${repKey}${email?`&hint=${encodeURIComponent(email)}`:""}`;
+  if (checking) return <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Checking…</div>;
+  if (!info) return null;
+  if (info.found && info.email) return (
+    <div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"10px 14px"}}>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green,fontWeight:600}}>✓ Connected as {info.email}</div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>Campaign emails assigned to you will send from this account.</div>
+      <a href={setupUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>Reconnect →</a>
+    </div>
+  );
+  return (
+    <div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"10px 14px"}}>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.red,fontWeight:600,marginBottom:6}}>Your Gmail is not connected yet.</div>
+      <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>Click the button below to connect your Google account. <strong>Open it on your own device</strong> and sign in as yourself — not a shared or admin account.</div>
+      <a href={setupUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",background:B.orange,color:B.white,borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,textDecoration:"none",letterSpacing:.3}}>Connect My Gmail →</a>
+      <button onClick={check} style={{marginLeft:10,background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer"}}>↻ Recheck</button>
+    </div>
+  );
+}
+
 function ModSettings() {
-  const {s,dispatch,toast,setMod}=useApp();
+  const {s,dispatch,toast,setMod,cu}=useApp();
   const [ints,setInts]=useState({...(s.integrations||{})});
   const [co,setCo]=useState({...SEED.company,...(s.company||{})});
   const [repForm,setRepForm]=useState(null); // null = hidden, {} = new, {id,...} = edit
@@ -13665,6 +14823,17 @@ function ModSettings() {
 
   const testRepEmail=async(rep)=>{
     const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
+    // First: diagnose which account the token resolves to
+    if(rep.gmailEnvKey){
+      try{
+        const dbg=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug",repEnvKey:rep.gmailEnvKey})}).then(r=>r.json());
+        if(!dbg.found){toast(`No Gmail connected for ${rep.name} — have them visit /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser to connect`,"error");return;}
+        if(dbg.email&&dbg.email!==rep.email){
+          toast(`Wrong account: ${rep.gmailEnvKey} is connected as ${dbg.email}, not ${rep.email}. Have ${rep.name} redo the OAuth at /api/gmail-setup?repKey=${rep.gmailEnvKey} from their own browser`,"error");
+          return;
+        }
+      }catch{}
+    }
     toast(`Sending test to ${rep.email} via ${fromLabel}…`,"info");
     try {
       const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -13672,6 +14841,7 @@ function ModSettings() {
         subject:`ST1 RevOps — email test for ${rep.name}`,
         body:`Hi ${(rep.name||"there").split(" ")[0]},\n\nThis is a test email confirming your address is connected to ST1 RevOps. If you received this, outbound email is working correctly for your account.\n\n— ST1 RevOps`,
         ...(rep.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
+        ...(rep.email ? {from_email:rep.email, from_name:rep.name, reply_to:rep.email} : {}),
       })}).then(r=>r.json());
       if(d.sent) toast(`Test sent to ${rep.email} via ${fromLabel} ✓`,"success");
       else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
@@ -13703,6 +14873,38 @@ function ModSettings() {
       .then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
       .catch(()=>setGmailStatus(false));
   },[]);
+
+  // ── Rep (non-admin) view: just their own Gmail + profile ─────────────────────
+  if (cu && !cu.isAdmin) {
+    const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
+    const myKey = cu?.gmailEnvKey || "";
+    const setupUrl = myKey ? `/api/gmail-setup?repKey=${myKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}` : "";
+    return (
+      <div style={{padding:"22px 26px",maxWidth:600}}>
+        <PH title="MY ACCOUNT" sub={`Logged in as ${cu?.name||"you"}`}/>
+        <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.orange}`}}>
+          <Lbl c={B.orange} s={{marginBottom:12}}>My Profile</Lbl>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:9}}>
+            {[["Name","name"],["Email","email"],["Title","title"],["Phone","phone"]].map(([l,k])=>(
+              <div key={k}><Lbl s={{marginBottom:3}}>{l}</Lbl>
+                <div style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}>{myRep?.[k]||<span style={{color:B.muted}}>—</span>}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
+          <Lbl c={B.green} s={{marginBottom:12}}>My Gmail</Lbl>
+          {!myKey ? (
+            <div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+              No Gmail key assigned to your account. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
+            </div>
+          ) : (
+            <RepGmailConnector repKey={myKey} email={cu?.email||""} name={cu?.name||""} />
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{padding:"22px 26px",maxWidth:760}}>
@@ -13771,10 +14973,11 @@ function ModSettings() {
         const [publerSendDebug,setPublerSendDebug]=useState(null);
         const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 
+        const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
         const checkGmail=async()=>{
           setGmailChecking(true);setGmailInfo(null);
           try{
-            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})}).then(r=>r.json());
+            const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile",...(repGmailKey?{repEnvKey:repGmailKey}:{})})}).then(r=>r.json());
             setGmailInfo(d.error?{error:d.error}:{email:d.email});
           }catch(e){setGmailInfo({error:e.message});}
           setGmailChecking(false);
@@ -13843,22 +15046,32 @@ function ModSettings() {
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5}}>GMAIL (outbound email)</div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={checkGmail} disabled={gmailChecking} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{gmailChecking?"Checking…":"↻ Test"}</button>
-                  <button onClick={async()=>{
+                  {!repGmailKey&&<button onClick={async()=>{
                     const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:s.company?.email||"test@example.com",to_name:"ST1 Test",subject:"ST1 RevOps — Gmail test",body:"If you receive this, Gmail sending is working correctly."})}).then(r=>r.json());
                     if(d.sent) toast("Test email sent — check your inbox","success");
                     else toast("Send failed: "+(d.error||JSON.stringify(d)),"error");
-                  }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>
+                  }} style={{background:B.purple,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>✉ Send Test</button>}
+                  {repGmailKey&&<a href={`/api/gmail-setup?repKey=${repGmailKey}${cu?.email?`&hint=${encodeURIComponent(cu.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:B.orange,color:B.white,border:"none",borderRadius:3,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",textDecoration:"none"}}>Connect Gmail →</a>}
                 </div>
               </div>
+              {/* Rep (non-admin) with no gmailEnvKey set */}
+              {cu && !cu.isAdmin && !cu?.gmailEnvKey && (
+                <div style={{background:`${B.yellow}18`,border:`1px solid ${B.yellow}`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                  No Gmail key assigned. Ask an admin to set your Gmail Key in Settings → Reps, then come back here to connect.
+                </div>
+              )}
               {gmailInfo&&(
                 gmailInfo.error
                   ?<div style={{background:`${B.red}08`,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-                    ✕ Not connected — {gmailInfo.error}
-                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                    ✕ {repGmailKey ? "Your Gmail is not connected yet." : `Not connected — ${gmailInfo.error}`}
+                    {repGmailKey
+                      ?<div style={{marginTop:6,fontSize:10,color:B.muted}}>Click <strong>Connect Gmail →</strong> above to link your Google account. Open it on <strong>your own device</strong> and sign in with your own Google account.</div>
+                      :<div style={{marginTop:4,fontSize:10,color:B.muted}}>Set GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN in Vercel env vars. Visit <strong>/api/gmail-setup</strong> to generate tokens.</div>
+                    }
                   </div>
                   :<div style={{background:`${B.green}08`,border:`1px solid ${B.green}30`,borderRadius:5,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
                     ✓ Connected as <strong>{gmailInfo.email}</strong>
-                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>All campaign emails send FROM this account. Rep name &amp; email appear in the signature — replies go back to this inbox.</div>
+                    <div style={{marginTop:4,fontSize:10,color:B.muted}}>{repGmailKey?"Campaign emails assigned to you will send from this account.":"All campaign emails send FROM this account. Rep name & email appear in the signature — replies go back to this inbox."}</div>
                   </div>
               )}
               {!gmailInfo&&!gmailChecking&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Click Test to check connection.</div>}
@@ -14034,9 +15247,11 @@ function ModSettings() {
                   <input type="text" value={repForm.gmailEnvKey||""} onChange={e=>setRepForm(f=>({...f,gmailEnvKey:e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g,"")}))}
                     placeholder="e.g. JOSH" maxLength={20}
                     style={{width:120,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",letterSpacing:1}}/>
-                  {repForm.gmailEnvKey&&<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
-                    style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline"}}>Set up Gmail for {repForm.gmailEnvKey} →</a>}
-                  <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>→ set <code>GMAIL_REFRESH_TOKEN_{repForm.gmailEnvKey||"KEY"}</code> in Vercel</span>
+                  {repForm.gmailEnvKey
+                    ?<a href={`/api/gmail-setup?repKey=${repForm.gmailEnvKey}`} target="_blank" rel="noreferrer"
+                        style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"underline",whiteSpace:"nowrap"}}>Gmail setup link →</a>
+                    :<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Type a key above, then click the setup link</span>}
+                  {repForm.gmailEnvKey&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>Save, then have the rep open this link on their own computer. Token saves automatically.</span>}
                 </div>
               </div>
             </div>
@@ -14077,6 +15292,7 @@ function ModSettings() {
                 </div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={()=>testRepEmail(rep)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer"}} title={hasOwnGmail?`Send test from ${rep.gmailEnvKey}'s Gmail`:"Send test from shared Gmail"}>✉ TEST</button>
+                  {hasOwnGmail&&<a href={`/api/gmail-setup?repKey=${rep.gmailEnvKey}${rep.email?`&hint=${encodeURIComponent(rep.email)}`:""}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.blue}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.blue,cursor:"pointer",textDecoration:"none"}}>GMAIL SETUP →</a>}
                   <button onClick={()=>{if(pinForm===rep.id){setPinForm(null);setPinVal("");}else{setPinForm(rep.id);setPinVal("");}}} style={{background:hasAccess?`${B.green}15`:"none",border:`1px solid ${hasAccess?B.green:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:hasAccess?B.green:B.muted,cursor:"pointer"}} title={hasAccess?"Change or revoke PIN":"Set login PIN for this rep"}>{hasAccess?"🔑 CHANGE PIN":"🔑 SET PIN"}</button>
                   {hasAccess&&<button onClick={toggleRepAdmin} style={{background:isRepAdmin?B.purpleBg:"none",border:`1px solid ${isRepAdmin?`${B.purple}40`:B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:isRepAdmin?B.purple:B.muted,cursor:"pointer"}} title={isRepAdmin?"Remove admin access":"Grant admin access to this rep"}>◐ {isRepAdmin?"ADMIN":"MAKE ADMIN"}</button>}
                   <button onClick={()=>setRepForm({...rep})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>EDIT</button>

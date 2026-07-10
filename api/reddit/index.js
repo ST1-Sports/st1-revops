@@ -26,16 +26,12 @@
  *   mute-list       — list all mute entries
  */
 
-const { ingestThreads }      = require('./services/ingestion');
-const { evaluateThread }     = require('./services/evaluator');
-const { generateReplies }    = require('./services/reply-generator');
-const { notifySlack }        = require('./services/slack-review');
-const { postApprovedReply }  = require('./services/posting');
-const { refreshAnalytics }   = require('./services/analytics');
+const { ingestThreads }         = require('./services/ingestion');
+const { generateSearchQueries } = require('./services/query-generator');
+const { evaluateThread }        = require('./services/evaluator');
+const { generateReplies }       = require('./services/reply-generator');
 const { muteSubreddit, muteKeyword } = require('./services/db-guardrails');
-const { checkContent }       = require('./services/content-guardrail');
-const { generateReport }     = require('./services/report');
-const { PrismaClient }       = require('@prisma/client');
+const { PrismaClient }          = require('@prisma/client');
 
 let prisma;
 function getPrisma() {
@@ -131,39 +127,23 @@ export default async function handler(req, res) {
         return ok(res, { replySet });
       }
 
-      case 'notify': {
-        if (!body.threadId) return err(res, 'threadId is required', 400);
-        const appBaseUrl = body.appBaseUrl || `https://${req.headers.host}`;
-        const result = await notifySlack(body.threadId, appBaseUrl, body.dryRun === true || flags.dryRun);
-        return ok(res, result);
-      }
-
-      case 'approve': {
-        // Validate the approval payload then record it in the DB
-        const { threadId, replyId, decidedBy } = body;
-        if (!threadId || !replyId) return err(res, 'threadId and replyId are required', 400);
-
+      // mark-done: user manually posted the reply — record it and hide from queue
+      case 'mark-done': {
+        const { threadId } = body;
+        if (!threadId) return err(res, 'threadId is required', 400);
         const db = getPrisma();
-        await db.redditReply.update({
-          where: { id: replyId },
-          data:  { approvedBy: decidedBy || 'unknown', approvedAt: new Date(), rejectedAt: null },
-        });
         await db.redditThread.update({
           where: { id: threadId },
-          data:  { status: 'APPROVED' },
+          data:  { status: 'POSTED' },
         });
-        return ok(res, { approved: true, replyId });
+        return ok(res, { done: true, threadId });
       }
 
+      // reject / skip: hide from review queue
       case 'reject': {
-        const { threadId, decidedBy, reason } = body;
+        const { threadId } = body;
         if (!threadId) return err(res, 'threadId is required', 400);
-
         const db = getPrisma();
-        await db.redditReply.updateMany({
-          where: { threadId },
-          data:  { rejectedAt: new Date(), rejectionReason: reason || null },
-        });
         await db.redditThread.update({
           where: { id: threadId },
           data:  { status: 'REJECTED' },
@@ -171,33 +151,41 @@ export default async function handler(req, res) {
         return ok(res, { rejected: true, threadId });
       }
 
-      case 'check': {
-        if (!body.replyId) return err(res, 'replyId is required', 400);
-        const guardrail = await checkContent(body.replyId, {
-          subredditRules: body.subredditRules || '',
-          topComments:    body.topComments    || '',
-          dryRun:         body.dryRun === true || flags.dryRun,
+      // pipeline: ingest + evaluate + generate for pending threads (manual trigger from UI)
+      case 'pipeline': {
+        const pResults = { ingested: 0, evaluated: 0, generated: 0, errors: [] };
+
+        // Generate smart queries and ingest new threads
+        try {
+          const queries = await generateSearchQueries();
+          const overrides = queries.length ? {
+            subreddits: [...new Set(queries.map(q => q.subreddit))],
+            keywords:   [...new Set(queries.map(q => q.query))],
+          } : {};
+          const ig = await ingestThreads(flags, overrides);
+          pResults.ingested = ig.ingested;
+        } catch (e) {
+          pResults.errors.push({ step: 'ingest', error: e.message });
+        }
+
+        // Evaluate pending threads (up to 5 to stay under 30s timeout)
+        const db = getPrisma();
+        const pending = await db.redditThread.findMany({
+          where: { status: 'PENDING' }, take: 5, orderBy: { ingestedAt: 'desc' },
         });
-        return ok(res, { guardrail });
-      }
-
-      case 'post': {
-        if (!body.replyId) return err(res, 'replyId is required', 400);
-        const result = await postApprovedReply(body.replyId, {
-          dryRun:    body.dryRun === true || flags.dryRun,
-          decidedBy: body.decidedBy || 'unknown',
-        });
-        return ok(res, { result });
-      }
-
-      case 'analytics': {
-        const records = await refreshAnalytics(body.dryRun === true || flags.dryRun);
-        return ok(res, { records });
-      }
-
-      case 'report': {
-        const report = await generateReport({ days: body.days || 90 });
-        return ok(res, { report });
+        for (const thread of pending) {
+          try {
+            const ev = await evaluateThread(thread.id);
+            pResults.evaluated++;
+            if (ev.decision === 'REPLY') {
+              const rs = await generateReplies(thread.id);
+              if (!rs.skip) pResults.generated++;
+            }
+          } catch (e) {
+            pResults.errors.push({ step: 'evaluate', threadId: thread.id, error: e.message });
+          }
+        }
+        return ok(res, pResults);
       }
 
       case 'threads': {
