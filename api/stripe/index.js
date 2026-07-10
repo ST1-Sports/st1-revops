@@ -45,7 +45,10 @@ async function fetchCharges(fromTs, toTs, maxCharges = 5000) {
   while (all.length < maxCharges) {
     if (startingAfter) params.starting_after = startingAfter;
     const page = await stripeGet('/charges', params);
-    const succeeded = page.data.filter(c => c.status === 'succeeded' && !c.invoice);
+    // Only keep charges with the store order format: "#ST1-XXXXX / Store Name"
+    const succeeded = page.data.filter(c =>
+      c.status === 'succeeded' && !c.invoice && c.description && c.description.includes(' / ')
+    );
     all.push(...succeeded);
     if (!page.has_more || page.data.length === 0) break;
     startingAfter = page.data[page.data.length - 1].id;
