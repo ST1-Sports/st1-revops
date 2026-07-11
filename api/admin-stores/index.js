@@ -15,14 +15,21 @@ const API_BASE = 'https://api.st1sports.com/admin';
 const API_ROOT = 'https://api.st1sports.com';
 
 const AUTH_ENDPOINTS = [
+  // NestJS/Passport patterns — most likely given camelCase accessToken response
+  { base: API_BASE, path: '/auth/login',        body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/auth/signin',       body: (e, p) => ({ email: e, password: p }) },
+  { base: API_ROOT, path: '/auth/login',        body: (e, p) => ({ email: e, password: p }) },
+  { base: API_ROOT, path: '/auth/signin',       body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/login',             body: (e, p) => ({ email: e, password: p }) },
+  { base: API_ROOT, path: '/login',             body: (e, p) => ({ email: e, password: p }) },
+  { base: API_BASE, path: '/signin',            body: (e, p) => ({ email: e, password: p }) },
+  { base: API_ROOT, path: '/signin',            body: (e, p) => ({ email: e, password: p }) },
+  // Fallback patterns
   { base: API_BASE, path: '/sign_in',           body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/sign_in',           body: (e, p) => ({ admin: { email: e, password: p } }) },
   { base: API_ROOT, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
   { base: API_BASE, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
   { base: API_ROOT, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
   { base: API_BASE, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/v1/auth/login',     body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/v1/sign_in',        body: (e, p) => ({ email: e, password: p }) },
 ];
 
 let _auth = null;
@@ -65,7 +72,7 @@ async function probeAuth(email, password) {
       if (ct.includes('text/html') || text.trim().startsWith('<')) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'html-response' }); continue; }
       if ((status === 200 || status === 201) && ct.includes('application/json')) {
         let body; try { body = JSON.parse(text); } catch { body = {}; }
-        const token = body.token || body.access_token || body.auth_token || body.jwt || body.data?.token || body.user?.token || body.data?.access_token;
+        const token = body.accessToken || body.token || body.access_token || body.auth_token || body.jwt || body.data?.accessToken || body.data?.token || body.user?.token || body.data?.access_token;
         if (token) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' }); return { type: 'bearer', value: token, endpoint: `${ep.base}${ep.path}` }; }
         if (cookies) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-json' }); return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` }; }
         _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet }); continue;
