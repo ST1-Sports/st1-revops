@@ -58,6 +58,8 @@ export default function TeamStores() {
   const [authScanning, setAuthScanning] = useState(false);
   const [dataDiscover, setDataDiscover] = useState(null);
   const [dataDiscovering, setDataDiscovering] = useState(false);
+  const [bundleScan, setBundleScan] = useState(null);
+  const [bundleScanning, setBundleScanning] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -276,6 +278,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setDataDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover-data" }) }); setDataDiscover(await r.json()); } finally { setDataDiscovering(false); } }} disabled={dataDiscovering}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: dataDiscovering ? "default" : "pointer", border: `1px solid ${B.green}`, borderRadius: 6, background: B.greenBg, color: B.green }}>
                       {dataDiscovering ? "Probing data…" : "Discover Data Endpoints"}</button>
+                    <button onClick={async () => { setBundleScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-bundle-paths" }) }); setBundleScan(await r.json()); } finally { setBundleScanning(false); } }} disabled={bundleScanning}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: bundleScanning ? "default" : "pointer", border: `1px solid ${B.purple}`, borderRadius: 6, background: B.purpleBg, color: B.purple }}>
+                      {bundleScanning ? "Scanning paths…" : "Scan Bundle Paths"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -353,13 +358,64 @@ export default function TeamStores() {
                     <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Stores:</span></div>
                     {dataDiscover.storeResults?.map((r, i) => (
                       <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
+                        <code>{r.path}</code>{r.params ? <span style={{ color: B.muted }}> ?{r.params}</span> : ""} → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
                       </div>
                     ))}
                     <div style={{ marginTop: 6, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Orders:</span></div>
                     {dataDiscover.orderResults?.map((r, i) => (
                       <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
+                        <code>{r.path}</code>{r.params ? <span style={{ color: B.muted }}> ?{r.params}</span> : ""} → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {bundleScan && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.purple}`, borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: B.purple, marginBottom: 8 }}>Bundle path scan ({bundleScan.totalChunks} chunks):</div>
+                    {bundleScan.error && <div style={{ color: B.red, fontSize: 12 }}>{bundleScan.error}</div>}
+                    {bundleScan.chunkResults?.map((c, i) => (
+                      <div key={i} style={{ marginBottom: 14 }}>
+                        <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
+                        {c.interceptorCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.purple, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Interceptors ({c.interceptorCtxs.length}):</div>
+                            {c.interceptorCtxs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 120, margin: "4px 0", padding: "6px 8px", background: B.purpleBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.authCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Authorization header contexts ({c.authCtxs.length}):</div>
+                            {c.authCtxs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.createCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.blue, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>axios.create config ({c.createCtxs.length}):</div>
+                            {c.createCtxs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.blueBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.endpointCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Endpoint keyword contexts ({c.endpointCtxs.length}):</div>
+                            {c.endpointCtxs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong style={{ color: B.teal }}>[{ctx.kw}]</strong> {ctx.ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.apiPaths?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>All API path strings ({c.apiPaths.length}):</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {c.apiPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.surface, border: `1px solid ${B.border}`, padding: "1px 5px", borderRadius: 3, color: B.textMid }}>{p}</code>)}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

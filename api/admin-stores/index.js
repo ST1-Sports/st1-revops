@@ -93,7 +93,7 @@ async function getAuth() {
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
   const auth = await probeAuth(email, password);
-  if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
+  if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})` ).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
   if (auth.type === 'rejected') throw new Error(`Login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
   _auth = auth;
   _sessionExpiry = Date.now() + 30 * 60 * 1000;
@@ -246,16 +246,115 @@ export default async function handler(req, res) {
     }
   }
 
+  // Scan the admin app bundle for API paths, auth interceptors, and Authorization header setup.
+  if (action === 'scan-bundle-paths') {
+    try {
+      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const html = await htmlRes.text();
+      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
+
+      const chunkResults = [];
+      for (const scriptUrl of allScripts.slice(0, 5)) {
+        const chunk = scriptUrl.split('/').pop();
+        try {
+          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
+          const text = await r.text();
+          const sizeKB = Math.round(text.length / 1024);
+
+          // 1. interceptors.request.use — where auth token is added to headers
+          const interceptorCtxs = [];
+          let pos = 0;
+          while (pos < text.length && interceptorCtxs.length < 4) {
+            const idx = text.indexOf('interceptors', pos);
+            if (idx === -1) break;
+            const ctx = text.slice(Math.max(0, idx - 60), Math.min(text.length, idx + 500)).replace(/\n/g, ' ');
+            if (/token|bearer|access|auth|header/i.test(ctx)) interceptorCtxs.push(ctx.slice(0, 500));
+            pos = idx + 12;
+          }
+
+          // 2. Authorization header construction
+          const authCtxs = [];
+          pos = 0;
+          while (pos < text.length && authCtxs.length < 6) {
+            const idx = text.indexOf('Authorization', pos);
+            if (idx === -1) break;
+            authCtxs.push(text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 280)).replace(/\n/g, ' ').slice(0, 350));
+            pos = idx + 13;
+          }
+
+          // 3. All short quoted path-like strings (API routes)
+          const apiPaths = [...new Set(
+            [...text.matchAll(/["'`](\/[a-z][a-z0-9_/-]{1,60})["'`]/gi)].map(m => m[1])
+              .filter(p => !p.startsWith('/assets/') && !p.startsWith('/static/') && !/\.(js|css|png|svg|woff|ico)/.test(p))
+          )];
+
+          // 4. axios.create({}) config — shows baseURL and default headers
+          const createCtxs = [];
+          pos = 0;
+          while (pos < text.length && createCtxs.length < 3) {
+            const idx = text.indexOf('.create({', pos);
+            if (idx === -1) break;
+            const ctx = text.slice(Math.max(0, idx - 20), Math.min(text.length, idx + 400)).replace(/\n/g, ' ');
+            if (/url|timeout|header/i.test(ctx)) createCtxs.push(ctx.slice(0, 400));
+            pos = idx + 9;
+          }
+
+          // 5. team_store / store_order / order-related keyword contexts
+          const endpointCtxs = [];
+          const kws = ['team_store', 'store_order', 'storeOrder', 'teamStore', '/stores', '/orders', '/products', '/school', '/purchase', '/merchant'];
+          for (const kw of kws) {
+            pos = 0;
+            while (pos < text.length && endpointCtxs.length < 20) {
+              const idx = text.toLowerCase().indexOf(kw.toLowerCase(), pos);
+              if (idx === -1) break;
+              const before = text[idx - 1] || '';
+              if (/["'`\/]/.test(before)) {
+                const ctx = text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 200)).replace(/\n/g, ' ');
+                endpointCtxs.push({ kw, ctx: ctx.slice(0, 280) });
+              }
+              pos = idx + kw.length;
+            }
+          }
+
+          if (interceptorCtxs.length || authCtxs.length || endpointCtxs.length || createCtxs.length) {
+            chunkResults.push({ chunk, sizeKB, interceptorCtxs, authCtxs, apiPaths: apiPaths.slice(0, 120), createCtxs, endpointCtxs: endpointCtxs.slice(0, 15) });
+          }
+        } catch (e) { chunkResults.push({ chunk, error: e.message }); }
+      }
+      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
+    } catch (e) { return res.json({ ok: false, error: e.message }); }
+  }
+
   // Probe all candidate data endpoint paths to find which ones return data.
   if (action === 'discover-data') {
-    const storePaths  = ['/team_stores', '/team-stores', '/teamStores', '/stores', '/store', '/team_store'];
-    const orderPaths  = ['/store_orders', '/store-orders', '/storeOrders', '/orders', '/order', '/store_order'];
+    // Expanded path list — includes query-param variant for 401 endpoint and more ST1-specific names
+    const storePaths  = [
+      '/team_stores', '/team-stores', '/teamStores', '/stores', '/store', '/team_store',
+      '/team_store?page=1&limit=20', '/school_store', '/school_stores',
+      '/org_stores', '/organization_stores', '/merchant_stores', '/clients', '/accounts',
+    ];
+    const orderPaths  = [
+      '/store_orders', '/store-orders', '/storeOrders', '/orders', '/order', '/store_order',
+      '/purchase', '/purchases', '/transactions', '/checkouts',
+      '/team_store_orders', '/school_store_orders',
+    ];
+    // Fetch auth once up front to avoid concurrent probeAuth races
+    let authHeaders;
+    try {
+      const auth = await getAuth();
+      authHeaders = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
+    } catch (e) {
+      return res.json({ ok: false, error: `Auth failed: ${e.message}`, probeLog: _probeLog });
+    }
     const probeOne = async path => {
+      const cleanPath = path.split('?')[0];
+      const url = `${API_BASE}${path}`;
       try {
-        const r = await fetch(`${API_BASE}${path}`, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...(await getAuth().then(a => a.type === 'bearer' ? { 'Authorization': `Bearer ${a.value}` } : { 'Cookie': a.value })) }, signal: AbortSignal.timeout(5000) });
+        const r = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeaders }, signal: AbortSignal.timeout(5000) });
         const text = await r.text();
-        return { path, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path, error: e.message }; }
+        return { path: cleanPath, params: path.includes('?') ? path.split('?')[1] : null, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path: cleanPath, error: e.message }; }
     };
     const [storeResults, orderResults] = await Promise.all([
       Promise.all(storePaths.map(probeOne)),
