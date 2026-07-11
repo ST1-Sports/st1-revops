@@ -66,6 +66,8 @@ export default function TeamStores() {
   const [apiCallsScanning, setApiCallsScanning] = useState(false);
   const [debugProbe, setDebugProbe] = useState(null);
   const [debugProbing, setDebugProbing] = useState(false);
+  const [permProbe, setPermProbe] = useState(null);
+  const [permProbing, setPermProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -296,6 +298,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setDebugProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-debug" }) }); setDebugProbe(await r.json()); } finally { setDebugProbing(false); } }} disabled={debugProbing}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: debugProbing ? "default" : "pointer", border: "1px solid #7B3F00", borderRadius: 6, background: "#FFF3E0", color: "#7B3F00" }}>
                       {debugProbing ? "Debugging…" : "Debug 401"}</button>
+                    <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
+                      {permProbing ? "Probing role…" : "Probe Role/Permissions"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -503,6 +508,38 @@ export default function TeamStores() {
                     {debugProbe.results?.map((r, i) => (
                       <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.red : B.muted, marginBottom: 3 }}>
                         <strong>{r.label}</strong> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 140)}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {permProbe && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>Role/Permissions probe (auth: {permProbe.authEndpoint || "?"}):</div>
+                    {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
+                    {permProbe.accessible?.length > 0 && (
+                      <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible endpoints ({permProbe.accessible.length}):</div>
+                        {permProbe.accessible.map((r, i) => (
+                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 120)}</div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Who am I? (/me, /profile, etc):</span></div>
+                    {permProbe.meResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.red : B.muted, marginBottom: 2 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 200)}` : ""}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Endpoint sweep (non-403/404 highlighted):</span></div>
+                    {permProbe.sweepResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : r.status === 401 ? B.yellow : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>API root (no /admin prefix):</span></div>
+                    {permProbe.rootResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
                       </div>
                     ))}
                   </div>

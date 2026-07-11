@@ -488,6 +488,55 @@ export default async function handler(req, res) {
     return res.json({ ok: true, authEndpoint: _auth?.endpoint, storeResults, orderResults });
   }
 
+  // Probe what this token's role is and what endpoints it can access
+  if (action === 'probe-permissions') {
+    let auth;
+    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
+    const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
+
+    // 1. Who am I?
+    const mePaths = ['me', 'profile', 'admin/me', 'auth/me', 'user', 'account', 'whoami', 'users/me'];
+    const meResults = await Promise.all(mePaths.map(async p => {
+      try {
+        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+        const text = await r.text();
+        return { path: p, status: r.status, snippet: text.slice(0, 300).replace(/\n/g, ' ') };
+      } catch (e) { return { path: p, error: e.message }; }
+    }));
+
+    // 2. Broad sweep — what responds with something other than 403/404?
+    const sweepPaths = [
+      'team_store', 'team_store_order', 'products', 'st1_products', 'st1_product_stat',
+      'team_store_stat', 'team_store_order_stat', 'supplier',
+      'school', 'schools', 'organization', 'organizations',
+      'merchant', 'merchants', 'account', 'accounts',
+      'user', 'users', 'admin_user', 'admin_users',
+      'report', 'reports', 'revenue', 'dashboard', 'stats', 'analytics',
+      'quote_order', 'quote_orders', 'invoice', 'invoices',
+      'shipping', 'fulfillment', 'category', 'categories',
+    ];
+    const sweepResults = await Promise.all(sweepPaths.map(async p => {
+      try {
+        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+        const text = await r.text();
+        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path: p, error: e.message }; }
+    }));
+
+    // 3. Try API_ROOT (no /admin prefix) with same token
+    const rootSweep = ['me', 'profile', 'team_store', 'orders', 'products', 'users/me', 'account'];
+    const rootResults = await Promise.all(rootSweep.map(async p => {
+      try {
+        const r = await fetch(`${API_ROOT}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+        const text = await r.text();
+        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path: p, error: e.message }; }
+    }));
+
+    const accessible = sweepResults.filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
+    return res.json({ ok: true, authEndpoint: auth.endpoint, meResults, sweepResults, rootResults, accessible });
+  }
+
   // Debug: try team_store with different header combinations to isolate the 401
   if (action === 'probe-debug') {
     let auth;
