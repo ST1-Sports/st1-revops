@@ -537,6 +537,78 @@ export default async function handler(req, res) {
     return res.json({ ok: true, authEndpoint: auth.endpoint, meResults, sweepResults, rootResults, accessible });
   }
 
+  // Wider sweep: alternate path forms, supplier-nested paths, param variants
+  if (action === 'probe-extended') {
+    let auth;
+    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
+    const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
+
+    // Get supplier IDs to probe nested paths
+    let supplierIds = [];
+    try {
+      const r = await fetch(`${API_BASE}/supplier`, { headers: ah, signal: AbortSignal.timeout(5000) });
+      if (r.ok) {
+        const data = await r.json();
+        const list = Array.isArray(data) ? data : (data.data || []);
+        supplierIds = list.map(s => s.id).filter(Boolean).slice(0, 3);
+      }
+    } catch {}
+
+    // Alternate naming conventions for stores/orders
+    const altPaths = [
+      'store', 'stores', 'team-store', 'team-stores', 'teamstore', 'teamstores',
+      'storefront', 'storefronts', 'store_front',
+      'order', 'orders', 'store_order', 'store_orders',
+      'product', 'supplier_product', 'supplier_products',
+      'school', 'schools', 'client', 'clients',
+      'sales', 'sale', 'earning', 'earnings',
+      'stat', 'stats', 'metric', 'metrics',
+      'payment', 'payments', 'payout', 'payouts',
+      'commission', 'commissions',
+      'team', 'teams', 'role', 'roles',
+      'me', 'profile', 'self',
+    ];
+    const altResults = await Promise.all(altPaths.map(async p => {
+      try {
+        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(4000) });
+        const text = await r.text();
+        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path: p, error: e.message }; }
+    }));
+
+    // Supplier-nested paths (team stores/orders linked to this supplier)
+    const supplierNested = [];
+    for (const sid of supplierIds) {
+      for (const np of ['team_store', 'orders', 'products', 'store', 'stores', 'store_order']) {
+        try {
+          const r = await fetch(`${API_BASE}/supplier/${sid}/${np}`, { headers: ah, signal: AbortSignal.timeout(4000) });
+          const text = await r.text();
+          supplierNested.push({ path: `supplier/${sid}/${np}`, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') });
+        } catch (e) { supplierNested.push({ path: `supplier/${sid}/${np}`, error: e.message }); }
+      }
+    }
+
+    // team_store with supplier-scoped query params (in case role allows scoped reads)
+    const paramVariants = supplierIds.length ? [
+      `team_store?page=1&perPage=5`,
+      `team_store?supplierId=${supplierIds[0]}`,
+      `team_store?supplier_id=${supplierIds[0]}`,
+      `team_store_order?supplierId=${supplierIds[0]}`,
+    ] : [`team_store?page=1&perPage=5`];
+    const paramResults = await Promise.all(paramVariants.map(async p => {
+      try {
+        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(4000) });
+        const text = await r.text();
+        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path: p, error: e.message }; }
+    }));
+
+    const allAccessible = [...altResults, ...supplierNested, ...paramResults]
+      .filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
+
+    return res.json({ ok: true, supplierIds, altResults, supplierNested, paramResults, allAccessible });
+  }
+
   // Debug: try team_store with different header combinations to isolate the 401
   if (action === 'probe-debug') {
     let auth;

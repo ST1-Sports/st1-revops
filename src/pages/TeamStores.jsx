@@ -68,6 +68,8 @@ export default function TeamStores() {
   const [debugProbing, setDebugProbing] = useState(false);
   const [permProbe, setPermProbe] = useState(null);
   const [permProbing, setPermProbing] = useState(false);
+  const [extProbe, setExtProbe] = useState(null);
+  const [extProbing, setExtProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -301,6 +303,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
                       {permProbing ? "Probing role…" : "Probe Role/Permissions"}</button>
+                    <button onClick={async () => { setExtProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-extended" }) }); setExtProbe(await r.json()); } finally { setExtProbing(false); } }} disabled={extProbing}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: extProbing ? "default" : "pointer", border: "1px solid #4A4A00", borderRadius: 6, background: "#FAFAE8", color: "#4A4A00" }}>
+                      {extProbing ? "Probing…" : "Extended Probe"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -516,11 +521,33 @@ export default function TeamStores() {
                   <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
                     <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>Role/Permissions probe (auth: {permProbe.authEndpoint || "?"}):</div>
                     {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
+                    {(() => {
+                      const hasSupplier = permProbe.accessible?.some(r => r.path === 'supplier');
+                      const teamStore403 = permProbe.sweepResults?.find(r => r.path === 'team_store')?.status === 403;
+                      if (hasSupplier && teamStore403) return (
+                        <div style={{ marginBottom: 10, padding: "10px 14px", background: "#FFF8E6", border: `1px solid ${B.yellow}`, borderRadius: 6 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: B.yellow, marginBottom: 6 }}>Diagnosis: Supplier-level credentials</div>
+                          <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
+                            ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
+                            ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200 (this account can read supplier data)<br/>
+                            ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (no admin role for store data)
+                          </div>
+                          <div style={{ marginTop: 8, padding: "8px 12px", background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 4 }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: B.red, marginBottom: 4 }}>Action Required</div>
+                            <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
+                              Update <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_EMAIL</code> and <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_PASSWORD</code> in Vercel environment variables to credentials with admin access to <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.<br/>
+                              <span style={{ color: B.muted }}>Current account can only access <strong>supplier</strong> data.</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                      return null;
+                    })()}
                     {permProbe.accessible?.length > 0 && (
                       <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible endpoints ({permProbe.accessible.length}):</div>
                         {permProbe.accessible.map((r, i) => (
-                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 120)}</div>
+                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
                         ))}
                       </div>
                     )}
@@ -542,6 +569,48 @@ export default function TeamStores() {
                         <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
                       </div>
                     ))}
+                  </div>
+                )}
+                {extProbe && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A4A00", borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe — supplier IDs: [{extProbe.supplierIds?.join(", ") || "none"}]</div>
+                    {extProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{extProbe.error}</div>}
+                    {extProbe.allAccessible?.length > 0 ? (
+                      <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Newly accessible ({extProbe.allAccessible.length}):</div>
+                        {extProbe.allAccessible.map((r, i) => (
+                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found — all paths returned 403 or 404.</div>
+                    )}
+                    {extProbe.supplierNested?.length > 0 && (
+                      <div style={{ marginBottom: 6 }}>
+                        <div style={{ fontSize: 10, color: "#4A4A00", textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Supplier-nested paths:</div>
+                        {extProbe.supplierNested.map((r, i) => (
+                          <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                            <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Alternate path names:</span></div>
+                    {extProbe.altResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                      </div>
+                    ))}
+                    {extProbe.paramResults?.length > 0 && (
+                      <div style={{ marginTop: 6 }}>
+                        <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Scoped query params:</div>
+                        {extProbe.paramResults.map((r, i) => (
+                          <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                            <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{JSON.stringify(adminDiag, null, 2)}</pre>
