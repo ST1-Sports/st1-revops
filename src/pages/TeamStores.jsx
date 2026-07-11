@@ -301,19 +301,42 @@ export default function TeamStores() {
                         <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
                         {c.authPaths?.length > 0 && (
                           <div style={{ marginBottom: 4 }}>
-                            <span style={{ fontSize: 10, color: B.muted, textTransform: "uppercase" }}>Auth paths: </span>
+                            <span style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600 }}>Auth paths: </span>
                             {c.authPaths.map((p, j) => <code key={j} style={{ fontSize: 11, background: B.tealBg, color: B.teal, padding: "1px 5px", borderRadius: 3, marginRight: 4 }}>{p}</code>)}
                           </div>
                         )}
-                        {c.absUrls?.length > 0 && (
-                          <div style={{ marginBottom: 4 }}>
-                            <span style={{ fontSize: 10, color: B.muted, textTransform: "uppercase" }}>URLs: </span>
-                            {c.absUrls.map((u, j) => <code key={j} style={{ fontSize: 11, background: B.surface, color: B.text, padding: "1px 5px", borderRadius: 3, marginRight: 4, wordBreak: "break-all" }}>{u}</code>)}
+                        {c.postContexts?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>POST fetch contexts ({c.postContexts.length}):</div>
+                            {c.postContexts.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
                           </div>
                         )}
-                        {c.pwContexts?.map((ctx, j) => (
-                          <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.surface, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                        ))}
+                        {c.lpDefs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.purple, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>lp() definition ({c.lpDefs.length}):</div>
+                            {c.lpDefs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.purpleBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.storagePats?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.blue, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Storage patterns ({c.storagePats.length}):</div>
+                            {c.storagePats.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.blueBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.mutationCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.green, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Mutation contexts ({c.mutationCtxs.length}):</div>
+                            {c.mutationCtxs.map((ctx, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.greenBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

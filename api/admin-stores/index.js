@@ -200,13 +200,14 @@ export default async function handler(req, res) {
           // 3. localStorage / sessionStorage patterns
           const storagePats = [];
           let si = 0;
-          while ((si = text.search(/localStorage|sessionStorage/)) !== -1 && storagePats.length < 6) {
-            const abs = text.indexOf('localStorage', si) !== -1 ? text.indexOf('localStorage', si) : text.indexOf('sessionStorage', si);
+          while (si < text.length && storagePats.length < 6) {
+            const lsIdx = text.indexOf('localStorage', si);
+            const ssIdx = text.indexOf('sessionStorage', si);
+            if (lsIdx === -1 && ssIdx === -1) break;
+            const abs = lsIdx === -1 ? ssIdx : ssIdx === -1 ? lsIdx : Math.min(lsIdx, ssIdx);
             const ctx = text.slice(Math.max(0, abs - 60), Math.min(text.length, abs + 200)).replace(/\n/g, ' ');
             storagePats.push(ctx);
             si = abs + 12;
-            // avoid infinite loop on same position
-            if (si <= 0) break;
           }
 
           // 4. useMutation / mutate calls near auth
