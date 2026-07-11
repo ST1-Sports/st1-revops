@@ -62,6 +62,8 @@ export default function TeamStores() {
   const [bundleScanning, setBundleScanning] = useState(false);
   const [rootProbe, setRootProbe] = useState(null);
   const [rootProbing, setRootProbing] = useState(false);
+  const [apiCalls, setApiCalls] = useState(null);
+  const [apiCallsScanning, setApiCallsScanning] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -286,6 +288,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setRootProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-root" }) }); setRootProbe(await r.json()); } finally { setRootProbing(false); } }} disabled={rootProbing}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: rootProbing ? "default" : "pointer", border: `1px solid ${B.red}`, borderRadius: 6, background: B.redBg, color: B.red }}>
                       {rootProbing ? "Probing root…" : "Probe Root Paths"}</button>
+                    <button onClick={async () => { setApiCallsScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-api-calls" }) }); setApiCalls(await r.json()); } finally { setApiCallsScanning(false); } }} disabled={apiCallsScanning}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiCallsScanning ? "default" : "pointer", border: "1px solid #1A3A5C", borderRadius: 6, background: "#E8EFF7", color: "#1A3A5C" }}>
+                      {apiCallsScanning ? "Scanning calls…" : "Scan API Calls"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -439,6 +444,49 @@ export default function TeamStores() {
                     {rootProbe.adminResults?.map((r, i) => (
                       <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
                         <code style={{ fontSize: 10 }}>{r.url}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {apiCalls && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #1A3A5C", borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: "#1A3A5C", marginBottom: 8 }}>API call scan ({apiCalls.totalChunks} chunks):</div>
+                    {apiCalls.error && <div style={{ color: B.red, fontSize: 12 }}>{apiCalls.error}</div>}
+                    {apiCalls.chunkResults?.map((c, i) => (
+                      <div key={i} style={{ marginBottom: 14 }}>
+                        <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
+                        {c.s2Ctxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>baseURL / s2 ({c.s2Ctxs.length}):</div>
+                            {c.s2Ctxs.map((x, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong>{x.match}</strong>: {x.ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.dataCallCtxs?.length > 0 && (
+                          <div style={{ marginBottom: 6 }}>
+                            <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Store/order call contexts ({c.dataCallCtxs.length}):</div>
+                            {c.dataCallCtxs.map((x, j) => (
+                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong style={{ color: B.teal }}>.{x.method}()</strong> {x.ctx}</pre>
+                            ))}
+                          </div>
+                        )}
+                        {c.getCalls?.length > 0 && (
+                          <div style={{ marginBottom: 4 }}>
+                            <div style={{ fontSize: 10, color: B.green, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>GET paths ({c.getCalls.length}):</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {c.getCalls.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.greenBg, border: `1px solid ${B.green}`, padding: "1px 5px", borderRadius: 3, color: B.green }}>{p}</code>)}
+                            </div>
+                          </div>
+                        )}
+                        {c.postCalls?.length > 0 && (
+                          <div style={{ marginBottom: 4 }}>
+                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>POST paths ({c.postCalls.length}):</div>
+                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                              {c.postCalls.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.orangeBg, border: `1px solid ${B.orange}`, padding: "1px 5px", borderRadius: 3, color: B.orange }}>{p}</code>)}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

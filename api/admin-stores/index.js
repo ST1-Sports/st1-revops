@@ -93,7 +93,7 @@ async function getAuth() {
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
   const auth = await probeAuth(email, password);
-  if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})` ).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
+  if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
   if (auth.type === 'rejected') throw new Error(`Login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
   _auth = auth;
   _sessionExpiry = Date.now() + 30 * 60 * 1000;
@@ -319,6 +319,65 @@ export default async function handler(req, res) {
 
           if (interceptorCtxs.length || authCtxs.length || endpointCtxs.length || createCtxs.length) {
             chunkResults.push({ chunk, sizeKB, interceptorCtxs, authCtxs, apiPaths: apiPaths.slice(0, 120), createCtxs, endpointCtxs: endpointCtxs.slice(0, 15) });
+          }
+        } catch (e) { chunkResults.push({ chunk, error: e.message }); }
+      }
+      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
+    } catch (e) { return res.json({ ok: false, error: e.message }); }
+  }
+
+  // Scan all bundle chunks for .get() / .post() calls — reveals exact API paths.
+  if (action === 'scan-api-calls') {
+    try {
+      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const html = await htmlRes.text();
+      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
+
+      const chunkResults = [];
+      for (const scriptUrl of allScripts.slice(0, 10)) {
+        const chunk = scriptUrl.split('/').pop();
+        try {
+          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
+          const text = await r.text();
+          const sizeKB = Math.round(text.length / 1024);
+
+          // All .get( and .post( calls with a string-literal path argument
+          const getCalls = [...new Set(
+            [...text.matchAll(/\.get\s*\(\s*["'`]([^"'`\s]{1,120})["'`]/g)]
+              .map(m => m[1]).filter(p => p.startsWith('/') || p.includes('st1sports'))
+          )];
+          const postCalls = [...new Set(
+            [...text.matchAll(/\.post\s*\(\s*["'`]([^"'`\s]{1,120})["'`]/g)]
+              .map(m => m[1]).filter(p => p.startsWith('/') || p.includes('st1sports'))
+          )];
+
+          // Context around any call that mentions team_store, store_order, product, etc.
+          const dataCallCtxs = [];
+          for (const method of ['.get(', '.post(', '.put(', '.delete(', '.patch(']) {
+            let pos = 0;
+            while (pos < text.length && dataCallCtxs.length < 30) {
+              const idx = text.indexOf(method, pos);
+              if (idx === -1) break;
+              const ctx = text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 400)).replace(/\n/g, ' ');
+              if (/team_store|store_order|storeOrder|teamStore|\/stores|\/orders|\/products|\/accounts|\/school/i.test(ctx)) {
+                dataCallCtxs.push({ method: method.replace(/[.(]/g, ''), ctx: ctx.slice(0, 400) });
+              }
+              pos = idx + method.length;
+            }
+          }
+
+          // Find s2 variable assignment — the baseURL
+          const s2Ctxs = [];
+          for (const pat of [/\bs2\s*=\s*["'`]([^"'`]{5,120})["'`]/g, /baseURL?\s*[:=]\s*["'`]([^"'`]{5,120})["'`]/gi]) {
+            for (const m of text.matchAll(pat)) {
+              const ctx = text.slice(Math.max(0, m.index - 50), Math.min(text.length, m.index + 200)).replace(/\n/g, ' ');
+              s2Ctxs.push({ match: m[1], ctx: ctx.slice(0, 200) });
+            }
+          }
+
+          if (getCalls.length || postCalls.length || dataCallCtxs.length || s2Ctxs.length) {
+            chunkResults.push({ chunk, sizeKB, getCalls: getCalls.slice(0, 60), postCalls: postCalls.slice(0, 40), dataCallCtxs: dataCallCtxs.slice(0, 20), s2Ctxs: s2Ctxs.slice(0, 6) });
           }
         } catch (e) { chunkResults.push({ chunk, error: e.message }); }
       }
