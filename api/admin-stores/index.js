@@ -45,23 +45,30 @@ async function authenticate(email, password) {
     });
     const status = res.status;
     const ct = res.headers.get('content-type') || '';
+    // Capture cookies before consuming body (headers are available immediately)
     const cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
-    if (cookies && (status === 200 || status === 201 || status === 302)) {
-      return { type: 'cookie', value: cookies, endpoint };
+
+    if (status === 401 || status === 403 || status === 422) {
+      let errBody = {};
+      try { const t = await res.text(); errBody = JSON.parse(t); } catch {}
+      _probeLog.push({ endpoint, status, result: 'auth-rejected' });
+      return { type: 'rejected', endpoint, status, detail: errBody.error || errBody.message || '' };
     }
+
+    // Always read body first so we can extract JWT even when cookies are also set
     const text = await res.text();
     if ((status === 200 || status === 201) && ct.includes('application/json')) {
       let body; try { body = JSON.parse(text); } catch { body = {}; }
       const token = body.accessToken || body.token || body.access_token || body.auth_token || body.jwt || body.data?.accessToken;
       const refreshToken = body.refreshToken || body.refresh_token || body.data?.refreshToken || null;
-      if (token) { _probeLog.push({ endpoint, status, result: 'bearer-token' }); return { type: 'bearer', value: token, refreshToken, endpoint }; }
-      if (cookies) return { type: 'cookie', value: cookies, endpoint };
-      _probeLog.push({ endpoint, status, result: 'json-no-token', keys: Object.keys(body).join(',') });
+      if (token) {
+        _probeLog.push({ endpoint, status, result: 'bearer-token', hasCookies: Boolean(cookies) });
+        // Store signin cookies alongside bearer token — browser sends both and some endpoints need the cookie session
+        return { type: 'bearer', value: token, refreshToken, cookies: cookies || null, endpoint };
+      }
     }
-    if (status === 401 || status === 403 || status === 422) {
-      let errBody; try { errBody = JSON.parse(text); } catch { errBody = {}; }
-      _probeLog.push({ endpoint, status, result: 'auth-rejected' });
-      return { type: 'rejected', endpoint, status, detail: errBody.error || errBody.message || text.slice(0, 200) };
+    if (cookies && (status === 200 || status === 201 || status === 302)) {
+      return { type: 'cookie', value: cookies, endpoint };
     }
     _probeLog.push({ endpoint, status, ct, result: 'unknown' });
   } catch (err) { _probeLog.push({ endpoint, result: 'error', error: err.message }); }
@@ -93,23 +100,40 @@ async function getAuth() {
   return auth;
 }
 
+// Build auth headers — sends both Authorization + Cookie when signin returned both
+function buildAuthHeaders(auth) {
+  if (auth.type === 'bearer') {
+    const h = { 'Authorization': `Bearer ${auth.value}` };
+    if (auth.cookies) h['Cookie'] = auth.cookies;
+    return h;
+  }
+  return { 'Cookie': auth.value };
+}
+
 async function adminGet(path) {
   const auth = await getAuth();
-  const authHeader = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
   const url = `${API_BASE}/${path.replace(/^\/+/, '')}`;
-  const doFetch = (ah) => fetch(url, { headers: { 'Accept': 'application/json', ...BROWSER_HEADERS, ...ah } });
+  const makeHeaders = (a) => ({ 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(a) });
 
-  let res = await doFetch(authHeader);
+  let res = await fetch(url, { headers: makeHeaders(auth) });
 
   if (res.status === 401 && await tryRefresh()) {
-    const newAuthHeader = _auth.type === 'bearer' ? { 'Authorization': `Bearer ${_auth.value}` } : { 'Cookie': _auth.value };
-    res = await doFetch(newAuthHeader);
+    res = await fetch(url, { headers: makeHeaders(_auth) });
   }
 
-  if (res.status === 401 || res.status === 403) {
-    _auth = null;
+  if (res.status === 401) {
+    _auth = null; // token truly expired — force re-auth next call
     const errText = await res.text().catch(() => '');
-    throw new Error(`Admin API returned ${res.status} for ${path}: ${errText.slice(0, 200)}`);
+    const err = new Error(`Admin API returned 401 for ${path}: ${errText.slice(0, 200)}`);
+    err.status = 401;
+    throw err;
+  }
+  if (res.status === 403) {
+    // RBAC failure — do NOT clear auth (token is valid, account lacks the role)
+    const errText = await res.text().catch(() => '');
+    const err = new Error(`Admin API returned 403 for ${path}: ${errText.slice(0, 200)}`);
+    err.status = 403;
+    throw err;
   }
   if (!res.ok) throw new Error(`Admin API returned HTTP ${res.status} for ${path}`);
   const ct = res.headers.get('content-type') || '';
@@ -119,13 +143,54 @@ async function adminGet(path) {
   return JSON.parse(text);
 }
 
+// Probe current user's profile endpoints to find role + supplier ID
+async function fetchProfile(auth) {
+  const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
+  const candidates = ['me', 'auth/me', 'profile', 'user', 'account', 'user/profile', 'admin/profile'];
+  for (const ep of candidates) {
+    try {
+      const r = await fetch(`${API_BASE}/${ep}`, { headers: ah, signal: AbortSignal.timeout(4000) });
+      if (r.ok) { return { endpoint: ep, data: await r.json() }; }
+    } catch {}
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { action = 'status' } = req.body || {};
 
-  if (action === 'status') { const { email, password } = creds(); return res.json({ ok: true, configured: Boolean(email && password) }); }
+  if (action === 'status') {
+    const { email, password } = creds();
+    return res.json({ ok: true, configured: Boolean(email && password) });
+  }
+
+  // Inspect current user's profile, role, and supplier ID
+  if (action === 'get-profile') {
+    let auth;
+    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
+    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
+    const candidates = ['me', 'auth/me', 'profile', 'user', 'account', 'user/profile', 'admin/profile'];
+    const results = await Promise.all(candidates.map(async ep => {
+      try {
+        const r = await fetch(`${API_BASE}/${ep}`, { headers: ah, signal: AbortSignal.timeout(4000) });
+        const text = await r.text();
+        let body; try { body = JSON.parse(text); } catch { body = text.slice(0, 300); }
+        return { endpoint: ep, status: r.status, body };
+      } catch (e) { return { endpoint: ep, error: e.message }; }
+    }));
+    const profile = results.find(r => r.status === 200);
+    return res.json({
+      ok: true,
+      authType: auth.type,
+      hasCookies: Boolean(auth.cookies),
+      authEndpoint: auth.endpoint,
+      results,
+      profile: profile ? { endpoint: profile.endpoint, data: profile.body } : null,
+    });
+  }
 
   // Scan every JS chunk in the admin SPA and find what API calls the store_orders page actually makes
   if (action === 'scan-store-orders') {
@@ -143,7 +208,6 @@ export default async function handler(req, res) {
           const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
           const text = await r.text();
 
-          // Find any context around store_order / storeOrder in the bundle
           const kws = ['store_order', 'storeOrder', 'StoreOrder', 'store-order', 'storeorders', 'store_orders'];
           const contexts = [];
           for (const kw of kws) {
@@ -157,7 +221,6 @@ export default async function handler(req, res) {
             }
           }
 
-          // Also grab every quoted path-like string containing "order"
           const orderPaths = [...new Set(
             [...text.matchAll(/["'`](\/[^"'`\s]{1,80})["'`]/g)]
               .map(m => m[1])
@@ -173,11 +236,11 @@ export default async function handler(req, res) {
     } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
-  // Probe what role/permissions this token has — use to verify new credentials after updating env vars
+  // Probe what role/permissions this token has — use to verify credentials after updating env vars
   if (action === 'probe-permissions') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
-    const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
+    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
 
     const sweepPaths = [
       'team_store', 'team_store_order', 'products', 'st1_products',
@@ -193,14 +256,21 @@ export default async function handler(req, res) {
     }));
 
     const accessible = sweepResults.filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-    return res.json({ ok: true, authEndpoint: auth.endpoint, sweepResults, accessible });
+    return res.json({
+      ok: true,
+      authType: auth.type,
+      hasCookies: Boolean(auth.cookies),
+      authEndpoint: auth.endpoint,
+      sweepResults,
+      accessible,
+    });
   }
 
   // Wider sweep: alternate path forms, supplier-nested paths, param variants
   if (action === 'probe-extended') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
-    const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
+    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
 
     let supplierIds = [];
     try {
@@ -242,7 +312,8 @@ export default async function handler(req, res) {
       `team_store?supplierId=${supplierIds[0]}`,
       `team_store?supplier_id=${supplierIds[0]}`,
       `team_store_order?supplierId=${supplierIds[0]}`,
-    ] : [`team_store?page=1&perPage=5`];
+      `team_store_order?page=1&perPage=5`,
+    ] : [`team_store?page=1&perPage=5`, `team_store_order?page=1&perPage=5`];
     const paramResults = await Promise.all(paramVariants.map(async p => {
       try {
         const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(4000) });
@@ -264,12 +335,35 @@ export default async function handler(req, res) {
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
     if (action === 'orders') {
-      const data = await adminGet('team_store_order?page=1&perPage=200');
+      let data;
+      try {
+        data = await adminGet('team_store_order?page=1&perPage=200');
+      } catch (e) {
+        if (e.status === 403) {
+          // Try supplier-scoped fallback
+          const profile = await fetchProfile(_auth).catch(() => null);
+          const supplierId = profile?.data?.supplierId || profile?.data?.supplier_id || profile?.data?.id;
+          if (supplierId) {
+            data = await adminGet(`team_store_order?supplierId=${supplierId}&page=1&perPage=200`);
+          } else { throw e; }
+        } else { throw e; }
+      }
       const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      const data = await adminGet('team_store_order?page=1&perPage=200');
+      let data;
+      try {
+        data = await adminGet('team_store_order?page=1&perPage=200');
+      } catch (e) {
+        if (e.status === 403) {
+          const profile = await fetchProfile(_auth).catch(() => null);
+          const supplierId = profile?.data?.supplierId || profile?.data?.supplier_id || profile?.data?.id;
+          if (supplierId) {
+            data = await adminGet(`team_store_order?supplierId=${supplierId}&page=1&perPage=200`);
+          } else { throw e; }
+        } else { throw e; }
+      }
       const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
       const productMap = {};
       for (const order of orders) {

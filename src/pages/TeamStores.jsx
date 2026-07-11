@@ -12,6 +12,7 @@ const B = {
   blue:"#1A5FA8", blueBg:"#E8F0FA",
   purple:"#6B3FA0", purpleBg:"#F3EEFB",
   teal:"#0C7B6A", tealBg:"#E6F5F2",
+  indigo:"#3730A3", indigoBg:"#EEF2FF",
 };
 
 const fmt$ = n => `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -55,6 +56,8 @@ export default function TeamStores() {
   const [extProbing, setExtProbing] = useState(false);
   const [storeScan, setStoreScan] = useState(null);
   const [storeScanning, setStoreScanning] = useState(false);
+  const [profileProbe, setProfileProbe] = useState(null);
+  const [profileProbing, setProfileProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -257,7 +260,7 @@ export default function TeamStores() {
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
-                <div style={{ display: "flex", gap: 6 }}>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
                     style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
                     {permProbing ? "Probing…" : "Probe Permissions"}</button>
@@ -267,12 +270,36 @@ export default function TeamStores() {
                   <button onClick={async () => { setStoreScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-store-orders" }) }); setStoreScan(await r.json()); } finally { setStoreScanning(false); } }} disabled={storeScanning}
                     style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: storeScanning ? "default" : "pointer", border: `1px solid ${B.teal}`, borderRadius: 6, background: B.tealBg, color: B.teal }}>
                     {storeScanning ? "Scanning…" : "Find Store Orders API"}</button>
+                  <button onClick={async () => { setProfileProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get-profile" }) }); setProfileProbe(await r.json()); } finally { setProfileProbing(false); } }} disabled={profileProbing}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: profileProbing ? "default" : "pointer", border: `1px solid ${B.indigo}`, borderRadius: 6, background: B.indigoBg, color: B.indigo }}>
+                    {profileProbing ? "Loading…" : "Get Profile"}</button>
                 </div>
               </div>
 
+              {profileProbe && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.indigo}`, borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.indigo, marginBottom: 8 }}>
+                    Account Profile — auth: {profileProbe.authType || "?"}{profileProbe.hasCookies ? " + cookies" : " (no cookies)"}
+                  </div>
+                  {profileProbe.error && <div style={{ color: B.red, fontSize: 12, marginBottom: 6 }}>{profileProbe.error}</div>}
+                  {profileProbe.profile ? (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Found at /{profileProbe.profile.endpoint}:</div>
+                      <pre style={{ fontSize: 10, background: B.indigoBg, border: `1px solid ${B.indigo}`, borderRadius: 4, padding: "8px 10px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {JSON.stringify(profileProbe.profile.data, null, 2)}
+                      </pre>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 8 }}>No profile endpoint returned 200. Probed: {profileProbe.results?.map(r => `/${r.endpoint}→${r.status || r.error}`).join(", ")}</div>
+                  )}
+                </div>
+              )}
+
               {permProbe && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>Permissions (auth: {permProbe.authEndpoint || "?"}):</div>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>
+                    Permissions — auth: {permProbe.authType || "?"}{permProbe.hasCookies ? " + cookies" : ""} ({permProbe.authEndpoint || "?"}):
+                  </div>
                   {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
                   {(() => {
                     const hasSupplier = permProbe.accessible?.some(r => r.path === 'supplier');
@@ -283,12 +310,14 @@ export default function TeamStores() {
                         <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
                           ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
                           ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200 (this account can read supplier data)<br/>
-                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (no admin role for store data)
+                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (account role lacks access to store data)
                         </div>
                         <div style={{ marginTop: 8, padding: "8px 12px", background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 4 }}>
                           <div style={{ fontSize: 12, fontWeight: 700, color: B.red, marginBottom: 4 }}>Action Required</div>
                           <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
-                            Update <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_EMAIL</code> and <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_PASSWORD</code> in Vercel to credentials with admin access to <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.
+                            The credentials in Vercel don't have admin role for <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.
+                            Use <strong>Get Profile</strong> above to confirm which account is authenticated and what role it has.
+                            The credentials need to be for an admin account on admin.st1sports.com.
                           </div>
                         </div>
                       </div>
