@@ -164,8 +164,7 @@ export default async function handler(req, res) {
     } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
-  // Scan every JS chunk for the login fetch call — look for context around "password"
-  // and any path strings containing auth/login/sign keywords.
+  // Deep-scan bundle for: POST login call, lp() token hook definition, localStorage patterns.
   if (action === 'find-auth') {
     try {
       const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
@@ -178,32 +177,56 @@ export default async function handler(req, res) {
         try {
           const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(10000) });
           const text = await r.text();
+          const chunk = scriptUrl.split('/').pop();
+          const sizeKB = Math.round(text.length / 1024);
 
-          // Capture surrounding context for each "password" occurrence that has a URL/path nearby
-          const pwContexts = [];
-          let idx = 0, found = 0;
-          while ((idx = text.indexOf('password', idx)) !== -1 && found < 6) {
-            const start = Math.max(0, idx - 250);
-            const end = Math.min(text.length, idx + 250);
+          // 1. POST method occurrences — 400 chars context, only keep if near email/password/signin/login
+          const postContexts = [];
+          let pi = 0;
+          while ((pi = text.indexOf('"POST"', pi)) !== -1 && postContexts.length < 8) {
+            const start = Math.max(0, pi - 300);
+            const end = Math.min(text.length, pi + 300);
             const ctx = text.slice(start, end).replace(/\n/g, ' ');
-            if (/https?:\/\/|["'`]\/[a-z]/.test(ctx)) { pwContexts.push(ctx); found++; }
-            idx += 8;
+            if (/email|password|sign|login|auth|token/i.test(ctx)) postContexts.push(ctx);
+            pi += 6;
           }
 
-          // All quoted path-like strings that look auth-related
+          // 2. lp() definition — look for "lp=" or "function lp"
+          const lpDefs = [];
+          for (const pat of [/\blp\s*=\s*[^,;]{0,300}/g, /function lp\s*\([^)]*\)\s*\{[^}]{0,300}/g]) {
+            for (const m of text.matchAll(pat)) lpDefs.push(m[0].slice(0, 300).replace(/\n/g, ' '));
+          }
+
+          // 3. localStorage / sessionStorage patterns
+          const storagePats = [];
+          let si = 0;
+          while ((si = text.search(/localStorage|sessionStorage/)) !== -1 && storagePats.length < 6) {
+            const abs = text.indexOf('localStorage', si) !== -1 ? text.indexOf('localStorage', si) : text.indexOf('sessionStorage', si);
+            const ctx = text.slice(Math.max(0, abs - 60), Math.min(text.length, abs + 200)).replace(/\n/g, ' ');
+            storagePats.push(ctx);
+            si = abs + 12;
+            // avoid infinite loop on same position
+            if (si <= 0) break;
+          }
+
+          // 4. useMutation / mutate calls near auth
+          const mutationCtxs = [];
+          for (const m of text.matchAll(/useMutation|\.mutate\s*\(/g)) {
+            const start = Math.max(0, m.index - 100);
+            const end = Math.min(text.length, m.index + 300);
+            const ctx = text.slice(start, end).replace(/\n/g, ' ');
+            if (/sign|login|auth|email|password/i.test(ctx)) mutationCtxs.push(ctx.slice(0, 300));
+          }
+
+          // 5. All quoted path-like strings that look auth-related
           const authPaths = [...new Set(
             [...text.matchAll(/["'`](\/[^"'`\s]{2,80})["'`]/g)]
               .map(m => m[1])
-              .filter(p => /auth|login|sign|session|token|user/i.test(p))
+              .filter(p => /auth|login|sign|session|token/i.test(p))
           )];
 
-          // All absolute URLs in this chunk
-          const absUrls = [...new Set(
-            [...text.matchAll(/["'`](https?:\/\/[^"'`\s]{8,120})["'`]/g)].map(m => m[1])
-          )].filter(u => !u.includes('react.dev'));
-
-          if (pwContexts.length || authPaths.length || absUrls.length) {
-            chunkResults.push({ chunk: scriptUrl.split('/').pop(), sizeKB: Math.round(text.length / 1024), pwContexts, authPaths, absUrls });
+          if (postContexts.length || lpDefs.length || storagePats.length || mutationCtxs.length || authPaths.length) {
+            chunkResults.push({ chunk, sizeKB, postContexts, lpDefs: lpDefs.slice(0, 5), storagePats: storagePats.slice(0, 4), mutationCtxs: mutationCtxs.slice(0, 4), authPaths });
           }
         } catch (e) {
           chunkResults.push({ chunk: scriptUrl.split('/').pop(), error: e.message });
