@@ -164,6 +164,57 @@ export default async function handler(req, res) {
     } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
+  // Scan every JS chunk for the login fetch call — look for context around "password"
+  // and any path strings containing auth/login/sign keywords.
+  if (action === 'find-auth') {
+    try {
+      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const html = await htmlRes.text();
+      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
+
+      const chunkResults = [];
+      for (const scriptUrl of allScripts.slice(0, 10)) {
+        try {
+          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(10000) });
+          const text = await r.text();
+
+          // Capture surrounding context for each "password" occurrence that has a URL/path nearby
+          const pwContexts = [];
+          let idx = 0, found = 0;
+          while ((idx = text.indexOf('password', idx)) !== -1 && found < 6) {
+            const start = Math.max(0, idx - 250);
+            const end = Math.min(text.length, idx + 250);
+            const ctx = text.slice(start, end).replace(/\n/g, ' ');
+            if (/https?:\/\/|["'`]\/[a-z]/.test(ctx)) { pwContexts.push(ctx); found++; }
+            idx += 8;
+          }
+
+          // All quoted path-like strings that look auth-related
+          const authPaths = [...new Set(
+            [...text.matchAll(/["'`](\/[^"'`\s]{2,80})["'`]/g)]
+              .map(m => m[1])
+              .filter(p => /auth|login|sign|session|token|user/i.test(p))
+          )];
+
+          // All absolute URLs in this chunk
+          const absUrls = [...new Set(
+            [...text.matchAll(/["'`](https?:\/\/[^"'`\s]{8,120})["'`]/g)].map(m => m[1])
+          )].filter(u => !u.includes('react.dev'));
+
+          if (pwContexts.length || authPaths.length || absUrls.length) {
+            chunkResults.push({ chunk: scriptUrl.split('/').pop(), sizeKB: Math.round(text.length / 1024), pwContexts, authPaths, absUrls });
+          }
+        } catch (e) {
+          chunkResults.push({ chunk: scriptUrl.split('/').pop(), error: e.message });
+        }
+      }
+      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
+    } catch (e) {
+      return res.json({ ok: false, error: e.message });
+    }
+  }
+
   try {
     if (action === 'stores') {
       const data = await adminGet('/team_stores');
