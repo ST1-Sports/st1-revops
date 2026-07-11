@@ -56,6 +56,8 @@ export default function TeamStores() {
   const [apiDiscovering, setApiDiscovering] = useState(false);
   const [authScan, setAuthScan] = useState(null);
   const [authScanning, setAuthScanning] = useState(false);
+  const [dataDiscover, setDataDiscover] = useState(null);
+  const [dataDiscovering, setDataDiscovering] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -261,7 +263,7 @@ export default function TeamStores() {
               <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                   <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin API Diagnostic</div>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button onClick={async () => { setApiDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover" }) }); setApiDiscover(await r.json()); } finally { setApiDiscovering(false); } }} disabled={apiDiscovering}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiDiscovering ? "default" : "pointer", border: `1px solid ${B.orange}`, borderRadius: 6, background: B.orangeBg, color: B.orange }}>
                       {apiDiscovering ? "Probing…" : "Discover API Routes"}</button>
@@ -271,6 +273,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setAuthScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-auth" }) }); setAuthScan(await r.json()); } finally { setAuthScanning(false); } }} disabled={authScanning}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: authScanning ? "default" : "pointer", border: `1px solid ${B.teal}`, borderRadius: 6, background: B.tealBg, color: B.teal }}>
                       {authScanning ? "Scanning chunks…" : "Scan Chunks for Auth"}</button>
+                    <button onClick={async () => { setDataDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover-data" }) }); setDataDiscover(await r.json()); } finally { setDataDiscovering(false); } }} disabled={dataDiscovering}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: dataDiscovering ? "default" : "pointer", border: `1px solid ${B.green}`, borderRadius: 6, background: B.greenBg, color: B.green }}>
+                      {dataDiscovering ? "Probing data…" : "Discover Data Endpoints"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -337,6 +342,24 @@ export default function TeamStores() {
                             ))}
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {dataDiscover && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.green}`, borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: B.green, marginBottom: 6 }}>Data endpoint discovery (auth: {dataDiscover.authEndpoint || "unknown"}):</div>
+                    {dataDiscover.error && <div style={{ color: B.red, fontSize: 12 }}>{dataDiscover.error}</div>}
+                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Stores:</span></div>
+                    {dataDiscover.storeResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 6, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Orders:</span></div>
+                    {dataDiscover.orderResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
+                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
                       </div>
                     ))}
                   </div>

@@ -246,6 +246,24 @@ export default async function handler(req, res) {
     }
   }
 
+  // Probe all candidate data endpoint paths to find which ones return data.
+  if (action === 'discover-data') {
+    const storePaths  = ['/team_stores', '/team-stores', '/teamStores', '/stores', '/store', '/team_store'];
+    const orderPaths  = ['/store_orders', '/store-orders', '/storeOrders', '/orders', '/order', '/store_order'];
+    const probeOne = async path => {
+      try {
+        const r = await fetch(`${API_BASE}${path}`, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...(await getAuth().then(a => a.type === 'bearer' ? { 'Authorization': `Bearer ${a.value}` } : { 'Cookie': a.value })) }, signal: AbortSignal.timeout(5000) });
+        const text = await r.text();
+        return { path, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { path, error: e.message }; }
+    };
+    const [storeResults, orderResults] = await Promise.all([
+      Promise.all(storePaths.map(probeOne)),
+      Promise.all(orderPaths.map(probeOne)),
+    ]);
+    return res.json({ ok: true, authEndpoint: _auth?.endpoint, storeResults, orderResults });
+  }
+
   try {
     if (action === 'stores') {
       const data = await adminGet('/team_stores');
