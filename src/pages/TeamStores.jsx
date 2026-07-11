@@ -60,6 +60,8 @@ export default function TeamStores() {
   const [dataDiscovering, setDataDiscovering] = useState(false);
   const [bundleScan, setBundleScan] = useState(null);
   const [bundleScanning, setBundleScanning] = useState(false);
+  const [rootProbe, setRootProbe] = useState(null);
+  const [rootProbing, setRootProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -281,6 +283,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setBundleScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-bundle-paths" }) }); setBundleScan(await r.json()); } finally { setBundleScanning(false); } }} disabled={bundleScanning}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: bundleScanning ? "default" : "pointer", border: `1px solid ${B.purple}`, borderRadius: 6, background: B.purpleBg, color: B.purple }}>
                       {bundleScanning ? "Scanning paths…" : "Scan Bundle Paths"}</button>
+                    <button onClick={async () => { setRootProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-root" }) }); setRootProbe(await r.json()); } finally { setRootProbing(false); } }} disabled={rootProbing}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: rootProbing ? "default" : "pointer", border: `1px solid ${B.red}`, borderRadius: 6, background: B.redBg, color: B.red }}>
+                      {rootProbing ? "Probing root…" : "Probe Root Paths"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -416,6 +421,24 @@ export default function TeamStores() {
                             </div>
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {rootProbe && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.red}`, borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: B.red, marginBottom: 6 }}>Root path probe (auth: {rootProbe.authEndpoint || "unknown"}):</div>
+                    {rootProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{rootProbe.error}</div>}
+                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>api.st1sports.com/* (no /admin):</span></div>
+                    {rootProbe.rootResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
+                        <code style={{ fontSize: 10 }}>{r.url}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>api.st1sports.com/admin/* (with /admin):</span></div>
+                    {rootProbe.adminResults?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
+                        <code style={{ fontSize: 10 }}>{r.url}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
                       </div>
                     ))}
                   </div>

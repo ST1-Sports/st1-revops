@@ -326,6 +326,36 @@ export default async function handler(req, res) {
     } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
+  // Probe data paths under API_ROOT (no /admin prefix) to test if s2 = API_ROOT.
+  // Also checks /refresh_access to confirm which base s2 resolves to.
+  if (action === 'probe-root') {
+    let authHeaders;
+    try {
+      const auth = await getAuth();
+      authHeaders = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
+    } catch (e) {
+      return res.json({ ok: false, error: `Auth failed: ${e.message}`, probeLog: _probeLog });
+    }
+    const rootPaths = [
+      '/refresh_access', '/team_stores', '/team_store', '/store_orders', '/store_order',
+      '/orders', '/accounts', '/quote_orders', '/products', '/revenue',
+    ];
+    const adminPaths = ['/refresh_access', '/team_stores', '/store_orders', '/accounts', '/products'];
+    const probe = async (base, path) => {
+      const url = `${base}${path}`;
+      try {
+        const r = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeaders }, signal: AbortSignal.timeout(5000) });
+        const text = await r.text();
+        return { url, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { url, error: e.message }; }
+    };
+    const [rootResults, adminResults] = await Promise.all([
+      Promise.all(rootPaths.map(p => probe(API_ROOT, p))),
+      Promise.all(adminPaths.map(p => probe(API_BASE, p))),
+    ]);
+    return res.json({ ok: true, authEndpoint: _auth?.endpoint, rootResults, adminResults });
+  }
+
   // Probe all candidate data endpoint paths to find which ones return data.
   if (action === 'discover-data') {
     // Expanded path list — includes query-param variant for 401 endpoint and more ST1-specific names
