@@ -127,6 +127,52 @@ export default async function handler(req, res) {
 
   if (action === 'status') { const { email, password } = creds(); return res.json({ ok: true, configured: Boolean(email && password) }); }
 
+  // Scan every JS chunk in the admin SPA and find what API calls the store_orders page actually makes
+  if (action === 'scan-store-orders') {
+    try {
+      const BASE = 'https://admin.st1sports.com';
+      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
+      const html = await htmlRes.text();
+      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
+      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
+
+      const hits = [];
+      for (const scriptUrl of allScripts) {
+        const chunk = scriptUrl.split('/').pop();
+        try {
+          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
+          const text = await r.text();
+
+          // Find any context around store_order / storeOrder in the bundle
+          const kws = ['store_order', 'storeOrder', 'StoreOrder', 'store-order', 'storeorders', 'store_orders'];
+          const contexts = [];
+          for (const kw of kws) {
+            let pos = 0;
+            while (pos < text.length && contexts.length < 30) {
+              const idx = text.toLowerCase().indexOf(kw.toLowerCase(), pos);
+              if (idx === -1) break;
+              const ctx = text.slice(Math.max(0, idx - 200), Math.min(text.length, idx + 300)).replace(/\n/g, ' ');
+              contexts.push({ kw, ctx: ctx.slice(0, 460) });
+              pos = idx + kw.length;
+            }
+          }
+
+          // Also grab every quoted path-like string containing "order"
+          const orderPaths = [...new Set(
+            [...text.matchAll(/["'`](\/[^"'`\s]{1,80})["'`]/g)]
+              .map(m => m[1])
+              .filter(p => /order|store/i.test(p) && !p.startsWith('/assets/') && !/(js|css|png|svg|woff)$/.test(p))
+          )];
+
+          if (contexts.length || orderPaths.length) {
+            hits.push({ chunk, sizeKB: Math.round(text.length / 1024), contexts: contexts.slice(0, 15), orderPaths });
+          }
+        } catch (e) { hits.push({ chunk, error: e.message }); }
+      }
+      return res.json({ ok: true, totalChunks: allScripts.length, hits });
+    } catch (e) { return res.json({ ok: false, error: e.message }); }
+  }
+
   // Probe what role/permissions this token has — use to verify new credentials after updating env vars
   if (action === 'probe-permissions') {
     let auth;

@@ -53,6 +53,8 @@ export default function TeamStores() {
   const [permProbing, setPermProbing] = useState(false);
   const [extProbe, setExtProbe] = useState(null);
   const [extProbing, setExtProbing] = useState(false);
+  const [storeScan, setStoreScan] = useState(null);
+  const [storeScanning, setStoreScanning] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -262,6 +264,9 @@ export default function TeamStores() {
                   <button onClick={async () => { setExtProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-extended" }) }); setExtProbe(await r.json()); } finally { setExtProbing(false); } }} disabled={extProbing}
                     style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: extProbing ? "default" : "pointer", border: "1px solid #4A4A00", borderRadius: 6, background: "#FAFAE8", color: "#4A4A00" }}>
                     {extProbing ? "Probing…" : "Extended Probe"}</button>
+                  <button onClick={async () => { setStoreScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-store-orders" }) }); setStoreScan(await r.json()); } finally { setStoreScanning(false); } }} disabled={storeScanning}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: storeScanning ? "default" : "pointer", border: `1px solid ${B.teal}`, borderRadius: 6, background: B.tealBg, color: B.teal }}>
+                    {storeScanning ? "Scanning…" : "Find Store Orders API"}</button>
                 </div>
               </div>
 
@@ -346,6 +351,31 @@ export default function TeamStores() {
                       ))}
                     </div>
                   )}
+                </div>
+              )}
+              {storeScan && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.teal}`, borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.teal, marginBottom: 8 }}>Store orders API scan ({storeScan.totalChunks} chunks, {storeScan.hits?.length || 0} with hits):</div>
+                  {storeScan.error && <div style={{ color: B.red, fontSize: 12 }}>{storeScan.error}</div>}
+                  {storeScan.hits?.map((h, i) => (
+                    <div key={i} style={{ marginBottom: 12 }}>
+                      <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{h.chunk} ({h.sizeKB}KB){h.error ? ` — ${h.error}` : ""}</div>
+                      {h.orderPaths?.length > 0 && (
+                        <div style={{ marginBottom: 6 }}>
+                          <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Order-related paths ({h.orderPaths.length}):</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}
+                          </div>
+                        </div>
+                      )}
+                      {h.contexts?.map((c, j) => (
+                        <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                          <strong style={{ color: B.teal }}>[{c.kw}]</strong> {c.ctx}
+                        </pre>
+                      ))}
+                    </div>
+                  ))}
+                  {!storeScan.hits?.length && !storeScan.error && <div style={{ fontSize: 12, color: B.muted }}>No store_order references found in any chunk.</div>}
                 </div>
               )}
             </div>
