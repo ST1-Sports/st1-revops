@@ -49,23 +49,6 @@ export default function TeamStores() {
   const [recent, setRecent]       = useState([]);
   const [summary, setSummary]     = useState(null);
   const [adminStores, setAdminStores] = useState([]);
-  const [adminDiag, setAdminDiag] = useState(null);
-  const [apiFind, setApiFind] = useState(null);
-  const [apiFinding, setApiFinding] = useState(false);
-  const [apiDiscover, setApiDiscover] = useState(null);
-  const [apiDiscovering, setApiDiscovering] = useState(false);
-  const [authScan, setAuthScan] = useState(null);
-  const [authScanning, setAuthScanning] = useState(false);
-  const [dataDiscover, setDataDiscover] = useState(null);
-  const [dataDiscovering, setDataDiscovering] = useState(false);
-  const [bundleScan, setBundleScan] = useState(null);
-  const [bundleScanning, setBundleScanning] = useState(false);
-  const [rootProbe, setRootProbe] = useState(null);
-  const [rootProbing, setRootProbing] = useState(false);
-  const [apiCalls, setApiCalls] = useState(null);
-  const [apiCallsScanning, setApiCallsScanning] = useState(false);
-  const [debugProbe, setDebugProbe] = useState(null);
-  const [debugProbing, setDebugProbing] = useState(false);
   const [permProbe, setPermProbe] = useState(null);
   const [permProbing, setPermProbing] = useState(false);
   const [extProbe, setExtProbe] = useState(null);
@@ -79,21 +62,19 @@ export default function TeamStores() {
     setLoading(true);
     setError(null);
     try {
-      const [storesRes, recentRes, adminStoresRes, adminSellersRes, adminRawRes] = await Promise.all([
+      const [storesRes, recentRes, adminStoresRes, adminSellersRes] = await Promise.all([
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores", days: d }) }),
         fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recent", days: d, limit: 20 }) }),
         fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores" }) }),
         fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers" }) }),
-        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) }),
       ]);
-      const [sd, rd, ad, asd, raw] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json(), adminRawRes.json()]);
+      const [sd, rd, ad, asd] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json()]);
       if (!sd.ok) throw new Error(sd.error);
       setStores(sd.stores || []);
       setSummary(sd.summary || null);
       setRecent(rd.recent || []);
       if (ad.ok) setAdminStores(ad.stores || []);
       if (asd.ok && asd.sellers?.length) setSellers(asd.sellers || []);
-      setAdminDiag({ sellersResult: asd, rawSample: raw });
     } catch (e) {
       setError(e.message);
     } finally {
@@ -270,352 +251,104 @@ export default function TeamStores() {
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
           <div style={{ padding: 24 }}>
-            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data found.</div>
-            {adminDiag && (
-              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                  <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin API Diagnostic</div>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    <button onClick={async () => { setApiDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover" }) }); setApiDiscover(await r.json()); } finally { setApiDiscovering(false); } }} disabled={apiDiscovering}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiDiscovering ? "default" : "pointer", border: `1px solid ${B.orange}`, borderRadius: 6, background: B.orangeBg, color: B.orange }}>
-                      {apiDiscovering ? "Probing…" : "Discover API Routes"}</button>
-                    <button onClick={async () => { setApiFinding(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-api" }) }); setApiFind(await r.json()); } finally { setApiFinding(false); } }} disabled={apiFinding}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiFinding ? "default" : "pointer", border: `1px solid ${B.blue}`, borderRadius: 6, background: B.blueBg, color: B.blue }}>
-                      {apiFinding ? "Scanning…" : "Scan JS Bundle"}</button>
-                    <button onClick={async () => { setAuthScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "find-auth" }) }); setAuthScan(await r.json()); } finally { setAuthScanning(false); } }} disabled={authScanning}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: authScanning ? "default" : "pointer", border: `1px solid ${B.teal}`, borderRadius: 6, background: B.tealBg, color: B.teal }}>
-                      {authScanning ? "Scanning chunks…" : "Scan Chunks for Auth"}</button>
-                    <button onClick={async () => { setDataDiscovering(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "discover-data" }) }); setDataDiscover(await r.json()); } finally { setDataDiscovering(false); } }} disabled={dataDiscovering}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: dataDiscovering ? "default" : "pointer", border: `1px solid ${B.green}`, borderRadius: 6, background: B.greenBg, color: B.green }}>
-                      {dataDiscovering ? "Probing data…" : "Discover Data Endpoints"}</button>
-                    <button onClick={async () => { setBundleScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-bundle-paths" }) }); setBundleScan(await r.json()); } finally { setBundleScanning(false); } }} disabled={bundleScanning}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: bundleScanning ? "default" : "pointer", border: `1px solid ${B.purple}`, borderRadius: 6, background: B.purpleBg, color: B.purple }}>
-                      {bundleScanning ? "Scanning paths…" : "Scan Bundle Paths"}</button>
-                    <button onClick={async () => { setRootProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-root" }) }); setRootProbe(await r.json()); } finally { setRootProbing(false); } }} disabled={rootProbing}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: rootProbing ? "default" : "pointer", border: `1px solid ${B.red}`, borderRadius: 6, background: B.redBg, color: B.red }}>
-                      {rootProbing ? "Probing root…" : "Probe Root Paths"}</button>
-                    <button onClick={async () => { setApiCallsScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-api-calls" }) }); setApiCalls(await r.json()); } finally { setApiCallsScanning(false); } }} disabled={apiCallsScanning}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiCallsScanning ? "default" : "pointer", border: "1px solid #1A3A5C", borderRadius: 6, background: "#E8EFF7", color: "#1A3A5C" }}>
-                      {apiCallsScanning ? "Scanning calls…" : "Scan API Calls"}</button>
-                    <button onClick={async () => { setDebugProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-debug" }) }); setDebugProbe(await r.json()); } finally { setDebugProbing(false); } }} disabled={debugProbing}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: debugProbing ? "default" : "pointer", border: "1px solid #7B3F00", borderRadius: 6, background: "#FFF3E0", color: "#7B3F00" }}>
-                      {debugProbing ? "Debugging…" : "Debug 401"}</button>
-                    <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
-                      {permProbing ? "Probing role…" : "Probe Role/Permissions"}</button>
-                    <button onClick={async () => { setExtProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-extended" }) }); setExtProbe(await r.json()); } finally { setExtProbing(false); } }} disabled={extProbing}
-                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: extProbing ? "default" : "pointer", border: "1px solid #4A4A00", borderRadius: 6, background: "#FAFAE8", color: "#4A4A00" }}>
-                      {extProbing ? "Probing…" : "Extended Probe"}</button>
-                  </div>
+            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data — admin credentials need admin-level access to <code>team_store_order</code>.</div>
+            <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
+                    {permProbing ? "Probing…" : "Probe Permissions"}</button>
+                  <button onClick={async () => { setExtProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-extended" }) }); setExtProbe(await r.json()); } finally { setExtProbing(false); } }} disabled={extProbing}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: extProbing ? "default" : "pointer", border: "1px solid #4A4A00", borderRadius: 6, background: "#FAFAE8", color: "#4A4A00" }}>
+                    {extProbing ? "Probing…" : "Extended Probe"}</button>
                 </div>
-                {apiDiscover && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.border}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.text, marginBottom: 6 }}>API route discovery:</div>
-                    {apiDiscover.results?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status >= 400 ? B.muted : B.green, marginBottom: 3, wordBreak: "break-all" }}>
-                        <strong>{r.url}</strong> → {r.error || `${r.status} ${r.ct}`}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {apiFind && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.border}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.text, marginBottom: 6 }}>Bundle scan: {apiFind.bundleUrl}</div>
-                    {apiFind.urlMatches?.length > 0
-                      ? <ul style={{ margin: 0, padding: "0 0 0 16px", fontSize: 12, color: B.text, lineHeight: 1.8 }}>{apiFind.urlMatches.map((u, i) => <li key={i} style={{ wordBreak: "break-all" }}>{u}</li>)}</ul>
-                      : <div style={{ fontSize: 12, color: B.muted }}>No URL patterns found.</div>}
-                    {apiFind.error && <div style={{ color: B.red, fontSize: 12 }}>{apiFind.error}</div>}
-                  </div>
-                )}
-                {authScan && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.teal}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.teal, marginBottom: 8 }}>Auth chunk scan ({authScan.totalChunks} chunks):</div>
-                    {authScan.error && <div style={{ color: B.red, fontSize: 12 }}>{authScan.error}</div>}
-                    {authScan.chunkResults?.map((c, i) => (
-                      <div key={i} style={{ marginBottom: 12 }}>
-                        <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
-                        {c.authPaths?.length > 0 && (
-                          <div style={{ marginBottom: 4 }}>
-                            <span style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600 }}>Auth paths: </span>
-                            {c.authPaths.map((p, j) => <code key={j} style={{ fontSize: 11, background: B.tealBg, color: B.teal, padding: "1px 5px", borderRadius: 3, marginRight: 4 }}>{p}</code>)}
-                          </div>
-                        )}
-                        {c.postContexts?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>POST fetch contexts ({c.postContexts.length}):</div>
-                            {c.postContexts.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.lpDefs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.purple, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>lp() definition ({c.lpDefs.length}):</div>
-                            {c.lpDefs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.purpleBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.storagePats?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.blue, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Storage patterns ({c.storagePats.length}):</div>
-                            {c.storagePats.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.blueBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.mutationCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.green, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Mutation contexts ({c.mutationCtxs.length}):</div>
-                            {c.mutationCtxs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.greenBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {dataDiscover && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.green}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.green, marginBottom: 6 }}>Data endpoint discovery (auth: {dataDiscover.authEndpoint || "unknown"}):</div>
-                    {dataDiscover.error && <div style={{ color: B.red, fontSize: 12 }}>{dataDiscover.error}</div>}
-                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Stores:</span></div>
-                    {dataDiscover.storeResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code>{r.path}</code>{r.params ? <span style={{ color: B.muted }}> ?{r.params}</span> : ""} → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
-                      </div>
-                    ))}
-                    <div style={{ marginTop: 6, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Orders:</span></div>
-                    {dataDiscover.orderResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.red : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code>{r.path}</code>{r.params ? <span style={{ color: B.muted }}> ?{r.params}</span> : ""} → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 100)}` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {bundleScan && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.purple}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.purple, marginBottom: 8 }}>Bundle path scan ({bundleScan.totalChunks} chunks):</div>
-                    {bundleScan.error && <div style={{ color: B.red, fontSize: 12 }}>{bundleScan.error}</div>}
-                    {bundleScan.chunkResults?.map((c, i) => (
-                      <div key={i} style={{ marginBottom: 14 }}>
-                        <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
-                        {c.interceptorCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.purple, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Interceptors ({c.interceptorCtxs.length}):</div>
-                            {c.interceptorCtxs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 120, margin: "4px 0", padding: "6px 8px", background: B.purpleBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.authCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Authorization header contexts ({c.authCtxs.length}):</div>
-                            {c.authCtxs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.createCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.blue, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>axios.create config ({c.createCtxs.length}):</div>
-                            {c.createCtxs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.blueBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.endpointCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Endpoint keyword contexts ({c.endpointCtxs.length}):</div>
-                            {c.endpointCtxs.map((ctx, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong style={{ color: B.teal }}>[{ctx.kw}]</strong> {ctx.ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.apiPaths?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 }}>All API path strings ({c.apiPaths.length}):</div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                              {c.apiPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.surface, border: `1px solid ${B.border}`, padding: "1px 5px", borderRadius: 3, color: B.textMid }}>{p}</code>)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {rootProbe && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.red}`, borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: B.red, marginBottom: 6 }}>Root path probe (auth: {rootProbe.authEndpoint || "unknown"}):</div>
-                    {rootProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{rootProbe.error}</div>}
-                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>api.st1sports.com/* (no /admin):</span></div>
-                    {rootProbe.rootResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code style={{ fontSize: 10 }}>{r.url}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
-                      </div>
-                    ))}
-                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>api.st1sports.com/admin/* (with /admin):</span></div>
-                    {rootProbe.adminResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.yellow : B.muted, marginBottom: 2 }}>
-                        <code style={{ fontSize: 10 }}>{r.url}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 120)}` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {apiCalls && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #1A3A5C", borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: "#1A3A5C", marginBottom: 8 }}>API call scan ({apiCalls.totalChunks} chunks):</div>
-                    {apiCalls.error && <div style={{ color: B.red, fontSize: 12 }}>{apiCalls.error}</div>}
-                    {apiCalls.chunkResults?.map((c, i) => (
-                      <div key={i} style={{ marginBottom: 14 }}>
-                        <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{c.chunk} ({c.sizeKB}KB){c.error ? ` — ${c.error}` : ""}</div>
-                        {c.s2Ctxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>baseURL / s2 ({c.s2Ctxs.length}):</div>
-                            {c.s2Ctxs.map((x, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 80, margin: "4px 0", padding: "6px 8px", background: B.orangeBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong>{x.match}</strong>: {x.ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.dataCallCtxs?.length > 0 && (
-                          <div style={{ marginBottom: 6 }}>
-                            <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 2 }}>Store/order call contexts ({c.dataCallCtxs.length}):</div>
-                            {c.dataCallCtxs.map((x, j) => (
-                              <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}><strong style={{ color: B.teal }}>.{x.method}()</strong> {x.ctx}</pre>
-                            ))}
-                          </div>
-                        )}
-                        {c.getCalls?.length > 0 && (
-                          <div style={{ marginBottom: 4 }}>
-                            <div style={{ fontSize: 10, color: B.green, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>GET paths ({c.getCalls.length}):</div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                              {c.getCalls.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.greenBg, border: `1px solid ${B.green}`, padding: "1px 5px", borderRadius: 3, color: B.green }}>{p}</code>)}
-                            </div>
-                          </div>
-                        )}
-                        {c.postCalls?.length > 0 && (
-                          <div style={{ marginBottom: 4 }}>
-                            <div style={{ fontSize: 10, color: B.orange, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>POST paths ({c.postCalls.length}):</div>
-                            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                              {c.postCalls.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.orangeBg, border: `1px solid ${B.orange}`, padding: "1px 5px", borderRadius: 3, color: B.orange }}>{p}</code>)}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {debugProbe && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #7B3F00", borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: "#7B3F00", marginBottom: 6 }}>Debug 401 — header variants on team_store (auth: {debugProbe.authEndpoint || "?"}, refreshToken: {debugProbe.hasRefreshToken ? "yes" : "no"}):</div>
-                    {debugProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{debugProbe.error}</div>}
-                    {debugProbe.results?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.red : B.muted, marginBottom: 3 }}>
-                        <strong>{r.label}</strong> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 140)}` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {permProbe && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>Role/Permissions probe (auth: {permProbe.authEndpoint || "?"}):</div>
-                    {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
-                    {(() => {
-                      const hasSupplier = permProbe.accessible?.some(r => r.path === 'supplier');
-                      const teamStore403 = permProbe.sweepResults?.find(r => r.path === 'team_store')?.status === 403;
-                      if (hasSupplier && teamStore403) return (
-                        <div style={{ marginBottom: 10, padding: "10px 14px", background: "#FFF8E6", border: `1px solid ${B.yellow}`, borderRadius: 6 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: B.yellow, marginBottom: 6 }}>Diagnosis: Supplier-level credentials</div>
+              </div>
+
+              {permProbe && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>Permissions (auth: {permProbe.authEndpoint || "?"}):</div>
+                  {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
+                  {(() => {
+                    const hasSupplier = permProbe.accessible?.some(r => r.path === 'supplier');
+                    const teamStore403 = permProbe.sweepResults?.find(r => r.path === 'team_store')?.status === 403;
+                    if (hasSupplier && teamStore403) return (
+                      <div style={{ marginBottom: 10, padding: "10px 14px", background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 6 }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: B.yellow, marginBottom: 6 }}>Diagnosis: Supplier-level credentials</div>
+                        <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
+                          ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
+                          ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200 (this account can read supplier data)<br/>
+                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (no admin role for store data)
+                        </div>
+                        <div style={{ marginTop: 8, padding: "8px 12px", background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 4 }}>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: B.red, marginBottom: 4 }}>Action Required</div>
                           <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
-                            ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
-                            ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200 (this account can read supplier data)<br/>
-                            ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (no admin role for store data)
-                          </div>
-                          <div style={{ marginTop: 8, padding: "8px 12px", background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 4 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: B.red, marginBottom: 4 }}>Action Required</div>
-                            <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
-                              Update <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_EMAIL</code> and <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_PASSWORD</code> in Vercel environment variables to credentials with admin access to <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.<br/>
-                              <span style={{ color: B.muted }}>Current account can only access <strong>supplier</strong> data.</span>
-                            </div>
+                            Update <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_EMAIL</code> and <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>ADMIN_ST1_PASSWORD</code> in Vercel to credentials with admin access to <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.
                           </div>
                         </div>
-                      );
-                      return null;
-                    })()}
-                    {permProbe.accessible?.length > 0 && (
-                      <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible endpoints ({permProbe.accessible.length}):</div>
-                        {permProbe.accessible.map((r, i) => (
-                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
-                        ))}
                       </div>
-                    )}
-                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Who am I? (/me, /profile, etc):</span></div>
-                    {permProbe.meResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.red : B.muted, marginBottom: 2 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 200)}` : ""}
-                      </div>
-                    ))}
-                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Endpoint sweep (non-403/404 highlighted):</span></div>
-                    {permProbe.sweepResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : r.status === 401 ? B.yellow : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
-                      </div>
-                    ))}
-                    <div style={{ marginTop: 8, marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>API root (no /admin prefix):</span></div>
-                    {permProbe.rootResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {extProbe && (
-                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A4A00", borderRadius: 6 }}>
-                    <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe — supplier IDs: [{extProbe.supplierIds?.join(", ") || "none"}]</div>
-                    {extProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{extProbe.error}</div>}
-                    {extProbe.allAccessible?.length > 0 ? (
-                      <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Newly accessible ({extProbe.allAccessible.length}):</div>
-                        {extProbe.allAccessible.map((r, i) => (
-                          <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found — all paths returned 403 or 404.</div>
-                    )}
-                    {extProbe.supplierNested?.length > 0 && (
-                      <div style={{ marginBottom: 6 }}>
-                        <div style={{ fontSize: 10, color: "#4A4A00", textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Supplier-nested paths:</div>
-                        {extProbe.supplierNested.map((r, i) => (
-                          <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                            <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Alternate path names:</span></div>
-                    {extProbe.altResults?.map((r, i) => (
-                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                        <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                      </div>
-                    ))}
-                    {extProbe.paramResults?.length > 0 && (
-                      <div style={{ marginTop: 6 }}>
-                        <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Scoped query params:</div>
-                        {extProbe.paramResults.map((r, i) => (
-                          <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                            <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-                <pre style={{ fontSize: 11, color: B.text, overflow: "auto", maxHeight: 300, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{JSON.stringify(adminDiag, null, 2)}</pre>
-              </div>
-            )}
+                    );
+                    return null;
+                  })()}
+                  {permProbe.accessible?.length > 0 && (
+                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible ({permProbe.accessible.length}):</div>
+                      {permProbe.accessible.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
+                      ))}
+                    </div>
+                  )}
+                  {permProbe.sweepResults?.map((r, i) => (
+                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : r.status === 401 ? B.yellow : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {extProbe && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A4A00", borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe — supplier IDs: [{extProbe.supplierIds?.join(", ") || "none"}]</div>
+                  {extProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{extProbe.error}</div>}
+                  {extProbe.allAccessible?.length > 0 ? (
+                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible ({extProbe.allAccessible.length}):</div>
+                      {extProbe.allAccessible.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found — all paths returned 403 or 404.</div>
+                  )}
+                  {extProbe.supplierNested?.length > 0 && (
+                    <div style={{ marginBottom: 6 }}>
+                      <div style={{ fontSize: 10, color: "#4A4A00", textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Supplier-nested paths:</div>
+                      {extProbe.supplierNested.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                          <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Alternate paths:</span></div>
+                  {extProbe.altResults?.map((r, i) => (
+                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                    </div>
+                  ))}
+                  {extProbe.paramResults?.length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Scoped params:</div>
+                      {extProbe.paramResults.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
+                          <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>

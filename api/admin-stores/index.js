@@ -1,8 +1,6 @@
 /**
  * /api/admin-stores — Pulls team store + order data from admin.st1sports.com.
  *
- * The admin site is a Vite SPA; the real API backend is api.st1sports.com/admin.
- *
  * Env vars required:
  *   ADMIN_ST1_EMAIL     — login email for admin.st1sports.com
  *   ADMIN_ST1_PASSWORD  — login password
@@ -10,27 +8,7 @@
 
 import { setCors } from '../_lib/cors.js';
 
-const BASE     = 'https://admin.st1sports.com';
 const API_BASE = 'https://api.st1sports.com/admin';
-const API_ROOT = 'https://api.st1sports.com';
-
-const AUTH_ENDPOINTS = [
-  // NestJS/Passport patterns — most likely given camelCase accessToken response
-  { base: API_BASE, path: '/auth/login',        body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/auth/signin',       body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/auth/login',        body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/auth/signin',       body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/login',             body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/login',             body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/signin',            body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/signin',            body: (e, p) => ({ email: e, password: p }) },
-  // Fallback patterns
-  { base: API_BASE, path: '/sign_in',           body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/tokens',            body: (e, p) => ({ email: e, password: p }) },
-  { base: API_ROOT, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
-  { base: API_BASE, path: '/authenticate',      body: (e, p) => ({ email: e, password: p }) },
-];
 
 let _auth = null;
 let _sessionExpiry = 0;
@@ -49,50 +27,44 @@ function parseCookies(setCookieHeaders) {
   return headers.map(h => h.split(';')[0]).join('; ');
 }
 
-// Browser-like headers that match what the admin SPA sends — needed to pass server-side origin checks
+// Browser-like headers that match what the admin SPA sends
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Origin': 'https://admin.st1sports.com',
   'Referer': 'https://admin.st1sports.com/',
 };
 
-async function probeAuth(email, password) {
+async function authenticate(email, password) {
   _probeLog = [];
-  for (const ep of AUTH_ENDPOINTS) {
-    let status, ct, cookies, bodySnippet;
-    try {
-      const res = await fetch(`${ep.base}${ep.path}`, {
-        method: 'POST', redirect: 'manual',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', ...BROWSER_HEADERS },
-        body: JSON.stringify(ep.body(email, password)),
-      });
-      status = res.status;
-      ct = res.headers.get('content-type') || '';
-      cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
-      if (status === 404 || status === 405) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'not-found' }); continue; }
-      if (cookies && (status === 200 || status === 201 || status === 302)) {
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-auth' });
-        return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` };
-      }
-      const text = await res.text();
-      bodySnippet = text.slice(0, 200).replace(/\n/g, ' ');
-      if (ct.includes('text/html') || text.trim().startsWith('<')) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'html-response' }); continue; }
-      if ((status === 200 || status === 201) && ct.includes('application/json')) {
-        let body; try { body = JSON.parse(text); } catch { body = {}; }
-        const token = body.accessToken || body.token || body.access_token || body.auth_token || body.jwt || body.data?.accessToken || body.data?.token || body.user?.token || body.data?.access_token;
-        const refreshToken = body.refreshToken || body.refresh_token || body.data?.refreshToken || body.data?.refresh_token || null;
-        if (token) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' }); return { type: 'bearer', value: token, refreshToken, endpoint: `${ep.base}${ep.path}` }; }
-        if (cookies) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-json' }); return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` }; }
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet }); continue;
-      }
-      if ((status === 401 || status === 403 || status === 422) && ct.includes('application/json')) {
-        let errBody; try { errBody = JSON.parse(text); } catch { errBody = {}; }
-        _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'auth-rejected', error: errBody.error || errBody.message || bodySnippet });
-        return { type: 'rejected', endpoint: `${ep.base}${ep.path}`, status, detail: errBody.error || errBody.message || bodySnippet };
-      }
-      _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, ct, result: 'unknown', snippet: bodySnippet });
-    } catch (err) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, result: 'error', error: err.message }); }
-  }
+  const endpoint = `${API_BASE}/signin`;
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', ...BROWSER_HEADERS },
+      body: JSON.stringify({ email, password }),
+    });
+    const status = res.status;
+    const ct = res.headers.get('content-type') || '';
+    const cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
+    if (cookies && (status === 200 || status === 201 || status === 302)) {
+      return { type: 'cookie', value: cookies, endpoint };
+    }
+    const text = await res.text();
+    if ((status === 200 || status === 201) && ct.includes('application/json')) {
+      let body; try { body = JSON.parse(text); } catch { body = {}; }
+      const token = body.accessToken || body.token || body.access_token || body.auth_token || body.jwt || body.data?.accessToken;
+      const refreshToken = body.refreshToken || body.refresh_token || body.data?.refreshToken || null;
+      if (token) { _probeLog.push({ endpoint, status, result: 'bearer-token' }); return { type: 'bearer', value: token, refreshToken, endpoint }; }
+      if (cookies) return { type: 'cookie', value: cookies, endpoint };
+      _probeLog.push({ endpoint, status, result: 'json-no-token', keys: Object.keys(body).join(',') });
+    }
+    if (status === 401 || status === 403 || status === 422) {
+      let errBody; try { errBody = JSON.parse(text); } catch { errBody = {}; }
+      _probeLog.push({ endpoint, status, result: 'auth-rejected' });
+      return { type: 'rejected', endpoint, status, detail: errBody.error || errBody.message || text.slice(0, 200) };
+    }
+    _probeLog.push({ endpoint, status, ct, result: 'unknown' });
+  } catch (err) { _probeLog.push({ endpoint, result: 'error', error: err.message }); }
   return null;
 }
 
@@ -113,7 +85,7 @@ async function getAuth() {
   if (_auth && _auth.type !== 'rejected' && Date.now() < _sessionExpiry) return _auth;
   const { email, password } = creds();
   if (!email || !password) throw new Error('Admin credentials not configured (ADMIN_ST1_EMAIL / ADMIN_ST1_PASSWORD)');
-  const auth = await probeAuth(email, password);
+  const auth = await authenticate(email, password);
   if (!auth) { const summary = _probeLog.map(l => `${l.endpoint}→${l.result}(${l.status||''})`).join(', '); throw new Error(`Could not authenticate. Probe results: ${summary}`); }
   if (auth.type === 'rejected') throw new Error(`Login rejected at ${auth.endpoint} (HTTP ${auth.status}): ${auth.detail}`);
   _auth = auth;
@@ -121,7 +93,6 @@ async function getAuth() {
   return auth;
 }
 
-// path is a relative path like "team_store" or "team_store?page=1&perPage=20"
 async function adminGet(path) {
   const auth = await getAuth();
   const authHeader = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
@@ -130,7 +101,6 @@ async function adminGet(path) {
 
   let res = await doFetch(authHeader);
 
-  // On 401 try a token refresh once before giving up
   if (res.status === 401 && await tryRefresh()) {
     const newAuthHeader = _auth.type === 'bearer' ? { 'Authorization': `Bearer ${_auth.value}` } : { 'Cookie': _auth.value };
     res = await doFetch(newAuthHeader);
@@ -157,363 +127,16 @@ export default async function handler(req, res) {
 
   if (action === 'status') { const { email, password } = creds(); return res.json({ ok: true, configured: Boolean(email && password) }); }
 
-  if (action === 'discover') {
-    const paths = [`${API_ROOT}/`, `${API_BASE}/`, `${API_ROOT}/rails/info/routes`, `${API_ROOT}/swagger.json`, `${API_ROOT}/api-docs`, `${API_ROOT}/openapi.json`, `${API_BASE}/swagger.json`];
-    const results = await Promise.all(paths.map(async url => {
-      try {
-        const r = await fetch(url, { headers: { 'Accept': 'application/json, text/plain, */*', 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(5000) });
-        const ct = r.headers.get('content-type') || '';
-        const body = await r.text();
-        return { url, status: r.status, ct, snippet: body.slice(0, 300).replace(/\n/g, ' ') };
-      } catch (e) { return { url, error: e.message }; }
-    }));
-    return res.json({ ok: true, results });
-  }
-
-  if (action === 'probe-auth') {
-    const { email, password } = creds();
-    if (!email || !password) return res.json({ ok: false, error: 'Credentials not configured' });
-    const auth = await probeAuth(email, password);
-    return res.json({ ok: true, auth: auth ? { type: auth.type, endpoint: auth.endpoint, status: auth.status } : null, probeLog: _probeLog });
-  }
-
-  if (action === 'find-api') {
-    try {
-      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const html = await htmlRes.text();
-      const scriptMatches = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
-      const mainScript = scriptMatches.find(s => /\/(index|main)[^/]*\.js/.test(s)) || scriptMatches[0];
-      if (!mainScript) return res.json({ ok: false, error: 'No JS bundle found', scripts: scriptMatches });
-      const bundleUrl = mainScript.startsWith('http') ? mainScript : `${BASE}${mainScript}`;
-      const bundleRes = await fetch(bundleUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const bundleText = await bundleRes.text();
-      const allQuoted = [...new Set([
-        ...[...bundleText.matchAll(/["'`]([^"'`]*st1sports[^"'`]{0,100})["'`]/gi)].map(m => m[1]),
-        ...[...bundleText.matchAll(/["'`](https:\/\/[^"'`\s]{5,120})["'`]/g)].map(m => m[1]),
-        ...[...bundleText.matchAll(/["'`](\/api\/[^"'`\s]{3,80})["'`]/g)].map(m => m[1]),
-        ...[...bundleText.matchAll(/baseURL?["'`]?\s*[:=]\s*["'`]([^"'`\s]{5,120})["'`]/gi)].map(m => m[1]),
-        ...[...bundleText.matchAll(/["'`](\/[^"'`\s]*(?:login|sign_in|auth|session)[^"'`\s]{0,60})["'`]/gi)].map(m => m[1]),
-      ])];
-      const candidates = ['https://api.st1sports.com','https://app.st1sports.com','https://st1sports.com','https://admin-api.st1sports.com'];
-      const probeResults = await Promise.all(candidates.map(async base => {
-        try {
-          const r = await fetch(`${base}/health`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(4000) });
-          const ct = r.headers.get('content-type') || '';
-          const body = await r.text();
-          return { base, status: r.status, ct, snippet: body.slice(0, 100).replace(/\n/g, ' ') };
-        } catch (e) { return { base, error: e.message }; }
-      }));
-      return res.json({ ok: true, bundleUrl, bundleSizeChars: bundleText.length, urlMatches: allQuoted.slice(0, 80), candidateProbes: probeResults, allScripts: scriptMatches });
-    } catch (e) { return res.json({ ok: false, error: e.message }); }
-  }
-
-  // Deep-scan bundle for: POST login call, lp() token hook definition, localStorage patterns.
-  if (action === 'find-auth') {
-    try {
-      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const html = await htmlRes.text();
-      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
-      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
-
-      const chunkResults = [];
-      for (const scriptUrl of allScripts.slice(0, 10)) {
-        try {
-          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(10000) });
-          const text = await r.text();
-          const chunk = scriptUrl.split('/').pop();
-          const sizeKB = Math.round(text.length / 1024);
-
-          // 1. POST method occurrences — 400 chars context, only keep if near email/password/signin/login
-          const postContexts = [];
-          let pi = 0;
-          while ((pi = text.indexOf('"POST"', pi)) !== -1 && postContexts.length < 8) {
-            const start = Math.max(0, pi - 300);
-            const end = Math.min(text.length, pi + 300);
-            const ctx = text.slice(start, end).replace(/\n/g, ' ');
-            if (/email|password|sign|login|auth|token/i.test(ctx)) postContexts.push(ctx);
-            pi += 6;
-          }
-
-          // 2. lp() definition — look for "lp=" or "function lp"
-          const lpDefs = [];
-          for (const pat of [/\blp\s*=\s*[^,;]{0,300}/g, /function lp\s*\([^)]*\)\s*\{[^}]{0,300}/g]) {
-            for (const m of text.matchAll(pat)) lpDefs.push(m[0].slice(0, 300).replace(/\n/g, ' '));
-          }
-
-          // 3. localStorage / sessionStorage patterns
-          const storagePats = [];
-          let si = 0;
-          while (si < text.length && storagePats.length < 6) {
-            const lsIdx = text.indexOf('localStorage', si);
-            const ssIdx = text.indexOf('sessionStorage', si);
-            if (lsIdx === -1 && ssIdx === -1) break;
-            const abs = lsIdx === -1 ? ssIdx : ssIdx === -1 ? lsIdx : Math.min(lsIdx, ssIdx);
-            const ctx = text.slice(Math.max(0, abs - 60), Math.min(text.length, abs + 200)).replace(/\n/g, ' ');
-            storagePats.push(ctx);
-            si = abs + 12;
-          }
-
-          // 4. useMutation / mutate calls near auth
-          const mutationCtxs = [];
-          for (const m of text.matchAll(/useMutation|\.mutate\s*\(/g)) {
-            const start = Math.max(0, m.index - 100);
-            const end = Math.min(text.length, m.index + 300);
-            const ctx = text.slice(start, end).replace(/\n/g, ' ');
-            if (/sign|login|auth|email|password/i.test(ctx)) mutationCtxs.push(ctx.slice(0, 300));
-          }
-
-          // 5. All quoted path-like strings that look auth-related
-          const authPaths = [...new Set(
-            [...text.matchAll(/["'`](\/[^"'`\s]{2,80})["'`]/g)]
-              .map(m => m[1])
-              .filter(p => /auth|login|sign|session|token/i.test(p))
-          )];
-
-          if (postContexts.length || lpDefs.length || storagePats.length || mutationCtxs.length || authPaths.length) {
-            chunkResults.push({ chunk, sizeKB, postContexts, lpDefs: lpDefs.slice(0, 5), storagePats: storagePats.slice(0, 4), mutationCtxs: mutationCtxs.slice(0, 4), authPaths });
-          }
-        } catch (e) {
-          chunkResults.push({ chunk: scriptUrl.split('/').pop(), error: e.message });
-        }
-      }
-      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
-    } catch (e) {
-      return res.json({ ok: false, error: e.message });
-    }
-  }
-
-  // Scan the admin app bundle for API paths, auth interceptors, and Authorization header setup.
-  if (action === 'scan-bundle-paths') {
-    try {
-      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const html = await htmlRes.text();
-      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
-      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
-
-      const chunkResults = [];
-      for (const scriptUrl of allScripts.slice(0, 5)) {
-        const chunk = scriptUrl.split('/').pop();
-        try {
-          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
-          const text = await r.text();
-          const sizeKB = Math.round(text.length / 1024);
-
-          // 1. interceptors.request.use — where auth token is added to headers
-          const interceptorCtxs = [];
-          let pos = 0;
-          while (pos < text.length && interceptorCtxs.length < 4) {
-            const idx = text.indexOf('interceptors', pos);
-            if (idx === -1) break;
-            const ctx = text.slice(Math.max(0, idx - 60), Math.min(text.length, idx + 500)).replace(/\n/g, ' ');
-            if (/token|bearer|access|auth|header/i.test(ctx)) interceptorCtxs.push(ctx.slice(0, 500));
-            pos = idx + 12;
-          }
-
-          // 2. Authorization header construction
-          const authCtxs = [];
-          pos = 0;
-          while (pos < text.length && authCtxs.length < 6) {
-            const idx = text.indexOf('Authorization', pos);
-            if (idx === -1) break;
-            authCtxs.push(text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 280)).replace(/\n/g, ' ').slice(0, 350));
-            pos = idx + 13;
-          }
-
-          // 3. All short quoted path-like strings (API routes)
-          const apiPaths = [...new Set(
-            [...text.matchAll(/["'`](\/[a-z][a-z0-9_/-]{1,60})["'`]/gi)].map(m => m[1])
-              .filter(p => !p.startsWith('/assets/') && !p.startsWith('/static/') && !/\.(js|css|png|svg|woff|ico)/.test(p))
-          )];
-
-          // 4. axios.create({}) config — shows baseURL and default headers
-          const createCtxs = [];
-          pos = 0;
-          while (pos < text.length && createCtxs.length < 3) {
-            const idx = text.indexOf('.create({', pos);
-            if (idx === -1) break;
-            const ctx = text.slice(Math.max(0, idx - 20), Math.min(text.length, idx + 400)).replace(/\n/g, ' ');
-            if (/url|timeout|header/i.test(ctx)) createCtxs.push(ctx.slice(0, 400));
-            pos = idx + 9;
-          }
-
-          // 5. team_store / store_order / order-related keyword contexts
-          const endpointCtxs = [];
-          const kws = ['team_store', 'store_order', 'storeOrder', 'teamStore', '/stores', '/orders', '/products', '/school', '/purchase', '/merchant'];
-          for (const kw of kws) {
-            pos = 0;
-            while (pos < text.length && endpointCtxs.length < 20) {
-              const idx = text.toLowerCase().indexOf(kw.toLowerCase(), pos);
-              if (idx === -1) break;
-              const before = text[idx - 1] || '';
-              if (/["'`\/]/.test(before)) {
-                const ctx = text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 200)).replace(/\n/g, ' ');
-                endpointCtxs.push({ kw, ctx: ctx.slice(0, 280) });
-              }
-              pos = idx + kw.length;
-            }
-          }
-
-          if (interceptorCtxs.length || authCtxs.length || endpointCtxs.length || createCtxs.length) {
-            chunkResults.push({ chunk, sizeKB, interceptorCtxs, authCtxs, apiPaths: apiPaths.slice(0, 120), createCtxs, endpointCtxs: endpointCtxs.slice(0, 15) });
-          }
-        } catch (e) { chunkResults.push({ chunk, error: e.message }); }
-      }
-      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
-    } catch (e) { return res.json({ ok: false, error: e.message }); }
-  }
-
-  // Scan all bundle chunks for .get() / .post() calls — reveals exact API paths.
-  if (action === 'scan-api-calls') {
-    try {
-      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const html = await htmlRes.text();
-      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
-      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
-
-      const chunkResults = [];
-      for (const scriptUrl of allScripts.slice(0, 10)) {
-        const chunk = scriptUrl.split('/').pop();
-        try {
-          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
-          const text = await r.text();
-          const sizeKB = Math.round(text.length / 1024);
-
-          // All .get( and .post( calls with a string-literal path argument
-          const getCalls = [...new Set(
-            [...text.matchAll(/\.get\s*\(\s*["'`]([^"'`\s]{1,120})["'`]/g)]
-              .map(m => m[1]).filter(p => p.startsWith('/') || p.includes('st1sports'))
-          )];
-          const postCalls = [...new Set(
-            [...text.matchAll(/\.post\s*\(\s*["'`]([^"'`\s]{1,120})["'`]/g)]
-              .map(m => m[1]).filter(p => p.startsWith('/') || p.includes('st1sports'))
-          )];
-
-          // Context around any call that mentions team_store, store_order, product, etc.
-          const dataCallCtxs = [];
-          for (const method of ['.get(', '.post(', '.put(', '.delete(', '.patch(']) {
-            let pos = 0;
-            while (pos < text.length && dataCallCtxs.length < 30) {
-              const idx = text.indexOf(method, pos);
-              if (idx === -1) break;
-              const ctx = text.slice(Math.max(0, idx - 100), Math.min(text.length, idx + 400)).replace(/\n/g, ' ');
-              if (/team_store|store_order|storeOrder|teamStore|\/stores|\/orders|\/products|\/accounts|\/school/i.test(ctx)) {
-                dataCallCtxs.push({ method: method.replace(/[.(]/g, ''), ctx: ctx.slice(0, 400) });
-              }
-              pos = idx + method.length;
-            }
-          }
-
-          // Find s2 variable assignment — the baseURL
-          const s2Ctxs = [];
-          for (const pat of [/\bs2\s*=\s*["'`]([^"'`]{5,120})["'`]/g, /baseURL?\s*[:=]\s*["'`]([^"'`]{5,120})["'`]/gi]) {
-            for (const m of text.matchAll(pat)) {
-              const ctx = text.slice(Math.max(0, m.index - 50), Math.min(text.length, m.index + 200)).replace(/\n/g, ' ');
-              s2Ctxs.push({ match: m[1], ctx: ctx.slice(0, 200) });
-            }
-          }
-
-          if (getCalls.length || postCalls.length || dataCallCtxs.length || s2Ctxs.length) {
-            chunkResults.push({ chunk, sizeKB, getCalls: getCalls.slice(0, 60), postCalls: postCalls.slice(0, 40), dataCallCtxs: dataCallCtxs.slice(0, 20), s2Ctxs: s2Ctxs.slice(0, 6) });
-          }
-        } catch (e) { chunkResults.push({ chunk, error: e.message }); }
-      }
-      return res.json({ ok: true, chunkResults, totalChunks: allScripts.length });
-    } catch (e) { return res.json({ ok: false, error: e.message }); }
-  }
-
-  // Probe data paths under API_ROOT (no /admin prefix) to test if s2 = API_ROOT.
-  // Also checks /refresh_access to confirm which base s2 resolves to.
-  if (action === 'probe-root') {
-    let authHeaders;
-    try {
-      const auth = await getAuth();
-      authHeaders = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
-    } catch (e) {
-      return res.json({ ok: false, error: `Auth failed: ${e.message}`, probeLog: _probeLog });
-    }
-    const rootPaths = [
-      '/refresh_access', '/team_stores', '/team_store', '/store_orders', '/store_order',
-      '/orders', '/accounts', '/quote_orders', '/products', '/revenue',
-    ];
-    const adminPaths = ['/refresh_access', '/team_stores', '/store_orders', '/accounts', '/products'];
-    const probe = async (base, path) => {
-      const url = `${base}${path}`;
-      try {
-        const r = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeaders }, signal: AbortSignal.timeout(5000) });
-        const text = await r.text();
-        return { url, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { url, error: e.message }; }
-    };
-    const [rootResults, adminResults] = await Promise.all([
-      Promise.all(rootPaths.map(p => probe(API_ROOT, p))),
-      Promise.all(adminPaths.map(p => probe(API_BASE, p))),
-    ]);
-    return res.json({ ok: true, authEndpoint: _auth?.endpoint, rootResults, adminResults });
-  }
-
-  // Probe all candidate data endpoint paths to find which ones return data.
-  if (action === 'discover-data') {
-    // Expanded path list — includes query-param variant for 401 endpoint and more ST1-specific names
-    const storePaths  = [
-      '/team_stores', '/team-stores', '/teamStores', '/stores', '/store', '/team_store',
-      '/team_store?page=1&limit=20', '/school_store', '/school_stores',
-      '/org_stores', '/organization_stores', '/merchant_stores', '/clients', '/accounts',
-    ];
-    const orderPaths  = [
-      '/store_orders', '/store-orders', '/storeOrders', '/orders', '/order', '/store_order',
-      '/purchase', '/purchases', '/transactions', '/checkouts',
-      '/team_store_orders', '/school_store_orders',
-    ];
-    // Fetch auth once up front to avoid concurrent probeAuth races
-    let authHeaders;
-    try {
-      const auth = await getAuth();
-      authHeaders = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
-    } catch (e) {
-      return res.json({ ok: false, error: `Auth failed: ${e.message}`, probeLog: _probeLog });
-    }
-    const probeOne = async path => {
-      const cleanPath = path.split('?')[0];
-      const url = `${API_BASE}${path}`;
-      try {
-        const r = await fetch(url, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeaders }, signal: AbortSignal.timeout(5000) });
-        const text = await r.text();
-        return { path: cleanPath, params: path.includes('?') ? path.split('?')[1] : null, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path: cleanPath, error: e.message }; }
-    };
-    const [storeResults, orderResults] = await Promise.all([
-      Promise.all(storePaths.map(probeOne)),
-      Promise.all(orderPaths.map(probeOne)),
-    ]);
-    return res.json({ ok: true, authEndpoint: _auth?.endpoint, storeResults, orderResults });
-  }
-
-  // Probe what this token's role is and what endpoints it can access
+  // Probe what role/permissions this token has — use to verify new credentials after updating env vars
   if (action === 'probe-permissions') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
     const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
 
-    // 1. Who am I?
-    const mePaths = ['me', 'profile', 'admin/me', 'auth/me', 'user', 'account', 'whoami', 'users/me'];
-    const meResults = await Promise.all(mePaths.map(async p => {
-      try {
-        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
-        const text = await r.text();
-        return { path: p, status: r.status, snippet: text.slice(0, 300).replace(/\n/g, ' ') };
-      } catch (e) { return { path: p, error: e.message }; }
-    }));
-
-    // 2. Broad sweep — what responds with something other than 403/404?
     const sweepPaths = [
-      'team_store', 'team_store_order', 'products', 'st1_products', 'st1_product_stat',
-      'team_store_stat', 'team_store_order_stat', 'supplier',
-      'school', 'schools', 'organization', 'organizations',
-      'merchant', 'merchants', 'account', 'accounts',
-      'user', 'users', 'admin_user', 'admin_users',
-      'report', 'reports', 'revenue', 'dashboard', 'stats', 'analytics',
-      'quote_order', 'quote_orders', 'invoice', 'invoices',
-      'shipping', 'fulfillment', 'category', 'categories',
+      'team_store', 'team_store_order', 'products', 'st1_products',
+      'supplier', 'school', 'organization', 'account', 'user',
+      'report', 'revenue', 'dashboard', 'quote_order',
     ];
     const sweepResults = await Promise.all(sweepPaths.map(async p => {
       try {
@@ -523,18 +146,8 @@ export default async function handler(req, res) {
       } catch (e) { return { path: p, error: e.message }; }
     }));
 
-    // 3. Try API_ROOT (no /admin prefix) with same token
-    const rootSweep = ['me', 'profile', 'team_store', 'orders', 'products', 'users/me', 'account'];
-    const rootResults = await Promise.all(rootSweep.map(async p => {
-      try {
-        const r = await fetch(`${API_ROOT}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
-        const text = await r.text();
-        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path: p, error: e.message }; }
-    }));
-
     const accessible = sweepResults.filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-    return res.json({ ok: true, authEndpoint: auth.endpoint, meResults, sweepResults, rootResults, accessible });
+    return res.json({ ok: true, authEndpoint: auth.endpoint, sweepResults, accessible });
   }
 
   // Wider sweep: alternate path forms, supplier-nested paths, param variants
@@ -543,7 +156,6 @@ export default async function handler(req, res) {
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
     const ah = { 'Authorization': `Bearer ${auth.value}`, 'Accept': 'application/json', ...BROWSER_HEADERS };
 
-    // Get supplier IDs to probe nested paths
     let supplierIds = [];
     try {
       const r = await fetch(`${API_BASE}/supplier`, { headers: ah, signal: AbortSignal.timeout(5000) });
@@ -554,19 +166,11 @@ export default async function handler(req, res) {
       }
     } catch {}
 
-    // Alternate naming conventions for stores/orders
     const altPaths = [
       'store', 'stores', 'team-store', 'team-stores', 'teamstore', 'teamstores',
-      'storefront', 'storefronts', 'store_front',
-      'order', 'orders', 'store_order', 'store_orders',
+      'storefront', 'storefronts', 'order', 'orders', 'store_order', 'store_orders',
       'product', 'supplier_product', 'supplier_products',
-      'school', 'schools', 'client', 'clients',
-      'sales', 'sale', 'earning', 'earnings',
-      'stat', 'stats', 'metric', 'metrics',
-      'payment', 'payments', 'payout', 'payouts',
-      'commission', 'commissions',
-      'team', 'teams', 'role', 'roles',
-      'me', 'profile', 'self',
+      'sales', 'earning', 'earnings', 'payout', 'payouts', 'commission', 'commissions',
     ];
     const altResults = await Promise.all(altPaths.map(async p => {
       try {
@@ -576,7 +180,6 @@ export default async function handler(req, res) {
       } catch (e) { return { path: p, error: e.message }; }
     }));
 
-    // Supplier-nested paths (team stores/orders linked to this supplier)
     const supplierNested = [];
     for (const sid of supplierIds) {
       for (const np of ['team_store', 'orders', 'products', 'store', 'stores', 'store_order']) {
@@ -588,7 +191,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // team_store with supplier-scoped query params (in case role allows scoped reads)
     const paramVariants = supplierIds.length ? [
       `team_store?page=1&perPage=5`,
       `team_store?supplierId=${supplierIds[0]}`,
@@ -609,31 +211,8 @@ export default async function handler(req, res) {
     return res.json({ ok: true, supplierIds, altResults, supplierNested, paramResults, allAccessible });
   }
 
-  // Debug: try team_store with different header combinations to isolate the 401
-  if (action === 'probe-debug') {
-    let auth;
-    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
-    const bearer = `Bearer ${auth.value}`;
-    const variants = [
-      { label: 'bearer only',           headers: { 'Authorization': bearer, 'Accept': 'application/json' } },
-      { label: 'bearer + origin',        headers: { 'Authorization': bearer, 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com' } },
-      { label: 'bearer + origin + ref',  headers: { 'Authorization': bearer, 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com', 'Referer': 'https://admin.st1sports.com/' } },
-      { label: 'bearer + all browser',   headers: { 'Authorization': bearer, 'Accept': 'application/json', ...BROWSER_HEADERS } },
-      { label: 'no auth + origin',       headers: { 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com' } },
-    ];
-    const results = await Promise.all(variants.map(async v => {
-      try {
-        const r = await fetch(`${API_BASE}/team_store?page=1&perPage=5`, { headers: v.headers, signal: AbortSignal.timeout(6000) });
-        const text = await r.text();
-        return { label: v.label, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { label: v.label, error: e.message }; }
-    }));
-    return res.json({ ok: true, authEndpoint: auth.endpoint, hasRefreshToken: !!auth.refreshToken, results });
-  }
-
   try {
     if (action === 'stores') {
-      // Paginate through all team stores
       const data = await adminGet('team_store?page=1&perPage=200');
       const stores = Array.isArray(data) ? data : (data.data || data.team_stores || data.stores || []);
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
