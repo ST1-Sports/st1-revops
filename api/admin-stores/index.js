@@ -49,6 +49,13 @@ function parseCookies(setCookieHeaders) {
   return headers.map(h => h.split(';')[0]).join('; ');
 }
 
+// Browser-like headers that match what the admin SPA sends — needed to pass server-side origin checks
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Origin': 'https://admin.st1sports.com',
+  'Referer': 'https://admin.st1sports.com/',
+};
+
 async function probeAuth(email, password) {
   _probeLog = [];
   for (const ep of AUTH_ENDPOINTS) {
@@ -56,7 +63,7 @@ async function probeAuth(email, password) {
     try {
       const res = await fetch(`${ep.base}${ep.path}`, {
         method: 'POST', redirect: 'manual',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0' },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', ...BROWSER_HEADERS },
         body: JSON.stringify(ep.body(email, password)),
       });
       status = res.status;
@@ -73,7 +80,8 @@ async function probeAuth(email, password) {
       if ((status === 200 || status === 201) && ct.includes('application/json')) {
         let body; try { body = JSON.parse(text); } catch { body = {}; }
         const token = body.accessToken || body.token || body.access_token || body.auth_token || body.jwt || body.data?.accessToken || body.data?.token || body.user?.token || body.data?.access_token;
-        if (token) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' }); return { type: 'bearer', value: token, endpoint: `${ep.base}${ep.path}` }; }
+        const refreshToken = body.refreshToken || body.refresh_token || body.data?.refreshToken || body.data?.refresh_token || null;
+        if (token) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'bearer-token' }); return { type: 'bearer', value: token, refreshToken, endpoint: `${ep.base}${ep.path}` }; }
         if (cookies) { _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'cookie-json' }); return { type: 'cookie', value: cookies, endpoint: `${ep.base}${ep.path}` }; }
         _probeLog.push({ endpoint: `${ep.base}${ep.path}`, status, result: 'json-no-token', keys: Object.keys(body).join(','), snippet: bodySnippet }); continue;
       }
@@ -88,6 +96,19 @@ async function probeAuth(email, password) {
   return null;
 }
 
+async function tryRefresh() {
+  if (!_auth?.refreshToken) return false;
+  try {
+    const url = `${API_BASE}/refresh_access?refreshToken=${encodeURIComponent(_auth.refreshToken)}`;
+    const r = await fetch(url, { headers: { 'Accept': 'application/json', ...BROWSER_HEADERS }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return false;
+    const body = await r.json();
+    const newToken = body.accessToken || body.token || body.access_token;
+    if (newToken) { _auth = { ..._auth, value: newToken }; _sessionExpiry = Date.now() + 30 * 60 * 1000; return true; }
+    return false;
+  } catch { return false; }
+}
+
 async function getAuth() {
   if (_auth && _auth.type !== 'rejected' && Date.now() < _sessionExpiry) return _auth;
   const { email, password } = creds();
@@ -100,11 +121,26 @@ async function getAuth() {
   return auth;
 }
 
+// path is a relative path like "team_store" or "team_store?page=1&perPage=20"
 async function adminGet(path) {
   const auth = await getAuth();
   const authHeader = auth.type === 'bearer' ? { 'Authorization': `Bearer ${auth.value}` } : { 'Cookie': auth.value };
-  const res = await fetch(`${API_BASE}${path}`, { headers: { 'Accept': 'application/json', 'User-Agent': 'ST1-RevOps/1.0', ...authHeader } });
-  if (res.status === 401 || res.status === 403) { _auth = null; throw new Error(`Admin API returned ${res.status} for ${path}`); }
+  const url = `${API_BASE}/${path.replace(/^\/+/, '')}`;
+  const doFetch = (ah) => fetch(url, { headers: { 'Accept': 'application/json', ...BROWSER_HEADERS, ...ah } });
+
+  let res = await doFetch(authHeader);
+
+  // On 401 try a token refresh once before giving up
+  if (res.status === 401 && await tryRefresh()) {
+    const newAuthHeader = _auth.type === 'bearer' ? { 'Authorization': `Bearer ${_auth.value}` } : { 'Cookie': _auth.value };
+    res = await doFetch(newAuthHeader);
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    _auth = null;
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Admin API returned ${res.status} for ${path}: ${errText.slice(0, 200)}`);
+  }
   if (!res.ok) throw new Error(`Admin API returned HTTP ${res.status} for ${path}`);
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
@@ -452,20 +488,43 @@ export default async function handler(req, res) {
     return res.json({ ok: true, authEndpoint: _auth?.endpoint, storeResults, orderResults });
   }
 
+  // Debug: try team_store with different header combinations to isolate the 401
+  if (action === 'probe-debug') {
+    let auth;
+    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
+    const bearer = `Bearer ${auth.value}`;
+    const variants = [
+      { label: 'bearer only',           headers: { 'Authorization': bearer, 'Accept': 'application/json' } },
+      { label: 'bearer + origin',        headers: { 'Authorization': bearer, 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com' } },
+      { label: 'bearer + origin + ref',  headers: { 'Authorization': bearer, 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com', 'Referer': 'https://admin.st1sports.com/' } },
+      { label: 'bearer + all browser',   headers: { 'Authorization': bearer, 'Accept': 'application/json', ...BROWSER_HEADERS } },
+      { label: 'no auth + origin',       headers: { 'Accept': 'application/json', 'Origin': 'https://admin.st1sports.com' } },
+    ];
+    const results = await Promise.all(variants.map(async v => {
+      try {
+        const r = await fetch(`${API_BASE}/team_store?page=1&perPage=5`, { headers: v.headers, signal: AbortSignal.timeout(6000) });
+        const text = await r.text();
+        return { label: v.label, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
+      } catch (e) { return { label: v.label, error: e.message }; }
+    }));
+    return res.json({ ok: true, authEndpoint: auth.endpoint, hasRefreshToken: !!auth.refreshToken, results });
+  }
+
   try {
     if (action === 'stores') {
-      const data = await adminGet('/team_stores');
-      const stores = Array.isArray(data) ? data : (data.team_stores || data.stores || data);
+      // Paginate through all team stores
+      const data = await adminGet('team_store?page=1&perPage=200');
+      const stores = Array.isArray(data) ? data : (data.data || data.team_stores || data.stores || []);
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
     if (action === 'orders') {
-      const data = await adminGet('/store_orders');
-      const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
+      const data = await adminGet('team_store_order?page=1&perPage=200');
+      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      const data = await adminGet('/store_orders');
-      const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
+      const data = await adminGet('team_store_order?page=1&perPage=200');
+      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
       const productMap = {};
       for (const order of orders) {
         const lineItems = order.line_items || order.items || order.order_items || order.products || order.order_lines || [];
@@ -484,8 +543,8 @@ export default async function handler(req, res) {
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
     if (action === 'raw-sample') {
-      const data = await adminGet('/store_orders');
-      const orders = Array.isArray(data) ? data : (data.store_orders || data.orders || data);
+      const data = await adminGet('team_store_order?page=1&perPage=5');
+      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
       return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length, authEndpoint: _auth?.endpoint });
     }
     return res.status(400).json({ error: `Unknown action: ${action}` });

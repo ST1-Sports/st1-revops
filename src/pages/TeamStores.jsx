@@ -64,6 +64,8 @@ export default function TeamStores() {
   const [rootProbing, setRootProbing] = useState(false);
   const [apiCalls, setApiCalls] = useState(null);
   const [apiCallsScanning, setApiCallsScanning] = useState(false);
+  const [debugProbe, setDebugProbe] = useState(null);
+  const [debugProbing, setDebugProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -291,6 +293,9 @@ export default function TeamStores() {
                     <button onClick={async () => { setApiCallsScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-api-calls" }) }); setApiCalls(await r.json()); } finally { setApiCallsScanning(false); } }} disabled={apiCallsScanning}
                       style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: apiCallsScanning ? "default" : "pointer", border: "1px solid #1A3A5C", borderRadius: 6, background: "#E8EFF7", color: "#1A3A5C" }}>
                       {apiCallsScanning ? "Scanning calls…" : "Scan API Calls"}</button>
+                    <button onClick={async () => { setDebugProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-debug" }) }); setDebugProbe(await r.json()); } finally { setDebugProbing(false); } }} disabled={debugProbing}
+                      style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: debugProbing ? "default" : "pointer", border: "1px solid #7B3F00", borderRadius: 6, background: "#FFF3E0", color: "#7B3F00" }}>
+                      {debugProbing ? "Debugging…" : "Debug 401"}</button>
                   </div>
                 </div>
                 {apiDiscover && (
@@ -487,6 +492,17 @@ export default function TeamStores() {
                             </div>
                           </div>
                         )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {debugProbe && (
+                  <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #7B3F00", borderRadius: 6 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: "#7B3F00", marginBottom: 6 }}>Debug 401 — header variants on team_store (auth: {debugProbe.authEndpoint || "?"}, refreshToken: {debugProbe.hasRefreshToken ? "yes" : "no"}):</div>
+                    {debugProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{debugProbe.error}</div>}
+                    {debugProbe.results?.map((r, i) => (
+                      <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 401 || r.status === 403 ? B.red : B.muted, marginBottom: 3 }}>
+                        <strong>{r.label}</strong> → {r.error || r.status}{r.snippet ? `: ${r.snippet.slice(0, 140)}` : ""}
                       </div>
                     ))}
                   </div>
