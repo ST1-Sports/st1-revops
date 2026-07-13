@@ -169,21 +169,42 @@ export default async function handler(req, res) {
     }
 
     if (action === 'top-sellers') {
-      const data = await adminGet('team_store_order?page=1&perPage=50');
-      const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Bulk list has no line items — fetch individual order detail for each
+      // Step 1: fetch first page and discover total count for pagination
+      const PER_PAGE = 100;
+      const firstPage = await adminGet(`team_store_order?page=1&perPage=${PER_PAGE}`);
+      const firstOrders = extractList(firstPage, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
+      const total = firstPage.total ?? firstPage.count ?? firstPage.totalCount ?? firstPage.totalItems ?? null;
+      let allOrders = [...firstOrders];
+
+      // Step 2: if there are more pages, fetch them all in parallel
+      if (total && total > PER_PAGE) {
+        const extraPageCount = Math.ceil((total - PER_PAGE) / PER_PAGE);
+        const extraPages = await Promise.all(
+          Array.from({ length: extraPageCount }, (_, i) => i + 2).map(async page => {
+            try {
+              const d = await adminGet(`team_store_order?page=${page}&perPage=${PER_PAGE}`);
+              return extractList(d, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
+            } catch { return []; }
+          })
+        );
+        allOrders = [...allOrders, ...extraPages.flat()];
+      }
+
+      // Step 3: fetch individual order detail for every order in parallel (items array lives here)
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
       const details = await Promise.all(
-        orders.slice(0, 30).map(async order => {
+        allOrders.map(async order => {
           const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
           try {
-            const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+            const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(8000) });
             if (r.ok) return { storeName, detail: await r.json() };
           } catch {}
           return { storeName, detail: null };
         })
       );
+
+      // Step 4: aggregate by product name
       const productMap = {};
       for (const { storeName, detail } of details) {
         if (!detail) continue;
@@ -206,7 +227,7 @@ export default async function handler(req, res) {
       const sellers = Object.values(productMap)
         .map(p => ({ ...p, stores: p.stores.size }))
         .sort((a, b) => b.quantity - a.quantity);
-      return res.json({ ok: true, sellers, rawOrderCount: orders.length, ordersWithDetail: details.filter(d => d.detail).length, authEndpoint: _auth?.endpoint });
+      return res.json({ ok: true, sellers, rawOrderCount: allOrders.length, ordersWithDetail: details.filter(d => d.detail).length, total, authEndpoint: _auth?.endpoint });
     }
 
     if (action === 'raw-sample') {
