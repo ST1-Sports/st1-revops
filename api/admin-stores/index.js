@@ -171,7 +171,7 @@ export default async function handler(req, res) {
     if (action === 'top-sellers') {
       const data = await adminGet('team_store_order?page=1&perPage=50');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Bulk list has no line items — fetch individual order/cart detail for each
+      // Bulk list has no line items — fetch individual order detail for each
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
       const details = await Promise.all(
@@ -181,27 +181,18 @@ export default async function handler(req, res) {
             const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(5000) });
             if (r.ok) return { storeName, detail: await r.json() };
           } catch {}
-          if (order.cartId) {
-            try {
-              const r = await fetch(`${API_BASE}/cart/${order.cartId}`, { headers: ah, signal: AbortSignal.timeout(5000) });
-              if (r.ok) return { storeName, detail: await r.json() };
-            } catch {}
-          }
           return { storeName, detail: null };
         })
       );
       const productMap = {};
       for (const { storeName, detail } of details) {
         if (!detail) continue;
-        const lineItems =
-          detail.lineItems || detail.line_items ||
-          detail.orderItems || detail.order_items ||
-          detail.items || detail.products ||
-          detail.cartItems || detail.cart_items ||
-          detail.cartLineItems || detail.cart_line_items ||
-          detail.orderLines || detail.order_lines || [];
+        const lineItems = detail.items || detail.lineItems || detail.line_items ||
+          detail.orderItems || detail.order_items || detail.products ||
+          detail.cartItems || detail.cart_items || detail.orderLines || detail.order_lines || [];
         for (const item of lineItems) {
-          const name = item.name || item.productName || item.product_name || item.title || item.description || item.sku || null;
+          const name = item.name || item.productName || item.product_name || item.title || item.description ||
+            item.teamStoreProduct?.product?.name || item.sku || null;
           if (!name) continue;
           const qty = Number(item.quantity || item.qty || item.count || 1);
           const price = Number(item.price || item.unitPrice || item.unit_price || item.amount || item.total || 0);
@@ -221,7 +212,7 @@ export default async function handler(req, res) {
     if (action === 'raw-sample') {
       const data = await adminGet('team_store_order?page=1&perPage=3');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Also fetch individual order + cart detail to reveal full field structure (line items location)
+      // Also fetch individual order detail to reveal full field structure (line items location)
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
       let orderDetail = null, orderDetailStatus = null, orderDetailError = null;
