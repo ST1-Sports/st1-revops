@@ -390,8 +390,35 @@ export default async function handler(req, res) {
     if (action === 'raw-sample') {
       const data = await adminGet('team_store_order?page=1&perPage=3');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Return first order with full field list to reveal the data structure
-      return res.json({ ok: true, sample: orders.slice(0, 2), totalFetched: orders.length, authEndpoint: _auth?.endpoint });
+      // Also fetch individual order detail to reveal full field structure (including possible line items)
+      const auth = _auth;
+      const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
+      let orderDetail = null, orderDetailStatus = null, orderDetailError = null;
+      let cartDetail = null, cartDetailStatus = null, cartDetailError = null;
+      const first = orders[0];
+      if (first) {
+        try {
+          const r = await fetch(`${API_BASE}/team_store_order/${first.id}`, { headers: ah, signal: AbortSignal.timeout(6000) });
+          orderDetailStatus = r.status;
+          if (r.ok) orderDetail = await r.json();
+          else orderDetailError = (await r.text()).slice(0, 300);
+        } catch (e) { orderDetailError = e.message; }
+        if (first.cartId) {
+          try {
+            const r = await fetch(`${API_BASE}/cart/${first.cartId}`, { headers: ah, signal: AbortSignal.timeout(6000) });
+            cartDetailStatus = r.status;
+            if (r.ok) cartDetail = await r.json();
+            else cartDetailError = (await r.text()).slice(0, 300);
+          } catch (e) { cartDetailError = e.message; }
+        }
+      }
+      return res.json({
+        ok: true, sample: orders.slice(0, 2), totalFetched: orders.length,
+        orderDetail, orderDetailStatus, orderDetailError,
+        cartDetail, cartDetailStatus, cartDetailError,
+        firstOrderId: first?.id, firstCartId: first?.cartId,
+        authEndpoint: _auth?.endpoint,
+      });
     }
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {

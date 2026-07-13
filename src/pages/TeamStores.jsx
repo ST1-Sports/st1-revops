@@ -64,6 +64,7 @@ export default function TeamStores() {
   const [ordersProbing, setOrdersProbing] = useState(false);
   const [rawSample, setRawSample] = useState(null);
   const [rawSampling, setRawSampling] = useState(false);
+  const [sellersMeta, setSellersMeta] = useState(null);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -85,7 +86,10 @@ export default function TeamStores() {
       setSummary(sd.summary || null);
       setRecent(rd.recent || []);
       if (ad.ok) setAdminStores(ad.stores || []);
-      if (asd.ok && asd.sellers?.length) setSellers(asd.sellers || []);
+      if (asd.ok) {
+        setSellers(asd.sellers || []);
+        setSellersMeta({ rawOrderCount: asd.rawOrderCount, ordersWithDetail: asd.ordersWithDetail });
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -262,7 +266,14 @@ export default function TeamStores() {
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
           <div style={{ padding: 24 }}>
-            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data — run <strong>Raw Sample</strong> to inspect the order field structure.</div>
+            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>
+            No product data — run <strong>Raw Sample</strong> to inspect the order field structure.
+            {sellersMeta && (
+              <span style={{ display: "block", fontSize: 11, color: B.muted, marginTop: 6 }}>
+                Last attempt: {sellersMeta.rawOrderCount ?? 0} orders fetched, {sellersMeta.ordersWithDetail ?? 0} with detail returned.
+              </span>
+            )}
+          </div>
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
@@ -296,13 +307,45 @@ export default function TeamStores() {
                   {rawSample.error && <div style={{ color: B.red, fontSize: 12 }}>{rawSample.error}</div>}
                   {rawSample.sample?.map((order, i) => (
                     <div key={i} style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>Order {i + 1} — fields: {Object.keys(order).join(", ")}</div>
-                      <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>Bulk order {i + 1} — fields: {Object.keys(order).join(", ")}</div>
+                      <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
                         {JSON.stringify(order, null, 2)}
                       </pre>
                     </div>
                   ))}
                   {!rawSample.sample?.length && !rawSample.error && <div style={{ fontSize: 12, color: B.muted }}>No orders returned.</div>}
+                  {rawSample.firstOrderId && (
+                    <div style={{ marginTop: 10, borderTop: `1px solid ${B.border}`, paddingTop: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>
+                        Individual order detail — GET team_store_order/{rawSample.firstOrderId} → HTTP {rawSample.orderDetailStatus ?? "N/A"}
+                      </div>
+                      {rawSample.orderDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>Error: {rawSample.orderDetailError}</div>}
+                      {rawSample.orderDetail && (
+                        <>
+                          <div style={{ fontSize: 10, color: B.slate, marginBottom: 3 }}>Fields: {Object.keys(rawSample.orderDetail).join(", ")}</div>
+                          <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                            {JSON.stringify(rawSample.orderDetail, null, 2)}
+                          </pre>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {rawSample.firstCartId && (
+                    <div style={{ marginTop: 10, borderTop: `1px solid ${B.border}`, paddingTop: 10 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: B.teal, marginBottom: 3 }}>
+                        Cart detail — GET cart/{rawSample.firstCartId} → HTTP {rawSample.cartDetailStatus ?? "N/A"}
+                      </div>
+                      {rawSample.cartDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>Error: {rawSample.cartDetailError}</div>}
+                      {rawSample.cartDetail && (
+                        <>
+                          <div style={{ fontSize: 10, color: B.teal, marginBottom: 3 }}>Fields: {Object.keys(rawSample.cartDetail).join(", ")}</div>
+                          <pre style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                            {JSON.stringify(rawSample.cartDetail, null, 2)}
+                          </pre>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
