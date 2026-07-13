@@ -13,6 +13,7 @@ const B = {
   purple:"#6B3FA0", purpleBg:"#F3EEFB",
   teal:"#0C7B6A", tealBg:"#E6F5F2",
   indigo:"#3730A3", indigoBg:"#EEF2FF",
+  rose:"#9D174D", roseBg:"#FFF1F2",
 };
 
 const fmt$ = n => `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -58,6 +59,8 @@ export default function TeamStores() {
   const [storeScanning, setStoreScanning] = useState(false);
   const [profileProbe, setProfileProbe] = useState(null);
   const [profileProbing, setProfileProbing] = useState(false);
+  const [ordersProbe, setOrdersProbe] = useState(null);
+  const [ordersProbing, setOrdersProbing] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -273,8 +276,35 @@ export default function TeamStores() {
                   <button onClick={async () => { setProfileProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get-profile" }) }); setProfileProbe(await r.json()); } finally { setProfileProbing(false); } }} disabled={profileProbing}
                     style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: profileProbing ? "default" : "pointer", border: `1px solid ${B.indigo}`, borderRadius: 6, background: B.indigoBg, color: B.indigo }}>
                     {profileProbing ? "Loading…" : "Get Profile"}</button>
+                  <button onClick={async () => { setOrdersProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-orders" }) }); setOrdersProbe(await r.json()); } finally { setOrdersProbing(false); } }} disabled={ordersProbing}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: ordersProbing ? "default" : "pointer", border: `1px solid ${B.rose}`, borderRadius: 6, background: B.roseBg, color: B.rose }}>
+                    {ordersProbing ? "Probing…" : "Probe Orders"}</button>
                 </div>
               </div>
+
+              {ordersProbe && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.rose}`, borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.rose, marginBottom: 8 }}>
+                    Orders probe — suppliers: [{ordersProbe.supplierIds?.join(", ") || "none"}]:
+                  </div>
+                  {ordersProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{ordersProbe.error}</div>}
+                  {ordersProbe.working?.length > 0 && (
+                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Working ({ordersProbe.working.length}):</div>
+                      {ordersProbe.working.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}>
+                          <code>{r.path}</code> → {r.status}{r.count != null ? ` (${r.count} items)` : ""}: {r.snippet?.slice(0, 120)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {ordersProbe.results?.map((r, i) => (
+                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status === 200 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status === 200 ? 700 : 400 }}>
+                      <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.count != null ? ` (${r.count})` : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {profileProbe && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.indigo}`, borderRadius: 6 }}>
@@ -309,16 +339,8 @@ export default function TeamStores() {
                         <div style={{ fontSize: 12, fontWeight: 700, color: B.yellow, marginBottom: 6 }}>Diagnosis: Supplier-level credentials</div>
                         <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
                           ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
-                          ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200 (this account can read supplier data)<br/>
-                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403 Forbidden (account role lacks access to store data)
-                        </div>
-                        <div style={{ marginTop: 8, padding: "8px 12px", background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 4 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, color: B.red, marginBottom: 4 }}>Action Required</div>
-                          <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
-                            The credentials in Vercel don't have admin role for <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3 }}>team_store</code>.
-                            Use <strong>Get Profile</strong> above to confirm which account is authenticated and what role it has.
-                            The credentials need to be for an admin account on admin.st1sports.com.
-                          </div>
+                          ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200<br/>
+                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403
                         </div>
                       </div>
                     );
@@ -352,24 +374,8 @@ export default function TeamStores() {
                       ))}
                     </div>
                   ) : (
-                    <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found — all paths returned 403 or 404.</div>
+                    <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found.</div>
                   )}
-                  {extProbe.supplierNested?.length > 0 && (
-                    <div style={{ marginBottom: 6 }}>
-                      <div style={{ fontSize: 10, color: "#4A4A00", textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Supplier-nested paths:</div>
-                      {extProbe.supplierNested.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                          <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div style={{ marginBottom: 4 }}><span style={{ fontSize: 10, fontWeight: 600, color: B.muted, textTransform: "uppercase" }}>Alternate paths:</span></div>
-                  {extProbe.altResults?.map((r, i) => (
-                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                    </div>
-                  ))}
                   {extProbe.paramResults?.length > 0 && (
                     <div style={{ marginTop: 6 }}>
                       <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Scoped params:</div>
@@ -388,13 +394,10 @@ export default function TeamStores() {
                   {storeScan.error && <div style={{ color: B.red, fontSize: 12 }}>{storeScan.error}</div>}
                   {storeScan.hits?.map((h, i) => (
                     <div key={i} style={{ marginBottom: 12 }}>
-                      <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{h.chunk} ({h.sizeKB}KB){h.error ? ` — ${h.error}` : ""}</div>
+                      <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{h.chunk} ({h.sizeKB}KB)</div>
                       {h.orderPaths?.length > 0 && (
-                        <div style={{ marginBottom: 6 }}>
-                          <div style={{ fontSize: 10, color: B.teal, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Order-related paths ({h.orderPaths.length}):</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                            {h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}
-                          </div>
+                        <div style={{ marginBottom: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                          {h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}
                         </div>
                       )}
                       {h.contexts?.map((c, j) => (
@@ -404,7 +407,7 @@ export default function TeamStores() {
                       ))}
                     </div>
                   ))}
-                  {!storeScan.hits?.length && !storeScan.error && <div style={{ fontSize: 12, color: B.muted }}>No store_order references found in any chunk.</div>}
+                  {!storeScan.hits?.length && !storeScan.error && <div style={{ fontSize: 12, color: B.muted }}>No store_order references found.</div>}
                 </div>
               )}
             </div>

@@ -27,7 +27,6 @@ function parseCookies(setCookieHeaders) {
   return headers.map(h => h.split(';')[0]).join('; ');
 }
 
-// Browser-like headers that match what the admin SPA sends
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Origin': 'https://admin.st1sports.com',
@@ -45,7 +44,6 @@ async function authenticate(email, password) {
     });
     const status = res.status;
     const ct = res.headers.get('content-type') || '';
-    // Capture cookies before consuming body (headers are available immediately)
     const cookies = parseCookies(res.headers.getSetCookie?.() || res.headers.get('set-cookie'));
 
     if (status === 401 || status === 403 || status === 422) {
@@ -55,7 +53,6 @@ async function authenticate(email, password) {
       return { type: 'rejected', endpoint, status, detail: errBody.error || errBody.message || '' };
     }
 
-    // Always read body first so we can extract JWT even when cookies are also set
     const text = await res.text();
     if ((status === 200 || status === 201) && ct.includes('application/json')) {
       let body; try { body = JSON.parse(text); } catch { body = {}; }
@@ -63,7 +60,6 @@ async function authenticate(email, password) {
       const refreshToken = body.refreshToken || body.refresh_token || body.data?.refreshToken || null;
       if (token) {
         _probeLog.push({ endpoint, status, result: 'bearer-token', hasCookies: Boolean(cookies) });
-        // Store signin cookies alongside bearer token — browser sends both and some endpoints need the cookie session
         return { type: 'bearer', value: token, refreshToken, cookies: cookies || null, endpoint };
       }
     }
@@ -100,7 +96,6 @@ async function getAuth() {
   return auth;
 }
 
-// Build auth headers — sends both Authorization + Cookie when signin returned both
 function buildAuthHeaders(auth) {
   if (auth.type === 'bearer') {
     const h = { 'Authorization': `Bearer ${auth.value}` };
@@ -121,21 +116,24 @@ async function adminGet(path) {
     res = await fetch(url, { headers: makeHeaders(_auth) });
   }
 
+  const errBody = async () => { try { return (await res.text()).slice(0, 200); } catch { return ''; } };
+
   if (res.status === 401) {
-    _auth = null; // token truly expired — force re-auth next call
-    const errText = await res.text().catch(() => '');
-    const err = new Error(`Admin API returned 401 for ${path}: ${errText.slice(0, 200)}`);
+    _auth = null;
+    const err = new Error(`Admin API returned 401 for ${path}: ${await errBody()}`);
     err.status = 401;
     throw err;
   }
   if (res.status === 403) {
-    // RBAC failure — do NOT clear auth (token is valid, account lacks the role)
-    const errText = await res.text().catch(() => '');
-    const err = new Error(`Admin API returned 403 for ${path}: ${errText.slice(0, 200)}`);
+    const err = new Error(`Admin API returned 403 for ${path}: ${await errBody()}`);
     err.status = 403;
     throw err;
   }
-  if (!res.ok) throw new Error(`Admin API returned HTTP ${res.status} for ${path}`);
+  if (!res.ok) {
+    const err = new Error(`Admin API returned HTTP ${res.status} for ${path}: ${await errBody()}`);
+    err.status = res.status;
+    throw err;
+  }
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
   const text = await res.text();
@@ -143,7 +141,33 @@ async function adminGet(path) {
   return JSON.parse(text);
 }
 
-// Probe current user's profile endpoints to find role + supplier ID
+// Fetch full supplier list (used as fallback scope for super admin)
+async function getAllSuppliers() {
+  try {
+    const data = await adminGet('supplier?page=1&perPage=100');
+    const list = Array.isArray(data) ? data : (data.data || []);
+    return list.filter(s => s.id);
+  } catch { return []; }
+}
+
+// Fan out a request across all suppliers when the unscoped version 500s.
+// basePath should include any fixed query params (e.g. "team_store_order?page=1&perPage=200").
+async function adminGetSupplierScoped(basePath) {
+  const suppliers = await getAllSuppliers();
+  if (!suppliers.length) throw new Error('Supplier-scoped fallback: no suppliers found');
+  const sep = basePath.includes('?') ? '&' : '?';
+  const pages = await Promise.all(
+    suppliers.map(async s => {
+      try {
+        const data = await adminGet(`${basePath}${sep}supplierId=${s.id}`);
+        const items = Array.isArray(data) ? data : (data.data || data.orders || data.stores || data.team_stores || data.team_store_orders || []);
+        return items.map(item => ({ ...item, _supplierName: s.name, _supplierId: s.id }));
+      } catch { return []; }
+    })
+  );
+  return pages.flat();
+}
+
 async function fetchProfile(auth) {
   const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
   const candidates = ['me', 'auth/me', 'profile', 'user', 'account', 'user/profile', 'admin/profile'];
@@ -154,6 +178,30 @@ async function fetchProfile(auth) {
     } catch {}
   }
   return null;
+}
+
+async function fetchOrders(path) {
+  try {
+    const data = await adminGet(path);
+    return Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
+  } catch (e) {
+    if (e.status === 403 || e.status === 500) {
+      return adminGetSupplierScoped(path);
+    }
+    throw e;
+  }
+}
+
+async function fetchStores(path) {
+  try {
+    const data = await adminGet(path);
+    return Array.isArray(data) ? data : (data.data || data.team_stores || data.stores || []);
+  } catch (e) {
+    if (e.status === 403 || e.status === 500) {
+      return adminGetSupplierScoped(path);
+    }
+    throw e;
+  }
 }
 
 export default async function handler(req, res) {
@@ -167,7 +215,6 @@ export default async function handler(req, res) {
     return res.json({ ok: true, configured: Boolean(email && password) });
   }
 
-  // Inspect current user's profile, role, and supplier ID
   if (action === 'get-profile') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
@@ -183,16 +230,49 @@ export default async function handler(req, res) {
     }));
     const profile = results.find(r => r.status === 200);
     return res.json({
-      ok: true,
-      authType: auth.type,
-      hasCookies: Boolean(auth.cookies),
-      authEndpoint: auth.endpoint,
-      results,
-      profile: profile ? { endpoint: profile.endpoint, data: profile.body } : null,
+      ok: true, authType: auth.type, hasCookies: Boolean(auth.cookies), authEndpoint: auth.endpoint,
+      results, profile: profile ? { endpoint: profile.endpoint, data: profile.body } : null,
     });
   }
 
-  // Scan every JS chunk in the admin SPA and find what API calls the store_orders page actually makes
+  // Probe team_store_order param variants to find what works for this account
+  if (action === 'probe-orders') {
+    let auth;
+    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
+    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
+
+    let supplierIds = [];
+    try {
+      const r = await fetch(`${API_BASE}/supplier?page=1&perPage=100`, { headers: ah, signal: AbortSignal.timeout(5000) });
+      if (r.ok) { const d = await r.json(); const l = Array.isArray(d) ? d : (d.data || []); supplierIds = l.map(s => s.id).filter(Boolean); }
+    } catch {}
+
+    const variants = [
+      'team_store_order',
+      'team_store_order?page=1&perPage=5',
+      'team_store_order?page=1&perPage=5&status=completed',
+      'team_store_order?page=1&perPage=5&status=pending',
+      'team_store?page=1&perPage=5',
+      ...supplierIds.slice(0, 3).flatMap(sid => [
+        `team_store_order?supplierId=${sid}&page=1&perPage=5`,
+        `team_store?supplierId=${sid}&page=1&perPage=5`,
+      ]),
+    ];
+
+    const results = await Promise.all(variants.map(async path => {
+      try {
+        const r = await fetch(`${API_BASE}/${path}`, { headers: ah, signal: AbortSignal.timeout(6000) });
+        const text = await r.text();
+        let parsed; try { parsed = JSON.parse(text); } catch { parsed = null; }
+        const count = parsed ? (Array.isArray(parsed) ? parsed.length : (parsed.data?.length ?? parsed.total ?? null)) : null;
+        return { path, status: r.status, count, snippet: text.slice(0, 300).replace(/\n/g, ' ') };
+      } catch (e) { return { path, error: e.message }; }
+    }));
+
+    const working = results.filter(r => r.status === 200);
+    return res.json({ ok: true, supplierIds, results, working });
+  }
+
   if (action === 'scan-store-orders') {
     try {
       const BASE = 'https://admin.st1sports.com';
@@ -200,14 +280,12 @@ export default async function handler(req, res) {
       const html = await htmlRes.text();
       const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
       const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
-
       const hits = [];
       for (const scriptUrl of allScripts) {
         const chunk = scriptUrl.split('/').pop();
         try {
           const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
           const text = await r.text();
-
           const kws = ['store_order', 'storeOrder', 'StoreOrder', 'store-order', 'storeorders', 'store_orders'];
           const contexts = [];
           for (const kw of kws) {
@@ -215,33 +293,25 @@ export default async function handler(req, res) {
             while (pos < text.length && contexts.length < 30) {
               const idx = text.toLowerCase().indexOf(kw.toLowerCase(), pos);
               if (idx === -1) break;
-              const ctx = text.slice(Math.max(0, idx - 200), Math.min(text.length, idx + 300)).replace(/\n/g, ' ');
-              contexts.push({ kw, ctx: ctx.slice(0, 460) });
+              contexts.push({ kw, ctx: text.slice(Math.max(0, idx - 200), Math.min(text.length, idx + 300)).replace(/\n/g, ' ').slice(0, 460) });
               pos = idx + kw.length;
             }
           }
-
           const orderPaths = [...new Set(
-            [...text.matchAll(/["'`](\/[^"'`\s]{1,80})["'`]/g)]
-              .map(m => m[1])
+            [...text.matchAll(/["'`](\/[^"'`\s]{1,80})["'`]/g)].map(m => m[1])
               .filter(p => /order|store/i.test(p) && !p.startsWith('/assets/') && !/(js|css|png|svg|woff)$/.test(p))
           )];
-
-          if (contexts.length || orderPaths.length) {
-            hits.push({ chunk, sizeKB: Math.round(text.length / 1024), contexts: contexts.slice(0, 15), orderPaths });
-          }
+          if (contexts.length || orderPaths.length) hits.push({ chunk, sizeKB: Math.round(text.length / 1024), contexts: contexts.slice(0, 15), orderPaths });
         } catch (e) { hits.push({ chunk, error: e.message }); }
       }
       return res.json({ ok: true, totalChunks: allScripts.length, hits });
     } catch (e) { return res.json({ ok: false, error: e.message }); }
   }
 
-  // Probe what role/permissions this token has — use to verify credentials after updating env vars
   if (action === 'probe-permissions') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
     const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-
     const sweepPaths = [
       'team_store', 'team_store_order', 'products', 'st1_products',
       'supplier', 'school', 'organization', 'account', 'user',
@@ -254,34 +324,19 @@ export default async function handler(req, res) {
         return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
       } catch (e) { return { path: p, error: e.message }; }
     }));
-
     const accessible = sweepResults.filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-    return res.json({
-      ok: true,
-      authType: auth.type,
-      hasCookies: Boolean(auth.cookies),
-      authEndpoint: auth.endpoint,
-      sweepResults,
-      accessible,
-    });
+    return res.json({ ok: true, authType: auth.type, hasCookies: Boolean(auth.cookies), authEndpoint: auth.endpoint, sweepResults, accessible });
   }
 
-  // Wider sweep: alternate path forms, supplier-nested paths, param variants
   if (action === 'probe-extended') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
     const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-
     let supplierIds = [];
     try {
       const r = await fetch(`${API_BASE}/supplier`, { headers: ah, signal: AbortSignal.timeout(5000) });
-      if (r.ok) {
-        const data = await r.json();
-        const list = Array.isArray(data) ? data : (data.data || []);
-        supplierIds = list.map(s => s.id).filter(Boolean).slice(0, 3);
-      }
+      if (r.ok) { const data = await r.json(); const list = Array.isArray(data) ? data : (data.data || []); supplierIds = list.map(s => s.id).filter(Boolean).slice(0, 3); }
     } catch {}
-
     const altPaths = [
       'store', 'stores', 'team-store', 'team-stores', 'teamstore', 'teamstores',
       'storefront', 'storefronts', 'order', 'orders', 'store_order', 'store_orders',
@@ -295,7 +350,6 @@ export default async function handler(req, res) {
         return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
       } catch (e) { return { path: p, error: e.message }; }
     }));
-
     const supplierNested = [];
     for (const sid of supplierIds) {
       for (const np of ['team_store', 'orders', 'products', 'store', 'stores', 'store_order']) {
@@ -306,7 +360,6 @@ export default async function handler(req, res) {
         } catch (e) { supplierNested.push({ path: `supplier/${sid}/${np}`, error: e.message }); }
       }
     }
-
     const paramVariants = supplierIds.length ? [
       `team_store?page=1&perPage=5`,
       `team_store?supplierId=${supplierIds[0]}`,
@@ -321,50 +374,21 @@ export default async function handler(req, res) {
         return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
       } catch (e) { return { path: p, error: e.message }; }
     }));
-
-    const allAccessible = [...altResults, ...supplierNested, ...paramResults]
-      .filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-
+    const allAccessible = [...altResults, ...supplierNested, ...paramResults].filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
     return res.json({ ok: true, supplierIds, altResults, supplierNested, paramResults, allAccessible });
   }
 
   try {
     if (action === 'stores') {
-      const data = await adminGet('team_store?page=1&perPage=200');
-      const stores = Array.isArray(data) ? data : (data.data || data.team_stores || data.stores || []);
+      const stores = await fetchStores('team_store?page=1&perPage=200');
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
     if (action === 'orders') {
-      let data;
-      try {
-        data = await adminGet('team_store_order?page=1&perPage=200');
-      } catch (e) {
-        if (e.status === 403) {
-          // Try supplier-scoped fallback
-          const profile = await fetchProfile(_auth).catch(() => null);
-          const supplierId = profile?.data?.supplierId || profile?.data?.supplier_id || profile?.data?.id;
-          if (supplierId) {
-            data = await adminGet(`team_store_order?supplierId=${supplierId}&page=1&perPage=200`);
-          } else { throw e; }
-        } else { throw e; }
-      }
-      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
+      const orders = await fetchOrders('team_store_order?page=1&perPage=200');
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      let data;
-      try {
-        data = await adminGet('team_store_order?page=1&perPage=200');
-      } catch (e) {
-        if (e.status === 403) {
-          const profile = await fetchProfile(_auth).catch(() => null);
-          const supplierId = profile?.data?.supplierId || profile?.data?.supplier_id || profile?.data?.id;
-          if (supplierId) {
-            data = await adminGet(`team_store_order?supplierId=${supplierId}&page=1&perPage=200`);
-          } else { throw e; }
-        } else { throw e; }
-      }
-      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
+      const orders = await fetchOrders('team_store_order?page=1&perPage=200');
       const productMap = {};
       for (const order of orders) {
         const lineItems = order.line_items || order.items || order.order_items || order.products || order.order_lines || [];
@@ -383,8 +407,7 @@ export default async function handler(req, res) {
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
     if (action === 'raw-sample') {
-      const data = await adminGet('team_store_order?page=1&perPage=5');
-      const orders = Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
+      const orders = await fetchOrders('team_store_order?page=1&perPage=5');
       return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length, authEndpoint: _auth?.endpoint });
     }
     return res.status(400).json({ error: `Unknown action: ${action}` });
