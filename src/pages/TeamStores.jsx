@@ -14,6 +14,7 @@ const B = {
   teal:"#0C7B6A", tealBg:"#E6F5F2",
   indigo:"#3730A3", indigoBg:"#EEF2FF",
   rose:"#9D174D", roseBg:"#FFF1F2",
+  slate:"#334155", slateBg:"#F1F5F9",
 };
 
 const fmt$ = n => `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -61,6 +62,8 @@ export default function TeamStores() {
   const [profileProbing, setProfileProbing] = useState(false);
   const [ordersProbe, setOrdersProbe] = useState(null);
   const [ordersProbing, setOrdersProbing] = useState(false);
+  const [rawSample, setRawSample] = useState(null);
+  const [rawSampling, setRawSampling] = useState(false);
   const [error, setError]         = useState(null);
   const [sortCol, setSortCol]     = useState("revenue");
   const [sortDir, setSortDir]     = useState("desc");
@@ -259,11 +262,14 @@ export default function TeamStores() {
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
           <div style={{ padding: 24 }}>
-            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data — admin credentials need admin-level access to <code>team_store_order</code>.</div>
+            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data — run <strong>Raw Sample</strong> to inspect the order field structure.</div>
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button onClick={async () => { setRawSampling(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) }); setRawSample(await r.json()); } finally { setRawSampling(false); } }} disabled={rawSampling}
+                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: rawSampling ? "default" : "pointer", border: `1px solid ${B.slate}`, borderRadius: 6, background: B.slateBg, color: B.slate }}>
+                    {rawSampling ? "Loading…" : "Raw Sample"}</button>
                   <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
                     style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
                     {permProbing ? "Probing…" : "Probe Permissions"}</button>
@@ -282,18 +288,34 @@ export default function TeamStores() {
                 </div>
               </div>
 
+              {rawSample && (
+                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.slate}`, borderRadius: 6 }}>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.slate, marginBottom: 8 }}>
+                    Raw order sample ({rawSample.totalFetched} fetched):
+                  </div>
+                  {rawSample.error && <div style={{ color: B.red, fontSize: 12 }}>{rawSample.error}</div>}
+                  {rawSample.sample?.map((order, i) => (
+                    <div key={i} style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>Order {i + 1} — fields: {Object.keys(order).join(", ")}</div>
+                      <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                        {JSON.stringify(order, null, 2)}
+                      </pre>
+                    </div>
+                  ))}
+                  {!rawSample.sample?.length && !rawSample.error && <div style={{ fontSize: 12, color: B.muted }}>No orders returned.</div>}
+                </div>
+              )}
+
               {ordersProbe && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.rose}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.rose, marginBottom: 8 }}>
-                    Orders probe — suppliers: [{ordersProbe.supplierIds?.join(", ") || "none"}]:
-                  </div>
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.rose, marginBottom: 8 }}>Orders probe — suppliers: [{ordersProbe.supplierIds?.length || 0}]:</div>
                   {ordersProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{ordersProbe.error}</div>}
                   {ordersProbe.working?.length > 0 && (
                     <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Working ({ordersProbe.working.length}):</div>
                       {ordersProbe.working.map((r, i) => (
                         <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}>
-                          <code>{r.path}</code> → {r.status}{r.count != null ? ` (${r.count} items)` : ""}: {r.snippet?.slice(0, 120)}
+                          <code>{r.path}</code> → {r.status}{r.count != null ? ` (${r.count} items)` : ""}
                         </div>
                       ))}
                     </div>
@@ -311,16 +333,12 @@ export default function TeamStores() {
                   <div style={{ fontWeight: 600, fontSize: 12, color: B.indigo, marginBottom: 8 }}>
                     Account Profile — auth: {profileProbe.authType || "?"}{profileProbe.hasCookies ? " + cookies" : " (no cookies)"}
                   </div>
-                  {profileProbe.error && <div style={{ color: B.red, fontSize: 12, marginBottom: 6 }}>{profileProbe.error}</div>}
                   {profileProbe.profile ? (
-                    <div style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Found at /{profileProbe.profile.endpoint}:</div>
-                      <pre style={{ fontSize: 10, background: B.indigoBg, border: `1px solid ${B.indigo}`, borderRadius: 4, padding: "8px 10px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                        {JSON.stringify(profileProbe.profile.data, null, 2)}
-                      </pre>
-                    </div>
+                    <pre style={{ fontSize: 10, background: B.indigoBg, border: `1px solid ${B.indigo}`, borderRadius: 4, padding: "8px 10px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {JSON.stringify(profileProbe.profile.data, null, 2)}
+                    </pre>
                   ) : (
-                    <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 8 }}>No profile endpoint returned 200. Probed: {profileProbe.results?.map(r => `/${r.endpoint}→${r.status || r.error}`).join(", ")}</div>
+                    <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic" }}>No profile endpoint returned 200.</div>
                   )}
                 </div>
               )}
@@ -328,35 +346,20 @@ export default function TeamStores() {
               {permProbe && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
                   <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>
-                    Permissions — auth: {permProbe.authType || "?"}{permProbe.hasCookies ? " + cookies" : ""} ({permProbe.authEndpoint || "?"}):
+                    Permissions — auth: {permProbe.authType || "?"}{permProbe.hasCookies ? " + cookies" : ""}
                   </div>
                   {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
-                  {(() => {
-                    const hasSupplier = permProbe.accessible?.some(r => r.path === 'supplier');
-                    const teamStore403 = permProbe.sweepResults?.find(r => r.path === 'team_store')?.status === 403;
-                    if (hasSupplier && teamStore403) return (
-                      <div style={{ marginBottom: 10, padding: "10px 14px", background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 6 }}>
-                        <div style={{ fontSize: 12, fontWeight: 700, color: B.yellow, marginBottom: 6 }}>Diagnosis: Supplier-level credentials</div>
-                        <div style={{ fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
-                          ✅ Auth works — token obtained from <code style={{ background: B.border, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>/admin/signin</code><br/>
-                          ✅ <code style={{ background: B.greenBg, color: B.green, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>supplier</code> → 200<br/>
-                          ❌ <code style={{ background: B.redBg, color: B.red, padding: "1px 4px", borderRadius: 3, fontSize: 11 }}>team_store</code> → 403
-                        </div>
-                      </div>
-                    );
-                    return null;
-                  })()}
                   {permProbe.accessible?.length > 0 && (
                     <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible ({permProbe.accessible.length}):</div>
                       {permProbe.accessible.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
+                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 160)}</div>
                       ))}
                     </div>
                   )}
                   {permProbe.sweepResults?.map((r, i) => (
-                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : r.status === 403 ? B.muted : r.status === 401 ? B.yellow : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 150)}` : ""}
+                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status < 400 ? 700 : 400 }}>
+                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status < 400 ? `: ${r.snippet.slice(0, 150)}` : ""}
                     </div>
                   ))}
                 </div>
@@ -364,50 +367,26 @@ export default function TeamStores() {
 
               {extProbe && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A4A00", borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe — supplier IDs: [{extProbe.supplierIds?.join(", ") || "none"}]</div>
-                  {extProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{extProbe.error}</div>}
+                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe</div>
                   {extProbe.allAccessible?.length > 0 ? (
-                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible ({extProbe.allAccessible.length}):</div>
+                    <div style={{ padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
                       {extProbe.allAccessible.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 180)}</div>
+                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 160)}</div>
                       ))}
                     </div>
-                  ) : (
-                    <div style={{ fontSize: 11, color: B.muted, marginBottom: 8, fontStyle: "italic" }}>No additional accessible endpoints found.</div>
-                  )}
-                  {extProbe.paramResults?.length > 0 && (
-                    <div style={{ marginTop: 6 }}>
-                      <div style={{ fontSize: 10, color: B.muted, textTransform: "uppercase", fontWeight: 600, marginBottom: 3 }}>Scoped params:</div>
-                      {extProbe.paramResults.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status !== 403 && r.status !== 404 ? 700 : 400 }}>
-                          <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.snippet && r.status !== 403 && r.status !== 404 ? `: ${r.snippet.slice(0, 120)}` : ""}
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  ) : <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic" }}>No additional accessible endpoints found.</div>}
                 </div>
               )}
+
               {storeScan && (
                 <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.teal}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.teal, marginBottom: 8 }}>Store orders API scan ({storeScan.totalChunks} chunks, {storeScan.hits?.length || 0} with hits):</div>
-                  {storeScan.error && <div style={{ color: B.red, fontSize: 12 }}>{storeScan.error}</div>}
+                  <div style={{ fontWeight: 600, fontSize: 12, color: B.teal, marginBottom: 8 }}>Store orders API scan ({storeScan.totalChunks} chunks):</div>
                   {storeScan.hits?.map((h, i) => (
-                    <div key={i} style={{ marginBottom: 12 }}>
-                      <div style={{ fontWeight: 600, fontSize: 11, color: B.text, marginBottom: 4 }}>{h.chunk} ({h.sizeKB}KB)</div>
-                      {h.orderPaths?.length > 0 && (
-                        <div style={{ marginBottom: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-                          {h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}
-                        </div>
-                      )}
-                      {h.contexts?.map((c, j) => (
-                        <pre key={j} style={{ fontSize: 10, color: B.textMid, overflow: "auto", maxHeight: 100, margin: "4px 0", padding: "6px 8px", background: B.tealBg, borderRadius: 4, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                          <strong style={{ color: B.teal }}>[{c.kw}]</strong> {c.ctx}
-                        </pre>
-                      ))}
+                    <div key={i} style={{ marginBottom: 8 }}>
+                      <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 3 }}>{h.chunk} ({h.sizeKB}KB)</div>
+                      {h.orderPaths?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>{h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}</div>}
                     </div>
                   ))}
-                  {!storeScan.hits?.length && !storeScan.error && <div style={{ fontSize: 12, color: B.muted }}>No store_order references found.</div>}
                 </div>
               )}
             </div>

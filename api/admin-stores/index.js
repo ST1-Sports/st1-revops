@@ -116,23 +116,20 @@ async function adminGet(path) {
     res = await fetch(url, { headers: makeHeaders(_auth) });
   }
 
-  const errBody = async () => { try { return (await res.text()).slice(0, 200); } catch { return ''; } };
+  const readErr = async () => { try { return (await res.text()).slice(0, 200); } catch { return ''; } };
 
   if (res.status === 401) {
     _auth = null;
-    const err = new Error(`Admin API returned 401 for ${path}: ${await errBody()}`);
-    err.status = 401;
-    throw err;
+    const err = new Error(`Admin API returned 401 for ${path}: ${await readErr()}`);
+    err.status = 401; throw err;
   }
   if (res.status === 403) {
-    const err = new Error(`Admin API returned 403 for ${path}: ${await errBody()}`);
-    err.status = 403;
-    throw err;
+    const err = new Error(`Admin API returned 403 for ${path}: ${await readErr()}`);
+    err.status = 403; throw err;
   }
   if (!res.ok) {
-    const err = new Error(`Admin API returned HTTP ${res.status} for ${path}: ${await errBody()}`);
-    err.status = res.status;
-    throw err;
+    const err = new Error(`Admin API returned HTTP ${res.status} for ${path}: ${await readErr()}`);
+    err.status = res.status; throw err;
   }
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) return res.json();
@@ -141,31 +138,10 @@ async function adminGet(path) {
   return JSON.parse(text);
 }
 
-// Fetch full supplier list (used as fallback scope for super admin)
-async function getAllSuppliers() {
-  try {
-    const data = await adminGet('supplier?page=1&perPage=100');
-    const list = Array.isArray(data) ? data : (data.data || []);
-    return list.filter(s => s.id);
-  } catch { return []; }
-}
-
-// Fan out a request across all suppliers when the unscoped version 500s.
-// basePath should include any fixed query params (e.g. "team_store_order?page=1&perPage=200").
-async function adminGetSupplierScoped(basePath) {
-  const suppliers = await getAllSuppliers();
-  if (!suppliers.length) throw new Error('Supplier-scoped fallback: no suppliers found');
-  const sep = basePath.includes('?') ? '&' : '?';
-  const pages = await Promise.all(
-    suppliers.map(async s => {
-      try {
-        const data = await adminGet(`${basePath}${sep}supplierId=${s.id}`);
-        const items = Array.isArray(data) ? data : (data.data || data.orders || data.stores || data.team_stores || data.team_store_orders || []);
-        return items.map(item => ({ ...item, _supplierName: s.name, _supplierId: s.id }));
-      } catch { return []; }
-    })
-  );
-  return pages.flat();
+function extractList(data, ...keys) {
+  if (Array.isArray(data)) return data;
+  for (const k of keys) { if (Array.isArray(data[k])) return data[k]; }
+  return [];
 }
 
 async function fetchProfile(auth) {
@@ -178,30 +154,6 @@ async function fetchProfile(auth) {
     } catch {}
   }
   return null;
-}
-
-async function fetchOrders(path) {
-  try {
-    const data = await adminGet(path);
-    return Array.isArray(data) ? data : (data.data || data.team_store_orders || data.orders || []);
-  } catch (e) {
-    if (e.status === 403 || e.status === 500) {
-      return adminGetSupplierScoped(path);
-    }
-    throw e;
-  }
-}
-
-async function fetchStores(path) {
-  try {
-    const data = await adminGet(path);
-    return Array.isArray(data) ? data : (data.data || data.team_stores || data.stores || []);
-  } catch (e) {
-    if (e.status === 403 || e.status === 500) {
-      return adminGetSupplierScoped(path);
-    }
-    throw e;
-  }
 }
 
 export default async function handler(req, res) {
@@ -235,7 +187,6 @@ export default async function handler(req, res) {
     });
   }
 
-  // Probe team_store_order param variants to find what works for this account
   if (action === 'probe-orders') {
     let auth;
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
@@ -250,10 +201,11 @@ export default async function handler(req, res) {
     const variants = [
       'team_store_order',
       'team_store_order?page=1&perPage=5',
-      'team_store_order?page=1&perPage=5&status=completed',
-      'team_store_order?page=1&perPage=5&status=pending',
+      'team_store_order?page=1&perPage=50',
+      'team_store_order?page=1&perPage=100',
+      'team_store_order?page=1&perPage=200',
       'team_store?page=1&perPage=5',
-      ...supplierIds.slice(0, 3).flatMap(sid => [
+      ...supplierIds.slice(0, 2).flatMap(sid => [
         `team_store_order?supplierId=${sid}&page=1&perPage=5`,
         `team_store?supplierId=${sid}&page=1&perPage=5`,
       ]),
@@ -313,7 +265,7 @@ export default async function handler(req, res) {
     try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
     const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
     const sweepPaths = [
-      'team_store', 'team_store_order', 'products', 'st1_products',
+      'team_store?page=1&perPage=5', 'team_store_order?page=1&perPage=5', 'products', 'st1_products',
       'supplier', 'school', 'organization', 'account', 'user',
       'report', 'revenue', 'dashboard', 'quote_order',
     ];
@@ -362,9 +314,6 @@ export default async function handler(req, res) {
     }
     const paramVariants = supplierIds.length ? [
       `team_store?page=1&perPage=5`,
-      `team_store?supplierId=${supplierIds[0]}`,
-      `team_store?supplier_id=${supplierIds[0]}`,
-      `team_store_order?supplierId=${supplierIds[0]}`,
       `team_store_order?page=1&perPage=5`,
     ] : [`team_store?page=1&perPage=5`, `team_store_order?page=1&perPage=5`];
     const paramResults = await Promise.all(paramVariants.map(async p => {
@@ -380,35 +329,53 @@ export default async function handler(req, res) {
 
   try {
     if (action === 'stores') {
-      const stores = await fetchStores('team_store?page=1&perPage=200');
+      const data = await adminGet('team_store?page=1&perPage=50');
+      const stores = extractList(data, 'data', 'team_stores', 'teamStores', 'stores');
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
     if (action === 'orders') {
-      const orders = await fetchOrders('team_store_order?page=1&perPage=200');
+      const data = await adminGet('team_store_order?page=1&perPage=50');
+      const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      const orders = await fetchOrders('team_store_order?page=1&perPage=200');
+      const data = await adminGet('team_store_order?page=1&perPage=50');
+      const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
       const productMap = {};
       for (const order of orders) {
-        const lineItems = order.line_items || order.items || order.order_items || order.products || order.order_lines || [];
-        const storeName = order.store_name || order.team_store_name || order.store?.name || order.team_store?.name || order.school_name || 'Unknown Store';
+        // Handle both camelCase and snake_case field names from the API
+        const lineItems =
+          order.lineItems || order.line_items ||
+          order.orderItems || order.order_items ||
+          order.items || order.products ||
+          order.cartItems || order.cart_items ||
+          order.orderLines || order.order_lines || [];
+        const storeName =
+          order.storeName || order.store_name ||
+          order.teamStoreName || order.team_store_name ||
+          order.teamStore?.name || order.team_store?.name ||
+          order.store?.name || order.schoolName || order.school_name || 'Unknown Store';
         for (const item of lineItems) {
-          const name = item.name || item.product_name || item.title || item.description || item.sku || null;
+          const name = item.name || item.productName || item.product_name || item.title || item.description || item.sku || null;
           if (!name) continue;
-          const qty = Number(item.quantity || item.qty || 1);
-          const price = Number(item.price || item.unit_price || item.amount || 0);
+          const qty = Number(item.quantity || item.qty || item.count || 1);
+          const price = Number(item.price || item.unitPrice || item.unit_price || item.amount || item.total || 0);
           const revenue = qty * price;
           if (!productMap[name]) productMap[name] = { name, revenue: 0, orders: 0, quantity: 0, stores: new Set() };
-          productMap[name].revenue += revenue; productMap[name].orders++; productMap[name].quantity += qty; productMap[name].stores.add(storeName);
+          productMap[name].revenue += revenue;
+          productMap[name].orders++;
+          productMap[name].quantity += qty;
+          productMap[name].stores.add(storeName);
         }
       }
       const sellers = Object.values(productMap).map(p => ({ ...p, stores: p.stores.size })).sort((a, b) => b.quantity - a.quantity);
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
     if (action === 'raw-sample') {
-      const orders = await fetchOrders('team_store_order?page=1&perPage=5');
-      return res.json({ ok: true, sample: orders.slice(0, 2), totalOrders: orders.length, authEndpoint: _auth?.endpoint });
+      const data = await adminGet('team_store_order?page=1&perPage=3');
+      const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
+      // Return first order with full field list to reveal the data structure
+      return res.json({ ok: true, sample: orders.slice(0, 2), totalFetched: orders.length, authEndpoint: _auth?.endpoint });
     }
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {
