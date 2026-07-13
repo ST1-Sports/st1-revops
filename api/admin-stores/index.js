@@ -339,26 +339,53 @@ export default async function handler(req, res) {
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      const data = await adminGet('team_store_order?page=1&perPage=100');
+      const data = await adminGet('team_store_order?page=1&perPage=50');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Bulk list has no line items — aggregate by store using unitCount/totalAmount
-      const storeMap = {};
-      for (const order of orders) {
-        const ts = order.teamStore || {};
-        const storeName = ts.name || order.storeName || order.store_name || 'Unknown Store';
-        const slug = ts.slug || null;
-        const status = ts.status || null;
-        const units = Number(order.unitCount || order.itemCount || 0);
-        const revenue = Number(order.totalAmount || order.subTotal || 0);
-        if (!storeMap[storeName]) {
-          storeMap[storeName] = { name: storeName, slug, status, revenue: 0, orders: 0, units: 0 };
+      // Bulk list has no line items — fetch individual order/cart detail for each
+      const auth = _auth;
+      const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
+      const details = await Promise.all(
+        orders.slice(0, 30).map(async order => {
+          const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
+          try {
+            const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+            if (r.ok) return { storeName, detail: await r.json() };
+          } catch {}
+          if (order.cartId) {
+            try {
+              const r = await fetch(`${API_BASE}/cart/${order.cartId}`, { headers: ah, signal: AbortSignal.timeout(5000) });
+              if (r.ok) return { storeName, detail: await r.json() };
+            } catch {}
+          }
+          return { storeName, detail: null };
+        })
+      );
+      const productMap = {};
+      for (const { storeName, detail } of details) {
+        if (!detail) continue;
+        const lineItems =
+          detail.lineItems || detail.line_items ||
+          detail.orderItems || detail.order_items ||
+          detail.items || detail.products ||
+          detail.cartItems || detail.cart_items ||
+          detail.cartLineItems || detail.cart_line_items ||
+          detail.orderLines || detail.order_lines || [];
+        for (const item of lineItems) {
+          const name = item.name || item.productName || item.product_name || item.title || item.description || item.sku || null;
+          if (!name) continue;
+          const qty = Number(item.quantity || item.qty || item.count || 1);
+          const price = Number(item.price || item.unitPrice || item.unit_price || item.amount || item.total || 0);
+          if (!productMap[name]) productMap[name] = { name, revenue: 0, orders: 0, quantity: 0, stores: new Set() };
+          productMap[name].revenue += qty * price;
+          productMap[name].orders++;
+          productMap[name].quantity += qty;
+          productMap[name].stores.add(storeName);
         }
-        storeMap[storeName].revenue += revenue;
-        storeMap[storeName].orders++;
-        storeMap[storeName].units += units;
       }
-      const sellers = Object.values(storeMap).sort((a, b) => b.units - a.units);
-      return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
+      const sellers = Object.values(productMap)
+        .map(p => ({ ...p, stores: p.stores.size }))
+        .sort((a, b) => b.quantity - a.quantity);
+      return res.json({ ok: true, sellers, rawOrderCount: orders.length, ordersWithDetail: details.filter(d => d.detail).length, authEndpoint: _auth?.endpoint });
     }
     if (action === 'raw-sample') {
       const data = await adminGet('team_store_order?page=1&perPage=3');
