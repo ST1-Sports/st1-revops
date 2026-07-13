@@ -10,10 +10,7 @@ const B = {
   yellow:"#C77800", yellowBg:"#FFF8E6",
   red:"#C0392B", redBg:"#FDECEA",
   blue:"#1A5FA8", blueBg:"#E8F0FA",
-  purple:"#6B3FA0", purpleBg:"#F3EEFB",
   teal:"#0C7B6A", tealBg:"#E6F5F2",
-  indigo:"#3730A3", indigoBg:"#EEF2FF",
-  rose:"#9D174D", roseBg:"#FFF1F2",
   slate:"#334155", slateBg:"#F1F5F9",
 };
 
@@ -44,31 +41,21 @@ function SortIcon({ col, sortCol, sortDir }) {
 }
 
 export default function TeamStores() {
-  const [days, setDays]           = useState(0);
-  const [loading, setLoading]     = useState(false);
+  const [days, setDays]             = useState(0);
+  const [loading, setLoading]       = useState(false);
   const [configured, setConfigured] = useState(null);
-  const [stores, setStores]       = useState([]);
-  const [sellers, setSellers]     = useState([]);
-  const [recent, setRecent]       = useState([]);
-  const [summary, setSummary]     = useState(null);
+  const [stores, setStores]         = useState([]);
+  const [sellers, setSellers]       = useState([]);
+  const [recent, setRecent]         = useState([]);
+  const [summary, setSummary]       = useState(null);
   const [adminStores, setAdminStores] = useState([]);
-  const [permProbe, setPermProbe] = useState(null);
-  const [permProbing, setPermProbing] = useState(false);
-  const [extProbe, setExtProbe] = useState(null);
-  const [extProbing, setExtProbing] = useState(false);
-  const [storeScan, setStoreScan] = useState(null);
-  const [storeScanning, setStoreScanning] = useState(false);
-  const [profileProbe, setProfileProbe] = useState(null);
-  const [profileProbing, setProfileProbing] = useState(false);
-  const [ordersProbe, setOrdersProbe] = useState(null);
-  const [ordersProbing, setOrdersProbing] = useState(false);
-  const [rawSample, setRawSample] = useState(null);
-  const [rawSampling, setRawSampling] = useState(false);
   const [sellersMeta, setSellersMeta] = useState(null);
-  const [error, setError]         = useState(null);
-  const [sortCol, setSortCol]     = useState("revenue");
-  const [sortDir, setSortDir]     = useState("desc");
-  const [tab, setTab]             = useState("stores");
+  const [rawSample, setRawSample]   = useState(null);
+  const [rawSampling, setRawSampling] = useState(false);
+  const [error, setError]           = useState(null);
+  const [sortCol, setSortCol]       = useState("revenue");
+  const [sortDir, setSortDir]       = useState("desc");
+  const [tab, setTab]               = useState("stores");
 
   const load = useCallback(async (d) => {
     setLoading(true);
@@ -265,174 +252,71 @@ export default function TeamStores() {
         loading && !sellers.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
-          <div style={{ padding: 24 }}>
-            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>
-            No product data — run <strong>Raw Sample</strong> to inspect the order field structure.
+          <div style={{ textAlign: "center", padding: 60, color: B.muted }}>
+            <div style={{ marginBottom: 16 }}>No product data found.</div>
             {sellersMeta && (
-              <span style={{ display: "block", fontSize: 11, color: B.muted, marginTop: 6 }}>
-                Last attempt: {sellersMeta.rawOrderCount ?? 0} orders fetched, {sellersMeta.ordersWithDetail ?? 0} with detail returned.
-              </span>
-            )}
-          </div>
-            <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
-                <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
-                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                  <button onClick={async () => { setRawSampling(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) }); setRawSample(await r.json()); } finally { setRawSampling(false); } }} disabled={rawSampling}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: rawSampling ? "default" : "pointer", border: `1px solid ${B.slate}`, borderRadius: 6, background: B.slateBg, color: B.slate }}>
-                    {rawSampling ? "Loading…" : "Raw Sample"}</button>
-                  <button onClick={async () => { setPermProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-permissions" }) }); setPermProbe(await r.json()); } finally { setPermProbing(false); } }} disabled={permProbing}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: permProbing ? "default" : "pointer", border: "1px solid #4A235A", borderRadius: 6, background: "#F5EFF9", color: "#4A235A" }}>
-                    {permProbing ? "Probing…" : "Probe Permissions"}</button>
-                  <button onClick={async () => { setExtProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-extended" }) }); setExtProbe(await r.json()); } finally { setExtProbing(false); } }} disabled={extProbing}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: extProbing ? "default" : "pointer", border: "1px solid #4A4A00", borderRadius: 6, background: "#FAFAE8", color: "#4A4A00" }}>
-                    {extProbing ? "Probing…" : "Extended Probe"}</button>
-                  <button onClick={async () => { setStoreScanning(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "scan-store-orders" }) }); setStoreScan(await r.json()); } finally { setStoreScanning(false); } }} disabled={storeScanning}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: storeScanning ? "default" : "pointer", border: `1px solid ${B.teal}`, borderRadius: 6, background: B.tealBg, color: B.teal }}>
-                    {storeScanning ? "Scanning…" : "Find Store Orders API"}</button>
-                  <button onClick={async () => { setProfileProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "get-profile" }) }); setProfileProbe(await r.json()); } finally { setProfileProbing(false); } }} disabled={profileProbing}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: profileProbing ? "default" : "pointer", border: `1px solid ${B.indigo}`, borderRadius: 6, background: B.indigoBg, color: B.indigo }}>
-                    {profileProbing ? "Loading…" : "Get Profile"}</button>
-                  <button onClick={async () => { setOrdersProbing(true); try { const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "probe-orders" }) }); setOrdersProbe(await r.json()); } finally { setOrdersProbing(false); } }} disabled={ordersProbing}
-                    style={{ padding: "4px 12px", fontSize: 11, fontWeight: 600, cursor: ordersProbing ? "default" : "pointer", border: `1px solid ${B.rose}`, borderRadius: 6, background: B.roseBg, color: B.rose }}>
-                    {ordersProbing ? "Probing…" : "Probe Orders"}</button>
-                </div>
+              <div style={{ fontSize: 12, marginBottom: 16 }}>
+                {sellersMeta.rawOrderCount ?? 0} orders fetched · {sellersMeta.ordersWithDetail ?? 0} with line item detail returned
               </div>
-
-              {rawSample && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.slate}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.slate, marginBottom: 8 }}>
-                    Raw order sample ({rawSample.totalFetched} fetched):
+            )}
+            <button
+              onClick={async () => {
+                setRawSampling(true);
+                try {
+                  const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) });
+                  setRawSample(await r.json());
+                } finally { setRawSampling(false); }
+              }}
+              disabled={rawSampling}
+              style={{ padding: "6px 16px", fontSize: 12, fontWeight: 600, cursor: rawSampling ? "default" : "pointer", border: `1px solid ${B.slate}`, borderRadius: 6, background: B.slateBg, color: B.slate }}
+            >
+              {rawSampling ? "Loading…" : "Inspect Order Structure"}
+            </button>
+            {rawSample && (
+              <div style={{ marginTop: 20, textAlign: "left", background: B.white, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
+                {rawSample.error && <div style={{ color: B.red, fontSize: 12, marginBottom: 8 }}>{rawSample.error}</div>}
+                {rawSample.firstOrderId && (
+                  <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: B.slate, marginBottom: 4 }}>
+                      team_store_order/{rawSample.firstOrderId} → HTTP {rawSample.orderDetailStatus ?? "N/A"}
+                    </div>
+                    {rawSample.orderDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>{rawSample.orderDetailError}</div>}
+                    {rawSample.orderDetail && (
+                      <>
+                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 4 }}>Fields: {Object.keys(rawSample.orderDetail).join(", ")}</div>
+                        <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 260, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                          {JSON.stringify(rawSample.orderDetail, null, 2)}
+                        </pre>
+                      </>
+                    )}
                   </div>
-                  {rawSample.error && <div style={{ color: B.red, fontSize: 12 }}>{rawSample.error}</div>}
-                  {rawSample.sample?.map((order, i) => (
-                    <div key={i} style={{ marginBottom: 8 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>Bulk order {i + 1} — fields: {Object.keys(order).join(", ")}</div>
-                      <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                        {JSON.stringify(order, null, 2)}
-                      </pre>
+                )}
+                {rawSample.firstCartId && (
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: B.teal, marginBottom: 4 }}>
+                      cart/{rawSample.firstCartId} → HTTP {rawSample.cartDetailStatus ?? "N/A"}
                     </div>
-                  ))}
-                  {!rawSample.sample?.length && !rawSample.error && <div style={{ fontSize: 12, color: B.muted }}>No orders returned.</div>}
-                  {rawSample.firstOrderId && (
-                    <div style={{ marginTop: 10, borderTop: `1px solid ${B.border}`, paddingTop: 10 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: B.slate, marginBottom: 3 }}>
-                        Individual order detail — GET team_store_order/{rawSample.firstOrderId} → HTTP {rawSample.orderDetailStatus ?? "N/A"}
-                      </div>
-                      {rawSample.orderDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>Error: {rawSample.orderDetailError}</div>}
-                      {rawSample.orderDetail && (
-                        <>
-                          <div style={{ fontSize: 10, color: B.slate, marginBottom: 3 }}>Fields: {Object.keys(rawSample.orderDetail).join(", ")}</div>
-                          <pre style={{ fontSize: 10, background: B.slateBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                            {JSON.stringify(rawSample.orderDetail, null, 2)}
-                          </pre>
-                        </>
-                      )}
-                    </div>
-                  )}
-                  {rawSample.firstCartId && (
-                    <div style={{ marginTop: 10, borderTop: `1px solid ${B.border}`, paddingTop: 10 }}>
-                      <div style={{ fontSize: 10, fontWeight: 700, color: B.teal, marginBottom: 3 }}>
-                        Cart detail — GET cart/{rawSample.firstCartId} → HTTP {rawSample.cartDetailStatus ?? "N/A"}
-                      </div>
-                      {rawSample.cartDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>Error: {rawSample.cartDetailError}</div>}
-                      {rawSample.cartDetail && (
-                        <>
-                          <div style={{ fontSize: 10, color: B.teal, marginBottom: 3 }}>Fields: {Object.keys(rawSample.cartDetail).join(", ")}</div>
-                          <pre style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 240, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                            {JSON.stringify(rawSample.cartDetail, null, 2)}
-                          </pre>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {ordersProbe && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.rose}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.rose, marginBottom: 8 }}>Orders probe — suppliers: [{ordersProbe.supplierIds?.length || 0}]:</div>
-                  {ordersProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{ordersProbe.error}</div>}
-                  {ordersProbe.working?.length > 0 && (
-                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Working ({ordersProbe.working.length}):</div>
-                      {ordersProbe.working.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}>
-                          <code>{r.path}</code> → {r.status}{r.count != null ? ` (${r.count} items)` : ""}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {ordersProbe.results?.map((r, i) => (
-                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status === 200 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status === 200 ? 700 : 400 }}>
-                      <code style={{ wordBreak: "break-all" }}>{r.path}</code> → {r.error || r.status}{r.count != null ? ` (${r.count})` : ""}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {profileProbe && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.indigo}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.indigo, marginBottom: 8 }}>
-                    Account Profile — auth: {profileProbe.authType || "?"}{profileProbe.hasCookies ? " + cookies" : " (no cookies)"}
+                    {rawSample.cartDetailError && <div style={{ color: B.red, fontSize: 11, marginBottom: 4 }}>{rawSample.cartDetailError}</div>}
+                    {rawSample.cartDetail && (
+                      <>
+                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 4 }}>Fields: {Object.keys(rawSample.cartDetail).join(", ")}</div>
+                        <pre style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 260, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                          {JSON.stringify(rawSample.cartDetail, null, 2)}
+                        </pre>
+                      </>
+                    )}
                   </div>
-                  {profileProbe.profile ? (
-                    <pre style={{ fontSize: 10, background: B.indigoBg, border: `1px solid ${B.indigo}`, borderRadius: 4, padding: "8px 10px", overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
-                      {JSON.stringify(profileProbe.profile.data, null, 2)}
+                )}
+                {rawSample.sample?.map((order, i) => (
+                  <div key={i} style={{ marginTop: 12, borderTop: `1px solid ${B.border}`, paddingTop: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: B.muted, marginBottom: 4 }}>Bulk order {i + 1} fields: {Object.keys(order).join(", ")}</div>
+                    <pre style={{ fontSize: 10, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", overflow: "auto", maxHeight: 180, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                      {JSON.stringify(order, null, 2)}
                     </pre>
-                  ) : (
-                    <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic" }}>No profile endpoint returned 200.</div>
-                  )}
-                </div>
-              )}
-
-              {permProbe && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A235A", borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A235A", marginBottom: 8 }}>
-                    Permissions — auth: {permProbe.authType || "?"}{permProbe.hasCookies ? " + cookies" : ""}
                   </div>
-                  {permProbe.error && <div style={{ color: B.red, fontSize: 12 }}>{permProbe.error}</div>}
-                  {permProbe.accessible?.length > 0 && (
-                    <div style={{ marginBottom: 8, padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                      <div style={{ fontSize: 11, fontWeight: 700, color: B.green, marginBottom: 4 }}>Accessible ({permProbe.accessible.length}):</div>
-                      {permProbe.accessible.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 160)}</div>
-                      ))}
-                    </div>
-                  )}
-                  {permProbe.sweepResults?.map((r, i) => (
-                    <div key={i} style={{ fontSize: 11, color: r.error ? B.muted : r.status < 400 ? B.green : B.muted, marginBottom: 2, fontWeight: r.status && r.status < 400 ? 700 : 400 }}>
-                      <code>{r.path}</code> → {r.error || r.status}{r.snippet && r.status < 400 ? `: ${r.snippet.slice(0, 150)}` : ""}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {extProbe && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: "1px solid #4A4A00", borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: "#4A4A00", marginBottom: 8 }}>Extended probe</div>
-                  {extProbe.allAccessible?.length > 0 ? (
-                    <div style={{ padding: "6px 10px", background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 4 }}>
-                      {extProbe.allAccessible.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11, color: B.green, marginBottom: 2 }}><code>{r.path}</code> → {r.status}: {r.snippet?.slice(0, 160)}</div>
-                      ))}
-                    </div>
-                  ) : <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic" }}>No additional accessible endpoints found.</div>}
-                </div>
-              )}
-
-              {storeScan && (
-                <div style={{ marginBottom: 10, padding: "10px 12px", background: B.white, border: `1px solid ${B.teal}`, borderRadius: 6 }}>
-                  <div style={{ fontWeight: 600, fontSize: 12, color: B.teal, marginBottom: 8 }}>Store orders API scan ({storeScan.totalChunks} chunks):</div>
-                  {storeScan.hits?.map((h, i) => (
-                    <div key={i} style={{ marginBottom: 8 }}>
-                      <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 3 }}>{h.chunk} ({h.sizeKB}KB)</div>
-                      {h.orderPaths?.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 4 }}>{h.orderPaths.map((p, j) => <code key={j} style={{ fontSize: 10, background: B.tealBg, border: `1px solid ${B.teal}`, padding: "1px 5px", borderRadius: 3, color: B.teal }}>{p}</code>)}</div>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>

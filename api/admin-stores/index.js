@@ -144,18 +144,6 @@ function extractList(data, ...keys) {
   return [];
 }
 
-async function fetchProfile(auth) {
-  const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-  const candidates = ['me', 'auth/me', 'profile', 'user', 'account', 'user/profile', 'admin/profile'];
-  for (const ep of candidates) {
-    try {
-      const r = await fetch(`${API_BASE}/${ep}`, { headers: ah, signal: AbortSignal.timeout(4000) });
-      if (r.ok) { return { endpoint: ep, data: await r.json() }; }
-    } catch {}
-  }
-  return null;
-}
-
 export default async function handler(req, res) {
   setCors(res);
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -167,177 +155,19 @@ export default async function handler(req, res) {
     return res.json({ ok: true, configured: Boolean(email && password) });
   }
 
-  if (action === 'get-profile') {
-    let auth;
-    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
-    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-    const candidates = ['me', 'auth/me', 'profile', 'user', 'account', 'user/profile', 'admin/profile'];
-    const results = await Promise.all(candidates.map(async ep => {
-      try {
-        const r = await fetch(`${API_BASE}/${ep}`, { headers: ah, signal: AbortSignal.timeout(4000) });
-        const text = await r.text();
-        let body; try { body = JSON.parse(text); } catch { body = text.slice(0, 300); }
-        return { endpoint: ep, status: r.status, body };
-      } catch (e) { return { endpoint: ep, error: e.message }; }
-    }));
-    const profile = results.find(r => r.status === 200);
-    return res.json({
-      ok: true, authType: auth.type, hasCookies: Boolean(auth.cookies), authEndpoint: auth.endpoint,
-      results, profile: profile ? { endpoint: profile.endpoint, data: profile.body } : null,
-    });
-  }
-
-  if (action === 'probe-orders') {
-    let auth;
-    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: e.message }); }
-    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-
-    let supplierIds = [];
-    try {
-      const r = await fetch(`${API_BASE}/supplier?page=1&perPage=100`, { headers: ah, signal: AbortSignal.timeout(5000) });
-      if (r.ok) { const d = await r.json(); const l = Array.isArray(d) ? d : (d.data || []); supplierIds = l.map(s => s.id).filter(Boolean); }
-    } catch {}
-
-    const variants = [
-      'team_store_order',
-      'team_store_order?page=1&perPage=5',
-      'team_store_order?page=1&perPage=50',
-      'team_store_order?page=1&perPage=100',
-      'team_store_order?page=1&perPage=200',
-      'team_store?page=1&perPage=5',
-      ...supplierIds.slice(0, 2).flatMap(sid => [
-        `team_store_order?supplierId=${sid}&page=1&perPage=5`,
-        `team_store?supplierId=${sid}&page=1&perPage=5`,
-      ]),
-    ];
-
-    const results = await Promise.all(variants.map(async path => {
-      try {
-        const r = await fetch(`${API_BASE}/${path}`, { headers: ah, signal: AbortSignal.timeout(6000) });
-        const text = await r.text();
-        let parsed; try { parsed = JSON.parse(text); } catch { parsed = null; }
-        const count = parsed ? (Array.isArray(parsed) ? parsed.length : (parsed.data?.length ?? parsed.total ?? null)) : null;
-        return { path, status: r.status, count, snippet: text.slice(0, 300).replace(/\n/g, ' ') };
-      } catch (e) { return { path, error: e.message }; }
-    }));
-
-    const working = results.filter(r => r.status === 200);
-    return res.json({ ok: true, supplierIds, results, working });
-  }
-
-  if (action === 'scan-store-orders') {
-    try {
-      const BASE = 'https://admin.st1sports.com';
-      const htmlRes = await fetch(`${BASE}/`, { headers: { 'User-Agent': 'ST1-RevOps/1.0' } });
-      const html = await htmlRes.text();
-      const scriptSrcs = [...html.matchAll(/src="([^"]+\.js[^"]*)"/g)].map(m => m[1]);
-      const allScripts = scriptSrcs.map(s => s.startsWith('http') ? s : `${BASE}${s}`);
-      const hits = [];
-      for (const scriptUrl of allScripts) {
-        const chunk = scriptUrl.split('/').pop();
-        try {
-          const r = await fetch(scriptUrl, { headers: { 'User-Agent': 'ST1-RevOps/1.0' }, signal: AbortSignal.timeout(15000) });
-          const text = await r.text();
-          const kws = ['store_order', 'storeOrder', 'StoreOrder', 'store-order', 'storeorders', 'store_orders'];
-          const contexts = [];
-          for (const kw of kws) {
-            let pos = 0;
-            while (pos < text.length && contexts.length < 30) {
-              const idx = text.toLowerCase().indexOf(kw.toLowerCase(), pos);
-              if (idx === -1) break;
-              contexts.push({ kw, ctx: text.slice(Math.max(0, idx - 200), Math.min(text.length, idx + 300)).replace(/\n/g, ' ').slice(0, 460) });
-              pos = idx + kw.length;
-            }
-          }
-          const orderPaths = [...new Set(
-            [...text.matchAll(/["'`](\/[^"'`\s]{1,80})["'`]/g)].map(m => m[1])
-              .filter(p => /order|store/i.test(p) && !p.startsWith('/assets/') && !/(js|css|png|svg|woff)$/.test(p))
-          )];
-          if (contexts.length || orderPaths.length) hits.push({ chunk, sizeKB: Math.round(text.length / 1024), contexts: contexts.slice(0, 15), orderPaths });
-        } catch (e) { hits.push({ chunk, error: e.message }); }
-      }
-      return res.json({ ok: true, totalChunks: allScripts.length, hits });
-    } catch (e) { return res.json({ ok: false, error: e.message }); }
-  }
-
-  if (action === 'probe-permissions') {
-    let auth;
-    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
-    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-    const sweepPaths = [
-      'team_store?page=1&perPage=5', 'team_store_order?page=1&perPage=5', 'products', 'st1_products',
-      'supplier', 'school', 'organization', 'account', 'user',
-      'report', 'revenue', 'dashboard', 'quote_order',
-    ];
-    const sweepResults = await Promise.all(sweepPaths.map(async p => {
-      try {
-        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(5000) });
-        const text = await r.text();
-        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path: p, error: e.message }; }
-    }));
-    const accessible = sweepResults.filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-    return res.json({ ok: true, authType: auth.type, hasCookies: Boolean(auth.cookies), authEndpoint: auth.endpoint, sweepResults, accessible });
-  }
-
-  if (action === 'probe-extended') {
-    let auth;
-    try { auth = await getAuth(); } catch (e) { return res.json({ ok: false, error: `Auth failed: ${e.message}` }); }
-    const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-    let supplierIds = [];
-    try {
-      const r = await fetch(`${API_BASE}/supplier`, { headers: ah, signal: AbortSignal.timeout(5000) });
-      if (r.ok) { const data = await r.json(); const list = Array.isArray(data) ? data : (data.data || []); supplierIds = list.map(s => s.id).filter(Boolean).slice(0, 3); }
-    } catch {}
-    const altPaths = [
-      'store', 'stores', 'team-store', 'team-stores', 'teamstore', 'teamstores',
-      'storefront', 'storefronts', 'order', 'orders', 'store_order', 'store_orders',
-      'product', 'supplier_product', 'supplier_products',
-      'sales', 'earning', 'earnings', 'payout', 'payouts', 'commission', 'commissions',
-    ];
-    const altResults = await Promise.all(altPaths.map(async p => {
-      try {
-        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(4000) });
-        const text = await r.text();
-        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path: p, error: e.message }; }
-    }));
-    const supplierNested = [];
-    for (const sid of supplierIds) {
-      for (const np of ['team_store', 'orders', 'products', 'store', 'stores', 'store_order']) {
-        try {
-          const r = await fetch(`${API_BASE}/supplier/${sid}/${np}`, { headers: ah, signal: AbortSignal.timeout(4000) });
-          const text = await r.text();
-          supplierNested.push({ path: `supplier/${sid}/${np}`, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') });
-        } catch (e) { supplierNested.push({ path: `supplier/${sid}/${np}`, error: e.message }); }
-      }
-    }
-    const paramVariants = supplierIds.length ? [
-      `team_store?page=1&perPage=5`,
-      `team_store_order?page=1&perPage=5`,
-    ] : [`team_store?page=1&perPage=5`, `team_store_order?page=1&perPage=5`];
-    const paramResults = await Promise.all(paramVariants.map(async p => {
-      try {
-        const r = await fetch(`${API_BASE}/${p}`, { headers: ah, signal: AbortSignal.timeout(4000) });
-        const text = await r.text();
-        return { path: p, status: r.status, snippet: text.slice(0, 200).replace(/\n/g, ' ') };
-      } catch (e) { return { path: p, error: e.message }; }
-    }));
-    const allAccessible = [...altResults, ...supplierNested, ...paramResults].filter(r => r.status && r.status !== 403 && r.status !== 404 && !r.error);
-    return res.json({ ok: true, supplierIds, altResults, supplierNested, paramResults, allAccessible });
-  }
-
   try {
     if (action === 'stores') {
       const data = await adminGet('team_store?page=1&perPage=50');
       const stores = extractList(data, 'data', 'team_stores', 'teamStores', 'stores');
       return res.json({ ok: true, stores, authEndpoint: _auth?.endpoint });
     }
+
     if (action === 'orders') {
       const data = await adminGet('team_store_order?page=1&perPage=50');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
       return res.json({ ok: true, orders });
     }
+
     if (action === 'top-sellers') {
       const data = await adminGet('team_store_order?page=1&perPage=50');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
@@ -387,10 +217,11 @@ export default async function handler(req, res) {
         .sort((a, b) => b.quantity - a.quantity);
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, ordersWithDetail: details.filter(d => d.detail).length, authEndpoint: _auth?.endpoint });
     }
+
     if (action === 'raw-sample') {
       const data = await adminGet('team_store_order?page=1&perPage=3');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      // Also fetch individual order detail to reveal full field structure (including possible line items)
+      // Also fetch individual order + cart detail to reveal full field structure (line items location)
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
       let orderDetail = null, orderDetailStatus = null, orderDetailError = null;
@@ -420,6 +251,7 @@ export default async function handler(req, res) {
         authEndpoint: _auth?.endpoint,
       });
     }
+
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (e) {
     console.error('[admin-stores]', e.message);
