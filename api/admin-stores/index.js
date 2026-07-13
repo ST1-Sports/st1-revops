@@ -339,36 +339,25 @@ export default async function handler(req, res) {
       return res.json({ ok: true, orders });
     }
     if (action === 'top-sellers') {
-      const data = await adminGet('team_store_order?page=1&perPage=50');
+      const data = await adminGet('team_store_order?page=1&perPage=100');
       const orders = extractList(data, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      const productMap = {};
+      // Bulk list has no line items — aggregate by store using unitCount/totalAmount
+      const storeMap = {};
       for (const order of orders) {
-        // Handle both camelCase and snake_case field names from the API
-        const lineItems =
-          order.lineItems || order.line_items ||
-          order.orderItems || order.order_items ||
-          order.items || order.products ||
-          order.cartItems || order.cart_items ||
-          order.orderLines || order.order_lines || [];
-        const storeName =
-          order.storeName || order.store_name ||
-          order.teamStoreName || order.team_store_name ||
-          order.teamStore?.name || order.team_store?.name ||
-          order.store?.name || order.schoolName || order.school_name || 'Unknown Store';
-        for (const item of lineItems) {
-          const name = item.name || item.productName || item.product_name || item.title || item.description || item.sku || null;
-          if (!name) continue;
-          const qty = Number(item.quantity || item.qty || item.count || 1);
-          const price = Number(item.price || item.unitPrice || item.unit_price || item.amount || item.total || 0);
-          const revenue = qty * price;
-          if (!productMap[name]) productMap[name] = { name, revenue: 0, orders: 0, quantity: 0, stores: new Set() };
-          productMap[name].revenue += revenue;
-          productMap[name].orders++;
-          productMap[name].quantity += qty;
-          productMap[name].stores.add(storeName);
+        const ts = order.teamStore || {};
+        const storeName = ts.name || order.storeName || order.store_name || 'Unknown Store';
+        const slug = ts.slug || null;
+        const status = ts.status || null;
+        const units = Number(order.unitCount || order.itemCount || 0);
+        const revenue = Number(order.totalAmount || order.subTotal || 0);
+        if (!storeMap[storeName]) {
+          storeMap[storeName] = { name: storeName, slug, status, revenue: 0, orders: 0, units: 0 };
         }
+        storeMap[storeName].revenue += revenue;
+        storeMap[storeName].orders++;
+        storeMap[storeName].units += units;
       }
-      const sellers = Object.values(productMap).map(p => ({ ...p, stores: p.stores.size })).sort((a, b) => b.quantity - a.quantity);
+      const sellers = Object.values(storeMap).sort((a, b) => b.units - a.units);
       return res.json({ ok: true, sellers, rawOrderCount: orders.length, authEndpoint: _auth?.endpoint });
     }
     if (action === 'raw-sample') {

@@ -188,7 +188,7 @@ export default function TeamStores() {
       )}
 
       <div style={{ display: "flex", gap: 0, borderBottom: `2px solid ${B.border}`, marginBottom: 20 }}>
-        {[["stores", "Stores"], ["sellers", "Top Sellers"], ["recent", "Recent Orders"]].map(([id, label]) => (
+        {[["stores", "Stores"], ["sellers", "Top Stores"], ["recent", "Recent Orders"]].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={{
             padding: "8px 20px", fontSize: 13, fontWeight: 600, cursor: "pointer",
             border: "none", background: "none",
@@ -220,8 +220,8 @@ export default function TeamStores() {
                     const adminMatch = matchAdminStore(store.storeName);
                     const status = adminMatch?.status || adminMatch?.state || adminMatch?.published;
                     const slug = adminMatch?.slug || adminMatch?.url_slug || adminMatch?.store_slug;
-                    const isOpen = status === true || status === "active" || status === "open" || status === "published";
-                    const isClosed = status === false || status === "inactive" || status === "closed" || status === "draft";
+                    const isOpen = status === true || ["active", "open", "published", "Active"].includes(status);
+                    const isClosed = status === false || ["inactive", "closed", "draft", "deactivated", "Deactivated"].includes(status);
                     return (
                       <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
                         <td style={tdStyle("left")}><div style={{ fontWeight: 600, color: store.storeName === "Unattributed" ? B.muted : B.text }}>{store.storeName}</div></td>
@@ -262,7 +262,7 @@ export default function TeamStores() {
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
         ) : sellers.length === 0 ? (
           <div style={{ padding: 24 }}>
-            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No product data — run <strong>Raw Sample</strong> to inspect the order field structure.</div>
+            <div style={{ textAlign: "center", color: B.muted, marginBottom: 20 }}>No store order data — run <strong>Probe Orders</strong> to diagnose API access.</div>
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 16 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, flexWrap: "wrap", gap: 6 }}>
                 <div style={{ fontWeight: 700, fontSize: 12, color: B.muted, textTransform: "uppercase" }}>Admin Credential Check</div>
@@ -397,23 +397,35 @@ export default function TeamStores() {
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead><tr>
                   <th style={{ ...thStyle("name"), textAlign: "left" }}>#</th>
-                  <th style={{ ...thStyle("name"), textAlign: "left" }}>Product</th>
-                  <th style={thStyle("quantity")}>Units Sold</th>
+                  <th style={{ ...thStyle("name"), textAlign: "left" }}>Store</th>
+                  <th style={thStyle("units")}>Units Sold</th>
                   <th style={thStyle("revenue")}>Revenue</th>
                   <th style={thStyle("orders")}>Orders</th>
-                  <th style={thStyle("stores")}>Stores</th>
+                  <th style={{ ...thStyle("status"), textAlign: "left" }}>Status</th>
                 </tr></thead>
                 <tbody>
-                  {sellers.map((s, i) => (
-                    <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
-                      <td style={{ ...tdStyle("left"), color: B.muted, width: 40 }}>{i + 1}</td>
-                      <td style={{ ...tdStyle("left"), fontWeight: 600 }}>{s.name}</td>
-                      <td style={{ ...tdStyle(), fontWeight: 700 }}>{fmtN(s.quantity || 0)}</td>
-                      <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{s.revenue > 0 ? fmt$(s.revenue) : "—"}</td>
-                      <td style={tdStyle()}>{fmtN(s.orders)}</td>
-                      <td style={{ ...tdStyle(), color: B.muted }}>{s.stores}</td>
-                    </tr>
-                  ))}
+                  {sellers.map((s, i) => {
+                    const sIsOpen = s.status === true || ["active", "open", "published", "Active"].includes(s.status);
+                    const sIsClosed = s.status === false || ["inactive", "closed", "draft", "deactivated", "Deactivated"].includes(s.status);
+                    return (
+                      <tr key={i} style={{ background: i % 2 === 0 ? B.white : B.surface }}>
+                        <td style={{ ...tdStyle("left"), color: B.muted, width: 40 }}>{i + 1}</td>
+                        <td style={{ ...tdStyle("left"), fontWeight: 600 }}>
+                          {s.slug
+                            ? <a href={`https://store.st1sports.com/${s.slug}`} target="_blank" rel="noopener noreferrer" style={{ color: B.blue, textDecoration: "none" }}>{s.name} ↗</a>
+                            : s.name}
+                        </td>
+                        <td style={{ ...tdStyle(), fontWeight: 700 }}>{fmtN(s.units || 0)}</td>
+                        <td style={{ ...tdStyle(), fontWeight: 700, color: B.green }}>{s.revenue > 0 ? fmt$(s.revenue) : "—"}</td>
+                        <td style={tdStyle()}>{fmtN(s.orders)}</td>
+                        <td style={tdStyle("left")}>
+                          {s.status
+                            ? <span style={{ display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 700, background: sIsOpen ? B.greenBg : sIsClosed ? B.redBg : B.yellowBg, color: sIsOpen ? B.green : sIsClosed ? B.red : B.yellow }}>{String(s.status).toUpperCase()}</span>
+                            : <span style={{ color: B.gray2, fontSize: 12 }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
