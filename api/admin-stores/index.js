@@ -169,28 +169,19 @@ export default async function handler(req, res) {
     }
 
     if (action === 'top-sellers') {
-      // Step 1: fetch first page and discover total count for pagination
+      // Fetch all pages — keep going until we get a partial page (no reliance on total metadata)
       const PER_PAGE = 100;
-      const firstPage = await adminGet(`team_store_order?page=1&perPage=${PER_PAGE}`);
-      const firstOrders = extractList(firstPage, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-      const total = firstPage.total ?? firstPage.count ?? firstPage.totalCount ?? firstPage.totalItems ?? null;
-      let allOrders = [...firstOrders];
-
-      // Step 2: if there are more pages, fetch them all in parallel
-      if (total && total > PER_PAGE) {
-        const extraPageCount = Math.ceil((total - PER_PAGE) / PER_PAGE);
-        const extraPages = await Promise.all(
-          Array.from({ length: extraPageCount }, (_, i) => i + 2).map(async page => {
-            try {
-              const d = await adminGet(`team_store_order?page=${page}&perPage=${PER_PAGE}`);
-              return extractList(d, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
-            } catch { return []; }
-          })
-        );
-        allOrders = [...allOrders, ...extraPages.flat()];
+      let allOrders = [];
+      let page = 1;
+      while (page <= 50) { // safety cap at 5,000 orders
+        const pageData = await adminGet(`team_store_order?page=${page}&perPage=${PER_PAGE}`);
+        const pageOrders = extractList(pageData, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
+        allOrders.push(...pageOrders);
+        if (pageOrders.length < PER_PAGE) break; // last page
+        page++;
       }
 
-      // Step 3: fetch individual order detail for every order in parallel (items array lives here)
+      // Fetch individual order detail for every order in parallel (items array lives here)
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
       const details = await Promise.all(
@@ -204,7 +195,7 @@ export default async function handler(req, res) {
         })
       );
 
-      // Step 4: aggregate by product name
+      // Aggregate by product name
       const productMap = {};
       for (const { storeName, detail } of details) {
         if (!detail) continue;
@@ -227,7 +218,7 @@ export default async function handler(req, res) {
       const sellers = Object.values(productMap)
         .map(p => ({ ...p, stores: p.stores.size }))
         .sort((a, b) => b.quantity - a.quantity);
-      return res.json({ ok: true, sellers, rawOrderCount: allOrders.length, ordersWithDetail: details.filter(d => d.detail).length, total, authEndpoint: _auth?.endpoint });
+      return res.json({ ok: true, sellers, rawOrderCount: allOrders.length, ordersWithDetail: details.filter(d => d.detail).length, authEndpoint: _auth?.endpoint });
     }
 
     if (action === 'raw-sample') {
