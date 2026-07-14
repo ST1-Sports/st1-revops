@@ -61,6 +61,11 @@ function nextBusinessStart(nowMs = Date.now()) {
 }
 
 export default async function handler(req, res) {
+  // Hard kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to stop all sends immediately
+  if (process.env.PAUSE_EMAIL_SENDING === 'true') {
+    return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0, message: 'Email sending is paused (PAUSE_EMAIL_SENDING=true)' });
+  }
+
   // Verify auth if CRON_SECRET is configured
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
