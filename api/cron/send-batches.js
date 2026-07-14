@@ -2,13 +2,13 @@
  * /api/cron/send-batches — Server-side batch email sender
  *
  * Fires scheduled email batches for all campaigns, independent of the browser.
- * Called every 15 minutes by Vercel Cron.
+ * Called every 15 minutes by Vercel Cron (Mon–Fri 9am–5pm MT only).
  *
- * Business hours: Mon–Fri 9am–5pm only.
- * Outside those hours: overdue batches are rescheduled to the next 9am business day
- * (preserving relative gaps between batches) rather than being skipped or dropped.
+ * Kill switch: set PAUSE_EMAIL_SENDING=true in Vercel env vars to halt all sends.
  *
- * Authorization: Bearer ${CRON_SECRET} header required in production.
+ * Double-send prevention: each batch is claimed (removed from scheduledBatches
+ * and written to DB) before any email is sent. A function timeout mid-send will
+ * not re-queue the batch on the next cron tick.
  */
 
 import { prisma } from '../_lib/prisma.js';
@@ -25,7 +25,6 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// All business-hours logic runs in Mountain Time (America/Denver).
 function getMTComponents(ms = Date.now()) {
   const parts = {};
   new Intl.DateTimeFormat("en-US", {
@@ -45,7 +44,6 @@ function isBusinessHours(nowMs = Date.now()) {
   return wd >= 1 && wd <= 5 && h >= 9 && h < 17;
 }
 
-// Returns UTC timestamp of the next 9:00am Mountain Time on a business day.
 function nextBusinessStart(nowMs = Date.now()) {
   for (let i = 0; i <= 7; i++) {
     const probe = nowMs + i * 86400000;
@@ -60,13 +58,21 @@ function nextBusinessStart(nowMs = Date.now()) {
   return nowMs + 86400000;
 }
 
+async function saveState(state) {
+  await prisma.setting.upsert({
+    where: { key: "app_state" },
+    update: { value: state },
+    create: { key: "app_state", value: state },
+  });
+}
+
 export default async function handler(req, res) {
-  // Hard kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to stop all sends immediately
+  // Kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to halt all sends immediately.
+  // Remove the variable (or set it to anything else) to resume.
   if (process.env.PAUSE_EMAIL_SENDING === 'true') {
-    return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0, message: 'Email sending is paused (PAUSE_EMAIL_SENDING=true)' });
+    return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0 });
   }
 
-  // Verify auth if CRON_SECRET is configured
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret) {
     const authHeader = req.headers["authorization"] || "";
@@ -80,7 +86,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Load full app state from DB
     const row = await prisma.setting.findUnique({ where: { key: "app_state" } });
     if (!row?.value) {
       return res.json({ ok: true, batchesFired: 0, emailsSent: 0, message: "No state found" });
@@ -108,21 +113,18 @@ export default async function handler(req, res) {
         const camp = campaigns[ci];
         if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") continue;
 
-        // Collect overdue batches (past due AND any scheduled before next business start)
         const toReschedule = Object.entries(camp.scheduledBatches)
           .filter(([, info]) => new Date(info.scheduledAt).getTime() < nextStart)
           .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
 
         if (toReschedule.length === 0) continue;
 
-        // Shift entire block so the first batch starts at nextStart,
-        // subsequent batches keep their original spacing.
         const newSched = { ...camp.scheduledBatches };
         const firstOrigMs = new Date(toReschedule[0][1].scheduledAt).getTime();
 
         for (const [bk, info] of toReschedule) {
           const origMs = new Date(info.scheduledAt).getTime();
-          const offsetFromFirst = origMs - firstOrigMs; // 0 for first, delay*N for rest
+          const offsetFromFirst = origMs - firstOrigMs;
           newSched[bk] = { ...info, scheduledAt: new Date(nextStart + offsetFromFirst).toISOString() };
         }
 
@@ -132,19 +134,11 @@ export default async function handler(req, res) {
       }
 
       if (anyRescheduled) {
-        await prisma.setting.upsert({
-          where: { key: "app_state" },
-          update: { value: { ...state, campaigns } },
-          create: { key: "app_state", value: { ...state, campaigns } },
-        });
+        await saveState({ ...state, campaigns });
       }
 
       return res.json({
-        ok: true,
-        batchesFired: 0,
-        emailsSent: 0,
-        offHours: true,
-        rescheduledCampaigns: anyRescheduled ? campaigns.filter(c => c.scheduledBatches && Object.keys(c.scheduledBatches).length).length : 0,
+        ok: true, batchesFired: 0, emailsSent: 0, offHours: true,
         nextWindow: new Date(nextStart).toISOString(),
       });
     }
@@ -158,14 +152,12 @@ export default async function handler(req, res) {
       const camp = campaigns[ci];
       if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") continue;
 
-      // Find due batches, sorted oldest-first
       const dueBatches = Object.entries(camp.scheduledBatches)
         .filter(([, info]) => new Date(info.scheduledAt).getTime() <= now)
         .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
 
       if (dueBatches.length === 0) continue;
 
-      // Fire ONE batch per campaign per run to stay within 120s timeout
       const [batchKey, batchInfo] = dueBatches[0];
       const { touchIdx, contactIds } = batchInfo;
 
@@ -185,10 +177,16 @@ export default async function handler(req, res) {
         continue;
       }
 
+      // ── CLAIM the batch before sending anything ────────────────────────────
+      // Delete it from scheduledBatches and write to DB now. If the function
+      // times out during email delivery, the next cron tick won’t replay it.
+      const claimedSched = { ...camp.scheduledBatches };
+      delete claimedSched[batchKey];
+      campaigns[ci] = { ...camp, scheduledBatches: claimedSched };
+      await saveState({ ...state, campaigns });
+
       const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
       const forceResend = !!batchInfo.forceResend;
-      // batchContacts holds embedded contact fields saved at schedule time —
-      // this is the primary source because contacts are not persisted in app_state
       const batchContacts = batchInfo.batchContacts || {};
       const updEnr = [...(camp.enrollments || [])];
       let sent = 0;
@@ -197,13 +195,10 @@ export default async function handler(req, res) {
       for (const contactId of contactIds) {
         const enroll = updEnr.find(e => e.contactId === contactId);
         if (!enroll) continue;
-        // forceResend bypasses step guard (contacts skipped by step mismatch)
         if (!forceResend && enroll.step !== touchIdx) continue;
         if (enroll.status === "interested") continue;
         if ((enroll.sentSteps || []).includes(touchIdx)) continue;
 
-        // Use embedded contact data (always present for new schedules).
-        // Fall back to contactMap for legacy batches scheduled before this fix.
         const c = batchContacts[contactId] || contactMap[contactId];
         if (!c?.email) {
           console.warn(`[cron] No contact data for ${contactId} in batch ${batchKey} — skipping`);
@@ -242,7 +237,6 @@ export default async function handler(req, res) {
             const idx = updEnr.findIndex(e => e.contactId === contactId);
             if (idx >= 0) {
               if (forceResend) {
-                // Don't reset step — contact may be further ahead; just record sent step + timestamps
                 updEnr[idx] = {
                   ...updEnr[idx],
                   sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
@@ -276,32 +270,24 @@ export default async function handler(req, res) {
           errors.push({ contactId, error: err.message });
         }
 
-        await sleep(3000);
+        await sleep(1500);
       }
 
-      const newSched = { ...camp.scheduledBatches };
-      delete newSched[batchKey];
+      // Persist the updated enrollments + sentBatches record immediately after each campaign.
+      // campaigns[ci] already has the claimed (batch-removed) scheduledBatches from above.
       campaigns[ci] = {
-        ...camp,
+        ...campaigns[ci],
         enrollments: updEnr,
-        scheduledBatches: newSched,
         sentBatches: {
           ...(camp.sentBatches || {}),
           [batchKey]: { sent, failed, sentAt: new Date().toISOString() },
         },
       };
+      await saveState({ ...state, campaigns });
 
       totalBatchesFired++;
       totalEmailsSent += sent;
       console.log(`[cron] Batch ${batchKey}: sent=${sent} failed=${failed}`);
-    }
-
-    if (totalBatchesFired > 0) {
-      await prisma.setting.upsert({
-        where: { key: "app_state" },
-        update: { value: { ...state, campaigns } },
-        create: { key: "app_state", value: { ...state, campaigns } },
-      });
     }
 
     return res.json({

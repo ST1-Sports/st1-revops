@@ -52,6 +52,7 @@
     "api/admin-stores/index.js":                   { "maxDuration": 30 }
   },
   "crons": [
+    { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
     { "path": "/api/cron/reddit-daily",  "schedule": "0 14 * * 1-5" }
   ],
   "rewrites": [
