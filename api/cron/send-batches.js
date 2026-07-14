@@ -5,6 +5,7 @@
  * Called every 15 minutes by Vercel Cron (Mon–Fri 9am–5pm MT only).
  *
  * Kill switch: set PAUSE_EMAIL_SENDING=true in Vercel env vars to halt all sends.
+ * DB-level kill switch: set state.globalPause=true via /api/cron/status (UI toggle).
  *
  * Double-send prevention: each batch is claimed (removed from scheduledBatches
  * and written to DB) before any email is sent. A function timeout mid-send will
@@ -76,7 +77,7 @@ async function saveState(state) {
 }
 
 export default async function handler(req, res) {
-  // Kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to halt all sends immediately.
+  // Env-level kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to halt all sends immediately.
   if (process.env.PAUSE_EMAIL_SENDING === 'true') {
     return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0 });
   }
@@ -103,6 +104,12 @@ export default async function handler(req, res) {
     }
 
     const state = row.value;
+
+    // DB-level kill switch — toggled from the Send Status UI
+    if (state.globalPause === true) {
+      return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0, message: 'Paused via globalPause flag' });
+    }
+
     const campaigns = [...(state.campaigns || [])];
     const contacts = state.contacts || [];
     const reps = state.reps || [];
@@ -144,10 +151,7 @@ export default async function handler(req, res) {
         console.log(`[cron] Off-hours: rescheduled ${toReschedule.length} batch(es) for campaign ${camp.id} → ${new Date(nextStart).toISOString()}`);
       }
 
-      if (anyRescheduled) {
-        await saveState({ ...state, campaigns });
-      }
-
+      await saveState({ ...state, campaigns, lastCronRun: { timestamp: new Date().toISOString(), offHours: true, batchesFired: 0, emailsSent: 0, stoppedReason: 'off-hours', nextWindow: new Date(nextStart).toISOString(), batches: [] } });
       return res.json({
         ok: true, batchesFired: 0, emailsSent: 0, offHours: true,
         nextWindow: new Date(nextStart).toISOString(),
@@ -313,7 +317,8 @@ export default async function handler(req, res) {
           }
         }
 
-        // Save enrollments and record this batch as done
+        // Persist the updated enrollments + sentBatches record immediately after each campaign.
+        // campaigns[ci] already has the claimed (batch-removed) scheduledBatches from above.
         campaigns[ci] = {
           ...campaigns[ci],
           enrollments: updEnr,
@@ -341,6 +346,18 @@ export default async function handler(req, res) {
         if (stoppedReason === "end-of-day") break outer;
       }
     }
+
+    await saveState({
+      ...state,
+      campaigns,
+      lastCronRun: {
+        timestamp: new Date().toISOString(),
+        batchesFired: totalBatchesFired,
+        emailsSent: totalEmailsSent,
+        stoppedReason,
+        batches: batchLog,
+      },
+    });
 
     return res.json({
       ok: true,

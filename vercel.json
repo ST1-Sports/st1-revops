@@ -47,6 +47,7 @@
     "api/instantly.js":                            { "maxDuration": 30 },
     "api/gmail-token.js":                          { "maxDuration": 15 },
     "api/cron/send-batches.js":                    { "maxDuration": 300 },
+    "api/cron/status.js":                          { "maxDuration": 15 },
     "api/cron/reddit-daily.js":                    { "maxDuration": 120 },
     "api/stripe/index.js":                         { "maxDuration": 30 },
     "api/admin-stores/index.js":                   { "maxDuration": 30 }
