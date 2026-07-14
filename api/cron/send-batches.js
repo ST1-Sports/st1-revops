@@ -9,11 +9,20 @@
  * Double-send prevention: each batch is claimed (removed from scheduledBatches
  * and written to DB) before any email is sent. A function timeout mid-send will
  * not re-queue the batch on the next cron tick.
+ *
+ * Pacing: 30s between each email. All due batches across all campaigns are
+ * processed in one run (not just one per campaign). A time-budget guard stops
+ * gracefully 45s before the 300s Vercel timeout so no run is killed mid-send.
+ * The 15-minute cron picks up remaining batches on the next tick.
  */
 
 import { prisma } from '../_lib/prisma.js';
 
 const APP_URL = process.env.APP_URL || "https://revops.st1sports.com";
+
+const SEND_PAUSE_MS   = 30_000;  // 30s between emails
+const MAX_DURATION_MS = 300_000; // must match vercel.json maxDuration for this function
+const TIMEOUT_BUFFER  = 45_000;  // stop this many ms before the hard timeout
 
 const mergeTags = (text, c) => (text || "")
   .replace(/\{\{firstName\}\}/gi, c?.firstName || (c?.fullName || "").split(" ")[0] || "there")
@@ -68,7 +77,6 @@ async function saveState(state) {
 
 export default async function handler(req, res) {
   // Kill switch — set PAUSE_EMAIL_SENDING=true in Vercel env to halt all sends immediately.
-  // Remove the variable (or set it to anything else) to resume.
   if (process.env.PAUSE_EMAIL_SENDING === 'true') {
     return res.json({ ok: true, paused: true, batchesFired: 0, emailsSent: 0 });
   }
@@ -84,6 +92,9 @@ export default async function handler(req, res) {
   if (req.method !== "GET" && req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  const runStart = Date.now();
+  const timeRemaining = () => MAX_DURATION_MS - TIMEOUT_BUFFER - (Date.now() - runStart);
 
   try {
     const row = await prisma.setting.findUnique({ where: { key: "app_state" } });
@@ -143,157 +154,200 @@ export default async function handler(req, res) {
       });
     }
 
-    // ── Business hours: fire one due batch per campaign ──────────────────────
+    // ── Business hours: roll through ALL due batches across all campaigns ────
+    // Stops when: no more due batches, end of business day, or time budget exhausted.
     let totalBatchesFired = 0;
     let totalEmailsSent = 0;
+    let stoppedReason = "done";
+    const batchLog = [];
     const errors = [];
 
-    for (let ci = 0; ci < campaigns.length; ci++) {
-      const camp = campaigns[ci];
-      if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") continue;
+    outer: for (let ci = 0; ci < campaigns.length; ci++) {
+      // Process every due batch for this campaign before moving to the next
+      while (true) {
+        const camp = campaigns[ci];
+        if (!camp?.scheduledBatches || typeof camp.scheduledBatches !== "object") break;
 
-      const dueBatches = Object.entries(camp.scheduledBatches)
-        .filter(([, info]) => new Date(info.scheduledAt).getTime() <= now)
-        .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
+        const dueBatches = Object.entries(camp.scheduledBatches)
+          .filter(([, info]) => new Date(info.scheduledAt).getTime() <= Date.now())
+          .sort((a, b) => new Date(a[1].scheduledAt).getTime() - new Date(b[1].scheduledAt).getTime());
 
-      if (dueBatches.length === 0) continue;
+        if (dueBatches.length === 0) break;
 
-      const [batchKey, batchInfo] = dueBatches[0];
-      const { touchIdx, contactIds } = batchInfo;
+        const [batchKey, batchInfo] = dueBatches[0];
+        const { touchIdx, contactIds } = batchInfo;
 
-      if (!Array.isArray(contactIds) || contactIds.length === 0) {
-        const newSched = { ...camp.scheduledBatches };
-        delete newSched[batchKey];
-        campaigns[ci] = { ...camp, scheduledBatches: newSched };
-        continue;
-      }
-
-      const touch = (camp.touches || [])[touchIdx];
-      if (!touch) {
-        console.warn(`[cron] Touch ${touchIdx} not found in campaign ${camp.id} — dropping batch ${batchKey}`);
-        const newSched = { ...camp.scheduledBatches };
-        delete newSched[batchKey];
-        campaigns[ci] = { ...camp, scheduledBatches: newSched };
-        continue;
-      }
-
-      // ── CLAIM the batch before sending anything ────────────────────────────
-      // Delete it from scheduledBatches and write to DB now. If the function
-      // times out during email delivery, the next cron tick won’t replay it.
-      const claimedSched = { ...camp.scheduledBatches };
-      delete claimedSched[batchKey];
-      campaigns[ci] = { ...camp, scheduledBatches: claimedSched };
-      await saveState({ ...state, campaigns });
-
-      const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
-      const forceResend = !!batchInfo.forceResend;
-      const batchContacts = batchInfo.batchContacts || {};
-      const updEnr = [...(camp.enrollments || [])];
-      let sent = 0;
-      let failed = 0;
-
-      for (const contactId of contactIds) {
-        const enroll = updEnr.find(e => e.contactId === contactId);
-        if (!enroll) continue;
-        if (!forceResend && enroll.step !== touchIdx) continue;
-        if (enroll.status === "interested") continue;
-        if ((enroll.sentSteps || []).includes(touchIdx)) continue;
-
-        const c = batchContacts[contactId] || contactMap[contactId];
-        if (!c?.email) {
-          console.warn(`[cron] No contact data for ${contactId} in batch ${batchKey} — skipping`);
+        if (!Array.isArray(contactIds) || contactIds.length === 0) {
+          const newSched = { ...camp.scheduledBatches };
+          delete newSched[batchKey];
+          campaigns[ci] = { ...camp, scheduledBatches: newSched };
           continue;
         }
 
-        const subject = mergeTags(touch.subject, c) || `Following up — ${camp.product || camp.name}`;
-        const mergedBody = mergeTags(touch.body, c);
-        const plainBody = mergedBody.trim() ? mergedBody : "(No email body — edit this touch in the Assets tab)";
-
-        const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const htmlLines = plainBody.split("\n").map(l => l.trim() ? `<p style="margin:0 0 10px 0">${esc(l)}</p>` : "<br>").join("");
-        const htmlBody = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}</body></html>`;
-
-        const to_name = c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim();
-
-        try {
-          const gmailRes = await fetch(`${APP_URL}/api/gmail`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "send",
-              to_email: c.email,
-              to_name,
-              subject,
-              body: plainBody,
-              htmlBody,
-              ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}),
-              ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}),
-            }),
-          });
-
-          const gmailData = await gmailRes.json();
-
-          if (gmailData.sent) {
-            const idx = updEnr.findIndex(e => e.contactId === contactId);
-            if (idx >= 0) {
-              if (forceResend) {
-                updEnr[idx] = {
-                  ...updEnr[idx],
-                  sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
-                  lastContacted: todStr,
-                  lastSentAt: todStr,
-                };
-              } else {
-                const ns = touchIdx + 1;
-                const done = ns >= (camp.touches || []).length;
-                const nt = (camp.touches || [])[ns];
-                const nd = nt ? new Date(Date.now() + nt.dayOffset * 86400000).toISOString().slice(0, 10) : null;
-                updEnr[idx] = {
-                  ...updEnr[idx],
-                  sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
-                  step: ns,
-                  status: done ? "done" : "active",
-                  nextDate: nd || enroll.nextDate,
-                  lastContacted: todStr,
-                  lastSentAt: todStr,
-                };
-              }
-            }
-            sent++;
-          } else {
-            console.error(`[cron] Failed to send to ${c.email}: ${gmailData.error || "send failed"}`);
-            failed++;
-          }
-        } catch (err) {
-          console.error(`[cron] Exception sending to ${c.email}: ${err.message}`);
-          failed++;
-          errors.push({ contactId, error: err.message });
+        const touch = (camp.touches || [])[touchIdx];
+        if (!touch) {
+          console.warn(`[cron] Touch ${touchIdx} not found in campaign ${camp.id} — dropping batch ${batchKey}`);
+          const newSched = { ...camp.scheduledBatches };
+          delete newSched[batchKey];
+          campaigns[ci] = { ...camp, scheduledBatches: newSched };
+          continue;
         }
 
-        await sleep(1500);
+        // ── CLAIM the batch before sending anything ──────────────────────────
+        // Removes from scheduledBatches and writes to DB immediately.
+        // A timeout mid-send cannot cause the next cron tick to replay this batch.
+        const claimedSched = { ...camp.scheduledBatches };
+        delete claimedSched[batchKey];
+        campaigns[ci] = { ...camp, scheduledBatches: claimedSched };
+        await saveState({ ...state, campaigns });
+
+        const rep = camp.repId ? reps.find(r => r.id === camp.repId) : null;
+        const forceResend = !!batchInfo.forceResend;
+        const batchContacts = batchInfo.batchContacts || {};
+        const updEnr = [...(camp.enrollments || [])];
+        let sent = 0;
+        let failed = 0;
+        let skippedEndOfDay = 0;
+
+        console.log(`[cron] Starting batch ${batchKey} — campaign "${camp.name || camp.id}", touch ${touchIdx}, ${contactIds.length} contact(s)`);
+
+        for (let ei = 0; ei < contactIds.length; ei++) {
+          const contactId = contactIds[ei];
+
+          // Stop if we've hit end of business day
+          if (!isBusinessHours(Date.now())) {
+            skippedEndOfDay = contactIds.length - ei;
+            stoppedReason = "end-of-day";
+            console.log(`[cron] End of business day — ${skippedEndOfDay} contact(s) in batch ${batchKey} will carry to next business day`);
+            break;
+          }
+
+          // Stop if we're approaching the function timeout
+          if (timeRemaining() < SEND_PAUSE_MS + 10_000) {
+            stoppedReason = "time-budget";
+            console.log(`[cron] Time budget exhausted — stopping after ${ei} of ${contactIds.length} contact(s) in batch ${batchKey}`);
+            break outer;
+          }
+
+          const enroll = updEnr.find(e => e.contactId === contactId);
+          if (!enroll) continue;
+          if (!forceResend && enroll.step !== touchIdx) continue;
+          if (enroll.status === "interested") continue;
+          if ((enroll.sentSteps || []).includes(touchIdx)) continue;
+
+          const c = batchContacts[contactId] || contactMap[contactId];
+          if (!c?.email) {
+            console.warn(`[cron] No contact data for ${contactId} in batch ${batchKey} — skipping`);
+            continue;
+          }
+
+          const subject = mergeTags(touch.subject, c) || `Following up — ${camp.product || camp.name}`;
+          const mergedBody = mergeTags(touch.body, c);
+          const plainBody = mergedBody.trim() ? mergedBody : "(No email body — edit this touch in the Assets tab)";
+
+          const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const htmlLines = plainBody.split("\n").map(l => l.trim() ? `<p style="margin:0 0 10px 0">${esc(l)}</p>` : "<br>").join("");
+          const htmlBody = `<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}</body></html>`;
+
+          const to_name = c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim();
+
+          try {
+            const gmailRes = await fetch(`${APP_URL}/api/gmail`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "send",
+                to_email: c.email,
+                to_name,
+                subject,
+                body: plainBody,
+                htmlBody,
+                ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}),
+                ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}),
+              }),
+            });
+
+            const gmailData = await gmailRes.json();
+
+            if (gmailData.sent) {
+              const idx = updEnr.findIndex(e => e.contactId === contactId);
+              if (idx >= 0) {
+                if (forceResend) {
+                  updEnr[idx] = {
+                    ...updEnr[idx],
+                    sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
+                    lastContacted: todStr,
+                    lastSentAt: todStr,
+                  };
+                } else {
+                  const ns = touchIdx + 1;
+                  const done = ns >= (camp.touches || []).length;
+                  const nt = (camp.touches || [])[ns];
+                  const nd = nt ? new Date(Date.now() + nt.dayOffset * 86400000).toISOString().slice(0, 10) : null;
+                  updEnr[idx] = {
+                    ...updEnr[idx],
+                    sentSteps: [...(updEnr[idx].sentSteps || []), touchIdx],
+                    step: ns,
+                    status: done ? "done" : "active",
+                    nextDate: nd || enroll.nextDate,
+                    lastContacted: todStr,
+                    lastSentAt: todStr,
+                  };
+                }
+              }
+              sent++;
+              console.log(`[cron] Sent ${ei + 1}/${contactIds.length} in batch ${batchKey} → ${c.email}`);
+            } else {
+              console.error(`[cron] Failed to send to ${c.email}: ${gmailData.error || "send failed"}`);
+              failed++;
+            }
+          } catch (err) {
+            console.error(`[cron] Exception sending to ${c.email}: ${err.message}`);
+            failed++;
+            errors.push({ contactId, error: err.message });
+          }
+
+          // 30s pause between emails (skip after the last one in the batch)
+          if (ei < contactIds.length - 1) {
+            await sleep(SEND_PAUSE_MS);
+          }
+        }
+
+        // Save enrollments and record this batch as done
+        campaigns[ci] = {
+          ...campaigns[ci],
+          enrollments: updEnr,
+          sentBatches: {
+            ...(camp.sentBatches || {}),
+            [batchKey]: { sent, failed, batchSize: contactIds.length, sentAt: new Date().toISOString() },
+          },
+        };
+        await saveState({ ...state, campaigns });
+
+        totalBatchesFired++;
+        totalEmailsSent += sent;
+        batchLog.push({
+          campaign: camp.name || camp.id,
+          batch: batchKey,
+          touchIdx,
+          batchSize: contactIds.length,
+          sent,
+          failed,
+          skippedEndOfDay,
+        });
+
+        console.log(`[cron] Batch ${batchKey} done — sent=${sent} failed=${failed} batchSize=${contactIds.length}`);
+
+        if (stoppedReason === "end-of-day") break outer;
       }
-
-      // Persist the updated enrollments + sentBatches record immediately after each campaign.
-      // campaigns[ci] already has the claimed (batch-removed) scheduledBatches from above.
-      campaigns[ci] = {
-        ...campaigns[ci],
-        enrollments: updEnr,
-        sentBatches: {
-          ...(camp.sentBatches || {}),
-          [batchKey]: { sent, failed, sentAt: new Date().toISOString() },
-        },
-      };
-      await saveState({ ...state, campaigns });
-
-      totalBatchesFired++;
-      totalEmailsSent += sent;
-      console.log(`[cron] Batch ${batchKey}: sent=${sent} failed=${failed}`);
     }
 
     return res.json({
       ok: true,
       batchesFired: totalBatchesFired,
       emailsSent: totalEmailsSent,
+      stoppedReason,
+      batches: batchLog,
       errors: errors.length > 0 ? errors : undefined,
     });
 
