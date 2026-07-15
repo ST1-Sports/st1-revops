@@ -7349,11 +7349,12 @@ return (
 <div style={{padding:"22px 26px"}}>
 <PH title="CAMPAIGNS" sub="Strategy builder, campaign wizard, and execution hub"/>
 <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap"}}>
-{[["plans","PLANS"],["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["adengine","AD ENGINE"],["reps","REP DASHBOARD"]].map(([id,l])=>(
+{[["plans","PLANS"],["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["adengine","AD ENGINE"],["reps","REP DASHBOARD"],["send-status","⚡ SEND STATUS"]].map(([id,l])=>(
 <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
 ))}
 </div>
 {tab==="adengine"&&<ModAds/>}
+{tab==="send-status"&&<SendStatusPanel/>}
 {/* ── REP DASHBOARD TAB ──────────────────────────────────────────────────── */}
 {tab==="reps"&&(
 <div>
@@ -10010,6 +10011,165 @@ function _AdBold({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p
 function _AdClean({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box",alignItems:"center",justifyContent:"center"}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:40,maxWidth:160,objectFit:"contain",marginBottom:Math.round(h*.035)}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:Math.round(h*.035)}}><div style={{width:5,height:24,background:ac,borderRadius:2}}/><div style={{fontSize:16,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{img&&<img src={img} style={{width:Math.round(w*.52),height:Math.round(h*.44),objectFit:"contain",borderRadius:14,marginBottom:Math.round(h*.038)}}/>}{badge&&<div style={{background:ac,color:"#fff",padding:"6px 16px",borderRadius:4,fontSize:14,fontWeight:800,marginBottom:16}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.066),fontWeight:900,color:tc,lineHeight:1.08,letterSpacing:-.5,textAlign:"center",marginBottom:16}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.025),color:tc+"99",lineHeight:1.55,textAlign:"center",maxWidth:Math.round(w*.76),marginBottom:22}}>{sub}</div>}{cta&&<div style={{background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.052)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:Math.round(h*.045)}}>ST1SPORTS.COM</div></div>);}
 function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",background:bg,width:"100%",height:"100%",fontFamily:"system-ui"}}><div style={{display:"flex",flexDirection:"column",flex:1,padding:p,justifyContent:"center",gap:18}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:34,maxWidth:130,objectFit:"contain",marginBottom:6}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:"6px 14px",borderRadius:4,fontSize:13,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.074),fontWeight:900,color:tc,lineHeight:1.06,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.026),color:tc+"AA",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.04)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800,marginTop:8}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:"auto"}}>ST1SPORTS.COM</div></div><div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",background:`${ac}0F`,borderLeft:`4px solid ${ac}`}}>{img?<img src={img} style={{width:Math.round(w*.41),height:Math.round(h*.66),objectFit:"contain",borderRadius:10}}/>:<div style={{fontSize:18,color:tc+"33",fontWeight:700,letterSpacing:2}}>PRODUCT IMAGE</div>}</div></div>);}
 function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&(logoUrl?<img src={logoUrl} style={{position:"absolute",top:py,left:px,maxHeight:32,maxWidth:120,objectFit:"contain"}} alt="Logo"/>:<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
+function SendStatusPanel(){
+const [status,setStatus]=useState(null);
+const [loading,setLoading]=useState(true);
+const [toggling,setToggling]=useState(false);
+const [expandedBatch,setExpandedBatch]=useState(null);
+useEffect(()=>{
+fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"status"})})
+.then(r=>r.json()).then(d=>{setStatus(d);setLoading(false);}).catch(()=>setLoading(false));
+},[]);
+const toggle=async()=>{
+if(!status||toggling)return;
+setToggling(true);
+const action=status.globalPause?"resume":"pause";
+try{
+const r=await fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
+const d=await r.json();
+if(d.ok)setStatus(s=>({...s,globalPause:d.globalPause}));
+}catch(e){}
+setToggling(false);
+};
+const fmtTime=iso=>{if(!iso)return"—";const d=new Date(iso);return d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit",hour12:true});};
+const fmtTimeOnly=iso=>{if(!iso)return"—";const d=new Date(iso);return d.toLocaleString("en-US",{hour:"numeric",minute:"2-digit",second:"2-digit",hour12:true});};
+const totalQueued=(status?.queue||[]).reduce((s,c)=>s+(c.batches||[]).length,0);
+if(loading)return<div style={{padding:40,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:13}}>Loading send status…</div>;
+if(!status?.ok)return<div style={{padding:40,textAlign:"center",color:B.orange,fontFamily:"'Lexend',sans-serif",fontSize:13}}>Could not load send status — check that /api/cron/status is deployed.</div>;
+const paused=status.globalPause===true;
+return(
+<div style={{maxWidth:860}}>
+{/* Kill switch card */}
+<div className="card" style={{padding:22,marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,borderLeft:`5px solid ${paused?"#ef4444":"#22c55e"}`}}>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:paused?"#ef4444":"#22c55e",marginBottom:4}}>{paused?"⏸ EMAIL SENDING PAUSED":"▶ EMAIL SENDING ACTIVE"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{paused?"All batch sends are halted. Click RESUME to restart the cron sender.":"Emails are sending normally. Click PAUSE to stop all cron sends immediately."}</div>
+</div>
+<button onClick={toggle} disabled={toggling} style={{background:paused?"#22c55e":"#ef4444",color:"#fff",border:"none",borderRadius:6,padding:"10px 24px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,letterSpacing:.8,cursor:toggling?"not-allowed":"pointer",opacity:toggling?.6:1,minWidth:110}}>
+{toggling?"…":paused?"RESUME":"PAUSE"}
+</button>
+</div>
+{/* Stat row */}
+<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:18}}>
+{[["Emails Today",(status.todaySent||0).toString()],["Active Campaigns",(status.activeCampaigns||0).toString()],["Batches Queued",totalQueued.toString()],["Enrolled",(status.enrollSummary?.total||0).toString()]].map(([label,val])=>(
+<div key={label} className="card" style={{padding:"14px 16px",textAlign:"center"}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange,marginBottom:3}}>{val}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.8}}>{label}</div>
+</div>
+))}
+</div>
+{/* Last cron run */}
+{status.lastCronRun?(
+<div className="card" style={{padding:18,marginBottom:18}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.8,marginBottom:10}}>LAST CRON RUN</div>
+<div style={{display:"flex",gap:20,flexWrap:"wrap",marginBottom:14}}>
+{[["Timestamp",fmtTime(status.lastCronRun.timestamp)],["Emails Sent",(status.lastCronRun.emailsSent||0).toString()],["Batches Fired",(status.lastCronRun.batchesFired||0).toString()],["Stopped Reason",status.lastCronRun.stoppedReason||"—"],["Off Hours",status.lastCronRun.offHours?"Yes":"No"]].map(([k,v])=>(
+<div key={k}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:2}}>{k}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.black}}>{v}</div></div>
+))}
+</div>
+{(status.lastCronRun.batches||[]).length>0&&(
+<div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>BATCHES SENT THIS RUN</div>
+<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+<thead>
+<tr style={{borderBottom:`1px solid ${B.border}`}}>
+{["Campaign","Touch","Batch Size","Sent","Failed","Time"].map(h=>(
+<th key={h} style={{textAlign:"left",padding:"5px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700}}>{h}</th>
+))}
+<th style={{width:24}}></th>
+</tr>
+</thead>
+<tbody>
+{(status.lastCronRun.batches||[]).map((b,i)=>{
+const isExpanded=expandedBatch===i;
+const firstSendAt=b.sends&&b.sends.length>0?fmtTime(b.sends[0].sentAt):fmtTime(status.lastCronRun.timestamp);
+return(
+<React.Fragment key={i}>
+<tr style={{borderBottom:`1px solid ${B.border}`,background:isExpanded?"#f9f9f9":"transparent",cursor:(b.sends||[]).length>0?"pointer":"default"}} onClick={()=>{if((b.sends||[]).length>0)setExpandedBatch(isExpanded?null:i);}}>
+<td style={{padding:"7px 8px",color:B.black}}>{b.campaign}</td>
+<td style={{padding:"7px 8px",color:B.muted}}>Touch {(b.touchIdx||0)+1}</td>
+<td style={{padding:"7px 8px",color:B.muted}}>{b.batchSize}</td>
+<td style={{padding:"7px 8px",color:"#22c55e",fontWeight:700}}>{b.sent}</td>
+<td style={{padding:"7px 8px",color:b.failed>0?"#ef4444":B.muted}}>{b.failed}</td>
+<td style={{padding:"7px 8px",color:B.muted,whiteSpace:"nowrap"}}>{firstSendAt}</td>
+<td style={{padding:"7px 8px",color:B.muted,textAlign:"center"}}>{(b.sends||[]).length>0?(isExpanded?"▲":"▼"):""}</td>
+</tr>
+{isExpanded&&(b.sends||[]).length>0&&(
+<tr key={`${i}-sends`}>
+<td colSpan={7} style={{padding:"0 8px 10px 24px"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,margin:"8px 0 6px"}}>INDIVIDUAL SENDS</div>
+<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+<thead>
+<tr>
+<th style={{textAlign:"left",padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.4,fontWeight:700}}>#</th>
+<th style={{textAlign:"left",padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.4,fontWeight:700}}>Email</th>
+<th style={{textAlign:"left",padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.4,fontWeight:700}}>Sent At (MT)</th>
+<th style={{textAlign:"left",padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.4,fontWeight:700}}>Gap from prev</th>
+</tr>
+</thead>
+<tbody>
+{b.sends.map((send,si)=>{
+const prev=si>0?new Date(b.sends[si-1].sentAt):null;
+const cur=new Date(send.sentAt);
+const gapSec=prev?Math.round((cur-prev)/1000):null;
+const gapStr=gapSec===null?"—":gapSec<60?`${gapSec}s`:`${Math.floor(gapSec/60)}m ${gapSec%60}s`;
+return(
+<tr key={si} style={{borderTop:`1px solid ${B.border}`}}>
+<td style={{padding:"4px 8px",color:B.muted}}>{si+1}</td>
+<td style={{padding:"4px 8px",color:B.black}}>{send.email}</td>
+<td style={{padding:"4px 8px",color:B.muted,whiteSpace:"nowrap"}}>{fmtTimeOnly(send.sentAt)}</td>
+<td style={{padding:"4px 8px",color:gapSec!==null&&gapSec<25?"#ef4444":B.muted,fontWeight:gapSec!==null&&gapSec<25?700:400}}>{gapStr}</td>
+</tr>
+);
+})}
+</tbody>
+</table>
+</td>
+</tr>
+)}
+</React.Fragment>
+);
+})}
+</tbody>
+</table>
+</div>
+)}
+</div>
+):(
+<div className="card" style={{padding:22,marginBottom:18,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No cron runs recorded yet. The scheduler fires every 15 minutes on weekdays 9am–5pm MT.</div>
+)}
+{/* Pending queue */}
+{(status.queue||[]).length>0&&(
+<div className="card" style={{padding:18}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.8,marginBottom:10}}>PENDING QUEUE</div>
+<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+<thead>
+<tr style={{borderBottom:`1px solid ${B.border}`}}>
+{["Campaign","Touch","Contacts","Scheduled For","Status"].map(h=>(
+<th key={h} style={{textAlign:"left",padding:"5px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700}}>{h}</th>
+))}
+</tr>
+</thead>
+<tbody>
+{(status.queue||[]).flatMap(camp=>(camp.batches||[]).map((b,bi)=>(
+<tr key={`${camp.campaignId}-${bi}`} style={{borderBottom:`1px solid ${B.border}`}}>
+<td style={{padding:"7px 8px",color:B.black}}>{camp.campaignName}</td>
+<td style={{padding:"7px 8px",color:B.muted}}>Touch {(b.touchIdx||0)+1}</td>
+<td style={{padding:"7px 8px",color:B.muted}}>{b.contactCount}</td>
+<td style={{padding:"7px 8px",color:B.muted,whiteSpace:"nowrap"}}>{fmtTime(b.scheduledAt)}</td>
+<td style={{padding:"7px 8px"}}>{b.overdue?<span style={{background:"#fef3c7",color:"#b45309",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.4,padding:"2px 7px",borderRadius:4}}>OVERDUE</span>:<span style={{color:"#22c55e",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.4}}>SCHEDULED</span>}</td>
+</tr>
+)))}
+</tbody>
+</table>
+</div>
+)}
+{(status.queue||[]).length===0&&(
+<div className="card" style={{padding:22,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:12}}>No batches currently queued.</div>
+)}
+</div>
+);
+}
 function ModCalendar() {
 const {s,setMod}=useApp();
 const now=new Date();

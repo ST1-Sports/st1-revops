@@ -212,6 +212,7 @@ export default async function handler(req, res) {
         let sent = 0;
         let failed = 0;
         let skippedEndOfDay = 0;
+        const sends = []; // per-email timestamps: { email, sentAt }
 
         console.log(`[cron] Starting batch ${batchKey} — campaign "${camp.name || camp.id}", touch ${touchIdx}, ${contactIds.length} contact(s)`);
 
@@ -299,6 +300,7 @@ export default async function handler(req, res) {
                   };
                 }
               }
+              sends.push({ email: c.email, sentAt: new Date().toISOString() });
               sent++;
               console.log(`[cron] Sent ${ei + 1}/${contactIds.length} in batch ${batchKey} → ${c.email}`);
             } else {
@@ -324,7 +326,7 @@ export default async function handler(req, res) {
           enrollments: updEnr,
           sentBatches: {
             ...(camp.sentBatches || {}),
-            [batchKey]: { sent, failed, batchSize: contactIds.length, sentAt: new Date().toISOString() },
+            [batchKey]: { sent, failed, batchSize: contactIds.length, sentAt: new Date().toISOString(), sends },
           },
         };
         await saveState({ ...state, campaigns });
@@ -339,6 +341,7 @@ export default async function handler(req, res) {
           sent,
           failed,
           skippedEndOfDay,
+          sends,
         });
 
         console.log(`[cron] Batch ${batchKey} done — sent=${sent} failed=${failed} batchSize=${contactIds.length}`);
