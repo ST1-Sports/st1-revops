@@ -1,5 +1,5 @@
 {
-  "buildCommand": "npx prisma generate && vite build",
+  "buildCommand": "npx prisma db push --accept-data-loss && vite build",
   "functions": {
     "api/chat.js":                                { "maxDuration": 15 },
     "api/claude.js":                              { "maxDuration": 120 },
