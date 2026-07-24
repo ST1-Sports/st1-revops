@@ -770,6 +770,18 @@ Provide strategic pricing advice. Return JSON:
         th{background:${B.surface};padding:7px 9px;text-align:left;font-family:'Lexend Zetta',sans-serif;font-size:8px;color:${B.muted};letter-spacing:1.5px;border-bottom:2px solid ${B.border};white-space:nowrap;position:sticky;top:0;z-index:1}
         td{padding:7px 9px;border-bottom:1px solid ${B.border};font-size:11px;vertical-align:middle}
         tr:hover td{background:${B.surface}}
+        .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+        @media(max-width:640px){
+          .pt-header{flex-direction:column !important;align-items:flex-start !important;padding:10px 14px !important;gap:10px !important}
+          .pt-header-stats{display:none !important}
+          .pt-header-upload{width:100%}
+          .pt-nav{padding:0 8px !important;overflow-x:auto;-webkit-overflow-scrolling:touch}
+          .pt-main{padding:14px 12px !important}
+          .pt-seed-banner{flex-direction:column !important;align-items:flex-start !important}
+          .pt-seed-banner button{width:100% !important;margin-top:8px;text-align:center !important}
+          .pt-kpi-grid{grid-template-columns:repeat(2,1fr) !important}
+          .pt-dash-grid{grid-template-columns:1fr !important}
+        }
       `}</style>
       {/* ← Back to RevOps */}
       <div style={{background:"#fff",borderBottom:"1px solid #E2E0DB",padding:"6px 20px",display:"flex",alignItems:"center",gap:8}}>
@@ -779,7 +791,7 @@ Provide strategic pricing advice. Return JSON:
       </div>
 
       {/* HEADER */}
-      <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
+      <div className="pt-header" style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"14px 28px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 1px 4px rgba(0,0,0,.06)"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
           <div style={{width:36,height:36,background:B.orange,borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
             <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.white,letterSpacing:-1}}>ST1</span>
@@ -789,7 +801,8 @@ Provide strategic pricing advice. Return JSON:
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SUPPLIER COSTS · MARGIN TRACKING · BID ALERTS</div>
           </div>
         </div>
-        <div style={{display:"flex",gap:20,alignItems:"center"}}>
+        <div style={{display:"flex",gap:12,alignItems:"center"}}>
+          <div className="pt-header-stats" style={{display:"flex",gap:20,alignItems:"center"}}>
           {[
             [`${suppliers.length}`, "suppliers",   B.text],
             [totalProducts,         "products",    B.blue],
@@ -801,16 +814,19 @@ Provide strategic pricing advice. Return JSON:
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{l}</div>
             </div>
           ))}
-          <button onClick={()=>fileInputRef.current?.click()}
-            style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5}}>
-            ↑ UPLOAD PRICE LIST
-          </button>
-          <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleImport} style={{display:"none"}}/>
+          </div>
+          <div className="pt-header-upload">
+            <button onClick={()=>fileInputRef.current?.click()}
+              style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,width:"100%"}}>
+              ↑ UPLOAD PRICE LIST
+            </button>
+            <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleImport} style={{display:"none"}}/>
+          </div>
         </div>
       </div>
 
       {/* NAV */}
-      <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
+      <div className="pt-nav" style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
         {NAV.map(n=>(
           <button key={n.id} onClick={()=>setTab(n.id)} style={{
             background:"none",border:"none",borderBottom:`2px solid ${tab===n.id?B.orange:"transparent"}`,
@@ -824,11 +840,11 @@ Provide strategic pricing advice. Return JSON:
         ))}
       </div>
 
-      <div style={{padding:"24px 28px"}}>
+      <div className="pt-main" style={{padding:"24px 28px"}}>
 
         {/* ── SEED BANNER (shown once when DB is empty) ── */}
         {dbLoaded&&dbWasEmpty&&(
-          <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}`,borderRadius:7,padding:"14px 18px",marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div className="pt-seed-banner" style={{background:B.yellowBg,border:`1px solid ${B.yellow}`,borderRadius:7,padding:"14px 18px",marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
             <div>
               <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.yellow,letterSpacing:.8,marginBottom:3}}>PRICE LIST DATABASE IS EMPTY</div>
               <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid}}>Showing built-in sample data. Click to save it to the database so Edgar can read it.</div>
@@ -843,7 +859,7 @@ Provide strategic pricing advice. Return JSON:
         {tab==="dashboard"&&(
           <div className="fu">
             {/* KPI row */}
-            <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
+            <div className="pt-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12,marginBottom:20}}>
               {[
                 {l:"Suppliers",     v:suppliers.length,                              c:B.text},
                 {l:"Total Products",v:totalProducts,                                 c:B.blue},
@@ -858,7 +874,7 @@ Provide strategic pricing advice. Return JSON:
               ))}
             </div>
 
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}}>
+            <div className="pt-dash-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:18,marginBottom:18}}>
               {/* Critical alerts */}
               <div className="card" style={{borderTop:`3px solid ${B.red}`}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:2,marginBottom:12}}>
