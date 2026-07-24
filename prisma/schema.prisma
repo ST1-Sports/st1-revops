@@ -710,3 +710,92 @@ model alert_history {
   @@index([fired_at(sort: Desc)])
   @@map("alert_history")
 }
+
+// ── AGENT BRAIN ───────────────────────────────────────────────────────────────
+// Price lists: source of truth for quoting (Edgar reads this)
+
+model Supplier {
+  id          String      @id @default(cuid())
+  name        String
+  category    String?
+  rep         String?
+  repEmail    String?
+  repPhone    String?
+  notes       String?     @db.Text
+  lastUpdated DateTime?
+  active      Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  items       PriceItem[]
+
+  @@index([name])
+  @@index([active])
+}
+
+model PriceItem {
+  id         String   @id @default(cuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  sku        String?
+  name       String
+  category   String?
+  unit       String?  @default("each")
+  cost       Decimal? @db.Decimal(12, 2)
+  lastCost   Decimal? @db.Decimal(12, 2)
+  map        Decimal? @db.Decimal(12, 2)
+  msrp       Decimal? @db.Decimal(12, 2)
+  ourPrice   Decimal? @db.Decimal(12, 2)
+  gmFloorPct Float?
+
+  marketLow      Decimal? @db.Decimal(12, 2)
+  marketHigh     Decimal? @db.Decimal(12, 2)
+  competitors    Json     @default("[]")
+  recommendation String?
+  marketNote     String?  @db.Text
+  scannedAt      DateTime?
+
+  updatedAt  DateTime @updatedAt
+
+  @@index([supplierId])
+  @@index([sku])
+  @@index([category])
+}
+
+// Shared memory: the organizational brain
+model AgentMemory {
+  id         String   @id @default(cuid())
+  scope      String   @default("org")
+  entity     String?
+  key        String
+  value      String   @db.Text
+  agentId    String
+  confidence Float    @default(1.0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([scope, entity, key])
+  @@index([entity])
+  @@index([scope])
+}
+
+// Interaction + outcome log: the feedback loop
+model AgentInteraction {
+  id        String    @id @default(cuid())
+  agentId   String
+  userId    String?
+  action    String
+  entity    String?
+  input     Json      @default("{}")
+  output    Json      @default("{}")
+  outcome   String    @default("pending")
+  outcomeAt DateTime?
+  blockedBy String?
+  dryRun    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  @@index([agentId])
+  @@index([entity])
+  @@index([outcome])
+  @@index([createdAt])
+}
