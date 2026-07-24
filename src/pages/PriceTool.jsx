@@ -178,6 +178,9 @@ async function callClaudeMsg(messages, sys="", tokens=4000) {
 export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
+  const [dbLoaded,   setDbLoaded]   = useState(false);
+  const [dbWasEmpty, setDbWasEmpty] = useState(false);
+  const [seeding,    setSeeding]    = useState(false);
   const [tab,       setTab]       = useState("dashboard");
   const [selSupplier, setSelSupplier] = useState(null);
   const [selProduct,  setSelProduct]  = useState(null);
@@ -238,31 +241,103 @@ export default function PriceListManager({ onMakeQuote } = {}) {
     setAlerts(computeAlerts(suppliers, deals));
   }, [suppliers, deals, computeAlerts]);
 
-  // Update a product's cost (simulates price list update)
+  // Load suppliers from DB on mount; fall back to SEED_SUPPLIERS if empty.
+  useEffect(() => {
+    fetch('/api/pricelists')
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.suppliers.length > 0) {
+          setSuppliers(d.suppliers);
+          // Restore any persisted market scan results
+          const mkt = {};
+          d.suppliers.forEach(s => s.products.forEach(p => {
+            if(p.scannedAt) mkt[p.id] = {
+              marketLow: p.marketLow, marketHigh: p.marketHigh,
+              competitors: p.competitors || [], recommendation: p.recommendation,
+              note: p.marketNote, scannedAt: p.scannedAt,
+            };
+          }));
+          if(Object.keys(mkt).length > 0) setScanResults(mkt);
+        } else {
+          setDbWasEmpty(true); // DB empty — show seed button
+        }
+        setDbLoaded(true);
+      })
+      .catch(() => setDbLoaded(true)); // network error — keep seed data silently
+  }, []);
+
+  const persistSupplier = (sup) => {
+    fetch('/api/pricelists/supplier', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: sup.id, name: sup.name, category: sup.category,
+        rep: sup.rep, repEmail: sup.repEmail, repPhone: sup.repPhone,
+        notes: sup.notes, lastUpdated: sup.lastUpdated,
+      }),
+    }).catch(() => {});
+  };
+
+  const persistItems = (supplierId, products) => {
+    fetch('/api/pricelists/items', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplierId, products }),
+    }).catch(() => {});
+  };
+
+  const seedToDB = async () => {
+    setSeeding(true);
+    try {
+      for (const sup of SEED_SUPPLIERS) {
+        await fetch('/api/pricelists/supplier', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: sup.id, name: sup.name, category: sup.category,
+            rep: sup.rep, repEmail: sup.repEmail, repPhone: sup.repPhone,
+            notes: sup.notes, lastUpdated: sup.lastUpdated,
+          }),
+        });
+        await fetch('/api/pricelists/items', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ supplierId: sup.id, products: sup.products }),
+        });
+      }
+      setDbWasEmpty(false);
+    } catch(e) {}
+    setSeeding(false);
+  };
+
+  // Update a product's cost and write through to DB.
   const updateProductCost = (supplierId, productId, newCost, newOurPrice=null) => {
+    let updated = null;
     setSuppliers(prev => prev.map(s => {
       if(s.id !== supplierId) return s;
       return { ...s, products: s.products.map(p => {
         if(p.id !== productId) return p;
-        return { ...p,
+        updated = { ...p,
           lastCost: p.cost,
           cost: parseFloat(newCost),
           ourPrice: newOurPrice ? parseFloat(newOurPrice) : p.ourPrice,
           updatedAt: new Date().toISOString().slice(0,10),
         };
+        return updated;
       })};
     }));
     setEditingPrice(null);
+    if(updated) persistItems(supplierId, [updated]);
   };
 
   const updateOurPrice = (supplierId, productId, newPrice) => {
+    let updated = null;
     setSuppliers(prev => prev.map(s => {
       if(s.id !== supplierId) return s;
-      return { ...s, products: s.products.map(p =>
-        p.id === productId ? {...p, ourPrice: parseFloat(newPrice)} : p
-      )};
+      return { ...s, products: s.products.map(p => {
+        if(p.id !== productId) return p;
+        updated = { ...p, ourPrice: parseFloat(newPrice) };
+        return updated;
+      })};
     }));
     setEditingPrice(null);
+    if(updated) persistItems(supplierId, [updated]);
   };
 
   // Accept suggested price into deal
@@ -410,12 +485,15 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
     e.target.value = "";
   };
 
-  // Commit import preview into catalog
+  // Commit import preview into catalog and persist to DB.
   const commitImport = () => {
     if(!importPreview) return;
     const {supplierName, supplierCategory, repName, repEmail, products, targetSupplierId} = importPreview;
     const today = new Date().toISOString().slice(0,10);
     const addLog = (msg,type="info") => setImportLog(l=>[...l,{id:uid(),msg,type,ts:Date.now()}]);
+
+    let finalSup = null;
+    let finalProds = [];
 
     setSuppliers(prev => {
       if(targetSupplierId) {
@@ -450,8 +528,10 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
           const uploadNames= new Set(products.map(p=>p.name?.toLowerCase()));
           const retained = s.products.filter(p => !uploadSkus.has(p.sku) && !uploadNames.has(p.name?.toLowerCase()));
 
+          const merged = {...s, lastUpdated:today, products:[...newProducts, ...retained]};
+          finalSup = merged; finalProds = merged.products;
           addLog(`Updated ${updated} products, added ${added} new, kept ${retained.length} unchanged`, "success");
-          return {...s, lastUpdated:today, products:[...newProducts, ...retained]};
+          return merged;
         });
       } else {
         // Create new supplier
@@ -468,10 +548,17 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
             lastCost:parseFloat(p.cost)||0, updatedAt:today,
           }))
         };
+        finalSup = newSupplier; finalProds = newSupplier.products;
         addLog(`Created new supplier "${supplierName}" with ${newSupplier.products.length} products`, "success");
         return [...prev, newSupplier];
       }
     });
+
+    // Persist to DB (fire-and-forget — local state is already updated)
+    if(finalSup) {
+      persistSupplier(finalSup);
+      persistItems(finalSup.id, finalProds);
+    }
 
     setImportPreview(null);
     bgTasks.clearTask(IMPORT_TASK_ID);
@@ -616,6 +703,14 @@ Provide strategic pricing advice. Return JSON:
         }
         setScanResults(prev=>({...prev,...upd}));
         setScanSelected(new Set());
+        // Persist market intel to DB (fire-and-forget)
+        const mktUpdates = Object.entries(upd).map(([id,r]) => ({ id, ...r }));
+        if(mktUpdates.length > 0) {
+          fetch('/api/pricelists/market', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ updates: mktUpdates }),
+          }).catch(()=>{});
+        }
       } else { setScanError("Could not parse response — try scanning fewer products"); }
     } catch(e){ setScanError(e.message); }
     setScanning(false);
@@ -730,6 +825,19 @@ Provide strategic pricing advice. Return JSON:
       </div>
 
       <div style={{padding:"24px 28px"}}>
+
+        {/* ── SEED BANNER (shown once when DB is empty) ── */}
+        {dbLoaded&&dbWasEmpty&&(
+          <div style={{background:B.yellowBg,border:`1px solid ${B.yellow}`,borderRadius:7,padding:"14px 18px",marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+            <div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.yellow,letterSpacing:.8,marginBottom:3}}>PRICE LIST DATABASE IS EMPTY</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid}}>Showing built-in sample data. Click to save it to the database so Edgar can read it.</div>
+            </div>
+            <button onClick={seedToDB} disabled={seeding} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:seeding?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:seeding?.6:1}}>
+              {seeding?"SAVING…":"SAVE TO DATABASE"}
+            </button>
+          </div>
+        )}
 
         {/* ── DASHBOARD ── */}
         {tab==="dashboard"&&(
