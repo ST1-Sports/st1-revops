@@ -118,11 +118,15 @@ export default function ToolManager() {
 
   async function handleDelete(plugin) {
     if (!window.confirm(`Delete "${plugin.name}"? This cannot be undone.`)) return
+    try {
+      const r = await fetch(`/api/admin/tools?id=${encodeURIComponent(plugin.id)}`, { method: 'DELETE' })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    } catch (e) {
+      setFlash(`error:Failed to delete: ${e.message}`)
+      return
+    }
     deleteCustomTool(plugin.id)
     reload()
-    try {
-      await fetch(`/api/admin/tools?id=${encodeURIComponent(plugin.id)}`, { method: 'DELETE' })
-    } catch {}
   }
 
   async function handleAdd() {
@@ -142,19 +146,23 @@ export default function ToolManager() {
       roles:        ['admin'],
       custom:       true,
     }
+    try {
+      const r = await fetch('/api/admin/tools', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(tool),
+      })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    } catch (e) {
+      setFlash(`error:Failed to save: ${e.message}`)
+      return
+    }
     registerPlugin(tool)
     reload()
     setForm(EMPTY_FORM)
     setShowForm(false)
     setFlash('ok:Tool registered successfully.')
     setTimeout(() => setFlash(''), 3000)
-    try {
-      await fetch('/api/admin/tools', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(tool),
-      })
-    } catch {}
   }
 
   const [isOk, flashMsg] = flash.startsWith('ok:')

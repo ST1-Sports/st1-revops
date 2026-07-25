@@ -213,18 +213,26 @@ try {
  * if the fetch fails. Call once on app init (ToolManager.useEffect).
  */
 export async function loadCustomTools() {
-  let tools = []
+  let tools  = []
+  let fromDb = false
   try {
     const r = await fetch('/api/admin/tools')
     if (r.ok) {
       const d = await r.json()
-      tools = Array.isArray(d.tools) ? d.tools : []
-      // Sync to localStorage so next hard-refresh is instant.
+      tools  = Array.isArray(d.tools) ? d.tools : []
+      fromDb = true
       try { localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify(tools)) } catch {}
     }
   } catch {}
-  if (!tools.length) {
+  if (!fromDb) {
     try { tools = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]') } catch {}
+  }
+  // After a fresh DB response, evict custom tools no longer in the list so
+  // deletions made in another session take effect without a hard reload.
+  if (fromDb) {
+    const freshIds = new Set(tools.map(t => t.id))
+    const stale = [..._byId.values()].filter(p => p.custom && !freshIds.has(p.id)).map(p => p.id)
+    for (const id of stale) deleteCustomTool(id)
   }
   for (const t of Array.isArray(tools) ? tools : []) {
     _upsert({ ...t, handler: buildHandler(t) })

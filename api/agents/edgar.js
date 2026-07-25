@@ -30,14 +30,12 @@ async function fetchPriceData(task) {
     .split(/\s+/)
     .filter(w => w.length > 2 && !stopWords.has(w))
 
-  const [ownSuppliers, matchedItems] = await Promise.all([
-    // Own suppliers + first 30 items each (catalog context)
+  const [ownSuppliers, matchedItems, competitors] = await Promise.all([
     prisma.supplier.findMany({
       where:   { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
       include: { items: { orderBy: { name: 'asc' }, take: 30 } },
       orderBy: { name: 'asc' },
     }),
-    // Keyword-matched items across all active own suppliers
     keywords.length ? prisma.priceItem.findMany({
       where: {
         supplier: { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
@@ -47,14 +45,12 @@ async function fetchPriceData(task) {
       orderBy: { name: 'asc' },
       take: 60,
     }) : Promise.resolve([]),
-    // Competitor pricing for market context
+    prisma.supplier.findMany({
+      where:   { active: true, category: { startsWith: COMP_PREFIX } },
+      include: { items: { orderBy: { name: 'asc' }, take: 20 } },
+      orderBy: { name: 'asc' },
+    }),
   ])
-
-  const competitors = await prisma.supplier.findMany({
-    where:   { active: true, category: { startsWith: COMP_PREFIX } },
-    include: { items: { orderBy: { name: 'asc' }, take: 20 } },
-    orderBy: { name: 'asc' },
-  })
 
   return { ownSuppliers, matchedItems, competitors }
 }
@@ -163,15 +159,32 @@ function formatItem(item, supplierName) {
 
 // ── Server-side guardrail enforcement ─────────────────────────────────────────
 
-function enforceGuardrails(quote) {
+// Build name → {map, gmFloorPct} from DB results so guardrails use real values,
+// not whatever Claude chose to echo back in its JSON output.
+function buildItemLookup(ownSuppliers, matchedItems) {
+  const lookup = new Map()
+  const register = item => {
+    const key = item.name.toLowerCase()
+    if (!lookup.has(key)) {
+      lookup.set(key, { map: dec(item.map), gmFloorPct: item.gmFloorPct ?? DEFAULT_FLOOR })
+    }
+  }
+  for (const item of matchedItems) register(item)
+  for (const sup of ownSuppliers) for (const item of sup.items) register(item)
+  return lookup
+}
+
+function enforceGuardrails(quote, itemLookup) {
   const warnings = [...(quote.warnings || [])]
 
   const lineItems = (quote.lineItems || []).map(item => {
     if (item.notFound) return item
 
-    const cost     = item.cost || 0
-    const map      = item.map  || 0
-    const floor    = DEFAULT_FLOOR
+    const cost   = item.cost || 0
+    const dbData = itemLookup?.get(item.name?.toLowerCase())
+    const floor  = dbData?.gmFloorPct ?? DEFAULT_FLOOR
+    const map    = dbData?.map ?? (item.map || 0)   // DB is authoritative; Claude's echo is fallback
+
     const minByGm  = cost > 0 ? cost / (1 - floor) : 0
     const minByMap = map > 0 ? map : 0
     const minPrice = Math.max(minByGm, minByMap)
@@ -179,10 +192,10 @@ function enforceGuardrails(quote) {
 
     if (minPrice > 0 && quoted < minPrice) {
       quoted = Math.round(minPrice * 100) / 100
-      if (map > 0 && quoted <= map + 0.001) {
+      if (map > 0 && minByMap >= minByGm) {
         warnings.push(`${item.name}: price set to MAP minimum $${map.toFixed(2)}`)
       } else {
-        warnings.push(`${item.name}: price raised to $${quoted.toFixed(2)} to meet GM floor`)
+        warnings.push(`${item.name}: price raised to $${quoted.toFixed(2)} to meet ${Math.round(floor * 100)}% GM floor`)
       }
     }
 
@@ -233,6 +246,7 @@ export default async function handler(req, res) {
       ? memFacts.map(f => `- ${f.key}: ${f.value}`).join('\n')
       : ''
 
+    const itemLookup = buildItemLookup(ownSuppliers, matchedItems)
     const system = buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock)
 
     // Build user message — embed structured items if provided
@@ -288,7 +302,7 @@ export default async function handler(req, res) {
       return res.json({ output: raw, metadata: { quote: null, warnings: [] } })
     }
 
-    const guarded = enforceGuardrails(quote)
+    const guarded = enforceGuardrails(quote, itemLookup)
 
     // Fire-and-forget interaction log
     logInteraction({

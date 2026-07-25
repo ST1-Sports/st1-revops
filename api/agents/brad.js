@@ -17,10 +17,11 @@ import { prisma }                               from '../_lib/prisma.js'
 import { logInteraction, countActions }         from '../_lib/memory.js'
 
 const API_KEY   = process.env.ANTHROPIC_KEY
+const _cap = parseInt(process.env.BRAD_DAILY_TOUCH_CAP || '25', 10)
 const FLAGS = {
   sendingEnabled: process.env.BRAD_SENDING_ENABLED === 'true',
   dryRun:         process.env.BRAD_DRY_RUN         === 'true',
-  dailyCap:       parseInt(process.env.BRAD_DAILY_TOUCH_CAP || '25', 10),
+  dailyCap:       Number.isFinite(_cap) ? _cap : 25,
 }
 const RETOUCH_MS = 14 * 24 * 60 * 60 * 1000
 
