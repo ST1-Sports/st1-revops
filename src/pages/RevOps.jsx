@@ -13318,6 +13318,38 @@ const [tab,setTab]=useState("own");
 const [showUpload,setShowUpload]=useState(false);
 const [editItem,setEditItem]=useState(null);
 const [searchQ,setSearchQ]=useState("");
+const [dbSaving,setDbSaving]=useState(false);
+const [dbSaveMsg,setDbSaveMsg]=useState(null);
+const saveToDB=async()=>{
+  const own=(s.priceLists||[]).filter(pl=>pl.type==="own");
+  if(!own.length){toast("No supplier lists to save","error");return;}
+  setDbSaving(true);setDbSaveMsg(null);
+  let totalItems=0;
+  try{
+    for(const pl of own){
+      await fetch("/api/pricelists/supplier",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:pl.id,name:pl.name,category:pl.supplierName||pl.name,
+          rep:pl.repName||null,repEmail:pl.repEmail||null,repPhone:pl.repPhone||null,
+          notes:pl.notes||null,lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null})});
+      const products=(pl.items||[]).map((it,i)=>({
+        id:`${pl.id}_${i}`,supplierId:pl.id,
+        sku:it.sku||null,name:it.name||"Item",category:it.category||null,
+        unit:it.unit||"each",cost:it.cost||null,ourPrice:it.price||null,
+        map:it.map||null,msrp:null,lastCost:null,gmFloorPct:null,
+      }));
+      await fetch("/api/pricelists/items",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({supplierId:pl.id,products})});
+      totalItems+=products.length;
+    }
+    setDbSaveMsg(`✓ Saved ${own.length} supplier${own.length>1?"s":""} · ${totalItems} products to DB`);
+    setTimeout(()=>setDbSaveMsg(null),5000);
+    toast(`Price lists saved to DB — Edgar can now use them`,"success");
+  }catch(e){
+    setDbSaveMsg(`Save failed: ${e.message}`);
+    toast("DB save failed","error");
+  }
+  setDbSaving(false);
+};
 const allLists=s.priceLists||[];
 const ownLists=useMemo(()=>allLists.filter(pl=>pl.type==="own"),[allLists]);
 const compLists=useMemo(()=>allLists.filter(pl=>pl.type==="competitor"),[allLists]);
@@ -13364,6 +13396,10 @@ return(
 {lowCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#C77800",letterSpacing:.5,background:"#FFF8E6",borderRadius:3,padding:"1px 5px"}}>{lowCount} LOW MARGIN</span>}
 {compLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5}}>{compLists.length} COMPETITOR SOURCES</span>}
 <div style={{flex:1}}/>
+{dbSaveMsg&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:dbSaveMsg.startsWith("✓")?B.green:B.red}}>{dbSaveMsg}</span>}
+<button onClick={saveToDB} disabled={dbSaving} style={{padding:"6px 14px",background:dbSaving?"#aaa":B.green,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:dbSaving?"not-allowed":"pointer",opacity:dbSaving?.7:1}}>
+  {dbSaving?"SAVING…":"SAVE TO DB"}
+</button>
 <button onClick={()=>setShowUpload(true)} style={{padding:"6px 14px",background:B.orange,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD LIST</button>
 </div>
 <div style={{display:"flex",flex:1,overflow:"hidden"}}>
