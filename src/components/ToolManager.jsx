@@ -20,7 +20,7 @@ const B = {
   redBg:    '#FDECEA',
 }
 
-const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', ideogram: 'Ideogram AI', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
+const TYPE_LABELS = { claude: 'Claude AI', 'claude-search': 'Claude + Search', ideogram: 'Ideogram AI', agent: 'ST1 Agent', webhook: 'Webhook', api: 'API', embed: 'Embed', iframe: 'iFrame' }
 
 function pluginStatus(p) {
   if (p.custom) {
@@ -112,7 +112,7 @@ export default function ToolManager() {
   }, [])
 
   function handleToggle(plugin) {
-    setPluginEnabled(plugin.id, plugin.enabled === false ? true : false)
+    setPluginEnabled(plugin.id, plugin.enabled === false)
     reload()
   }
 

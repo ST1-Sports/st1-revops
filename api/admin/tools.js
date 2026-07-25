@@ -29,7 +29,7 @@ export default async function handler(req, res) {
       await prisma.agentMemory.upsert({
         where:  { scope_entity_key: { scope: SCOPE, entity: ENTITY, key: tool.id } },
         update: { value: JSON.stringify(tool), updatedAt: new Date() },
-        create: { scope: SCOPE, entity: ENTITY, key: tool.id, value: JSON.stringify(tool) },
+        create: { scope: SCOPE, entity: ENTITY, key: tool.id, value: JSON.stringify(tool), agentId: 'system' },
       })
       return res.json({ ok: true })
     }
