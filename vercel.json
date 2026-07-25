@@ -40,6 +40,7 @@
     "api/pricelists/market.js":                    { "maxDuration": 30 },
     "api/agents/edgar.js":                         { "maxDuration": 60 },
     "api/agents/brad.js":                          { "maxDuration": 60 },
+    "api/agents/ledger/reconcile.js":              { "maxDuration": 60 },
     "api/webhooks/zoho.js":                        { "maxDuration": 30 },
     "api/webhooks/instantly.js":                   { "maxDuration": 30 }
   },

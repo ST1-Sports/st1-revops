@@ -798,3 +798,66 @@ model AgentInteraction {
   @@index([outcome])
   @@index([createdAt])
 }
+
+// ── Ledger / reconciliation models ───────────────────────────────────────────
+
+// Known team stores — populated manually or via admin UI
+model TeamStore {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  externalId String?
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  deposits   Deposit[]
+}
+
+// Shadow of Zoho Books open invoices — populated from Zoho Books sync or manually
+model DealInvoice {
+  id            String    @id @default(cuid())
+  zohoInvoiceId String?   @unique
+  dealName      String?
+  customerName  String?
+  amount        Float
+  dueDate       DateTime?
+  status        String    @default("open")
+  reference     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  deposits      Deposit[]
+}
+
+// One row per bank deposit candidate; reconciliation outcome stored here
+model Deposit {
+  id                 String       @id @default(cuid())
+  source             String       // stripe | shopify | other
+  zohoBankTxnId      String?      @unique
+  stripePayoutId     String?
+  amount             Float
+  currency           String       @default("USD")
+  depositDate        DateTime
+  description        String?
+  extractedName      String?
+  status             String       @default("PENDING")
+  categorizedAs      String?
+  matchedTeamStoreId String?
+  matchedInvoiceId   String?
+  matchConfidence    String?
+  isDuplicate        Boolean      @default(false)
+  isReversal         Boolean      @default(false)
+  reversalOfId       String?
+  rawPayload         Json         @default("{}")
+  notes              String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+
+  matchedTeamStore   TeamStore?   @relation(fields: [matchedTeamStoreId], references: [id])
+  matchedInvoice     DealInvoice? @relation(fields: [matchedInvoiceId], references: [id])
+
+  @@index([source])
+  @@index([status])
+  @@index([depositDate])
+  @@index([matchedTeamStoreId])
+}
