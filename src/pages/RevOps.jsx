@@ -517,6 +517,7 @@ export default function App() {
 const [s, set, lastSynced, syncing, pullFromServer] = useStore();
 const [mod, setMod]   = useState("briefing");
 const [slim, setSlim] = useState(false);
+const [mobileNavOpen, setMobileNavOpen] = useState(false);
 const [expandedGroups, setExpandedGroups] = useState(new Set());
 const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 const [toasts, setToasts] = useState([]);
@@ -609,6 +610,7 @@ const initTimer=setTimeout(()=>{syncInvoices();syncContacts();},8000);
 const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
 return()=>{clearTimeout(initTimer);clearInterval(iv);};
 },[s.currentUserId]);
+useEffect(()=>{ setMobileNavOpen(false); },[mod]);
 useEffect(()=>{
 const handler=(e)=>{
 if(e.key==="/" && !["INPUT","TEXTAREA","SELECT"].includes(document.activeElement?.tagName)){
@@ -667,9 +669,21 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
 @keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
 .fu{animation:fu .2s ease} .blink{animation:blink 2s infinite}
 .card{background:${B.white};border:1px solid ${B.border};border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.rv-hamburger{display:none!important}
+.rv-mob-close{display:none!important}
+@media(max-width:768px){
+  .rv-sidebar{position:fixed!important;top:0!important;left:0!important;height:100vh!important;width:240px!important;z-index:50;transform:translateX(-100%);transition:transform .22s ease,width .18s!important}
+  .rv-sidebar.open{transform:translateX(0)}
+  .rv-slim-toggle{display:none!important}
+  .rv-mob-close{display:flex!important;align-items:center}
+  .rv-hamburger{display:flex!important;align-items:center}
+  .rv-int-status{display:none!important}
+  .rv-sync-btn{display:none!important}
+  .rv-sep{display:none!important}
+}
 `}</style>
 {/* SIDEBAR */}
-<aside style={{width:slim?52:208,background:"#111827",borderRight:"1px solid rgba(255,255,255,0.07)",display:"flex",flexDirection:"column",flexShrink:0,transition:"width .18s",overflow:"hidden"}}>
+<aside className={"rv-sidebar"+(mobileNavOpen?" open":"")} style={{width:slim?52:208,background:"#111827",borderRight:"1px solid rgba(255,255,255,0.07)",display:"flex",flexDirection:"column",flexShrink:0,transition:"width .18s",overflow:"hidden"}}>
 <div style={{padding:"14px 10px 12px",borderBottom:"1px solid rgba(255,255,255,0.07)",display:"flex",alignItems:"center",justifyContent:slim?"center":"space-between",minHeight:60}}>
 {!slim&&<div style={{display:"flex",alignItems:"center",gap:8}}>
 <div style={{width:30,height:30,background:B.orange,borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -683,7 +697,8 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
 {slim&&<div style={{width:30,height:30,background:B.orange,borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center"}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.white,letterSpacing:-1}}>ST1</span>
 </div>}
-<button onClick={()=>setSlim(c=>!c)} style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:13,padding:2,flexShrink:0,marginLeft:slim?0:2}}>{slim?"→":"←"}</button>
+<button onClick={()=>setMobileNavOpen(false)} className="rv-mob-close" style={{background:"none",border:"none",color:"rgba(255,255,255,0.45)",fontSize:17,padding:"0 2px",flexShrink:0,lineHeight:1}}>✕</button>
+<button onClick={()=>setSlim(c=>!c)} className="rv-slim-toggle" style={{background:"none",border:"none",color:"rgba(255,255,255,0.35)",fontSize:13,padding:2,flexShrink:0,marginLeft:slim?0:2}}>{slim?"→":"←"}</button>
 </div>
 <nav style={{flex:1,overflowY:"auto",overflowX:"hidden",paddingTop:6}}>
 {NAV.map(n=>{
@@ -751,11 +766,16 @@ style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent"
 <button onClick={()=>dispatch("LOGOUT")} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.4)",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
 </div>}
 </aside>
+{mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:49}}/>}
 {/* MAIN */}
 <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-<header style={{background:B.white,borderBottom:`1px solid ${B.border}`,height:46,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",flexShrink:0,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+<header style={{background:B.white,borderBottom:`1px solid ${B.border}`,height:46,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 16px 0 12px",flexShrink:0,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+<div style={{display:"flex",alignItems:"center",gap:8}}>
+<button className="rv-hamburger" onClick={()=>setMobileNavOpen(o=>!o)} style={{background:"none",border:"none",fontSize:18,color:B.muted,padding:"2px 6px 2px 2px",lineHeight:1,flexShrink:0}}>☰</button>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{navLabel(mod).toUpperCase()}</div>
+</div>
 <div style={{display:"flex",gap:12,alignItems:"center"}}>
+<div className="rv-int-status" style={{display:"flex",gap:12,alignItems:"center"}}>
 {(()=>{
 let st={};
 try{st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");}catch{}
@@ -773,13 +793,14 @@ return [
 </div>
 ));
 })()}
-<div style={{width:1,height:14,background:B.border}}/>
+</div>
+<div className="rv-sep" style={{width:1,height:14,background:B.border}}/>
 {/* Live sync indicator */}
 {(()=>{
 const secAgo = lastSynced ? Math.round((Date.now()-lastSynced)/1000) : null;
 const fresh  = secAgo !== null && secAgo < 60;
 return(
-<button onClick={()=>pullFromServer()} title="Sync now — pull latest from server"
+<button className="rv-sync-btn" onClick={()=>pullFromServer()} title="Sync now — pull latest from server"
 style={{display:"flex",alignItems:"center",gap:5,background:"none",border:`1px solid ${fresh?B.green+"40":B.border}`,borderRadius:4,padding:"3px 9px",cursor:"pointer"}}>
 <div style={{width:6,height:6,borderRadius:"50%",background:syncing?B.orange:fresh?B.green:B.muted,
 animation:syncing?"pulse 1s infinite":undefined}}/>
@@ -789,7 +810,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 </button>
 );
 })()}
-<div style={{width:1,height:14,background:B.border}}/>
+<div className="rv-sep" style={{width:1,height:14,background:B.border}}/>
 <button onClick={()=>{setShowSearch(true);setSearchQuery("");}} title="Search (press /)" style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:11,borderRadius:4,padding:"3px 9px",display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
 <span style={{fontSize:12}}>⌕</span>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10}}>Search</span>
