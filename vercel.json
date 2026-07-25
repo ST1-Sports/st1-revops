@@ -38,8 +38,10 @@
     "api/pricelists/index.js":                     { "maxDuration": 30 },
     "api/pricelists/items.js":                     { "maxDuration": 30 },
     "api/pricelists/market.js":                    { "maxDuration": 30 },
-    "api/agents/edgar.js":                         { "maxDuration": 30 },
-    "api/agents/brad.js":                          { "maxDuration": 30 }
+    "api/agents/edgar.js":                         { "maxDuration": 60 },
+    "api/agents/brad.js":                          { "maxDuration": 60 },
+    "api/webhooks/zoho.js":                        { "maxDuration": 30 },
+    "api/webhooks/instantly.js":                   { "maxDuration": 30 }
   },
   "crons": [
     { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
