@@ -12,9 +12,9 @@
  *   14-day re-touch rule  — no same contact within 14 days
  *   DNC check             — skip status=unsubscribed or notes containing "dnc"
  */
-import { setCors }                              from '../_lib/cors.js'
-import { prisma }                               from '../_lib/prisma.js'
-import { logInteraction, countActions }         from '../_lib/memory.js'
+import { setCors }                                        from '../_lib/cors.js'
+import { prisma }                                         from '../_lib/prisma.js'
+import { logInteraction, countActions, recentOutcomes }   from '../_lib/memory.js'
 
 const API_KEY   = process.env.ANTHROPIC_KEY
 const _cap = parseInt(process.env.BRAD_DAILY_TOUCH_CAP || '25', 10)
@@ -91,7 +91,7 @@ async function applyGuardrails(contacts, isDryRun) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystem(contacts, guardrailStatus) {
+function buildSystem(contacts, guardrailStatus, outcomes = []) {
   const contactBlock = contacts.length
     ? contacts.map(c => {
         const name = [c.firstName, c.lastName].filter(Boolean).join(' ') || 'Unknown'
@@ -110,12 +110,24 @@ function buildSystem(contacts, guardrailStatus) {
       }).join('\n\n')
     : '  (no eligible contacts — all cleared contacts shown)'
 
+  const outcomesBlock = outcomes.length
+    ? outcomes.map(r => {
+        const info   = r.input && typeof r.input === 'object' ? r.input : {}
+        const who    = info.contactEmail || r.entity || 'unknown'
+        const when   = new Date(r.outcomeAt || r.createdAt).toLocaleDateString()
+        return `  ${r.outcome.toUpperCase()}: ${who} (${when})`
+      }).join('\n')
+    : '  (no closed outcomes yet)'
+
   return `You are Brad, ST1 Sports's SDR agent. You research leads and draft outreach. You never send — every draft requires human approval.
 
 ${ST1_VOICE}
 
 === GUARDRAIL STATUS ===
 ${guardrailStatus}
+
+=== RECENT OUTCOMES (what's been working) ===
+${outcomesBlock}
 
 === ELIGIBLE CONTACTS (passed all guardrail checks) ===
 ${contactBlock}
@@ -155,7 +167,10 @@ export default async function handler(req, res) {
   const isDryRun = FLAGS.dryRun || input.dryRun === true
 
   try {
-    const contacts                                   = await loadContacts(input)
+    const [contacts, outcomes] = await Promise.all([
+      loadContacts(input),
+      recentOutcomes({ agentId: 'brad', limit: 10 }).catch(() => []),
+    ])
     const { allowed, skipped, dailyUsed, remaining } = await applyGuardrails(contacts, isDryRun)
 
     // Build guardrail status string for the prompt
@@ -199,7 +214,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({
           model:      'claude-sonnet-4-6',
           max_tokens: 2500,
-          system:     buildSystem(allowed, guardrailStatus),
+          system:     buildSystem(allowed, guardrailStatus, outcomes),
           messages:   [{ role: 'user', content: task }],
         }),
       })

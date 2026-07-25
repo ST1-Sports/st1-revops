@@ -1,5 +1,6 @@
-import { prisma } from '../_lib/prisma.js';
-import { setCors } from '../_lib/cors.js';
+import { prisma }                    from '../_lib/prisma.js';
+import { setCors }                   from '../_lib/cors.js';
+import { recordOutcome, remember }   from '../_lib/memory.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
@@ -65,6 +66,34 @@ export default async function handler(req, res) {
         },
       });
       created++;
+
+      // Close the Brad feedback loop: mark any pending outreach for this contact as 'won'
+      if (email) {
+        try {
+          const pending = await prisma.agentInteraction.findMany({
+            where: {
+              agentId: 'brad',
+              action:  'outreach',
+              outcome: 'pending',
+              input:   { path: ['contactEmail'], equals: email },
+            },
+            orderBy: { createdAt: 'desc' },
+            take:    5,
+          });
+          await Promise.all(pending.map(i => recordOutcome(i.id, 'won')));
+
+          // Persist win to agent memory so future Brad and Edgar runs have context
+          await remember({
+            scope:   'org',
+            entity:  `customer:${email}`,
+            key:     'last_closed_won',
+            value:   JSON.stringify({ dealId: String(dealId || ''), amount, closedAt: new Date().toISOString() }),
+            agentId: 'system',
+          });
+        } catch (e) {
+          console.error('[zoho webhook] brad outcome loop:', e.message);
+        }
+      }
     }
 
     return res.status(200).json({ ok: true, attributionsCreated: created });
