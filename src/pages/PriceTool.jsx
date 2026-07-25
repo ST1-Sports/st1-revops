@@ -179,8 +179,9 @@ export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
   const [dbLoaded,   setDbLoaded]   = useState(false);
-  const [dbWasEmpty, setDbWasEmpty] = useState(false);
-  const [seeding,    setSeeding]    = useState(false);
+  const [dbSaved,    setDbSaved]    = useState(false);  // true once DB has data
+  const [saving,     setSaving]     = useState(false);
+  const [saveMsg,    setSaveMsg]    = useState(null);   // "Saved X items" or error string
   const [tab,       setTab]       = useState("dashboard");
   const [selSupplier, setSelSupplier] = useState(null);
   const [selProduct,  setSelProduct]  = useState(null);
@@ -248,6 +249,7 @@ export default function PriceListManager({ onMakeQuote } = {}) {
       .then(d => {
         if (d.ok && d.suppliers.length > 0) {
           setSuppliers(d.suppliers);
+          setDbSaved(true);
           // Restore any persisted market scan results
           const mkt = {};
           d.suppliers.forEach(s => s.products.forEach(p => {
@@ -258,12 +260,11 @@ export default function PriceListManager({ onMakeQuote } = {}) {
             };
           }));
           if(Object.keys(mkt).length > 0) setScanResults(mkt);
-        } else {
-          setDbWasEmpty(true); // DB empty — show seed button
         }
+        // DB empty or error — show Save button so user can commit
         setDbLoaded(true);
       })
-      .catch(() => setDbLoaded(true)); // network error — keep seed data silently
+      .catch(() => setDbLoaded(true)); // network error — show seed data + save button
   }, []);
 
   const persistSupplier = (sup) => {
@@ -284,10 +285,12 @@ export default function PriceListManager({ onMakeQuote } = {}) {
     }).catch(() => {});
   };
 
-  const seedToDB = async () => {
-    setSeeding(true);
+  const saveAllToDB = async () => {
+    setSaving(true);
+    setSaveMsg(null);
+    let totalItems = 0;
     try {
-      for (const sup of SEED_SUPPLIERS) {
+      for (const sup of suppliers) {
         await fetch('/api/pricelists/supplier', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -300,10 +303,15 @@ export default function PriceListManager({ onMakeQuote } = {}) {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ supplierId: sup.id, products: sup.products }),
         });
+        totalItems += sup.products.length;
       }
-      setDbWasEmpty(false);
-    } catch(e) {}
-    setSeeding(false);
+      setDbSaved(true);
+      setSaveMsg(`Saved ${suppliers.length} suppliers · ${totalItems} products`);
+      setTimeout(() => setSaveMsg(null), 4000);
+    } catch(e) {
+      setSaveMsg(`Save failed: ${e.message}`);
+    }
+    setSaving(false);
   };
 
   // Update a product's cost and write through to DB.
@@ -558,6 +566,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
     if(finalSup) {
       persistSupplier(finalSup);
       persistItems(finalSup.id, finalProds);
+      setDbSaved(true);
     }
 
     setImportPreview(null);
@@ -815,11 +824,27 @@ Provide strategic pricing advice. Return JSON:
             </div>
           ))}
           </div>
-          <div className="pt-header-upload">
-            <button onClick={()=>fileInputRef.current?.click()}
-              style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,width:"100%"}}>
-              ↑ UPLOAD PRICE LIST
-            </button>
+          <div className="pt-header-upload" style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={saveAllToDB} disabled={saving}
+                style={{background:dbSaved&&!saveMsg?B.greenBg:B.orange,color:dbSaved&&!saveMsg?B.green:B.white,
+                  border:`1px solid ${dbSaved&&!saveMsg?B.green:B.orange}`,borderRadius:5,padding:"8px 14px",
+                  fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,
+                  cursor:saving?"not-allowed":"pointer",opacity:saving?.65:1,whiteSpace:"nowrap"}}>
+                {saving?"SAVING…":dbSaved&&!saveMsg?"✓ SAVED TO DB":"SAVE TO DB"}
+              </button>
+              <button onClick={()=>fileInputRef.current?.click()}
+                style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 16px",
+                  fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
+                ↑ UPLOAD PRICE LIST
+              </button>
+            </div>
+            {saveMsg&&(
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,
+                color:saveMsg.startsWith("Save failed")?B.red:B.green,textAlign:"right"}}>
+                {saveMsg}
+              </div>
+            )}
             <input ref={fileInputRef} type="file" accept=".pdf,.xlsx,.xls,.csv" onChange={handleImport} style={{display:"none"}}/>
           </div>
         </div>
@@ -842,15 +867,15 @@ Provide strategic pricing advice. Return JSON:
 
       <div className="pt-main" style={{padding:"24px 28px"}}>
 
-        {/* ── SEED BANNER (shown once when DB is empty) ── */}
-        {dbLoaded&&dbWasEmpty&&(
+        {/* ── UNSAVED BANNER — shown until data is committed to DB ── */}
+        {dbLoaded&&!dbSaved&&(
           <div className="pt-seed-banner" style={{background:B.yellowBg,border:`1px solid ${B.yellow}`,borderRadius:7,padding:"14px 18px",marginBottom:18,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
             <div>
-              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.yellow,letterSpacing:.8,marginBottom:3}}>PRICE LIST DATABASE IS EMPTY</div>
-              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid}}>Showing built-in sample data. Click to save it to the database so Edgar can read it.</div>
+              <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.yellow,letterSpacing:.8,marginBottom:3}}>PRICE LIST NOT SAVED TO DATABASE</div>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid}}>This data only exists in your browser. Save it so Edgar can read it and it persists across sessions.</div>
             </div>
-            <button onClick={seedToDB} disabled={seeding} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:seeding?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:seeding?.6:1}}>
-              {seeding?"SAVING…":"SAVE TO DATABASE"}
+            <button onClick={saveAllToDB} disabled={saving} style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:saving?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:saving?.6:1}}>
+              {saving?"SAVING…":"SAVE TO DATABASE"}
             </button>
           </div>
         )}
