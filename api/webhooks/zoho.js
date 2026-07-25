@@ -48,26 +48,32 @@ export default async function handler(req, res) {
       const amount   = parseFloat(item.Amount || item.amount || 0);
       const source   = item.Lead_Source || item['Lead Source'] || '';
       const campaign = item.Campaign_Name || item['Campaign Name'] || item.Campaign || '';
-      const email    = item.Contact_Email || item['Contact Email'] || item['Email'] || '';
+      const email    = (item.Contact_Email || item['Contact Email'] || item['Email'] || '').toLowerCase().trim();
       const contactId= item.Contact_Id    || item['Contact Id']    || '';
 
       const platform = SOURCE_TO_PLATFORM[source] || 'unknown';
 
-      await prisma.ad_attribution.create({
-        data: {
-          platform,
-          platform_campaign_id: campaign || null,
-          zoho_deal_id:         dealId   ? String(dealId) : null,
-          zoho_contact_id:      contactId ? String(contactId) : null,
-          contact_email:        email    || null,
-          attributed_revenue:   amount,
-          attribution_type:     'last_touch',
-          converted_at:         new Date(),
-        },
-      });
-      created++;
+      // Ad attribution — isolated so a missing migration doesn't block the feedback loop
+      try {
+        await prisma.ad_attribution.create({
+          data: {
+            platform,
+            platform_campaign_id: campaign || null,
+            zoho_deal_id:         dealId   ? String(dealId) : null,
+            zoho_contact_id:      contactId ? String(contactId) : null,
+            contact_email:        email    || null,
+            attributed_revenue:   amount,
+            attribution_type:     'last_touch',
+            converted_at:         new Date(),
+          },
+        });
+        created++;
+      } catch (e) {
+        if (e.code !== 'P2021' && !e.message?.includes('does not exist')) throw e;
+        // ad_attribution table not yet migrated — skip attribution, continue to feedback loop
+      }
 
-      // Close the Brad feedback loop: mark any pending outreach for this contact as 'won'
+      // Brad feedback loop — always runs regardless of attribution table state
       if (email) {
         try {
           const pending = await prisma.agentInteraction.findMany({
@@ -98,9 +104,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, attributionsCreated: created });
   } catch (e) {
-    if (e.code === 'P2021' || e.message?.includes('does not exist')) {
-      return res.status(200).json({ ok: true, note: 'Run migration 002_ad_hub.sql to enable attribution.' });
-    }
     console.error('Zoho webhook error:', e);
     return res.status(500).json({ error: e.message });
   }

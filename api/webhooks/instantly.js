@@ -44,8 +44,8 @@ export default async function handler(req, res) {
 
     await Promise.all(pending.map(i => recordOutcome(i.id, 'replied')))
 
-    // Persist reply to memory — surfaced in future Brad prompts as a warm signal
-    await remember({
+    // Persist reply to memory — fire-and-forget so a write failure doesn't 500 Instantly
+    remember({
       scope:   'org',
       entity:  `customer:${email}`,
       key:     'last_replied',
@@ -55,7 +55,7 @@ export default async function handler(req, res) {
         campaignName: body.campaign_name || null,
       }),
       agentId: 'system',
-    })
+    }).catch(() => {})
 
     return res.status(200).json({ ok: true, updated: pending.length })
   } catch (e) {

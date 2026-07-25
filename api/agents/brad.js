@@ -256,7 +256,7 @@ export default async function handler(req, res) {
           agentId: 'brad',
           action:  'outreach',
           entity:  draft.contactId ? `contact:${draft.contactId}` : null,
-          input:   { task, contactEmail: draft.contactEmail },
+          input:   { task, contactEmail: draft.contactEmail?.toLowerCase() ?? '' },
           output:  { subject: draft.subject, bodyLength: draft.body?.length ?? 0 },
           outcome: 'pending',
           dryRun:  false,
