@@ -233,6 +233,43 @@ const TOOLS = [
       required: ["campaign_name", "emails"],
     },
   },
+  {
+    name: "call_edgar",
+    description: "Build an accurate quote using ST1's live dealer price database. Edgar reads real costs, enforces GM floor and MAP minimums, and returns verified line-item pricing. Always prefer this over propose_create_quote whenever the user asks for a quote, estimate, or 'how much would X cost' for specific products.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task:     { type: "string", description: "Natural language quote request — mention the customer, products, and quantities" },
+        customer: { type: "string", description: "Customer or school name for memory lookup (optional)" },
+        items: {
+          type: "array",
+          description: "Specific line items to quote (optional — Edgar extracts from task if omitted)",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              qty:  { type: "number" },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["task"],
+    },
+  },
+  {
+    name: "call_brad",
+    description: "Research leads and draft personalized outreach emails using Brad, ST1's SDR agent. Brad checks DNC lists, enforces a 14-day re-touch barrier per contact, and caps daily touches. Returns drafts for human approval — nothing sends automatically. Use for prospecting or bulk outreach; use propose_draft_email for a single specific named contact.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task:      { type: "string", description: "Natural language outreach task — who to target, the angle, and any product or seasonal hook" },
+        contactId: { type: "string", description: "Specific contact ID to target (optional, single-contact mode)" },
+        minScore:  { type: "number", description: "Minimum lead score filter to narrow the contact pool (optional)" },
+      },
+      required: ["task"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -284,6 +321,43 @@ async function fetchZohoInventory() {
     }));
   } catch {
     return [];
+  }
+}
+
+// ── AGENT CALLERS (server-to-server within the same deployment) ───────────────
+async function callEdgar(input, baseUrl) {
+  try {
+    const r = await fetchWithTimeout(
+      `${baseUrl}/api/agents/edgar`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ task: input.task, input: { customer: input.customer, items: input.items } }),
+      },
+      20_000
+    );
+    if (!r.ok) return { error: `Edgar returned HTTP ${r.status}` };
+    return r.json();
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+async function callBrad(input, baseUrl) {
+  try {
+    const r = await fetchWithTimeout(
+      `${baseUrl}/api/agents/brad`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ task: input.task, input: { contactId: input.contactId, minScore: input.minScore } }),
+      },
+      20_000
+    );
+    if (!r.ok) return { error: `Brad returned HTTP ${r.status}` };
+    return r.json();
+  } catch (err) {
+    return { error: err.message };
   }
 }
 
@@ -415,8 +489,19 @@ USE propose_create_campaign_sequence when:
 - User says "build a campaign", "send to a group", "email all [sport] coaches", "reach out to [segment]", or describes outbound to multiple people
 - Write COMPLETE email bodies for every touch in the sequence
 
+USE call_edgar (preferred for all quoting) when:
+- User asks to "build a quote", "price this out", "what would X cost", "create an estimate", or names specific products
+- Always prefer call_edgar over propose_create_quote — Edgar reads live dealer costs and enforces GM floor + MAP
+- After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
+
+USE call_brad (preferred for prospecting outreach) when:
+- User asks to "prospect", "find leads", "reach out to coaches/ADs", "run outreach", or "email [segment]" without naming a specific person
+- Brad automatically applies DNC checks, 14-day re-touch barriers, and daily caps
+- Brad returns drafts flagged requiresApproval — nothing sends without a human click
+- For a single specific named person ("email Coach Smith at Lincoln High"), use propose_draft_email instead
+
 USE propose_create_quote when:
-- User asks to "build a quote", "create an estimate", or "price this out" with specific products and a customer
+- Edgar is unavailable or the items are clearly custom/not in the price database
 
 USE propose_flag_deal when:
 - User says a deal is urgent, high priority, or mentions a hot lead
@@ -436,14 +521,16 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 === YOUR TOOLS ===
 1. propose_create_deal — suggest creating a deal (user confirms)
 2. propose_add_contact — suggest adding a prospect (user confirms)
-3. propose_draft_email — compose a personalized email (user reviews + sends)
+3. propose_draft_email — compose a personalized email for a single known contact (user reviews + sends)
 4. propose_schedule_followup — set a follow-up date on a deal
 5. propose_flag_deal — mark a deal as hot/warm priority
 6. propose_add_to_nurture — add cold leads to email nurture campaign
 7. propose_log_note — log notes on a deal
-8. propose_create_quote — build and create a Zoho Books estimate/quote for a customer
+8. propose_create_quote — Zoho Books estimate fallback (use call_edgar instead when possible)
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
+11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)
+12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 
 IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
@@ -486,7 +573,9 @@ CAMPAIGN BUILDING:
 After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
-Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"`;
+Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"
+call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically.
+call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -557,7 +646,8 @@ async function _handler(req, res) {
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system = buildSystemPrompt(localContext, zoho, inventory);
+  const system  = buildSystemPrompt(localContext, zoho, inventory);
+  const baseUrl = `https://${req.headers.host}`;
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({
@@ -565,12 +655,13 @@ async function _handler(req, res) {
     content: m.role === "user" ? m.content : (m.raw || m.content || ""),
   }));
 
-  // Tool call loop — max 2 iterations (no web search, just proposal tools)
-  const MAX_LOOPS = 2;
-  let allToolCalls = [];
-  let loopCount   = 0;
-  let finalText   = "";
-  let searchUsed  = false;
+  // Tool call loop — max 2 iterations
+  const MAX_LOOPS   = 2;
+  let allToolCalls  = [];   // all tool_use blocks across all loops
+  let agentResults  = [];   // { name, input, output } for call_edgar / call_brad
+  let loopCount     = 0;
+  let finalText     = "";
+  let searchUsed    = false;
 
   while (loopCount < MAX_LOOPS) {
     let response;
@@ -585,20 +676,25 @@ async function _handler(req, res) {
 
     if (textBlocks.length) finalText = textBlocks.map(b => b.text).join("");
 
-    // Track tool usage
-    for (const t of toolUseBlocks) {
-      allToolCalls.push(t);
-    }
+    for (const t of toolUseBlocks) allToolCalls.push(t);
 
     // Done when no tool calls or stop reason is end_turn
     if (toolUseBlocks.length === 0 || response.stop_reason === "end_turn") break;
 
-    // Add assistant turn, add synthetic tool results, loop
+    // Build tool results — execute Edgar/Brad for real, synthetic for everything else
     messages.push({ role: "assistant", content: response.content });
-    const toolResults = toolUseBlocks.map(t => ({
-      type:        "tool_result",
-      tool_use_id: t.id,
-      content:     JSON.stringify({ proposed: true, ...t.input }),
+    const toolResults = await Promise.all(toolUseBlocks.map(async t => {
+      if (t.name === "call_edgar") {
+        const output = await callEdgar(t.input, baseUrl);
+        agentResults.push({ name: "call_edgar", input: t.input, output });
+        return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
+      }
+      if (t.name === "call_brad") {
+        const output = await callBrad(t.input, baseUrl);
+        agentResults.push({ name: "call_brad", input: t.input, output });
+        return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
+      }
+      return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ proposed: true, ...t.input }) };
     }));
     messages.push({ role: "user", content: toolResults });
     loopCount++;
@@ -611,25 +707,40 @@ async function _handler(req, res) {
     if (m) parsed = JSON.parse(m[0]);
   } catch { /* fallback to plain text */ }
 
-  // Build actions from tool proposals + any in parsed.actions
-  const proposedActions = allToolCalls
-    .map(t => {
-      const typeMap = {
-        propose_create_deal:     "create_deal",
-        propose_add_contact:     "add_contact",
-        propose_draft_email:     "draft_email",
-        propose_schedule_followup: "schedule_followup",
-        propose_flag_deal:       "flag_deal",
-        propose_add_to_nurture:  "add_to_nurture",
-        propose_log_note:        "log_note",
-        propose_create_quote:             "create_quote",
-        propose_store_competitor_intel:   "store_competitor_intel",
-        propose_create_campaign_sequence: "create_campaign_sequence",
-      };
-      return { type: typeMap[t.name] || t.name, ...t.input };
-    });
+  // Actions from Edgar/Brad executions (surfaced directly — no user confirm for edgar_quote shape;
+  // brad_outreach drafts already carry requiresApproval: true from the agent)
+  const agentActions = agentResults.map(r => {
+    if (r.name === "call_edgar") {
+      const quote = r.output?.metadata?.quote;
+      if (!quote) return null;
+      return { type: "edgar_quote", quote, warnings: r.output?.metadata?.warnings || [], task: r.input.task, customer: r.input.customer };
+    }
+    if (r.name === "call_brad") {
+      const drafts = r.output?.metadata?.drafts || [];
+      if (!drafts.length) return null;
+      return { type: "brad_outreach", drafts, skipped: r.output?.metadata?.skipped || [], task: r.input.task };
+    }
+    return null;
+  }).filter(Boolean);
 
-  const actions     = [...proposedActions, ...(parsed?.actions || [])];
+  // Actions from proposal tools (exclude agent tools — they're handled above)
+  const typeMap = {
+    propose_create_deal:              "create_deal",
+    propose_add_contact:              "add_contact",
+    propose_draft_email:              "draft_email",
+    propose_schedule_followup:        "schedule_followup",
+    propose_flag_deal:                "flag_deal",
+    propose_add_to_nurture:           "add_to_nurture",
+    propose_log_note:                 "log_note",
+    propose_create_quote:             "create_quote",
+    propose_store_competitor_intel:   "store_competitor_intel",
+    propose_create_campaign_sequence: "create_campaign_sequence",
+  };
+  const proposedActions = allToolCalls
+    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad")
+    .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
+
+  const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
   const suggestions = parsed?.suggestions || [];
   const message     = parsed?.message || finalText;
 
