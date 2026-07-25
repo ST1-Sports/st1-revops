@@ -88,25 +88,6 @@ const BUILT_INS = [
     },
   },
   {
-    id:           'st1-quote',
-    name:         'Quote Builder',
-    capabilities: ['quote'],
-    type:         'claude',
-    roles:        ['admin', 'manager', 'sales_rep'],
-    requiresKeys: [],
-    enabled:      true,
-    handler: async (task) => {
-      const raw = await aiCall(task, {
-        sys:    ST1_CTX + ' You are a sports equipment quoting specialist. Match product requests to catalog items and return structured JSON.',
-        tokens: 2000,
-      })
-      let parsed = null
-      try { parsed = JSON.parse(raw?.trim()) } catch {}
-      if (!parsed) { try { const m = raw?.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]) } catch {} }
-      return { output: raw, metadata: { json: parsed } }
-    },
-  },
-  {
     id:           'st1-research',
     name:         'Research & Intel',
     capabilities: ['research'],
@@ -219,12 +200,36 @@ try {
   }
 } catch {}
 
+// Sync bootstrap from localStorage so custom tools appear immediately on load.
 try {
   const customs = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
   for (const t of Array.isArray(customs) ? customs : []) {
     _upsert({ ...t, handler: buildHandler(t) })
   }
 } catch {}
+
+/**
+ * Refresh custom tools from DB (authoritative). Falls back to localStorage cache
+ * if the fetch fails. Call once on app init (ToolManager.useEffect).
+ */
+export async function loadCustomTools() {
+  let tools = []
+  try {
+    const r = await fetch('/api/admin/tools')
+    if (r.ok) {
+      const d = await r.json()
+      tools = Array.isArray(d.tools) ? d.tools : []
+      // Sync to localStorage so next hard-refresh is instant.
+      try { localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify(tools)) } catch {}
+    }
+  } catch {}
+  if (!tools.length) {
+    try { tools = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]') } catch {}
+  }
+  for (const t of Array.isArray(tools) ? tools : []) {
+    _upsert({ ...t, handler: buildHandler(t) })
+  }
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export function getPlugin(capability, userRole = 'sales_rep') {

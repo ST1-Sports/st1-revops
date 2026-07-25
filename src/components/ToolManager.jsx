@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react'
-import { getAllPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
-
-const CUSTOM_TOOLS_KEY = 'st1_custom_tools'
+import { getAllPlugins, registerPlugin, setPluginEnabled, deleteCustomTool, loadCustomTools } from '../lib/plugins/index.js'
+import '../lib/agents/index.js'  // registers Edgar + Brad into the plugin registry
 
 const B = {
   white:    '#FFFFFF',
@@ -108,20 +107,25 @@ export default function ToolManager() {
 
   function reload() { setPlugins(getAllPlugins()) }
 
-  useEffect(() => { reload() }, [])
+  useEffect(() => {
+    loadCustomTools().then(() => reload())
+  }, [])
 
   function handleToggle(plugin) {
     setPluginEnabled(plugin.id, plugin.enabled === false ? true : false)
     reload()
   }
 
-  function handleDelete(plugin) {
+  async function handleDelete(plugin) {
     if (!window.confirm(`Delete "${plugin.name}"? This cannot be undone.`)) return
     deleteCustomTool(plugin.id)
     reload()
+    try {
+      await fetch(`/api/admin/tools?id=${encodeURIComponent(plugin.id)}`, { method: 'DELETE' })
+    } catch {}
   }
 
-  function handleAdd() {
+  async function handleAdd() {
     const name = form.name.trim()
     const caps = form.capabilities.filter(Boolean)
     if (!name || !caps.length) {
@@ -138,16 +142,19 @@ export default function ToolManager() {
       roles:        ['admin'],
       custom:       true,
     }
-    try {
-      const existing = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-      localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify([...existing, tool]))
-    } catch {}
     registerPlugin(tool)
     reload()
     setForm(EMPTY_FORM)
     setShowForm(false)
     setFlash('ok:Tool registered successfully.')
     setTimeout(() => setFlash(''), 3000)
+    try {
+      await fetch('/api/admin/tools', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(tool),
+      })
+    } catch {}
   }
 
   const [isOk, flashMsg] = flash.startsWith('ok:')
