@@ -32,7 +32,7 @@ export default async function handler(req, res) {
         map:       nullNum(p.map),
         msrp:      nullNum(p.msrp),
         ourPrice:  nullNum(p.ourPrice),
-        gmFloorPct: p.gmFloorPct != null ? parseFloat(p.gmFloorPct) : null,
+        gmFloorPct: nullNum(p.gmFloorPct),
       }
       return prisma.priceItem.upsert({
         where:  { id: p.id },
