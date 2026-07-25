@@ -1455,6 +1455,8 @@ const [running,setRunning]=useState(false);
 const [expandedEmail,setExpandedEmail]=useState(null);
 const [expandedQuote,setExpandedQuote]=useState(null);
 const [expandedCampaign,setExpandedCampaign]=useState(null);
+const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
+const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
@@ -1559,6 +1561,8 @@ return;
 if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
 if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
 if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
+if(action.type==="edgar_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedEdgarQuote(e=>e===key?null:key);return;}
+if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpandedBradOutreach(e=>e===key?null:key);return;}
 };
 const createQuoteNow=async(action,key)=>{
 setSendingQuote(key);
@@ -1581,6 +1585,15 @@ if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(match
 }else{toast(d.error||"Quote creation failed","error");}
 }catch(e){toast(`Quote error: ${e.message}`,"error");}
 setSendingQuote(null);
+};
+const createEdgarQuoteInZoho=async(action,key)=>{
+const q=action.quote||{};
+const zohoAction={
+customer_name:q.customer||action.customer||"Customer",
+line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0})),
+notes:(q.warnings||[]).join("\n"),
+};
+return createQuoteNow(zohoAction,key);
 };
 const launchCampaignNow=async(action,key,matchedContacts)=>{
 setLaunchingCampaign(key);
@@ -1734,8 +1747,8 @@ const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.foll
 const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -1959,6 +1972,106 @@ style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border
 ))}
 </div>
 {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
+</div>
+)}
+</div>
+);
+}
+if(a.type==="edgar_quote"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedEdgarQuote===key;
+const q=a.quote||{};const items=(q.lineItems||[]);const warns=a.warnings||q.warnings||[];
+const revenue=q.totalRevenue||items.reduce((s,i)=>s+(Number(i.quotedPrice)||0)*(Number(i.qty)||1),0);
+const gm=q.overallGmPct!=null?q.overallGmPct:null;
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.teal}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.tealBg,borderBottom:expanded?`1px solid ${B.teal}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>▤</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.teal,fontWeight:600}}>{q.customer||a.customer||"Quote"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{items.length} item{items.length!==1?"s":""} · ${Number(revenue).toFixed(2)}{gm!=null?` · ${gm}% GM`:""}{warns.length>0?` · ${warns.length} warning${warns.length!==1?"s":""}`:""}</div>
+</div>
+</div>
+<div style={{display:"flex",gap:5,flexShrink:0}}>
+<button onClick={()=>createEdgarQuoteInZoho(a,key)} disabled={sendingQuote===key} style={{background:B.teal,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"CREATING...":"▤ CREATE IN ZOHO"}</button>
+<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+</div>
+</div>
+{expanded&&(
+<div style={{padding:"10px 12px"}}>
+{warns.length>0&&<div style={{background:B.yellowBg,border:`1px solid ${B.yellow}30`,borderRadius:4,padding:"6px 10px",marginBottom:8}}>{warns.map((w,wi)=><div key={wi} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ {w}</div>)}</div>}
+<table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>ITEM</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>COST</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QUOTED</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>GM%</th>
+</tr></thead>
+<tbody>
+{items.map((li,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.notFound?.5:1}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
+{li.name}{li.mapFlag&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,borderRadius:2,padding:"1px 4px",marginLeft:5,letterSpacing:.3}}>MAP</span>}
+{li.notFound&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,marginLeft:5}}>NOT FOUND</span>}
+</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>{li.cost?`$${Number(li.cost).toFixed(2)}`:"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.teal,textAlign:"right",padding:"5px 0",fontWeight:600}}>{li.notFound?"—":`$${Number(li.quotedPrice||0).toFixed(2)}`}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:li.gmPct>=20?B.green:B.yellow,textAlign:"right",padding:"5px 0"}}>{li.gmPct!=null?`${li.gmPct}%`:"—"}</td>
+</tr>
+))}
+</tbody>
+<tfoot><tr>
+<td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.teal,textAlign:"right",paddingTop:6,fontWeight:700}}>${Number(revenue).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gm>=20?B.green:B.yellow,textAlign:"right",paddingTop:6,fontWeight:600}}>{gm!=null?`${gm}%`:""}</td>
+</tr></tfoot>
+</table>
+</div>
+)}
+</div>
+);
+}
+if(a.type==="brad_outreach"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedBradOutreach===key;
+const drafts=a.drafts||[];const skipped=a.skipped||[];
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.greenBg,borderBottom:expanded?`1px solid ${B.green}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>✉</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>Brad Outreach — {drafts.length} draft{drafts.length!==1?"s":""} ready</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{skipped.length>0?`${skipped.length} skipped (DNC / re-touch / cap)`:"All contacts cleared"} · requires approval</div>
+</div>
+</div>
+<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
+</div>
+{expanded&&(
+<div style={{padding:"8px 12px",display:"flex",flexDirection:"column",gap:6}}>
+{drafts.map((d,di)=>{
+const dKey=`b${msgIdx}_${ai}_${di}`;const dExpanded=expandedEmail===dKey;
+const emailAction={to_name:d.contactName,to_email:d.contactEmail,subject:d.subject,body:d.body};
+return(
+<div key={di} style={{border:`1px solid ${B.border}`,borderRadius:5,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",background:B.surface,borderBottom:dExpanded?`1px solid ${B.border}`:"none"}}>
+<div style={{flex:1,minWidth:0}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.contactName}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.subject}</div>
+</div>
+<div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}}>
+{d.contactEmail&&<button onClick={()=>sendEmailNow(emailAction,dKey)} disabled={sendingEmail===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===dKey?.6:1}}>{sendingEmail===dKey?"SENDING...":"✉ SEND"}</button>}
+<button onClick={()=>copyEmail(emailAction)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋</button>
+<button onClick={()=>setExpandedEmail(e=>e===dKey?null:dKey)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{dExpanded?"▲":"▼"}</button>
+</div>
+</div>
+{dExpanded&&<div style={{padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,whiteSpace:"pre-wrap",lineHeight:1.65}}>{d.body}</div>}
+{d.notes&&!dExpanded&&<div style={{padding:"2px 10px 6px",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontStyle:"italic"}}>{d.notes}</div>}
+</div>
+);
+})}
+{skipped.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,paddingTop:4}}>Skipped: {[...new Set(skipped.map(s=>s.blockedBy))].join(", ")}</div>}
 </div>
 )}
 </div>
