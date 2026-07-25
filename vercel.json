@@ -38,7 +38,8 @@
     "api/pricelists/index.js":                     { "maxDuration": 30 },
     "api/pricelists/items.js":                     { "maxDuration": 30 },
     "api/pricelists/market.js":                    { "maxDuration": 30 },
-    "api/agents/edgar.js":                         { "maxDuration": 30 }
+    "api/agents/edgar.js":                         { "maxDuration": 30 },
+    "api/agents/brad.js":                          { "maxDuration": 30 }
   },
   "crons": [
     { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
