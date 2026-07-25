@@ -13322,28 +13322,51 @@ const [dbSaving,setDbSaving]=useState(false);
 const [dbSaveMsg,setDbSaveMsg]=useState(null);
 const saveToDB=async()=>{
   const own=(s.priceLists||[]).filter(pl=>pl.type==="own");
-  if(!own.length){toast("No supplier lists to save","error");return;}
+  const comp=(s.priceLists||[]).filter(pl=>pl.type==="competitor");
+  if(!own.length&&!comp.length){toast("No price lists to save","error");return;}
   setDbSaving(true);setDbSaveMsg(null);
   let totalItems=0;
+  const CHUNK=500;
+  const postJSON=(url,body)=>fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
   try{
+    // ── Own supplier lists ──────────────────────────────────────────────
     for(const pl of own){
-      await fetch("/api/pricelists/supplier",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({id:pl.id,name:pl.name,category:pl.supplierName||pl.name,
-          rep:pl.repName||null,repEmail:pl.repEmail||null,repPhone:pl.repPhone||null,
-          notes:pl.notes||null,lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null})});
+      await postJSON("/api/pricelists/supplier",{id:pl.id,name:pl.name,
+        category:pl.supplierName||pl.name,rep:pl.repName||null,
+        repEmail:pl.repEmail||null,repPhone:pl.repPhone||null,
+        notes:pl.notes||null,
+        lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null});
       const products=(pl.items||[]).map((it,i)=>({
-        id:`${pl.id}_${i}`,supplierId:pl.id,
-        sku:it.sku||null,name:it.name||"Item",category:it.category||null,
-        unit:it.unit||"each",cost:it.cost||null,ourPrice:it.price||null,
-        map:it.map||null,msrp:null,lastCost:null,gmFloorPct:null,
+        id:`${pl.id}_${i}`,sku:it.sku||null,name:it.name||"Item",
+        category:it.category||null,unit:it.unit||"each",
+        cost:it.cost||null,ourPrice:it.price||null,map:it.map||null,
       }));
-      await fetch("/api/pricelists/items",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({supplierId:pl.id,products})});
+      for(let j=0;j<products.length;j+=CHUNK)
+        await postJSON("/api/pricelists/items",{supplierId:pl.id,products:products.slice(j,j+CHUNK)});
       totalItems+=products.length;
     }
-    setDbSaveMsg(`✓ Saved ${own.length} supplier${own.length>1?"s":""} · ${totalItems} products to DB`);
-    setTimeout(()=>setDbSaveMsg(null),5000);
-    toast(`Price lists saved to DB — Edgar can now use them`,"success");
+    // ── Competitor price lists ──────────────────────────────────────────
+    // Stored in same tables, tagged with __COMPETITOR__: prefix in category
+    for(const pl of comp){
+      const sid=`comp_${pl.id}`;
+      const cname=pl.competitorName||pl.name;
+      await postJSON("/api/pricelists/supplier",{id:sid,name:cname,
+        category:`__COMPETITOR__:${cname}`,rep:null,repEmail:null,repPhone:null,
+        notes:pl.notes||pl.source||null,
+        lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null});
+      const products=(pl.items||[]).map((it,i)=>({
+        id:`${sid}_${i}`,sku:it.sku||null,name:it.name||"Item",
+        category:it.category||null,unit:it.unit||"each",
+        cost:it.cost||null,ourPrice:null,map:it.map||null,
+      }));
+      for(let j=0;j<products.length;j+=CHUNK)
+        await postJSON("/api/pricelists/items",{supplierId:sid,products:products.slice(j,j+CHUNK)});
+      totalItems+=products.length;
+    }
+    const msg=`✓ ${own.length} supplier${own.length!==1?"s":""}${comp.length?` · ${comp.length} competitor${comp.length!==1?"s":""}`:"" } · ${totalItems} items saved`;
+    setDbSaveMsg(msg);
+    setTimeout(()=>setDbSaveMsg(null),6000);
+    toast("Price lists saved — Edgar can now use both supplier costs and competitor pricing","success");
   }catch(e){
     setDbSaveMsg(`Save failed: ${e.message}`);
     toast("DB save failed","error");
