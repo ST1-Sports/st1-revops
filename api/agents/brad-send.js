@@ -28,7 +28,14 @@ export default async function handler(req, res) {
     const gmailRes = await fetch(`${baseUrl}/api/gmail`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'send', to_email: contactEmail, to_name: contactName, subject, body }),
+      body: JSON.stringify({
+        action:    'send',
+        to_email:  contactEmail,
+        to_name:   contactName,
+        subject,
+        body,
+        from_name: 'Brad @ ST1 Sports',
+      }),
     })
     const gmailData = await gmailRes.json()
     if (!gmailData.sent) {

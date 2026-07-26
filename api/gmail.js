@@ -204,11 +204,18 @@ export default async function handler(req, res) {
 
       const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
+      // From: allows a custom display name (e.g. "Brad @ ST1 Sports <matt@st1sports.com>")
+      // Gmail honors the display name; email address must match the account or a Send As alias.
+      const fromEmail = req.body.from_email || null;
+      const fromHeader = from_name
+        ? `${from_name} <${fromEmail || "matt@st1sports.com"}>`
+        : null;
       // Reply-To points to the rep so replies land in their inbox
       const replyToHeader = reply_to
         ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
         : null;
       const lines = [
+        ...(fromHeader ? [`From: ${fromHeader}`] : []),
         `To: ${toHeader}`,
         ...(cc  ? [`Cc: ${cc}`]   : []),
         ...(bcc ? [`Bcc: ${bcc}`] : []),
