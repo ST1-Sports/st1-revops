@@ -1651,16 +1651,20 @@ setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "$
 }catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingEmail(null);
 };
-const sendBradToInstantly=async(draft,key)=>{
-if(!draft.contactEmail){toast("No email — can't send to Instantly","error");return;}
+const sendBradEmail=async(draft,key)=>{
+if(!draft.contactEmail){toast("No email — can't send","error");return;}
 setSendingInstantly(key);
 try{
 const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,contactSchool:draft.contactSchool,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
 const d=await r.json();
-if(d.ok){toast(`✓ ${draft.contactName||draft.contactEmail} queued in Instantly`,"success");dispatch("LOG",{msg:`Brad → Instantly: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});}
-else toast(d.error||"Instantly error","error");
-}catch(e){toast(`Instantly error: ${e.message}`,"error");}
+if(d.sent){
+toast(`✉ Sent to ${draft.contactName||draft.contactEmail}`,"success");
+dispatch("LOG",{msg:`Brad email sent: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});
+const contact=(s.contacts||[]).find(c=>c.email===draft.contactEmail);
+if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"brad",note:`Brad: ${draft.subject}`});
+}else toast(d.error||"Send failed","error");
+}catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingInstantly(null);
 };
 const send=async(overrideMsg)=>{
@@ -2085,7 +2089,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.subject}</div>
 </div>
 <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}}>
-{d.contactEmail&&<button onClick={()=>sendBradToInstantly(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"QUEUING...":"⚡ INSTANTLY"}</button>}
+{d.contactEmail&&<button onClick={()=>sendBradEmail(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"SENDING...":"✉ SEND"}</button>}
 <button onClick={()=>copyEmail(emailAction)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋</button>
 <button onClick={()=>setExpandedEmail(e=>e===dKey?null:dKey)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{dExpanded?"▲":"▼"}</button>
 </div>
@@ -13409,16 +13413,20 @@ toast(d.error||"Send failed","error");
 }catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingEmail(null);
 };
-const sendBradToInstantly=async(draft,key)=>{
-if(!draft.contactEmail){toast("No email — can't send to Instantly","error");return;}
+const sendBradEmail=async(draft,key)=>{
+if(!draft.contactEmail){toast("No email — can't send","error");return;}
 setSendingInstantly(key);
 try{
 const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,contactSchool:draft.contactSchool,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
 const d=await r.json();
-if(d.ok){toast(`✓ ${draft.contactName||draft.contactEmail} queued in Instantly`,"success");dispatch("LOG",{msg:`Brad → Instantly: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});}
-else toast(d.error||"Instantly error","error");
-}catch(e){toast(`Instantly error: ${e.message}`,"error");}
+if(d.sent){
+toast(`✉ Sent to ${draft.contactName||draft.contactEmail}`,"success");
+dispatch("LOG",{msg:`Brad email sent: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});
+const contact=(s.contacts||[]).find(c=>c.email===draft.contactEmail);
+if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"brad",note:`Brad: ${draft.subject}`});
+}else toast(d.error||"Send failed","error");
+}catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingInstantly(null);
 };
 const createQuoteNow=async(action,key)=>{
@@ -13667,7 +13675,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.subject}</div>
 </div>
 <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}}>
-{d.contactEmail&&<button onClick={()=>sendBradToInstantly(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"QUEUING...":"⚡ INSTANTLY"}</button>}
+{d.contactEmail&&<button onClick={()=>sendBradEmail(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"SENDING...":"✉ SEND"}</button>}
 <button onClick={()=>copyEmail(emailAction)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋</button>
 <button onClick={()=>setExpandedEmail(e=>e===dKey?null:dKey)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{dExpanded?"▲":"▼"}</button>
 </div>
