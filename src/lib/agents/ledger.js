@@ -35,22 +35,20 @@ export default {
   },
 
   async handler(task, input = {}) {
-    // Determine server-side task from explicit input or keyword fallback
     const serverTask =
       input.task ||
-      (/reconcil/i.test(task)               ? 'reconcile'   :
-       /\bvendor\b|\/bill\b|vendor.?bill/i.test(task) ? 'vendor-bill'  :
-       'invoice')
+      (/reconcil/i.test(task)                          ? 'reconcile'  :
+       /\bvendor\b|\/bill\b|vendor.?bill/i.test(task)  ? 'vendor-bill' :
+       /invoice|closed.?won|deal.?won/i.test(task)     ? 'invoice'    :
+       'reconcile')
 
-    const body = {
-      task:   serverTask,
-      dryRun: input.dryRun ?? true,   // always safe-default
-      limit:  input.limit  ?? 10,
-    }
-    if (input.crmDealId)   body.crmDealId   = input.crmDealId
-    if (input.crmDealName) body.crmDealName = input.crmDealName
+    const isInvoice = serverTask === 'invoice'
+    const endpoint  = isInvoice ? '/api/agents/ledger/invoice' : '/api/agents/ledger/reconcile'
+    const body      = isInvoice
+      ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
+      : { task: serverTask, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
 
-    const r = await fetch('/api/agents/ledger/reconcile', {
+    const r = await fetch(endpoint, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),

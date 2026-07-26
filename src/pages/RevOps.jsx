@@ -1459,6 +1459,7 @@ const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
 const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
+const [invoiceCreated,setInvoiceCreated]=useState({});
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
@@ -2131,20 +2132,88 @@ return(
 );
 }
 if(a.type==="ledger_invoice"){
-const meta=a.result?.metadata||{};const invoice=meta.invoice||{};
-const summary=a.result?.output||"Invoice task complete";
+const ikey=`${msgIdx}_${ai}`;
+const meta=a.result?.metadata||{};
+const preview=meta.preview||{};
+const created=invoiceCreated[ikey]||null;
+const customerName=created?.customerName||preview.customerName||meta.customerName||a.crmDealName||"Invoice";
+const lineItems=preview.lineItems||[];
+const total=created?.total||preview.total||meta.total||0;
+const dueDate=created?.dueDate||preview.dueDate||meta.dueDate||"";
+const poNumber=preview.poNumber||meta.poNumber||"";
+const zohoId=created?.zohoInvoiceId||meta.zohoInvoiceId||"";
+const dealInvoiceId=created?.dealInvoiceId||meta.dealInvoiceId||"";
+const invStatus=created?.status||meta.status||"PREVIEW";
+const reviewUrl=created?.reviewUrl||meta.reviewUrl||"";
+const creatingKey=invoiceCreated[ikey+"_creating"];
+const sendingKey=invoiceCreated[ikey+"_sending"];
+const sendDone=created?.status==="SENT";
+const createDraft=async()=>{
+setInvoiceCreated(p=>({...p,[ikey+"_creating"]:true}));
+try{
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
+const d=await r.json();
+if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:d}));toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as draft`,"success");}
+else toast(d.error||"Draft creation failed","error");
+}catch(e){toast(e.message,"error");}
+setInvoiceCreated(p=>({...p,[ikey+"_creating"]:false}));
+};
+const sendInvoice=async()=>{
+if(!dealInvoiceId){toast("No local invoice ID — create draft first","error");return;}
+setInvoiceCreated(p=>({...p,[ikey+"_sending"]:true}));
+try{
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"confirm",dealInvoiceId})});
+const d=await r.json();
+if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:{...created,...d}}));toast("Invoice sent to customer","success");}
+else toast(d.error||"Send failed","error");
+}catch(e){toast(e.message,"error");}
+setInvoiceCreated(p=>({...p,[ikey+"_sending"]:false}));
+};
 return(
 <div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg}}>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
 <span style={{fontSize:14}}>◫</span>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{invoice.dealName||meta.dealName||"Invoice Created"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{customerName}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sendDone?B.green:invStatus==="DRAFT"?B.teal:B.yellow,background:sendDone?B.greenBg:invStatus==="DRAFT"?B.tealBg:B.yellowBg,borderRadius:2,padding:"1px 5px",letterSpacing:.3}}>{sendDone?"SENT":invStatus}</span>
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>${Number(total).toFixed(2)}{dueDate?` · Net 30 (${dueDate})`:""}{ poNumber?` · PO: ${poNumber}`:""}</div>
 </div>
 </div>
-{invoice.zohoInvoiceId&&<a href={`https://books.zoho.com/app#/invoices/${invoice.zohoInvoiceId}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+<div style={{display:"flex",gap:5,flexShrink:0}}>
+{reviewUrl&&<a href={reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+{!zohoId&&<button onClick={createDraft} disabled={!!creatingKey} style={{background:B.purple,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:creatingKey?.6:1}}>{creatingKey?"CREATING...":"◫ CREATE DRAFT"}</button>}
+{zohoId&&!sendDone&&<button onClick={sendInvoice} disabled={!!sendingKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingKey?.6:1}}>{sendingKey?"SENDING...":"✉ SEND"}</button>}
 </div>
+</div>
+{lineItems.length>0&&(
+<div style={{padding:"8px 12px 10px"}}>
+<table style={{width:"100%",borderCollapse:"collapse"}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"3px 0",fontWeight:700}}>ITEM</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>QTY</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>RATE</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>AMOUNT</th>
+</tr></thead>
+<tbody>
+{lineItems.map((li,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}20`}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"4px 0",paddingRight:8}}>{li.name}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"4px 0"}}>{li.quantity||li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"4px 0"}}>${Number(li.rate||li.quotedPrice||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,textAlign:"right",padding:"4px 0",fontWeight:600}}>${(Number(li.rate||li.quotedPrice||0)*Number(li.quantity||li.qty||1)).toFixed(2)}</td>
+</tr>
+))}
+</tbody>
+<tfoot><tr>
+<td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.purple,textAlign:"right",paddingTop:6,fontWeight:700}}>${Number(total).toFixed(2)}</td>
+</tr></tfoot>
+</table>
+</div>
+)}
 </div>
 );
 }
@@ -12808,6 +12877,7 @@ const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
 const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
+const [invoiceCreated,setInvoiceCreated]=useState({});
 const [sendingQuote,setSendingQuote]=useState(null);
 const endRef=useRef(null);
 const inputRef=useRef(null);
@@ -13241,20 +13311,88 @@ return(
 );
 }
 if(a.type==="ledger_invoice"){
-const meta=a.result?.metadata||{};const invoice=meta.invoice||{};
-const summary=a.result?.output||"Invoice task complete";
+const ikey=`${msgIdx}_${ai}`;
+const meta=a.result?.metadata||{};
+const preview=meta.preview||{};
+const created=invoiceCreated[ikey]||null;
+const customerName=created?.customerName||preview.customerName||meta.customerName||a.crmDealName||"Invoice";
+const lineItems=preview.lineItems||[];
+const total=created?.total||preview.total||meta.total||0;
+const dueDate=created?.dueDate||preview.dueDate||meta.dueDate||"";
+const poNumber=preview.poNumber||meta.poNumber||"";
+const zohoId=created?.zohoInvoiceId||meta.zohoInvoiceId||"";
+const dealInvoiceId=created?.dealInvoiceId||meta.dealInvoiceId||"";
+const invStatus=created?.status||meta.status||"PREVIEW";
+const reviewUrl=created?.reviewUrl||meta.reviewUrl||"";
+const creatingKey=invoiceCreated[ikey+"_creating"];
+const sendingKey=invoiceCreated[ikey+"_sending"];
+const sendDone=created?.status==="SENT";
+const createDraft=async()=>{
+setInvoiceCreated(p=>({...p,[ikey+"_creating"]:true}));
+try{
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
+const d=await r.json();
+if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:d}));toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as draft`,"success");}
+else toast(d.error||"Draft creation failed","error");
+}catch(e){toast(e.message,"error");}
+setInvoiceCreated(p=>({...p,[ikey+"_creating"]:false}));
+};
+const sendInvoice=async()=>{
+if(!dealInvoiceId){toast("No local invoice ID — create draft first","error");return;}
+setInvoiceCreated(p=>({...p,[ikey+"_sending"]:true}));
+try{
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"confirm",dealInvoiceId})});
+const d=await r.json();
+if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:{...created,...d}}));toast("Invoice sent to customer","success");}
+else toast(d.error||"Send failed","error");
+}catch(e){toast(e.message,"error");}
+setInvoiceCreated(p=>({...p,[ikey+"_sending"]:false}));
+};
 return(
 <div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg}}>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
 <span style={{fontSize:14}}>◫</span>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{invoice.dealName||meta.dealName||"Invoice Created"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{customerName}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sendDone?B.green:invStatus==="DRAFT"?B.teal:B.yellow,background:sendDone?B.greenBg:invStatus==="DRAFT"?B.tealBg:B.yellowBg,borderRadius:2,padding:"1px 5px",letterSpacing:.3}}>{sendDone?"SENT":invStatus}</span>
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>${Number(total).toFixed(2)}{dueDate?` · Net 30 (${dueDate})`:""}{ poNumber?` · PO: ${poNumber}`:""}</div>
 </div>
 </div>
-{invoice.zohoInvoiceId&&<a href={`https://books.zoho.com/app#/invoices/${invoice.zohoInvoiceId}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+<div style={{display:"flex",gap:5,flexShrink:0}}>
+{reviewUrl&&<a href={reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+{!zohoId&&<button onClick={createDraft} disabled={!!creatingKey} style={{background:B.purple,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:creatingKey?.6:1}}>{creatingKey?"CREATING...":"◫ CREATE DRAFT"}</button>}
+{zohoId&&!sendDone&&<button onClick={sendInvoice} disabled={!!sendingKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingKey?.6:1}}>{sendingKey?"SENDING...":"✉ SEND"}</button>}
 </div>
+</div>
+{lineItems.length>0&&(
+<div style={{padding:"8px 12px 10px"}}>
+<table style={{width:"100%",borderCollapse:"collapse"}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"3px 0",fontWeight:700}}>ITEM</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>QTY</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>RATE</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"3px 0",fontWeight:700}}>AMOUNT</th>
+</tr></thead>
+<tbody>
+{lineItems.map((li,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}20`}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"4px 0",paddingRight:8}}>{li.name}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"4px 0"}}>{li.quantity||li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"4px 0"}}>${Number(li.rate||li.quotedPrice||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,textAlign:"right",padding:"4px 0",fontWeight:600}}>${(Number(li.rate||li.quotedPrice||0)*Number(li.quantity||li.qty||1)).toFixed(2)}</td>
+</tr>
+))}
+</tbody>
+<tfoot><tr>
+<td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.purple,textAlign:"right",paddingTop:6,fontWeight:700}}>${Number(total).toFixed(2)}</td>
+</tr></tfoot>
+</table>
+</div>
+)}
 </div>
 );
 }

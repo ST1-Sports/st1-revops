@@ -88,7 +88,6 @@ export default async function handler(req, res) {
           });
           await Promise.all(pending.map(i => recordOutcome(i.id, 'won')));
 
-          // Persist win to agent memory so future Brad and Edgar runs have context
           await remember({
             scope:   'org',
             entity:  `customer:${email}`,
@@ -99,6 +98,24 @@ export default async function handler(req, res) {
         } catch (e) {
           console.error('[zoho webhook] brad outcome loop:', e.message);
         }
+      }
+
+      // Ledger invoice creation — fire-and-forget (non-blocking)
+      if (dealId) {
+        const host = req.headers.host;
+        fetch(`https://${host}/api/agents/ledger/invoice`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            action:        'draft',
+            crmDealId:     String(dealId),
+            crmDealName:   item.Deal_Name || item.Name || '',
+            crmAccountName: typeof item.Account_Name === 'object' ? item.Account_Name?.name : item.Account_Name || '',
+            crmEmail:      email,
+            dealAmount:    amount,
+            dryRun:        false,
+          }),
+        }).catch(e => console.error('[zoho webhook] invoice draft error:', e.message));
       }
     }
 

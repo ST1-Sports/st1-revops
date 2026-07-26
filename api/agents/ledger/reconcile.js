@@ -222,17 +222,14 @@ async function matchTeamStore(name) {
   }
 }
 
-async function matchInvoice(amount, dateMs) {
+async function matchInvoice(amount) {
   try {
     return await prisma.dealInvoice.findFirst({
       where: {
-        amount:  { gte: amount - 0.01, lte: amount + 0.01 },
-        status:  'open',
-        dueDate: {
-          gte: new Date(dateMs - 3 * 86_400_000),
-          lte: new Date(dateMs + 3 * 86_400_000),
-        },
+        amountTotal: { gte: amount - 0.01, lte: amount + 0.01 },
+        status:      { in: ['SENT'] },
       },
+      orderBy: { createdAt: 'desc' },
     })
   } catch (e) {
     if (isPrismaTableMissing(e)) return null
@@ -253,8 +250,8 @@ async function findDuplicate(amount, dateMs, source) {
   try {
     return await prisma.deposit.findFirst({
       where: {
-        amount:      { gte: amount - 0.01, lte: amount + 0.01 },
-        depositDate: {
+        amount:  { gte: amount - 0.01, lte: amount + 0.01 },
+        txnDate: {
           gte: new Date(dateMs - 86_400_000),
           lte: new Date(dateMs + 86_400_000),
         },
@@ -272,12 +269,11 @@ async function findOriginalForReversal(absAmount, source) {
   try {
     return await prisma.deposit.findFirst({
       where: {
-        amount:     { gte: absAmount - 0.01, lte: absAmount + 0.01 },
+        amount: { gte: absAmount - 0.01, lte: absAmount + 0.01 },
         source,
-        isReversal: false,
-        status:     { notIn: ['NEEDS_REVIEW', 'REVERSED'] },
+        status: { notIn: ['NEEDS_REVIEW', 'REVERSED'] },
       },
-      orderBy: { depositDate: 'desc' },
+      orderBy: { txnDate: 'desc' },
     })
   } catch (e) {
     if (isPrismaTableMissing(e)) return null
@@ -312,7 +308,7 @@ async function classifyTxn(txn, source, accountIds) {
       status:      'REVERSED',
       confidence:  original ? 'exact' : 'none',
       notes:       original
-        ? `Reverses deposit ${original.id} (${original.depositDate.toISOString().slice(0, 10)})`
+        ? `Reverses deposit ${original.id} (${original.txnDate.toISOString().slice(0, 10)})`
         : 'Negative deposit — no matching original found',
     }
   }
@@ -325,7 +321,7 @@ async function classifyTxn(txn, source, accountIds) {
       isDuplicate: true,
       status:      'DUPLICATE',
       confidence:  'exact',
-      notes:       `Duplicate of deposit ${dup.id} (${dup.depositDate.toISOString().slice(0, 10)})`,
+      notes:       `Duplicate of deposit ${dup.id} (${dup.txnDate.toISOString().slice(0, 10)})`,
     }
   }
 
@@ -355,8 +351,8 @@ async function classifyTxn(txn, source, accountIds) {
     }
   }
 
-  // Invoice match — amount + date window
-  const invoice = await matchInvoice(amount, dateMs)
+  // Invoice match — amount within $0.01 against SENT invoices
+  const invoice = await matchInvoice(amount)
   if (invoice) {
     return {
       txn, source, amount, extractedName,
@@ -364,7 +360,7 @@ async function classifyTxn(txn, source, accountIds) {
       confidence:         'exact',
       categorizedAs:      'Accounts Receivable',
       matchedInvoiceId:   invoice.id,
-      matchedInvoiceName: invoice.customerName || invoice.dealName || null,
+      matchedInvoiceName: invoice.crmDealName || null,
     }
   }
 
@@ -384,34 +380,37 @@ async function classifyTxn(txn, source, accountIds) {
 async function writeDeposit(result, dryRun) {
   if (dryRun) return null
   const { txn, source } = result
-  const payload = {
+
+  const confMap = { exact: 1.0, high: 0.8, low: 0.4 }
+  const createData = {
     source,
-    zohoBankTxnId:     txn.transaction_id || null,
-    stripePayoutId:    extractPayoutId(txn) || null,
-    amount:            Math.abs(result.amount),
-    depositDate:       new Date(txn.date),
-    description:       txn.description || txn.payee || null,
-    extractedName:     result.extractedName || null,
-    status:            result.status,
-    categorizedAs:     result.categorizedAs || null,
+    zohoBankTxnId:      txn.transaction_id || `noid-${Date.now()}`,
+    amount:             Math.abs(result.amount),
+    txnDate:            new Date(txn.date),
+    orgNameRaw:         result.extractedName || txn.description || txn.payee || null,
+    status:             result.status,
+    categorizedAs:      result.categorizedAs      || null,
     matchedTeamStoreId: result.matchedTeamStoreId || null,
-    matchedInvoiceId:  result.matchedInvoiceId   || null,
-    matchConfidence:   result.confidence || 'none',
-    isDuplicate:       result.isDuplicate  || false,
-    isReversal:        result.isReversal   || false,
-    reversalOfId:      result.reversalOfId || null,
-    notes:             result.notes || null,
-    rawPayload:        txn,
+    matchedInvoiceId:   result.matchedInvoiceId   || null,
+    matchConfidence:    confMap[result.confidence] ?? null,
   }
+
   try {
     if (txn.transaction_id) {
+      const updateData = {
+        status:             createData.status,
+        categorizedAs:      createData.categorizedAs,
+        matchedTeamStoreId: createData.matchedTeamStoreId,
+        matchedInvoiceId:   createData.matchedInvoiceId,
+        matchConfidence:    createData.matchConfidence,
+      }
       return await prisma.deposit.upsert({
         where:  { zohoBankTxnId: txn.transaction_id },
-        update: payload,
-        create: payload,
+        update: updateData,
+        create: createData,
       })
     }
-    return await prisma.deposit.create({ data: payload })
+    return await prisma.deposit.create({ data: createData })
   } catch (e) {
     if (isPrismaTableMissing(e)) {
       console.warn('[ledger] Deposit table not migrated yet — skipping write')
@@ -476,15 +475,14 @@ async function seedTeamStores() {
   let seeded = 0
   for (const name of names) {
     try {
-      await prisma.teamStore.upsert({
-        where:  { name },
-        update: {},
-        create: { name },
-      })
-      seeded++
+      const exists = await prisma.teamStore.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } })
+      if (!exists) {
+        await prisma.teamStore.create({ data: { name } })
+        seeded++
+      }
     } catch (e) {
       if (isPrismaTableMissing(e)) break
-      console.warn('[ledger] seed-stores upsert error:', name, e.message)
+      console.warn('[ledger] seed-stores insert error:', name, e.message)
     }
   }
 

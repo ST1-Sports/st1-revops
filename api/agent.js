@@ -346,18 +346,19 @@ async function fetchZohoInventory() {
 // ── AGENT CALLERS (server-to-server within the same deployment) ───────────────
 async function callLedger(input, baseUrl) {
   try {
+    const isInvoice = input.task === 'invoice'
+    const endpoint  = isInvoice
+      ? `${baseUrl}/api/agents/ledger/invoice`
+      : `${baseUrl}/api/agents/ledger/reconcile`
+    const body = isInvoice
+      ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
+      : { task: input.task, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
     const r = await fetchWithTimeout(
-      `${baseUrl}/api/agents/ledger/reconcile`,
+      endpoint,
       {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          task:        input.task,
-          dryRun:      input.dryRun      ?? true,
-          limit:       input.limit       ?? 10,
-          crmDealId:   input.crmDealId   || undefined,
-          crmDealName: input.crmDealName || undefined,
-        }),
+        body:    JSON.stringify(body),
       },
       20_000
     );
