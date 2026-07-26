@@ -15,59 +15,30 @@
  * dryRun: true (default) returns a preview without writing to Zoho Books or DB.
  */
 
-import { setCors }      from '../../_lib/cors.js'
-import { prisma }       from '../../_lib/prisma.js'
-import { getZohoToken } from '../../_lib/zoho-token.js'
+import { setCors }                       from '../../_lib/cors.js'
+import { prisma }                       from '../../_lib/prisma.js'
+import { getZohoToken }                 from '../../_lib/zoho-token.js'
+import { booksGet, booksPost,
+         isPrismaTableMissing }          from '../../_lib/zoho-books.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } }
 
-const ORG       = process.env.ZOHO_ORG_ID || '899940777'
-const BOOKS     = 'https://www.zohoapis.com/books/v3'
-const CRM       = 'https://www.zohoapis.com/crm/v3'
-const NET30     = 30   // default payment terms in days
+const CRM   = 'https://www.zohoapis.com/crm/v3'
+const NET30 = 30   // default payment terms in days
 
-// ── Shared auth + fetch helpers ───────────────────────────────────────────────
-
-async function authHeaders() {
-  const token = await getZohoToken()
-  return { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }
-}
+// ── CRM helpers ───────────────────────────────────────────────────────────────
 
 async function crmGet(path) {
-  const h = await authHeaders()
-  const r = await fetch(`${CRM}${path}`, { headers: h })
+  const token = await getZohoToken()
+  const r     = await fetch(`${CRM}${path}`, {
+    headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
+  })
   if (!r.ok) {
     const txt = await r.text()
     throw new Error(`CRM GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
   }
   return r.json()
 }
-
-async function booksGet(path) {
-  const h   = await authHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r   = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, { headers: h })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
-}
-
-async function booksPost(path, body) {
-  const h   = await authHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r   = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, {
-    method: 'POST', headers: h, body: JSON.stringify(body),
-  })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books POST ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
-}
-
-// ── CRM helpers ───────────────────────────────────────────────────────────────
 
 async function fetchDeal(dealId) {
   const data = await crmGet(`/Deals/${dealId}?fields=Deal_Name,Account_Name,Amount,PO_Number,Contact_Email,Email,Owner`)
@@ -211,12 +182,12 @@ async function createDraft({ crmDealId, crmDealName, crmAccountName, crmEmail, d
         status:        'DRAFT',
         amountTotal:   inv.total ?? totalAmount,
         dueDate:       new Date(dueDate),
-        triggerSource: crmDealId ? 'WEBHOOK' : 'MANUAL',
+        triggerSource: crmDealId ? 'CRM_WEBHOOK' : 'MANUAL',
       },
     })
     dealInvoiceId = row.id
   } catch (e) {
-    if (e.code !== 'P2021' && !e.message?.includes('does not exist')) throw e
+    if (!isPrismaTableMissing(e)) throw e
     console.warn('[invoice] DealInvoice table not migrated — skipping DB write')
   }
 
@@ -243,7 +214,7 @@ async function confirmAndSend(dealInvoiceId) {
   try {
     local = await prisma.dealInvoice.findUnique({ where: { id: dealInvoiceId } })
   } catch (e) {
-    if (e.code === 'P2021' || e.message?.includes('does not exist')) {
+    if (isPrismaTableMissing(e)) {
       throw new Error('DealInvoice table not migrated')
     }
     throw e
@@ -299,7 +270,7 @@ async function getInvoiceStatus(dealInvoiceId) {
       crmDealName:   local.crmDealName,
     }
   } catch (e) {
-    if (e.code === 'P2021' || e.message?.includes('does not exist')) {
+    if (isPrismaTableMissing(e)) {
       return { ok: false, error: 'DealInvoice table not migrated' }
     }
     throw e

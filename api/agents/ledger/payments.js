@@ -15,14 +15,12 @@
  *   void            → VOID
  */
 
-import { setCors }      from '../../_lib/cors.js'
-import { prisma }       from '../../_lib/prisma.js'
-import { getZohoToken } from '../../_lib/zoho-token.js'
+import { setCors }             from '../../_lib/cors.js'
+import { prisma }             from '../../_lib/prisma.js'
+import { booksGet,
+         isPrismaTableMissing } from '../../_lib/zoho-books.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '100kb' } } }
-
-const ORG   = process.env.ZOHO_ORG_ID || '899940777'
-const BOOKS = 'https://www.zohoapis.com/books/v3'
 
 // Zoho Books → local DealInvoice status
 const STATUS_MAP = {
@@ -31,21 +29,6 @@ const STATUS_MAP = {
   partially_paid: 'PARTIAL',
   paid:           'PAID',
   void:           'VOID',
-}
-
-// ── Zoho Books helpers ────────────────────────────────────────────────────────
-
-async function booksGet(path) {
-  const token = await getZohoToken()
-  const sep   = path.includes('?') ? '&' : '?'
-  const r     = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, {
-    headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' },
-  })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
 }
 
 // ── Slack helper ──────────────────────────────────────────────────────────────
@@ -97,7 +80,7 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
       orderBy: { dueDate: 'asc' },
     })
   } catch (e) {
-    if (e.code === 'P2021' || e.message?.includes('does not exist')) {
+    if (isPrismaTableMissing(e)) {
       return { ok: true, message: 'DealInvoice table not migrated — nothing to poll', totals: {} }
     }
     throw e

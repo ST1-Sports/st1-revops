@@ -15,14 +15,12 @@
  * Nothing is written to Zoho Books or the Deposit table in dry-run mode.
  */
 
-import { setCors }      from '../../_lib/cors.js'
-import { prisma }       from '../../_lib/prisma.js'
-import { getZohoToken } from '../../_lib/zoho-token.js'
+import { setCors }                              from '../../_lib/cors.js'
+import { prisma }                              from '../../_lib/prisma.js'
+import { ORG, BOOKS, booksGet, booksPost,
+         isPrismaTableMissing }                from '../../_lib/zoho-books.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
-const ORG = process.env.ZOHO_ORG_ID || '899940777'
-const BOOKS = 'https://www.zohoapis.com/books/v3'
 
 const STRIPE_KEY      = process.env.STRIPE_SECRET_KEY
 const SHOPIFY_URL     = process.env.SHOPIFY_STORE_URL    // e.g. "your-store.myshopify.com"
@@ -60,37 +58,6 @@ const ACCT_DEFS = [
 
 // Confidence → Float for Deposit.matchConfidence
 const CONF_MAP = { exact: 1.0, high: 0.8, low: 0.4, none: null }
-
-// ── Zoho Books helpers ────────────────────────────────────────────────────────
-
-async function booksHeaders() {
-  const token = await getZohoToken()
-  return { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }
-}
-
-async function booksGet(path) {
-  const headers = await booksHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, { headers })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
-}
-
-async function booksPost(path, body) {
-  const headers = await booksHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, {
-    method: 'POST', headers, body: JSON.stringify(body),
-  })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books POST ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
-}
 
 // ── STEP 0 — Chart of accounts setup (idempotent) ────────────────────────────
 
@@ -330,9 +297,6 @@ async function findOriginalForReversal(absAmount, source) {
   }
 }
 
-function isPrismaTableMissing(e) {
-  return e.code === 'P2021' || e.message?.includes('does not exist')
-}
 
 // ── STEP 4 — Classify one transaction ────────────────────────────────────────
 

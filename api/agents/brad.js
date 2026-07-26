@@ -86,7 +86,7 @@ async function applyGuardrails(contacts, isDryRun) {
     if (!isDryRun) remaining--
   }
 
-  return { allowed, skipped, dailyUsed, remaining: Math.max(0, FLAGS.dailyCap - dailyUsed) }
+  return { allowed, skipped, dailyUsed, remaining: Math.max(0, remaining) }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────

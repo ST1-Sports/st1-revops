@@ -17,16 +17,16 @@
  *   { action: "status", vendorBillId }
  */
 
-import { setCors }      from '../../_lib/cors.js'
-import { prisma }       from '../../_lib/prisma.js'
-import { getZohoToken } from '../../_lib/zoho-token.js'
+import { setCors }                              from '../../_lib/cors.js'
+import { prisma }                              from '../../_lib/prisma.js'
+import { getZohoToken }                        from '../../_lib/zoho-token.js'
+import { ORG, BOOKS, booksGet, booksPost,
+         isPrismaTableMissing }                from '../../_lib/zoho-books.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ORG           = process.env.ZOHO_ORG_ID || '899940777'
-const BOOKS         = 'https://www.zohoapis.com/books/v3'
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY
 
 const AP_ACCOUNT = '7255504000000000373'  // Accounts Payable
@@ -51,37 +51,6 @@ const COGS_ACCOUNTS = {
   freight:    '7255504000000474421',
   delivery:   '7255504000000474421',
   packaging:  '7255504000000722115',
-}
-
-// ── Zoho Books helpers ────────────────────────────────────────────────────────
-
-async function booksHeaders() {
-  const token = await getZohoToken()
-  return { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }
-}
-
-async function booksGet(path) {
-  const h   = await booksHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r   = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, { headers: h })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
-}
-
-async function booksPost(path, body) {
-  const h   = await booksHeaders()
-  const sep = path.includes('?') ? '&' : '?'
-  const r   = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, {
-    method: 'POST', headers: h, body: JSON.stringify(body),
-  })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Books POST ${path}: ${r.status} — ${txt.slice(0, 200)}`)
-  }
-  return r.json()
 }
 
 // ── STEP 1 — Extract invoice data via Claude ──────────────────────────────────
@@ -377,9 +346,9 @@ async function writeVendorBill(supplierId, extracted, resolvedItems, zohoBill, f
         vendorInvoiceNo: extracted.vendorInvoiceNo || null,
         poNumber:        extracted.poNumber        || null,
         zohoBillId:      zohoBill?.bill_id         || null,
-        fileUrl:         fileUrl || zohoBill?.bill_id
+        fileUrl:         fileUrl || (zohoBill?.bill_id
                            ? `zoho:bill:${zohoBill?.bill_id}`
-                           : `upload:${Date.now()}`,
+                           : `upload:${Date.now()}`),
         status,
         totalAmount:     extracted.totalAmount || null,
       },
@@ -404,7 +373,7 @@ async function writeVendorBill(supplierId, extracted, resolvedItems, zohoBill, f
 
     return { bill, lineRows }
   } catch (e) {
-    if (e.code === 'P2021' || e.message?.includes('does not exist')) {
+    if (isPrismaTableMissing(e)) {
       console.warn('[vendor-bill] VendorBill table not migrated — skipping DB write')
       return null
     }
@@ -469,7 +438,7 @@ export default async function handler(req, res) {
           lineItems:     bill.lineItems,
         })
       } catch (e) {
-        if (e.code === 'P2021' || e.message?.includes('does not exist')) {
+        if (isPrismaTableMissing(e)) {
           return res.json({ ok: false, error: 'VendorBill table not migrated' })
         }
         throw e
