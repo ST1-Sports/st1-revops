@@ -1752,8 +1752,8 @@ const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.foll
 const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg},ledger_payments:{c:B.green,bg:B.greenBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -2256,6 +2256,72 @@ return(
 ))}
 </tbody>
 </table>
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_payments"){
+const meta=a.result?.metadata||{};const totals=meta.totals||{};
+const overdue=meta.overdue||[];const upcoming=meta.upcoming||[];const changes=meta.changes||[];
+const fmt$=n=>`$${Number(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{padding:"8px 12px",background:B.greenBg,borderBottom:`1px solid ${B.green}20`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◎</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>Payment Tracker</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+{totals.checked??0} checked · {totals.updated??0} updated · {totals.overdue??0} overdue · {totals.upcoming??0} upcoming{totals.paid>0?` · ${totals.paid} paid`:""}
+</div>
+</div>
+</div>
+{meta.dryRun&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}20`,padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>DRY RUN</span>}
+</div>
+{overdue.length>0&&(
+<div style={{padding:"8px 12px",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:.5,marginBottom:5}}>OVERDUE</div>
+{overdue.map((inv,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<overdue.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{inv.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,fontWeight:600}}>{fmt$(inv.amountTotal)}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.dueDate}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,background:`${B.red}15`,padding:"2px 5px",borderRadius:3}}>{Math.abs(inv.daysFromNow||0)}d OVERDUE</span>
+</div>
+</div>
+))}
+</div>
+)}
+{upcoming.length>0&&(
+<div style={{padding:"8px 12px",borderBottom:changes.length>0?`1px solid ${B.border}20`:"none"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,letterSpacing:.5,marginBottom:5}}>DUE SOON</div>
+{upcoming.map((inv,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<upcoming.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{inv.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:600}}>{fmt$(inv.amountTotal)}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.dueDate}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}15`,padding:"2px 5px",borderRadius:3}}>{inv.daysFromNow}d</span>
+</div>
+</div>
+))}
+</div>
+)}
+{changes.length>0&&(
+<div style={{padding:"8px 12px"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:.5,marginBottom:5}}>STATUS CHANGES</div>
+{changes.map((c,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",borderBottom:i<changes.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{c.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:`${B.surface}`,padding:"2px 5px",borderRadius:3}}>{c.from}</span>
+<span style={{color:B.muted,fontSize:9}}>→</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:c.to==="PAID"?B.green:c.to==="OVERDUE"?B.red:B.yellow,background:c.to==="PAID"?`${B.green}15`:c.to==="OVERDUE"?`${B.red}15`:`${B.yellow}15`,padding:"2px 5px",borderRadius:3}}>{c.to}</span>
+</div>
+</div>
+))}
 </div>
 )}
 </div>
@@ -13086,8 +13152,8 @@ const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
 const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg},ledger_payments:{c:B.green,bg:B.greenBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -13435,6 +13501,72 @@ return(
 ))}
 </tbody>
 </table>
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_payments"){
+const meta=a.result?.metadata||{};const totals=meta.totals||{};
+const overdue=meta.overdue||[];const upcoming=meta.upcoming||[];const changes=meta.changes||[];
+const fmt$=n=>`$${Number(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.green}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{padding:"8px 12px",background:B.greenBg,borderBottom:`1px solid ${B.green}20`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◎</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:600}}>Payment Tracker</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
+{totals.checked??0} checked · {totals.updated??0} updated · {totals.overdue??0} overdue · {totals.upcoming??0} upcoming{totals.paid>0?` · ${totals.paid} paid`:""}
+</div>
+</div>
+</div>
+{meta.dryRun&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}20`,padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>DRY RUN</span>}
+</div>
+{overdue.length>0&&(
+<div style={{padding:"8px 12px",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:.5,marginBottom:5}}>OVERDUE</div>
+{overdue.map((inv,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<overdue.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{inv.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,fontWeight:600}}>{fmt$(inv.amountTotal)}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.dueDate}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,background:`${B.red}15`,padding:"2px 5px",borderRadius:3}}>{Math.abs(inv.daysFromNow||0)}d OVERDUE</span>
+</div>
+</div>
+))}
+</div>
+)}
+{upcoming.length>0&&(
+<div style={{padding:"8px 12px",borderBottom:changes.length>0?`1px solid ${B.border}20`:"none"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,letterSpacing:.5,marginBottom:5}}>DUE SOON</div>
+{upcoming.map((inv,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<upcoming.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{inv.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:600}}>{fmt$(inv.amountTotal)}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.dueDate}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}15`,padding:"2px 5px",borderRadius:3}}>{inv.daysFromNow}d</span>
+</div>
+</div>
+))}
+</div>
+)}
+{changes.length>0&&(
+<div style={{padding:"8px 12px"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:.5,marginBottom:5}}>STATUS CHANGES</div>
+{changes.map((c,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 0",borderBottom:i<changes.length-1?`1px solid ${B.border}15`:"none"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{c.crmDealName||"Unknown"}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:`${B.surface}`,padding:"2px 5px",borderRadius:3}}>{c.from}</span>
+<span style={{color:B.muted,fontSize:9}}>→</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:c.to==="PAID"?B.green:c.to==="OVERDUE"?B.red:B.yellow,background:c.to==="PAID"?`${B.green}15`:c.to==="OVERDUE"?`${B.red}15`:`${B.yellow}15`,padding:"2px 5px",borderRadius:3}}>{c.to}</span>
+</div>
+</div>
+))}
 </div>
 )}
 </div>

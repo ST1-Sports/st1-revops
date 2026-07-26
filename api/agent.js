@@ -272,19 +272,20 @@ const TOOLS = [
   },
   {
     name: "call_ledger",
-    description: "Execute the Ledger agent for finance and accounting tasks. Three modes: (1) invoice — create a Zoho Books invoice when a CRM deal is marked Closed Won; (2) reconcile — match uncategorized Stripe/Shopify deposits to team stores or open invoices, flagging anything ambiguous; (3) vendor-bill — parse and map a vendor invoice file to a Zoho Books bill. Use for deal-won invoice creation, /reconcile commands, /bill commands, or any deposit-matching request.",
+    description: "Execute the Ledger agent for finance and accounting tasks. Four modes: (1) invoice — create a Zoho Books invoice when a CRM deal is marked Closed Won; (2) reconcile — match uncategorized Stripe/Shopify deposits; (3) vendor-bill — parse a vendor invoice file; (4) payments — poll open invoices for status changes and send Slack reminders for overdue/upcoming.",
     input_schema: {
       type: "object",
       properties: {
         task: {
           type: "string",
-          enum: ["invoice", "reconcile", "vendor-bill"],
-          description: '"invoice" — create Zoho Books invoice for a won CRM deal. "reconcile" — match uncategorized bank deposits. "vendor-bill" — process a vendor invoice file.',
+          enum: ["invoice", "reconcile", "vendor-bill", "payments"],
+          description: '"invoice" — create Zoho Books invoice for a won deal. "reconcile" — match bank deposits. "vendor-bill" — process vendor invoice. "payments" — poll invoice statuses and send overdue/upcoming Slack reminders.',
         },
-        crmDealId:   { type: "string",  description: "CRM deal ID (required for invoice task)" },
-        crmDealName: { type: "string",  description: "Deal or account name (invoice task)" },
-        dryRun:      { type: "boolean", description: "Preview without writing — defaults true for reconcile, safe to omit" },
-        limit:       { type: "number",  description: "Max bank transactions to inspect (reconcile only, default 10)" },
+        crmDealId:     { type: "string",  description: "CRM deal ID (invoice task only)" },
+        crmDealName:   { type: "string",  description: "Deal or account name (invoice task only)" },
+        dryRun:        { type: "boolean", description: "Preview without writing — defaults true, safe to omit" },
+        limit:         { type: "number",  description: "Max items to fetch (reconcile/payments, default 10)" },
+        lookAheadDays: { type: "number",  description: "Days ahead to warn for upcoming due dates (payments only, default 7)" },
       },
       required: ["task"],
     },
@@ -346,13 +347,15 @@ async function fetchZohoInventory() {
 // ── AGENT CALLERS (server-to-server within the same deployment) ───────────────
 async function callLedger(input, baseUrl) {
   try {
-    const isInvoice = input.task === 'invoice'
-    const endpoint  = isInvoice
-      ? `${baseUrl}/api/agents/ledger/invoice`
-      : `${baseUrl}/api/agents/ledger/reconcile`
-    const body = isInvoice
+    const task      = input.task
+    const endpoint  = task === 'invoice'  ? `${baseUrl}/api/agents/ledger/invoice`
+                    : task === 'payments' ? `${baseUrl}/api/agents/ledger/payments`
+                    :                      `${baseUrl}/api/agents/ledger/reconcile`
+    const body = task === 'invoice'
       ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
-      : { task: input.task, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
+      : task === 'payments'
+      ? { dryRun: input.dryRun ?? true, lookAheadDays: input.lookAheadDays ?? 7, limit: input.limit ?? 200 }
+      : { task, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
     const r = await fetchWithTimeout(
       endpoint,
       {
@@ -542,6 +545,7 @@ USE call_ledger when:
 - A CRM deal is marked "Closed Won" and an invoice needs to be created → task:"invoice", pass crmDealId and crmDealName
 - User says "/reconcile", "reconcile my deposits", "match deposits", "what's unmatched", "check bank transactions" → task:"reconcile"
 - User says "/bill", "process a vendor bill", "map this vendor invoice", "vendor invoice" → task:"vendor-bill"
+- User asks about payment status, overdue invoices, "who hasn't paid", "check invoice status", "send reminders" → task:"payments"
 - Finance or accounting tasks that are not about quoting customers or prospecting leads
 
 USE call_brad (preferred for prospecting outreach) when:
@@ -581,7 +585,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
-13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill action)
+13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 
 IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
@@ -627,7 +631,7 @@ After using tools, respond with a JSON object:
 Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"
 call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically.
 call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.
-call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill" depending on the task.`;
+call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill"|"ledger_payments" depending on the task.`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────

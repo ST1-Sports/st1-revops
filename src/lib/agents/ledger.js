@@ -12,7 +12,7 @@
 export default {
   id:           'ledger',
   name:         'Ledger',
-  capabilities: ['invoice', 'reconcile', 'vendor-bill'],
+  capabilities: ['invoice', 'reconcile', 'vendor-bill', 'payments'],
   type:         'agent',
   roles:        ['admin', 'manager'],   // finance tasks — not exposed to sales_rep
   enabled:      true,
@@ -40,12 +40,18 @@ export default {
       (/reconcil/i.test(task)                          ? 'reconcile'  :
        /\bvendor\b|\/bill\b|vendor.?bill/i.test(task)  ? 'vendor-bill' :
        /invoice|closed.?won|deal.?won/i.test(task)     ? 'invoice'    :
+       /payment|overdue|reminder/i.test(task)          ? 'payments'   :
        'reconcile')
 
-    const isInvoice = serverTask === 'invoice'
-    const endpoint  = isInvoice ? '/api/agents/ledger/invoice' : '/api/agents/ledger/reconcile'
-    const body      = isInvoice
+    const isInvoice  = serverTask === 'invoice'
+    const isPayments = serverTask === 'payments'
+    const endpoint   = isInvoice  ? '/api/agents/ledger/invoice'
+                     : isPayments ? '/api/agents/ledger/payments'
+                     :              '/api/agents/ledger/reconcile'
+    const body       = isInvoice
       ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
+      : isPayments
+      ? { dryRun: input.dryRun ?? true, lookAheadDays: input.lookAheadDays ?? 7, limit: input.limit ?? 200 }
       : { task: serverTask, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
 
     const r = await fetch(endpoint, {
@@ -57,7 +63,12 @@ export default {
 
     const d = await r.json()
     const summary =
-      d.totals
+      isPayments && d.totals
+        ? `Payments: ${d.totals.checked ?? 0} checked — ` +
+          `${d.totals.updated ?? 0} updated, ` +
+          `${d.totals.overdue ?? 0} overdue, ` +
+          `${d.totals.upcoming ?? 0} upcoming`
+        : d.totals
         ? `Ledger: ${d.totals.polled ?? 0} checked — ` +
           `${d.totals.matchedStore ?? 0} store, ` +
           `${d.totals.matchedInvoice ?? 0} invoice, ` +
