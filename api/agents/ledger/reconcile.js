@@ -1,29 +1,32 @@
 /**
  * POST /api/agents/ledger/reconcile
- * { task?: "setup"|"reconcile", dryRun?: boolean, limit?: number }
+ * { task?: "setup"|"seed-stores"|"reconcile", dryRun?: boolean, limit?: number }
  *
  * Ledger reconciliation agent.
  *
- * STEP 0 (always runs): idempotently create three Zoho Books accounts and
+ * STEP 0 (idempotent): create/verify three Zoho Books chart-of-accounts entries and
  *   persist their IDs to the Setting table.
  *
- * STEP 1+: poll uncategorized deposits from ST1 Operating Account, Stripe
- *   Clearing, and Shopify Clearing; classify each against TeamStore → open
- *   DealInvoice → NEEDS_REVIEW; write Deposit rows; Slack-notify on review items.
+ * STEP 1+: poll uncategorized deposits from ST1 Operating Account, Stripe Clearing,
+ *   and Shopify Clearing; classify each against TeamStore → open DealInvoice →
+ *   NEEDS_REVIEW; write Deposit rows; Slack-notify review items.
  *
  * Safe defaults: task="reconcile", dryRun=true, limit=10.
  * Nothing is written to Zoho Books or the Deposit table in dry-run mode.
  */
 
-import { setCors }        from '../../_lib/cors.js'
-import { prisma }         from '../../_lib/prisma.js'
-import { getZohoToken }   from '../../_lib/zoho-token.js'
+import { setCors }      from '../../_lib/cors.js'
+import { prisma }       from '../../_lib/prisma.js'
+import { getZohoToken } from '../../_lib/zoho-token.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const ORG        = process.env.ZOHO_ORG_ID || '899940777'
-const BOOKS      = 'https://www.zohoapis.com/books/v3'
-const STRIPE_KEY = process.env.STRIPE_SECRET_KEY
+const ORG = process.env.ZOHO_ORG_ID || '899940777'
+const BOOKS = 'https://www.zohoapis.com/books/v3'
+
+const STRIPE_KEY      = process.env.STRIPE_SECRET_KEY
+const SHOPIFY_URL     = process.env.SHOPIFY_STORE_URL    // e.g. "your-store.myshopify.com"
+const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN
 
 // Fixed Zoho Books account IDs (never change)
 const FIXED = {
@@ -33,7 +36,7 @@ const FIXED = {
   stripeClearing: '7255504000000551015',  // Stripe Clearing
 }
 
-// Accounts to create (idempotent) — STEP 0
+// Accounts to create idempotently in STEP 0
 const ACCT_DEFS = [
   {
     key:      'ledger_acct_team_store_sales',
@@ -55,6 +58,9 @@ const ACCT_DEFS = [
   },
 ]
 
+// Confidence → Float for Deposit.matchConfidence
+const CONF_MAP = { exact: 1.0, high: 0.8, low: 0.4, none: null }
+
 // ── Zoho Books helpers ────────────────────────────────────────────────────────
 
 async function booksHeaders() {
@@ -68,7 +74,7 @@ async function booksGet(path) {
   const r = await fetch(`${BOOKS}${path}${sep}organization_id=${ORG}`, { headers })
   if (!r.ok) {
     const txt = await r.text()
-    throw new Error(`Zoho Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
+    throw new Error(`Books GET ${path}: ${r.status} — ${txt.slice(0, 200)}`)
   }
   return r.json()
 }
@@ -81,7 +87,7 @@ async function booksPost(path, body) {
   })
   if (!r.ok) {
     const txt = await r.text()
-    throw new Error(`Zoho Books POST ${path}: ${r.status} — ${txt.slice(0, 200)}`)
+    throw new Error(`Books POST ${path}: ${r.status} — ${txt.slice(0, 200)}`)
   }
   return r.json()
 }
@@ -89,11 +95,9 @@ async function booksPost(path, body) {
 // ── STEP 0 — Chart of accounts setup (idempotent) ────────────────────────────
 
 async function setupAccounts() {
-  // Fetch all accounts — paginate up to 200 (typical orgs well under that)
-  const data     = await booksGet('/chartofaccounts?per_page=200')
-  const list     = data.chartofaccounts || data.chart_of_accounts || []
-  const byName   = Object.fromEntries(list.map(a => [a.account_name.toLowerCase(), a]))
-
+  const data   = await booksGet('/chartofaccounts?per_page=200')
+  const list   = data.chartofaccounts || data.chart_of_accounts || []
+  const byName = Object.fromEntries(list.map(a => [a.account_name.toLowerCase(), a]))
   const results = []
 
   for (const def of ACCT_DEFS) {
@@ -105,7 +109,6 @@ async function setupAccounts() {
     } else {
       const payload = { account_name: def.name, account_type: def.type }
       if (def.parentId) payload.parent_account_id = def.parentId
-
       const resp = await booksPost('/chartofaccounts', payload)
       const acct = resp.chart_of_account
       if (!acct?.account_id) {
@@ -115,7 +118,6 @@ async function setupAccounts() {
       created   = true
     }
 
-    // Persist to Setting table so Matt can view/edit without a code change
     await prisma.setting.upsert({
       where:  { key: def.key },
       update: { value: { accountId, accountName: def.name } },
@@ -154,13 +156,12 @@ async function fetchUncategorized(accountId, limit) {
     return data.banktransactions || []
   } catch (e) {
     console.warn(`[ledger] fetchUncategorized(${accountId}):`, e.message)
-    return []  // don't abort the whole run if one account fails
+    return []
   }
 }
 
-// ── Stripe helpers ────────────────────────────────────────────────────────────
+// ── Stripe name extraction ────────────────────────────────────────────────────
 
-// Extract Stripe payout ID (po_xxx) from bank transaction description / reference
 function extractPayoutId(txn) {
   const haystack = `${txn.description || ''} ${txn.reference_number || ''}`
   const m = haystack.match(/po_[a-zA-Z0-9]+/)
@@ -180,7 +181,6 @@ async function fetchStripeBalanceTxns(payoutId) {
   } catch { return [] }
 }
 
-// Mirrors the existing stripe/index.js storeNameOf pattern
 function storeNameFromSource(source) {
   if (!source) return null
   const m  = source.metadata || {}
@@ -191,8 +191,7 @@ function storeNameFromSource(source) {
   if (fromMeta) return String(fromMeta).trim()
 
   // "#ST1-26-00347 / ADM Tigers Cross Country" → "ADM Tigers Cross Country"
-  const desc = source.description || ''
-  const match = desc.match(/\/\s*(.+)$/)
+  const match = (source.description || '').match(/\/\s*(.+)$/)
   return match ? match[1].trim() : null
 }
 
@@ -206,6 +205,41 @@ async function extractStoreNameFromStripe(txn) {
   const freq = {}
   for (const n of names) freq[n] = (freq[n] || 0) + 1
   return Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0]
+}
+
+// ── Shopify name extraction ───────────────────────────────────────────────────
+
+// Extracts order number from bank transaction description/reference, then
+// calls the Shopify Admin API to get the order note (often the team store name)
+// or the customer's full name as a fallback.
+async function extractStoreNameFromShopify(txn) {
+  if (!SHOPIFY_URL || !SHOPIFY_TOKEN) return null
+
+  const haystack = `${txn.description || ''} ${txn.reference_number || ''}`
+
+  // Shopify order numbers are typically 4–6 digits, often preceded by #
+  const m = haystack.match(/#?(\d{4,6})\b/)
+  if (!m) return null
+
+  try {
+    const r = await fetch(
+      `https://${SHOPIFY_URL}/admin/api/2024-01/orders.json` +
+      `?name=%23${m[1]}&status=any&fields=id,note,customer`,
+      { headers: { 'X-Shopify-Access-Token': SHOPIFY_TOKEN } }
+    )
+    if (!r.ok) return null
+    const d     = await r.json()
+    const order = (d.orders || [])[0]
+    if (!order) return null
+
+    // Prefer order note (often set to team store / school name)
+    if (order.note?.trim()) return order.note.trim()
+
+    // Fall back to customer full name
+    const c = order.customer
+    if (c) return [c.first_name, c.last_name].filter(Boolean).join(' ').trim() || null
+    return null
+  } catch { return null }
 }
 
 // ── STEP 3 — Matching logic ───────────────────────────────────────────────────
@@ -222,15 +256,30 @@ async function matchTeamStore(name) {
   }
 }
 
-async function matchInvoice(amount) {
+// Match an open invoice by amount ± $0.01 and txnDate within ±60 days of dueDate.
+// Returns { invoice, confidence } — 'exact' when reference also matches, 'high' otherwise.
+async function matchInvoice(amount, txnDate, referenceNumber) {
   try {
-    return await prisma.dealInvoice.findFirst({
-      where: {
-        amountTotal: { gte: amount - 0.01, lte: amount + 0.01 },
-        status:      { in: ['SENT'] },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
+    const dateMs = txnDate ? new Date(txnDate).getTime() : null
+    const where = {
+      amountTotal: { gte: amount - 0.01, lte: amount + 0.01 },
+      status:      { in: ['SENT', 'OVERDUE', 'PARTIAL'] },
+    }
+    // Narrow by due-date window when we have a transaction date
+    if (dateMs) {
+      where.dueDate = {
+        gte: new Date(dateMs - 60 * 86_400_000),
+        lte: new Date(dateMs + 60 * 86_400_000),
+      }
+    }
+    const invoice = await prisma.dealInvoice.findFirst({ where, orderBy: { createdAt: 'desc' } })
+    if (!invoice) return null
+
+    // Boost to 'exact' when the bank reference matches the invoice PO
+    const refMatch = referenceNumber && invoice.poNumber &&
+                     invoice.poNumber.toLowerCase() === referenceNumber.toLowerCase()
+    const confidence = refMatch ? 'exact' : 'high'
+    return { invoice, confidence }
   } catch (e) {
     if (isPrismaTableMissing(e)) return null
     throw e
@@ -303,11 +352,11 @@ async function classifyTxn(txn, source, accountIds) {
     const original = await findOriginalForReversal(absAmt, source)
     return {
       txn, source, amount,
-      isReversal:  true,
+      isReversal:   true,
       reversalOfId: original?.id || null,
-      status:      'REVERSED',
-      confidence:  original ? 'exact' : 'none',
-      notes:       original
+      status:       'REVERSED',
+      confidence:   original ? 'exact' : 'none',
+      notes:        original
         ? `Reverses deposit ${original.id} (${original.txnDate.toISOString().slice(0, 10)})`
         : 'Negative deposit — no matching original found',
     }
@@ -325,13 +374,15 @@ async function classifyTxn(txn, source, accountIds) {
     }
   }
 
-  // Extract store / org name from Stripe metadata or description
+  // Extract store / org name from platform metadata
   let extractedName = null
   if (source === 'stripe') {
     extractedName = await extractStoreNameFromStripe(txn)
+  } else if (source === 'shopify') {
+    extractedName = await extractStoreNameFromShopify(txn)
   }
+  // Fallback: parse " / Name" pattern from description
   if (!extractedName) {
-    // Fallback: parse description for " / Name" pattern
     const desc  = txn.description || txn.payee || ''
     const match = desc.match(/\/\s*(.+)$/)
     if (match) extractedName = match[1].trim()
@@ -345,20 +396,34 @@ async function classifyTxn(txn, source, accountIds) {
       status:               'MATCHED_STORE',
       confidence:           'exact',
       categorizedAs:        'Team Store Sales',
+      cogsAccountId:        accountIds.teamStoreCogs,
       targetAccountId:      accountIds.teamStoreSales,
       matchedTeamStoreId:   teamStore.id,
       matchedTeamStoreName: teamStore.name,
     }
   }
 
-  // Invoice match — amount within $0.01 against SENT invoices
-  const invoice = await matchInvoice(amount)
-  if (invoice) {
+  // Invoice match — amount ± $0.01, date ± 60 days, optional reference boost
+  const invoiceMatch = await matchInvoice(amount, txn.date, txn.reference_number)
+  if (invoiceMatch) {
+    const { invoice, confidence } = invoiceMatch
+    // Only auto-categorize on 'exact' (reference matched) — 'high' goes to review
+    if (confidence === 'exact') {
+      return {
+        txn, source, amount, extractedName,
+        status:             'MATCHED_INVOICE',
+        confidence:         'exact',
+        categorizedAs:      'Accounts Receivable',
+        matchedInvoiceId:   invoice.id,
+        matchedInvoiceName: invoice.crmDealName || null,
+      }
+    }
+    // high confidence but not exact — surface for review with the candidate attached
     return {
       txn, source, amount, extractedName,
-      status:             'MATCHED_INVOICE',
-      confidence:         'exact',
-      categorizedAs:      'Accounts Receivable',
+      status:     'NEEDS_REVIEW',
+      confidence: 'high',
+      notes:      `Possible invoice match: ${invoice.crmDealName || invoice.id} — verify and confirm`,
       matchedInvoiceId:   invoice.id,
       matchedInvoiceName: invoice.crmDealName || null,
     }
@@ -381,10 +446,9 @@ async function writeDeposit(result, dryRun) {
   if (dryRun) return null
   const { txn, source } = result
 
-  const confMap = { exact: 1.0, high: 0.8, low: 0.4 }
   const createData = {
     source,
-    zohoBankTxnId:      txn.transaction_id || `noid-${Date.now()}`,
+    zohoBankTxnId:      txn.transaction_id || `noid-${source}-${Math.abs(result.amount)}-${Date.now()}`,
     amount:             Math.abs(result.amount),
     txnDate:            new Date(txn.date),
     orgNameRaw:         result.extractedName || txn.description || txn.payee || null,
@@ -392,21 +456,20 @@ async function writeDeposit(result, dryRun) {
     categorizedAs:      result.categorizedAs      || null,
     matchedTeamStoreId: result.matchedTeamStoreId || null,
     matchedInvoiceId:   result.matchedInvoiceId   || null,
-    matchConfidence:    confMap[result.confidence] ?? null,
+    matchConfidence:    CONF_MAP[result.confidence] ?? null,
   }
 
   try {
     if (txn.transaction_id) {
-      const updateData = {
-        status:             createData.status,
-        categorizedAs:      createData.categorizedAs,
-        matchedTeamStoreId: createData.matchedTeamStoreId,
-        matchedInvoiceId:   createData.matchedInvoiceId,
-        matchConfidence:    createData.matchConfidence,
-      }
       return await prisma.deposit.upsert({
         where:  { zohoBankTxnId: txn.transaction_id },
-        update: updateData,
+        update: {
+          status:             createData.status,
+          categorizedAs:      createData.categorizedAs,
+          matchedTeamStoreId: createData.matchedTeamStoreId,
+          matchedInvoiceId:   createData.matchedInvoiceId,
+          matchConfidence:    createData.matchConfidence,
+        },
         create: createData,
       })
     }
@@ -428,11 +491,10 @@ async function reverseDeposit(reversalOfId, dryRun) {
     await prisma.deposit.update({
       where: { id: reversalOfId },
       data: {
-        status:        'REVERSED',
+        status:             'REVERSED',
         matchedTeamStoreId: null,
         matchedInvoiceId:   null,
-        categorizedAs: null,
-        notes:         'Reversed by chargeback/refund',
+        categorizedAs:      null,
       },
     })
   } catch (e) {
@@ -449,7 +511,6 @@ async function seedTeamStores() {
   const names  = new Set()
   let startAfter = null
 
-  // Page through up to 500 recent charges (5 pages × 100)
   for (let page = 0; page < 5; page++) {
     const params = new URLSearchParams({
       limit:           '100',
@@ -475,7 +536,9 @@ async function seedTeamStores() {
   let seeded = 0
   for (const name of names) {
     try {
-      const exists = await prisma.teamStore.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } })
+      const exists = await prisma.teamStore.findFirst({
+        where: { name: { equals: name, mode: 'insensitive' } },
+      })
       if (!exists) {
         await prisma.teamStore.create({ data: { name } })
         seeded++
@@ -522,25 +585,24 @@ export default async function handler(req, res) {
 
   const {
     task   = 'reconcile',
-    dryRun = true,          // safe default: never write without explicit opt-in
+    dryRun = true,
     limit  = 10,
   } = req.body || {}
 
   try {
-    // ── STEP 0 — Create / verify Zoho Books accounts ─────────────────────────
+    // STEP 0 — idempotently create / verify Zoho Books accounts
     const accountSetup = await setupAccounts()
 
     if (task === 'setup') {
       return res.json({ ok: true, accounts: accountSetup })
     }
 
-    // ── seed-stores — pull unique store names from Stripe charge history ─────
     if (task === 'seed-stores') {
       const result = await seedTeamStores()
       return res.json({ ok: true, accounts: accountSetup, seedStores: result })
     }
 
-    // ── STEP 1 — Determine which clearing accounts to poll ───────────────────
+    // STEP 1 — load dynamic account IDs and build poll list
     const accountIds = await loadAccountIds()
 
     // Auto-seed TeamStore on very first reconcile run if table is empty
@@ -556,21 +618,17 @@ export default async function handler(req, res) {
       { id: FIXED.stripeClearing, source: 'stripe',  label: 'Stripe Clearing' },
     ]
     if (accountIds.shopifyClearing) {
-      pollAccounts.push({
-        id:     accountIds.shopifyClearing,
-        source: 'shopify',
-        label:  'Shopify Clearing',
-      })
+      pollAccounts.push({ id: accountIds.shopifyClearing, source: 'shopify', label: 'Shopify Clearing' })
     }
 
-    // ── STEP 2 — Fetch uncategorized deposits ────────────────────────────────
+    // STEP 2 — fetch uncategorized deposits from each account
     const allTxns = []
     for (const acct of pollAccounts) {
       const txns = await fetchUncategorized(acct.id, limit)
       for (const t of txns) allTxns.push({ ...t, _source: acct.source, _label: acct.label })
     }
 
-    // Deduplicate by transaction_id (same txn can appear in multiple accounts)
+    // Deduplicate by transaction_id (same txn can appear across accounts)
     const seenIds = new Set()
     const uniq = allTxns.filter(t => {
       if (!t.transaction_id || seenIds.has(t.transaction_id)) return false
@@ -578,7 +636,7 @@ export default async function handler(req, res) {
       return true
     })
 
-    // ── STEP 3 — Classify, guard, write ─────────────────────────────────────
+    // STEP 3 — classify, guard, write
     const results = []
 
     for (const txn of uniq) {
@@ -587,7 +645,6 @@ export default async function handler(req, res) {
 
         if (result.skip) continue  // already reconciled with terminal status
 
-        // Reversal: update the original deposit before writing the reversal row
         if (result.isReversal && result.reversalOfId) {
           await reverseDeposit(result.reversalOfId, dryRun)
         }
@@ -598,20 +655,20 @@ export default async function handler(req, res) {
         console.error('[ledger] classify error:', txn.transaction_id, e.message)
         results.push({
           txn,
-          source:    txn._source,
-          status:    'NEEDS_REVIEW',
+          source:     txn._source,
+          status:     'NEEDS_REVIEW',
           confidence: 'none',
-          notes:     `Classification error: ${e.message}`,
+          notes:      `Classification error: ${e.message}`,
         })
       }
     }
 
-    // ── STEP 4 — Slack notification (live mode only) ─────────────────────────
+    // STEP 4 — Slack notification (live mode only)
     const needsReview = results.filter(r => r.status === 'NEEDS_REVIEW')
     if (!dryRun) notifySlack(needsReview).catch(() => {})
 
-    // ── STEP 5 — Return report ───────────────────────────────────────────────
-    const rows = results.map(r => ({
+    // STEP 5 — return report
+    const transactions = results.map(r => ({
       date:          r.txn?.date || null,
       amount:        r.txn?.amount || r.amount || 0,
       source:        r.source,
@@ -621,6 +678,7 @@ export default async function handler(req, res) {
       status:        r.status,
       confidence:    r.confidence || null,
       categorizedAs: r.categorizedAs || null,
+      cogsAccountId: r.cogsAccountId || null,
       match:         r.matchedTeamStoreName || r.matchedInvoiceName || null,
       notes:         r.notes || null,
     }))
@@ -630,14 +688,14 @@ export default async function handler(req, res) {
       dryRun,
       accounts: accountSetup,
       totals: {
-        polled:          uniq.length,
-        matchedStore:    results.filter(r => r.status === 'MATCHED_STORE').length,
-        matchedInvoice:  results.filter(r => r.status === 'MATCHED_INVOICE').length,
-        needsReview:     needsReview.length,
-        duplicates:      results.filter(r => r.status === 'DUPLICATE').length,
-        reversals:       results.filter(r => r.status === 'REVERSED').length,
+        polled:         uniq.length,
+        matchedStore:   results.filter(r => r.status === 'MATCHED_STORE').length,
+        matchedInvoice: results.filter(r => r.status === 'MATCHED_INVOICE').length,
+        needsReview:    needsReview.length,
+        duplicates:     results.filter(r => r.status === 'DUPLICATE').length,
+        reversals:      results.filter(r => r.status === 'REVERSED').length,
       },
-      transactions: rows,
+      transactions,
     })
 
   } catch (err) {
