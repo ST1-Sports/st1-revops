@@ -725,7 +725,8 @@ model Supplier {
   active      Boolean     @default(true)
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
-  items       PriceItem[]
+  items        PriceItem[]
+  vendorBills  VendorBill[]
 
   @@index([name])
   @@index([active])
@@ -801,63 +802,86 @@ model AgentInteraction {
 
 // ── Ledger / reconciliation models ───────────────────────────────────────────
 
-// Known team stores — populated manually or via admin UI
-model TeamStore {
-  id         String    @id @default(cuid())
-  name       String    @unique
-  externalId String?
-  active     Boolean   @default(true)
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-
-  deposits   Deposit[]
-}
-
-// Shadow of Zoho Books open invoices — populated from Zoho Books sync or manually
 model DealInvoice {
-  id            String    @id @default(cuid())
-  zohoInvoiceId String?   @unique
-  dealName      String?
-  customerName  String?
-  amount        Float
+  id            String   @id @default(cuid())
+  crmDealId     String
+  crmDealName   String?
+  quoteRef      String?
+  poNumber      String?
+  zohoInvoiceId String?  @unique
+  status        String   @default("DRAFT")      // DRAFT | SENT | PARTIAL | PAID | OVERDUE | VOID
+  amountTotal   Decimal? @db.Decimal(12, 2)
+  amountPaid    Decimal? @db.Decimal(12, 2)
   dueDate       DateTime?
-  status        String    @default("open")
-  reference     String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  triggerSource String   @default("MANUAL")     // CRM_WEBHOOK | MANUAL
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  deposits      Deposit[]
+  @@index([crmDealId])
+  @@index([status])
 }
 
-// One row per bank deposit candidate; reconciliation outcome stored here
+model TeamStore {
+  id             String   @id @default(cuid())
+  name           String
+  orgIdentifiers Json     @default("[]")
+  zohoContactId  String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deposits       Deposit[]
+
+  @@index([name])
+}
+
 model Deposit {
-  id                 String       @id @default(cuid())
-  source             String       // stripe | shopify | other
-  zohoBankTxnId      String?      @unique
-  stripePayoutId     String?
-  amount             Float
-  currency           String       @default("USD")
-  depositDate        DateTime
-  description        String?
-  extractedName      String?
-  status             String       @default("PENDING")
-  categorizedAs      String?
-  matchedTeamStoreId String?
-  matchedInvoiceId   String?
-  matchConfidence    String?
-  isDuplicate        Boolean      @default(false)
-  isReversal         Boolean      @default(false)
-  reversalOfId       String?
-  rawPayload         Json         @default("{}")
-  notes              String?
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  id                  String   @id @default(cuid())
+  source              String                       // STRIPE | SHOPIFY
+  zohoBankTxnId       String   @unique
+  amount              Decimal  @db.Decimal(12, 2)
+  txnDate             DateTime
+  orgNameRaw          String?
+  matchedInvoiceId    String?
+  matchedTeamStoreId  String?
+  teamStore           TeamStore? @relation(fields: [matchedTeamStoreId], references: [id])
+  matchConfidence     Float?
+  status              String    @default("NEEDS_REVIEW") // AUTO_MATCHED | TEAM_STORE | NEEDS_REVIEW | DUPLICATE_FLAGGED | REVERSED
+  categorizedAs       String?
+  createdAt           DateTime  @default(now())
 
-  matchedTeamStore   TeamStore?   @relation(fields: [matchedTeamStoreId], references: [id])
-  matchedInvoice     DealInvoice? @relation(fields: [matchedInvoiceId], references: [id])
-
-  @@index([source])
   @@index([status])
-  @@index([depositDate])
-  @@index([matchedTeamStoreId])
+  @@index([source])
+}
+
+model VendorBill {
+  id                String   @id @default(cuid())
+  supplierId        String
+  supplier          Supplier @relation(fields: [supplierId], references: [id])
+  vendorInvoiceNo   String?
+  poNumber          String?
+  zohoBillId        String?  @unique
+  fileUrl           String
+  status            String   @default("PENDING_REVIEW") // PENDING_REVIEW | MAPPED | CREATED | NEEDS_REVIEW
+  totalAmount       Decimal? @db.Decimal(12, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lineItems         VendorBillLineItem[]
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+model VendorBillLineItem {
+  id                 String     @id @default(cuid())
+  vendorBillId       String
+  vendorBill         VendorBill @relation(fields: [vendorBillId], references: [id], onDelete: Cascade)
+  rawDescription     String
+  rawSku             String?
+  quantity           Decimal    @db.Decimal(12, 2)
+  unitCost           Decimal    @db.Decimal(12, 2)
+  matchedPriceItemId String?
+  matchConfidence    Float?
+  needsReview        Boolean    @default(false)
+
+  @@index([vendorBillId])
 }
