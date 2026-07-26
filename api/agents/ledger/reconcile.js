@@ -441,6 +441,56 @@ async function reverseDeposit(reversalOfId, dryRun) {
   }
 }
 
+// ── TeamStore seeding — auto-populate from Stripe charge history ──────────────
+
+async function seedTeamStores() {
+  if (!STRIPE_KEY) return { seeded: 0, note: 'STRIPE_KEY not set' }
+
+  const since = Math.floor((Date.now() - 90 * 86_400_000) / 1000)
+  const names  = new Set()
+  let startAfter = null
+
+  // Page through up to 500 recent charges (5 pages × 100)
+  for (let page = 0; page < 5; page++) {
+    const params = new URLSearchParams({
+      limit:           '100',
+      'created[gte]':  String(since),
+      'expand[]':      'data.payment_intent',
+    })
+    if (startAfter) params.set('starting_after', startAfter)
+
+    const r = await fetch(`https://api.stripe.com/v1/charges?${params}`, {
+      headers: { Authorization: `Bearer ${STRIPE_KEY}` },
+    })
+    if (!r.ok) break
+    const d = await r.json()
+
+    for (const charge of d.data || []) {
+      const name = storeNameFromSource(charge)
+      if (name) names.add(name)
+    }
+    if (!d.has_more) break
+    startAfter = (d.data || []).at(-1)?.id
+  }
+
+  let seeded = 0
+  for (const name of names) {
+    try {
+      await prisma.teamStore.upsert({
+        where:  { name },
+        update: {},
+        create: { name },
+      })
+      seeded++
+    } catch (e) {
+      if (isPrismaTableMissing(e)) break
+      console.warn('[ledger] seed-stores upsert error:', name, e.message)
+    }
+  }
+
+  return { seeded, discovered: names.size }
+}
+
 // ── STEP 7 — Slack notification for NEEDS_REVIEW items ───────────────────────
 
 async function notifySlack(needsReview) {
@@ -486,8 +536,22 @@ export default async function handler(req, res) {
       return res.json({ ok: true, accounts: accountSetup })
     }
 
+    // ── seed-stores — pull unique store names from Stripe charge history ─────
+    if (task === 'seed-stores') {
+      const result = await seedTeamStores()
+      return res.json({ ok: true, accounts: accountSetup, seedStores: result })
+    }
+
     // ── STEP 1 — Determine which clearing accounts to poll ───────────────────
     const accountIds = await loadAccountIds()
+
+    // Auto-seed TeamStore on very first reconcile run if table is empty
+    try {
+      const storeCount = await prisma.teamStore.count()
+      if (storeCount === 0) await seedTeamStores()
+    } catch (e) {
+      if (!isPrismaTableMissing(e)) console.warn('[ledger] auto-seed check:', e.message)
+    }
 
     const pollAccounts = [
       { id: FIXED.operating,      source: 'other',   label: 'ST1 Operating Account' },

@@ -41,12 +41,14 @@
     "api/agents/edgar.js":                         { "maxDuration": 60 },
     "api/agents/brad.js":                          { "maxDuration": 60 },
     "api/agents/ledger/reconcile.js":              { "maxDuration": 60 },
+    "api/cron/ledger-reconcile.js":               { "maxDuration": 60 },
     "api/webhooks/zoho.js":                        { "maxDuration": 30 },
     "api/webhooks/instantly.js":                   { "maxDuration": 30 }
   },
   "crons": [
-    { "path": "/api/cron/send-batches",  "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/reddit-daily",  "schedule": "0 14 * * 1-5" }
+    { "path": "/api/cron/send-batches",       "schedule": "*/15 * * * *" },
+    { "path": "/api/cron/reddit-daily",       "schedule": "0 14 * * 1-5" },
+    { "path": "/api/cron/ledger-reconcile",   "schedule": "0 8 * * 1-5" }
   ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
