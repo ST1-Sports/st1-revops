@@ -34,8 +34,9 @@ export default async function handler(req, res) {
         to_name:    contactName,
         subject,
         body,
-        from_name:  'Brad @ ST1 Sports',
+        from_name:  'Brad Hofer',
         from_email: 'brad@shopst1sports.com',
+        reply_to:   'brad@shopst1sports.com',
         repEnvKey:  'BRAD',
       }),
     })

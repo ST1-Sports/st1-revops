@@ -5427,6 +5427,11 @@ const [oneOffContext,setOneOffContext]=useState("");
 const [oneOffDraft,setOneOffDraft]=useState(null);
 const [oneOffLoading,setOneOffLoading]=useState(false);
 const [oneOffSending,setOneOffSending]=useState(false);
+const [oneOffMode,setOneOffMode]=useState("ai");
+const [oneOffSubject,setOneOffSubject]=useState("");
+const [oneOffBody,setOneOffBody]=useState("");
+const [bradReplies,setBradReplies]=useState([]);
+const [bradRepliesLoading,setBradRepliesLoading]=useState(false);
 const [dbContacts,setDbContacts]=useState([]);
 const [dbTotal,setDbTotal]=useState(0);
 const [dbPage,setDbPage]=useState(1);
@@ -5463,6 +5468,39 @@ setDbContacts(cs=>cs.map(c=>c.id===contactId?{...c,pushedToZoho:true,zohoCrmId:d
 }else toast(d.error||"Promote failed","error");
 }catch(e){toast("Promote error: "+e.message,"error");}
 setDbPromoting(null);
+};
+const loadBradReplies=async()=>{
+setBradRepliesLoading(true);
+try{
+const r=await fetch('/api/brad-replies');
+const d=await r.json();
+setBradReplies((d.replies||[]).filter(r=>r.outcome==='pending'));
+}catch{}
+setBradRepliesLoading(false);
+};
+const markReplyHandled=async(id)=>{
+try{
+await fetch('/api/brad-replies',{method:'POST',headers:{'Content-Type':'application/json','x-action':'mark-handled'},body:JSON.stringify({id})});
+setBradReplies(rs=>rs.filter(r=>r.id!==id));
+toast("Marked handled","success");
+}catch(e){toast("Error: "+e.message,"error");}
+};
+const sendManualEmail=async()=>{
+if(!oneOffEmail.trim()){toast("Email is required","error");return;}
+if(!oneOffSubject.trim()){toast("Subject is required","error");return;}
+if(!oneOffBody.trim()){toast("Body is required","error");return;}
+setOneOffSending(true);
+try{
+const r=await fetch('/api/agents/brad-send',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({contactEmail:oneOffEmail.trim(),contactName:oneOffName.trim()||oneOffEmail.split('@')[0],subject:oneOffSubject.trim(),body:oneOffBody.trim()})});
+const d=await r.json();
+if(d.sent){
+toast(`✉ Sent to ${oneOffName||oneOffEmail}`,'success');
+dispatch("LOG",{msg:`Brad sent: ${oneOffName||oneOffEmail} — "${oneOffSubject}"`});
+setOneOffName("");setOneOffEmail("");setOneOffContext("");setOneOffSubject("");setOneOffBody("");
+}else toast(d.error||"Send failed","error");
+}catch(e){toast("Send error: "+e.message,"error");}
+setOneOffSending(false);
 };
 const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
 const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
@@ -5525,7 +5563,7 @@ if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId
 }catch(e){toast(`Send error: ${e.message}`,"error");}
 setBradSending(null);
 };
-useEffect(()=>{runBrad();},[]);
+useEffect(()=>{runBrad();loadBradReplies();},[]);
 useEffect(()=>{if(view==="contacts"&&dbContacts.length===0)loadDbContacts(1,"");},[view]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
@@ -6795,6 +6833,39 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 )}
 {view==="brad"&&(
 <div style={{maxWidth:860}}>
+{/* Positive reply queue */}
+{bradReplies.length>0&&(
+<div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
+<button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
+</div>
+<div style={{display:"flex",flexDirection:"column",gap:8}}>
+{bradReplies.map(rep=>{
+const inp=rep.input||{};const out=rep.output||{};
+return(
+<div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`}}>
+<div style={{flex:1,minWidth:0}}>
+<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{inp.contactName||inp.fromEmail}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.white,background:B.green,borderRadius:3,padding:"2px 6px"}}>INTERESTED</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>→ assigned to <strong>{out.assignedName||out.assignedTo}</strong></span>
+</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginBottom:3}}>{inp.subject}</div>
+{inp.snippet&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.5,fontStyle:"italic"}}>"{inp.snippet.slice(0,160)}{inp.snippet.length>160?"…":""}"</div>}
+</div>
+<div style={{display:"flex",gap:6,flexShrink:0}}>
+<button onClick={()=>{setOneOffName(inp.contactName||"");setOneOffEmail(inp.fromEmail||"");setOneOffMode("self");setTimeout(()=>document.getElementById("oneoff-subject")?.focus(),100);}}
+style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ REPLY</button>
+<button onClick={()=>markReplyHandled(rep.id)}
+style={{background:B.green,color:B.white,border:"none",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,padding:"3px 10px",borderRadius:3,cursor:"pointer",letterSpacing:.3}}>✓ HANDLED</button>
+</div>
+</div>
+);
+})}
+</div>
+</div>
+)}
 {/* Status row */}
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
@@ -6862,11 +6933,22 @@ return(
 </div>
 {/* One-off compose */}
 <div style={{marginTop:24,borderTop:`1px solid ${B.border}`,paddingTop:20}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>SEND TO ANYONE</div>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>SEND TO ANYONE</div>
+<div style={{display:"flex",gap:4}}>
+{[["ai","AI DRAFT"],["self","WRITE IT"]].map(([m,l])=>(
+<button key={m} onClick={()=>{setOneOffMode(m);setOneOffDraft(null);}} style={{background:oneOffMode===m?B.orange:B.surface,color:oneOffMode===m?B.white:B.muted,border:`1px solid ${oneOffMode===m?B.orange:B.border}`,borderRadius:4,padding:"3px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{l}</button>
+))}
+</div>
+</div>
+{/* Shared: name + email row */}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
 <input value={oneOffName} onChange={e=>setOneOffName(e.target.value)} placeholder="Name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 <input value={oneOffEmail} onChange={e=>setOneOffEmail(e.target.value)} placeholder="Email *" type="email" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 </div>
+{/* AI mode */}
+{oneOffMode==="ai"&&(
+<div>
 <div style={{display:"flex",gap:8,marginBottom:oneOffDraft?12:0}}>
 <input value={oneOffContext} onChange={e=>setOneOffContext(e.target.value)} placeholder="School / sport / context (optional)" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 <OBtn sm onClick={runOneOff} disabled={oneOffLoading||!oneOffEmail.trim()}>{oneOffLoading?"DRAFTING…":"DRAFT →"}</OBtn>
@@ -6879,6 +6961,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{oneOffDraft.contactEmail}</div>
 </div>
 <div style={{display:"flex",gap:6}}>
+<GBtn onClick={()=>{setOneOffMode("self");setOneOffSubject(oneOffDraft.subject||"");setOneOffBody(oneOffDraft.body||"");setOneOffDraft(null);}} style={{fontSize:9,padding:"4px 9px"}}>✏ EDIT</GBtn>
 <GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${oneOffDraft.subject}\n\n${oneOffDraft.body}`).then(()=>toast("Copied","info"))} style={{fontSize:9,padding:"4px 9px"}}>📋 COPY</GBtn>
 <button onClick={sendOneOff} disabled={oneOffSending} style={{background:oneOffSending?B.muted:B.green,border:"none",color:B.white,borderRadius:4,padding:"4px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:oneOffSending?"default":"pointer",opacity:oneOffSending?.7:1}}>{oneOffSending?"SENDING…":"✉ SEND"}</button>
 <GBtn onClick={()=>setOneOffDraft(null)} style={{fontSize:9,padding:"4px 9px"}}>DISCARD</GBtn>
@@ -6888,6 +6971,19 @@ return(
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>SUBJECT</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text,marginBottom:10}}>{oneOffDraft.subject}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{oneOffDraft.body}</div>
+</div>
+</div>
+)}
+</div>
+)}
+{/* Self-compose mode */}
+{oneOffMode==="self"&&(
+<div style={{display:"flex",flexDirection:"column",gap:8}}>
+<input id="oneoff-subject" value={oneOffSubject} onChange={e=>setOneOffSubject(e.target.value)} placeholder="Subject *" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<textarea value={oneOffBody} onChange={e=>setOneOffBody(e.target.value)} placeholder="Write your email body here…" rows={8} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"10px",fontSize:11,fontFamily:"'Lexend',sans-serif",lineHeight:1.7,resize:"vertical"}}/>
+<div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+<GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${oneOffSubject}\n\n${oneOffBody}`).then(()=>toast("Copied","info"))} style={{fontSize:9,padding:"4px 9px"}}>📋 COPY</GBtn>
+<button onClick={sendManualEmail} disabled={oneOffSending||!oneOffEmail.trim()||!oneOffSubject.trim()||!oneOffBody.trim()} style={{background:oneOffSending||!oneOffEmail.trim()||!oneOffSubject.trim()||!oneOffBody.trim()?B.border:B.green,color:oneOffSending||!oneOffEmail.trim()||!oneOffSubject.trim()||!oneOffBody.trim()?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 18px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}}>{oneOffSending?"SENDING…":"✉ SEND AS BRAD"}</button>
 </div>
 </div>
 )}
