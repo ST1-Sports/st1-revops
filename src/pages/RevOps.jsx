@@ -5379,7 +5379,7 @@ await crmSyncRef.current(true);
 setCrmSyncing(false);
 };
 const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
-const [view,setView]=useState("areas");
+const [view,setView]=useState("brad");
 const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
 const [editing,setEditing]=useState(null);
 useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
@@ -5419,10 +5419,10 @@ const [timelineContact,setTimelineContact] = useState(null);
 const [bulkEnrolling,setBulkEnrolling] = useState(false);
 const [noteContactId,setNoteContactId] = useState(null);
 const [noteText,setNoteText] = useState("");
-const [bradTask,setBradTask]=useState("Draft first-touch outreach for these contacts");
-const [bradLimit,setBradLimit]=useState(10);
+const [bradTask,setBradTask]=useState("");
 const [bradLoading,setBradLoading]=useState(false);
 const [bradResult,setBradResult]=useState(null);
+const [bradSending,setBradSending]=useState(null);
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
@@ -5430,6 +5430,34 @@ bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
 };
 const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
 const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
+const BRAD_AUTO_TASK="Look at my top-scored contacts and identify who I should reach out to today. Prioritize contacts not touched in 2+ weeks, contacts at schools near active pipeline deals, and high-value prospects. Draft personalized emails for the 5 best targets. Include a brief note on why each one is worth contacting right now.";
+const runBrad=async(task)=>{
+setBradLoading(true);setBradResult(null);
+try{
+const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true}})});
+const d=await r.json();
+setBradResult(d.metadata||d);
+}catch(e){toast('Brad error: '+e.message,'error');}
+setBradLoading(false);
+};
+const sendDraftEmail=async(draft,key)=>{
+if(!draft.contactEmail){toast("No email address on file","error");return;}
+setBradSending(key);
+try{
+const r=await fetch('/api/agents/brad-send',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+const d=await r.json();
+if(d.sent){
+toast(`✉ Sent to ${draft.contactName||draft.contactEmail}`,'success');
+dispatch("LOG",{msg:`Brad sent: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});
+const contact=(s.contacts||[]).find(c=>c.email===draft.contactEmail);
+if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"brad",note:`Brad: ${draft.subject}`});
+}else toast(d.error||"Send failed","error");
+}catch(e){toast(`Send error: ${e.message}`,"error");}
+setBradSending(null);
+};
+useEffect(()=>{runBrad();},[]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
 abortRef.current=false;setPhase("finding");
@@ -5826,10 +5854,10 @@ await pushToZohoLeads(toAdd);
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`],["brad","✉ BRAD OUTREACH"]];
+const PVIEWS=[["brad","✉ BRAD"],["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 return (
 <div style={{padding:"22px 26px"}}>
-<PH title="PROSPECTING ENGINE" sub="Scrape contacts, import lists, manage your contact database"
+<PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
 action={<div style={{display:"flex",gap:6}}>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
 {view==="areas"&&(
 <div>
@@ -6640,73 +6668,72 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 </div>
 )}
 {view==="brad"&&(
-<div style={{maxWidth:820}}>
-<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:18,marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>BRAD OUTREACH — AI-DRAFTED FIRST-TOUCH EMAILS</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"end",marginBottom:10}}>
-<div>
-<Lbl s={{marginBottom:4}}>What should Brad focus on?</Lbl>
-<input value={bradTask} onChange={e=>setBradTask(e.target.value)} placeholder="Draft first-touch outreach for these contacts" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+<div style={{maxWidth:860}}>
+{/* Status row */}
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+{bradLoading?"Analyzing your contacts and pipeline…"
+:bradResult?`${bradResult.drafts?.length||0} recommendation${(bradResult.drafts?.length||0)!==1?"s":""} · ${bradResult.skipped?.length||0} skipped`
+:"Brad reads your CRM and recommends who to contact today."}
 </div>
-<div>
-<Lbl s={{marginBottom:4}}>Contact limit</Lbl>
-<select value={bradLimit} onChange={e=>setBradLimit(Number(e.target.value))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
-{[5,10,15,20,25].map(n=><option key={n} value={n}>{n} contacts</option>)}
-</select>
+<OBtn sm onClick={()=>runBrad(bradTask||undefined)} disabled={bradLoading}>{bradLoading?"THINKING…":"↺ REFRESH"}</OBtn>
 </div>
-</div>
-<div style={{display:"flex",gap:8,alignItems:"center"}}>
-<OBtn onClick={async()=>{
-setBradLoading(true);setBradResult(null);
-try{
-const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({task:bradTask,input:{limit:bradLimit,dryRun:true}})});
-const d=await r.json();
-setBradResult(d.metadata||d);
-}catch(e){toast('Brad error: '+e.message,'error');}
-setBradLoading(false);
-}} disabled={bradLoading}>{bradLoading?"BRAD IS THINKING…":"✉ RUN BRAD"}</OBtn>
-{bradResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{bradResult.drafts?.length||0} drafts ready · {bradResult.skipped?.length||0} skipped</span>}
-</div>
-</div>
-{bradResult&&(
-<div style={{display:"flex",flexDirection:"column",gap:10}}>
-{bradResult.skipped?.length>0&&(
-<div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>SKIPPED ({bradResult.skipped.length})</div>
-<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{bradResult.skipped.map((sk,i)=>(
-<span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,background:B.border,borderRadius:3,padding:"2px 6px"}}>{sk.contact?.firstName||sk.blockedBy} · {sk.blockedBy}</span>
-))}
-</div>
+{/* Loading */}
+{bradLoading&&(
+<div style={{textAlign:"center",padding:"60px 0",background:B.surface,borderRadius:8,border:`1px solid ${B.border}`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.textMid,marginBottom:8}}>Brad is reading your CRM…</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5}}>ANALYZING · CHECKING PIPELINE · DRAFTING</div>
 </div>
 )}
-{(bradResult.drafts||[]).map((draft,i)=>(
-<div key={i} style={{background:B.white,border:`1px solid ${B.green}40`,borderRadius:8,overflow:"hidden"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:B.greenBg}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green,fontWeight:600}}>{draft.contactName}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{draft.contactEmail} · {draft.contactSchool}</div>
+{/* Draft cards */}
+{!bradLoading&&bradResult&&(
+<div style={{display:"flex",flexDirection:"column",gap:12}}>
+{(bradResult.drafts||[]).map((draft,i)=>{
+const key=`brad_${i}`;const sending=bradSending===key;
+const score=(s.contacts||[]).find(c=>c.email===draft.contactEmail)?.score||null;
+return(
+<div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"12px 16px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>
+<div style={{flex:1,minWidth:0}}>
+<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:2}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text}}>{draft.contactName}</span>
+{score>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,borderRadius:3,padding:"2px 6px",letterSpacing:.3}}>{score}pts</span>}
 </div>
-<div style={{display:"flex",gap:6}}>
-<GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`)} style={{fontSize:9,padding:"4px 9px"}}>COPY</GBtn>
-<a href={`mailto:${draft.contactEmail}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`} style={{background:B.green,color:B.white,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,textDecoration:"none"}}>✉ OPEN IN MAIL</a>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{[draft.contactSchool,draft.contactEmail].filter(Boolean).join(" · ")}</div>
+{draft.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:6,fontStyle:"italic",lineHeight:1.55}}>💡 {draft.notes}</div>}
+</div>
+<div style={{display:"flex",gap:6,marginLeft:14,flexShrink:0}}>
+<GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`).then(()=>toast("Copied","info"))} style={{fontSize:9,padding:"4px 9px"}}>📋 COPY</GBtn>
+{draft.contactEmail&&<button onClick={()=>sendDraftEmail(draft,key)} disabled={sending} style={{background:sending?B.muted:B.green,border:"none",color:B.white,borderRadius:4,padding:"4px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:sending?"default":"pointer",opacity:sending?.7:1}}>{sending?"SENDING…":"✉ SEND"}</button>}
 </div>
 </div>
-<div style={{padding:"12px 14px"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,fontWeight:500,marginBottom:6}}>{draft.subject}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{draft.body}</div>
-{draft.notes&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>💡 {draft.notes}</div>}
+<div style={{padding:"14px 16px"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>SUBJECT</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text,marginBottom:12}}>{draft.subject}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{draft.body}</div>
 </div>
 </div>
-))}
+);
+})}
 {(!bradResult.drafts||bradResult.drafts.length===0)&&(
-<div style={{textAlign:"center",padding:"32px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-No drafts returned — Brad may have found no eligible contacts, or all were skipped by guardrails (DNC, 14-day retouch, daily cap).
+<div style={{textAlign:"center",padding:"48px 0",background:B.surface,borderRadius:8,border:`1px solid ${B.border}`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No contacts cleared guardrails today.</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:4}}>Everyone may be within the 14-day re-touch window, or the daily cap has been hit.</div>
 </div>
 )}
 </div>
 )}
+{/* Empty / first-load */}
+{!bradLoading&&!bradResult&&(
+<div style={{textAlign:"center",padding:"60px 0"}}>
+<OBtn onClick={()=>runBrad()}>✉ GET RECOMMENDATIONS</OBtn>
+</div>
+)}
+{/* Custom task input */}
+<div style={{marginTop:16,display:"flex",gap:8,alignItems:"center"}}>
+<input value={bradTask} onChange={e=>setBradTask(e.target.value)} placeholder="Give Brad specific instructions — or leave blank for today's recommendations…" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<OBtn sm onClick={()=>runBrad(bradTask||undefined)} disabled={bradLoading}>RUN</OBtn>
+</div>
 </div>
 )}
 {/* BULK ACTION BAR */}
