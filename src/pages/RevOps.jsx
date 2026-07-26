@@ -5452,6 +5452,14 @@ const [dbSearch,setDbSearch]=useState("");
 const [dbLoading,setDbLoading]=useState(false);
 const [dbPromoting,setDbPromoting]=useState(null);
 const dbSearchRef=React.useRef("");
+const [areaContactsAreaId,setAreaContactsAreaId]=useState(null);
+const [areaContactsList,setAreaContactsList]=useState([]);
+const [areaContactsTotal,setAreaContactsTotal]=useState(0);
+const [areaContactsPage,setAreaContactsPage]=useState(1);
+const [areaContactsLoading,setAreaContactsLoading]=useState(false);
+const [areaContactsSel,setAreaContactsSel]=useState(new Set());
+const [areaContactsStateF,setAreaContactsStateF]=useState('');
+const [areaContactsSportF,setAreaContactsSportF]=useState('');
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
@@ -5481,6 +5489,17 @@ setDbContacts(cs=>cs.map(c=>c.id===contactId?{...c,pushedToZoho:true,zohoCrmId:d
 }else toast(d.error||"Promote failed","error");
 }catch(e){toast("Promote error: "+e.message,"error");}
 setDbPromoting(null);
+};
+const loadAreaContacts=async(area,page=1,stateF='',sportF='')=>{
+setAreaContactsLoading(true);
+setAreaContactsPage(page);
+try{
+const r=await fetch('/api/contacts/area-browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sports:area.sports||[],states:area.states||[],roles:area.roles||[],page,limit:50,stateFilter:stateF,sportFilter:sportF})});
+const d=await r.json();
+setAreaContactsList(d.contacts||[]);
+setAreaContactsTotal(d.total||0);
+}catch(e){toast('Failed to load contacts: '+e.message,'error');}
+setAreaContactsLoading(false);
 };
 const loadBradReplies=async()=>{
 setBradRepliesLoading(true);
@@ -5983,11 +6002,11 @@ setView("contacts");loadDbContacts(1,"");
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import","IMPORT & SYNC"],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
-action={<div style={{display:"flex",gap:6}}>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
+action={<div style={{display:"flex",gap:6,alignItems:"center"}}><button onClick={()=>setView("import")} style={{background:view==="import"?B.orange:B.white,color:view==="import"?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>↑ IMPORT & SYNC</button><div style={{width:1,height:18,background:B.border,margin:"0 2px",flexShrink:0}}/>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
 {view==="contacts"&&(
 <div>
 {/* Search + stats bar */}
@@ -6040,6 +6059,34 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 )}
 {view==="areas"&&(
 <div>
+{areas.filter(a=>a.id===areaContactsAreaId).map(browseArea=>(
+<div key={browseArea.id}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+<div style={{display:"flex",alignItems:"center",gap:10}}>
+<button onClick={()=>{setAreaContactsAreaId(null);setAreaContactsSel(new Set());}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer",letterSpacing:.3}}>← AREAS</button>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{browseArea.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{areaContactsLoading?"Loading…":`${areaContactsTotal.toLocaleString()} contacts match`}</div>
+</div>
+</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<button onClick={()=>setAreaContactsSel(s=>{const all=new Set(areaContactsList.map(c=>c.id));return s.size===areaContactsList.length&&areaContactsList.length>0?new Set():all;})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer"}}>{areaContactsSel.size===areaContactsList.length&&areaContactsList.length>0?"DESELECT PAGE":"SELECT PAGE"}</button>
+{areaContactsSel.size>0&&<OBtn sm onClick={()=>{const nm=`${browseArea.name} – ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;const nl={id:mkId(),name:nm,contactIds:[...areaContactsSel],createdAt:Date.now(),source:"area-browse"};dispatch("ADD_CONTACT_LIST",nl);toast(`List "${nm}" created with ${areaContactsSel.size} contacts`,"success");setAreaContactsSel(new Set());}}>✓ CREATE LIST ({areaContactsSel.size})</OBtn>}
+</div>
+</div>
+<div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+<input value={areaContactsStateF} onChange={e=>setAreaContactsStateF(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loadAreaContacts(browseArea,1,areaContactsStateF,areaContactsSportF)} placeholder="Filter by state (e.g. IA)" style={{flex:1,minWidth:120,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<input value={areaContactsSportF} onChange={e=>setAreaContactsSportF(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loadAreaContacts(browseArea,1,areaContactsStateF,areaContactsSportF)} placeholder="Filter by sport" style={{flex:1,minWidth:120,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<OBtn sm onClick={()=>loadAreaContacts(browseArea,1,areaContactsStateF,areaContactsSportF)}>FILTER</OBtn>
+{(areaContactsStateF||areaContactsSportF)&&<button onClick={()=>{setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(browseArea,1,'','');}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:9,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>✕ CLEAR</button>}
+</div>
+{areaContactsLoading&&<div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Loading…</div>}
+{!areaContactsLoading&&areaContactsList.length===0&&<div style={{textAlign:"center",padding:"40px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No matching contacts yet — import a list that includes {browseArea.sports?.join(" / ")||browseArea.name} contacts.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:6}}>{areaContactsList.map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email;const sel=areaContactsSel.has(c.id);return(<div key={c.id} onClick={()=>setAreaContactsSel(s=>{const ns=new Set(s);sel?ns.delete(c.id):ns.add(c.id);return ns;})} style={{background:sel?B.orangeBg:B.white,border:`1px solid ${sel?B.orange:B.border}`,borderLeft:`3px solid ${sel?B.orange:B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",alignItems:"center",gap:12,cursor:"pointer"}}><div style={{width:16,height:16,border:`2px solid ${sel?B.orange:B.border}`,borderRadius:3,background:sel?B.orange:"none",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",color:B.white,fontSize:10,fontWeight:700}}>{sel&&"✓"}</div><div style={{flex:1,minWidth:0}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text,marginBottom:1}}>{name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.companyName,c.email].filter(Boolean).join(" · ")}</div>{(c.sport||c.state)&&<div style={{display:"flex",gap:5,marginTop:2,flexWrap:"wrap"}}>{c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}{(c.city||c.state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")}</span>}</div>}</div>{c.score>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 5px",borderRadius:3}}>{c.score}pts</span>}</div>);})}</div>
+{areaContactsTotal>50&&(<div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:10,marginTop:14}}><GBtn onClick={()=>loadAreaContacts(browseArea,areaContactsPage-1,areaContactsStateF,areaContactsSportF)} style={{fontSize:10,padding:"5px 10px",opacity:areaContactsPage<=1?.4:1,pointerEvents:areaContactsPage<=1?"none":"auto"}}>← PREV</GBtn><span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Page {areaContactsPage} of {Math.ceil(areaContactsTotal/50)}</span><GBtn onClick={()=>loadAreaContacts(browseArea,areaContactsPage+1,areaContactsStateF,areaContactsSportF)} style={{fontSize:10,padding:"5px 10px",opacity:areaContactsPage>=Math.ceil(areaContactsTotal/50)?.4:1,pointerEvents:areaContactsPage>=Math.ceil(areaContactsTotal/50)?"none":"auto"}}>NEXT →</GBtn></div>)}
+</div>
+))}
+{!areaContactsAreaId&&<>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Define target audiences — scrape each independently</div>
 <OBtn sm onClick={()=>setAreas(a=>[...a,{id:mkId(),name:"New Focus Area",states:[],sports:[],roles:[],maxSchools:10,active:true}])}>+ NEW AREA</OBtn>
@@ -6126,12 +6173,13 @@ States included: {(area.states||[]).join(", ")||"none"}
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
 {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).map(r=>typeof r==="string"?r:r?.name||String(r)).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
 </div>
-<OBtn onClick={()=>runScrape(area)} style={{width:"100%"}} sm>⊕ SCRAPE THIS AREA</OBtn>
+<div style={{display:"flex",gap:6}}><OBtn onClick={()=>runScrape(area)} style={{flex:1}} sm>⊕ SCRAPE</OBtn>{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={()=>{setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{flex:1}}>BROWSE {(areaCounts[area.id]||0).toLocaleString()}</OBtn>}</div>
 </div>
 )}
 </div>
 ))}
 </div>
+</>}
 </div>
 )}
 {view==="import"&&(
