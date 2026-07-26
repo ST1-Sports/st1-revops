@@ -1457,6 +1457,8 @@ const [expandedQuote,setExpandedQuote]=useState(null);
 const [expandedCampaign,setExpandedCampaign]=useState(null);
 const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
+const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
+const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
@@ -1563,6 +1565,8 @@ if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQ
 if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
 if(action.type==="edgar_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedEdgarQuote(e=>e===key?null:key);return;}
 if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpandedBradOutreach(e=>e===key?null:key);return;}
+if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
+if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
 const createQuoteNow=async(action,key)=>{
 setSendingQuote(key);
@@ -1747,8 +1751,8 @@ const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.foll
 const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -2072,6 +2076,117 @@ return(
 );
 })}
 {skipped.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,paddingTop:4}}>Skipped: {[...new Set(skipped.map(s=>s.blockedBy))].join(", ")}</div>}
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_reconcile"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerReconcile===key;
+const meta=a.result?.metadata||{};const totals=meta.totals||{};
+const txns=meta.transactions||[];const dryMode=a.dryRun||meta.dryRun;
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.blue}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.blueBg,borderBottom:expanded?`1px solid ${B.blue}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◎</span>
+<div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,fontWeight:600}}>Reconcile — {totals.polled??0} polled</span>
+{dryMode&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,borderRadius:2,padding:"1px 5px",letterSpacing:.3}}>DRY RUN</span>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{totals.matchedStore??0} store · {totals.matchedInvoice??0} invoice · {totals.needsReview??0} need review{(totals.duplicates||0)>0?` · ${totals.duplicates} dup`:""}</div>
+</div>
+</div>
+{txns.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+{expanded&&txns.length>0&&(
+<div style={{padding:"10px 12px",overflowX:"auto"}}>
+<table style={{width:"100%",borderCollapse:"collapse",minWidth:480}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>DATE</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 6px",fontWeight:700}}>DESCRIPTION</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>AMOUNT</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 6px",fontWeight:700}}>MATCH</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>STATUS</th>
+</tr></thead>
+<tbody>
+{txns.map((t,ti)=>{
+const sc={MATCHED_STORE:B.green,MATCHED_INVOICE:B.teal,NEEDS_REVIEW:B.yellow,DUPLICATE:B.muted,REVERSED:B.red}[t.status]||B.muted;
+return(
+<tr key={ti} style={{borderBottom:`1px solid ${B.border}20`}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"5px 0",whiteSpace:"nowrap"}}>{t.date||"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"5px 6px",maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.extractedName||t.description||"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,textAlign:"right",padding:"5px 0",whiteSpace:"nowrap",fontWeight:600}}>${Number(t.amount||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"5px 6px",maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.match||"—"}</td>
+<td style={{padding:"5px 0"}}><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,borderRadius:2,padding:"2px 5px",letterSpacing:.3,whiteSpace:"nowrap"}}>{t.status}</span></td>
+</tr>
+);
+})}
+</tbody>
+</table>
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_invoice"){
+const meta=a.result?.metadata||{};const invoice=meta.invoice||{};
+const summary=a.result?.output||"Invoice task complete";
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◫</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{invoice.dealName||meta.dealName||"Invoice Created"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}</div>
+</div>
+</div>
+{invoice.zohoInvoiceId&&<a href={`https://books.zoho.com/app#/invoices/${invoice.zohoInvoiceId}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+</div>
+</div>
+);
+}
+if(a.type==="ledger_vendor_bill"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerBill===key;
+const meta=a.result?.metadata||{};const bill=meta.bill||{};
+const lineItems=bill.lineItems||meta.lineItems||[];
+const summary=a.result?.output||"Vendor bill processed";
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.orange}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded?`1px solid ${B.orange}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◉</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}{lineItems.length>0?` · ${lineItems.length} line item${lineItems.length!==1?"s":""}`:""}</div>
+</div>
+</div>
+{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+{expanded&&lineItems.length>0&&(
+<div style={{padding:"10px 12px"}}>
+<table style={{width:"100%",borderCollapse:"collapse"}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>DESCRIPTION</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>UNIT COST</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+</tr></thead>
+<tbody>
+{lineItems.map((li,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.needsReview?.7:1}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
+{li.rawDescription||li.description}{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>${Number(li.unitCost||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,textAlign:"right",padding:"5px 0",fontWeight:600}}>${Number((li.quantity||0)*(li.unitCost||0)).toFixed(2)}</td>
+</tr>
+))}
+</tbody>
+</table>
 </div>
 )}
 </div>
@@ -12691,6 +12806,8 @@ const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
 const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
+const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
+const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
 const [sendingQuote,setSendingQuote]=useState(null);
 const endRef=useRef(null);
 const inputRef=useRef(null);
@@ -12776,6 +12893,8 @@ return;
 }
 if(action.type==="edgar_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedEdgarQuote(e=>e===key?null:key);return;}
 if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpandedBradOutreach(e=>e===key?null:key);return;}
+if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
+if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
 const sendEmailNow=async(action,key)=>{
 if(!action.to_email){toast("No email address — can't send","error");return;}
@@ -12897,8 +13016,8 @@ const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
 const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -13067,6 +13186,117 @@ return(
 );
 })}
 {skipped.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,paddingTop:4}}>Skipped: {[...new Set(skipped.map(s=>s.blockedBy))].join(", ")}</div>}
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_reconcile"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerReconcile===key;
+const meta=a.result?.metadata||{};const totals=meta.totals||{};
+const txns=meta.transactions||[];const dryMode=a.dryRun||meta.dryRun;
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.blue}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.blueBg,borderBottom:expanded?`1px solid ${B.blue}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◎</span>
+<div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,fontWeight:600}}>Reconcile — {totals.polled??0} polled</span>
+{dryMode&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,borderRadius:2,padding:"1px 5px",letterSpacing:.3}}>DRY RUN</span>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{totals.matchedStore??0} store · {totals.matchedInvoice??0} invoice · {totals.needsReview??0} need review{(totals.duplicates||0)>0?` · ${totals.duplicates} dup`:""}</div>
+</div>
+</div>
+{txns.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+{expanded&&txns.length>0&&(
+<div style={{padding:"10px 12px",overflowX:"auto"}}>
+<table style={{width:"100%",borderCollapse:"collapse",minWidth:480}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>DATE</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 6px",fontWeight:700}}>DESCRIPTION</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>AMOUNT</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 6px",fontWeight:700}}>MATCH</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>STATUS</th>
+</tr></thead>
+<tbody>
+{txns.map((t,ti)=>{
+const sc={MATCHED_STORE:B.green,MATCHED_INVOICE:B.teal,NEEDS_REVIEW:B.yellow,DUPLICATE:B.muted,REVERSED:B.red}[t.status]||B.muted;
+return(
+<tr key={ti} style={{borderBottom:`1px solid ${B.border}20`}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"5px 0",whiteSpace:"nowrap"}}>{t.date||"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"5px 6px",maxWidth:160,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.extractedName||t.description||"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,textAlign:"right",padding:"5px 0",whiteSpace:"nowrap",fontWeight:600}}>${Number(t.amount||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"5px 6px",maxWidth:130,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{t.match||"—"}</td>
+<td style={{padding:"5px 0"}}><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,borderRadius:2,padding:"2px 5px",letterSpacing:.3,whiteSpace:"nowrap"}}>{t.status}</span></td>
+</tr>
+);
+})}
+</tbody>
+</table>
+</div>
+)}
+</div>
+);
+}
+if(a.type==="ledger_invoice"){
+const meta=a.result?.metadata||{};const invoice=meta.invoice||{};
+const summary=a.result?.output||"Invoice task complete";
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.purple}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.purpleBg}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◫</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,fontWeight:600}}>{invoice.dealName||meta.dealName||"Invoice Created"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}</div>
+</div>
+</div>
+{invoice.zohoInvoiceId&&<a href={`https://books.zoho.com/app#/invoices/${invoice.zohoInvoiceId}`} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.purple}40`,color:B.purple,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+</div>
+</div>
+);
+}
+if(a.type==="ledger_vendor_bill"){
+const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerBill===key;
+const meta=a.result?.metadata||{};const bill=meta.bill||{};
+const lineItems=bill.lineItems||meta.lineItems||[];
+const summary=a.result?.output||"Vendor bill processed";
+return(
+<div key={ai} style={{background:B.white,border:`1px solid ${B.orange}50`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded?`1px solid ${B.orange}20`:"none"}}>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<span style={{fontSize:14}}>◉</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}{lineItems.length>0?` · ${lineItems.length} line item${lineItems.length!==1?"s":""}`:""}</div>
+</div>
+</div>
+{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+{expanded&&lineItems.length>0&&(
+<div style={{padding:"10px 12px"}}>
+<table style={{width:"100%",borderCollapse:"collapse"}}>
+<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>DESCRIPTION</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>UNIT COST</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+</tr></thead>
+<tbody>
+{lineItems.map((li,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.needsReview?.7:1}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
+{li.rawDescription||li.description}{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>${Number(li.unitCost||0).toFixed(2)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,textAlign:"right",padding:"5px 0",fontWeight:600}}>${Number((li.quantity||0)*(li.unitCost||0)).toFixed(2)}</td>
+</tr>
+))}
+</tbody>
+</table>
 </div>
 )}
 </div>
