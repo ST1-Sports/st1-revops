@@ -37,21 +37,25 @@ export default {
   async handler(task, input = {}) {
     const serverTask =
       input.task ||
-      (/reconcil/i.test(task)                          ? 'reconcile'  :
+      (/reconcil/i.test(task)                          ? 'reconcile'   :
        /\bvendor\b|\/bill\b|vendor.?bill/i.test(task)  ? 'vendor-bill' :
-       /invoice|closed.?won|deal.?won/i.test(task)     ? 'invoice'    :
-       /payment|overdue|reminder/i.test(task)          ? 'payments'   :
+       /invoice|closed.?won|deal.?won/i.test(task)     ? 'invoice'     :
+       /payment|overdue|reminder/i.test(task)          ? 'payments'    :
        'reconcile')
 
-    const isInvoice  = serverTask === 'invoice'
-    const isPayments = serverTask === 'payments'
-    const endpoint   = isInvoice  ? '/api/agents/ledger/invoice'
-                     : isPayments ? '/api/agents/ledger/payments'
-                     :              '/api/agents/ledger/reconcile'
-    const body       = isInvoice
+    const isInvoice    = serverTask === 'invoice'
+    const isPayments   = serverTask === 'payments'
+    const isVendorBill = serverTask === 'vendor-bill'
+    const endpoint     = isInvoice    ? '/api/agents/ledger/invoice'
+                       : isPayments   ? '/api/agents/ledger/payments'
+                       : isVendorBill ? '/api/agents/ledger/vendor-bill'
+                       :                '/api/agents/ledger/reconcile'
+    const body         = isInvoice
       ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
       : isPayments
       ? { dryRun: input.dryRun ?? true, lookAheadDays: input.lookAheadDays ?? 7, limit: input.limit ?? 200 }
+      : isVendorBill
+      ? { action: 'extract', pdfBase64: input.pdfBase64 || null, dryRun: input.dryRun ?? true }
       : { task: serverTask, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
 
     const r = await fetch(endpoint, {
@@ -63,7 +67,9 @@ export default {
 
     const d = await r.json()
     const summary =
-      isPayments && d.totals
+      isVendorBill
+        ? d.message || `Vendor bill: ${d.bill?.mappedCount ?? 0} mapped, ${d.bill?.reviewCount ?? 0} need review`
+        : isPayments && d.totals
         ? `Payments: ${d.totals.checked ?? 0} checked — ` +
           `${d.totals.updated ?? 0} updated, ` +
           `${d.totals.overdue ?? 0} overdue, ` +

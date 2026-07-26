@@ -348,13 +348,16 @@ async function fetchZohoInventory() {
 async function callLedger(input, baseUrl) {
   try {
     const task      = input.task
-    const endpoint  = task === 'invoice'  ? `${baseUrl}/api/agents/ledger/invoice`
-                    : task === 'payments' ? `${baseUrl}/api/agents/ledger/payments`
-                    :                      `${baseUrl}/api/agents/ledger/reconcile`
+    const endpoint  = task === 'invoice'     ? `${baseUrl}/api/agents/ledger/invoice`
+                    : task === 'payments'    ? `${baseUrl}/api/agents/ledger/payments`
+                    : task === 'vendor-bill' ? `${baseUrl}/api/agents/ledger/vendor-bill`
+                    :                         `${baseUrl}/api/agents/ledger/reconcile`
     const body = task === 'invoice'
       ? { action: 'draft', crmDealId: input.crmDealId, crmDealName: input.crmDealName, dryRun: input.dryRun ?? true }
       : task === 'payments'
       ? { dryRun: input.dryRun ?? true, lookAheadDays: input.lookAheadDays ?? 7, limit: input.limit ?? 200 }
+      : task === 'vendor-bill'
+      ? { action: 'extract', pdfBase64: input.pdfBase64 || null, dryRun: input.dryRun ?? true }
       : { task, dryRun: input.dryRun ?? true, limit: input.limit ?? 10 }
     const r = await fetchWithTimeout(
       endpoint,

@@ -1460,6 +1460,8 @@ const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
 const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
 const [invoiceCreated,setInvoiceCreated]=useState({});
+const [billCreated,setBillCreated]=useState({});
+const [billPdfStore,setBillPdfStore]=useState({});
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
@@ -2218,21 +2220,68 @@ return(
 );
 }
 if(a.type==="ledger_vendor_bill"){
-const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerBill===key;
-const meta=a.result?.metadata||{};const bill=meta.bill||{};
+const bkey=`${msgIdx}_${ai}`;
+const expanded=expandedLedgerBill===bkey;
+const meta=a.result?.metadata||{};
+const bill=meta.bill||{};
 const lineItems=bill.lineItems||meta.lineItems||[];
-const summary=a.result?.output||"Vendor bill processed";
+const created=billCreated[bkey];
+const hasPdf=Boolean(billPdfStore[bkey]);
+const createBill=async()=>{
+  const pdf=billPdfStore[bkey];
+  if(!pdf){toast("Upload a PDF first","error");return;}
+  setBillCreated(p=>({...p,[bkey+"_creating"]:true}));
+  try{
+    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
+    const d=await r.json();
+    if(d.ok){setBillCreated(p=>({...p,[bkey]:d}));toast(`Bill ${d.billNumber||d.zohoBillId} created`,"success");}
+    else toast(d.error||"Bill creation failed","error");
+  }catch(e){toast(e.message,"error");}
+  setBillCreated(p=>({...p,[bkey+"_creating"]:false}));
+};
+const onFileChange=async(e)=>{
+  const file=e.target.files?.[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const b64=ev.target.result.split(",")[1];
+    setBillPdfStore(p=>({...p,[bkey]:b64,[bkey+"_name"]:file.name}));
+    toast("PDF loaded — review extraction and click CREATE BILL","success");
+  };
+  reader.readAsDataURL(file);
+};
+const isDone=created?.ok&&created?.vendorBillId;
 return(
 <div key={ai} style={{background:B.white,border:`1px solid ${B.orange}50`,borderRadius:6,overflow:"hidden"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded?`1px solid ${B.orange}20`:"none"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded||lineItems.length>0?`1px solid ${B.orange}20`:"none"}}>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
 <span style={{fontSize:14}}>◉</span>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}{lineItems.length>0?` · ${lineItems.length} line item${lineItems.length!==1?"s":""}`:""}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</span>
+{meta.dryRun&&!isDone&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}20`,padding:"2px 5px",borderRadius:3,letterSpacing:.4}}>PREVIEW</span>}
+{isDone&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3,letterSpacing:.4}}>CREATED</span>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>
+{bill.vendorInvoiceNo?`Inv ${bill.vendorInvoiceNo}`:""}
+{bill.poNumber?` · PO: ${bill.poNumber}`:""}
+{bill.totalAmount?` · $${Number(bill.totalAmount).toFixed(2)}`:""}
+{lineItems.length>0?` · ${lineItems.length} item${lineItems.length!==1?"s":""}, ${bill.reviewCount||0} need review`:""}
 </div>
 </div>
-{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+<div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+{isDone&&created.reviewUrl&&<a href={created.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.orange}40`,color:B.orange,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+{!isDone&&(
+<>
+<label style={{background:"none",border:`1px solid ${hasPdf?B.green:B.border}`,color:hasPdf?B.green:B.muted,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>
+{hasPdf?"PDF ✓":"UPLOAD PDF"}
+<input type="file" accept="application/pdf" style={{display:"none"}} onChange={onFileChange}/>
+</label>
+{hasPdf&&<button onClick={createBill} disabled={!!billCreated[bkey+"_creating"]} style={{background:B.orange,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:billCreated[bkey+"_creating"]?.6:1}}>{billCreated[bkey+"_creating"]?"CREATING...":"◉ CREATE BILL"}</button>}
+</>
+)}
+{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
 </div>
 {expanded&&lineItems.length>0&&(
 <div style={{padding:"10px 12px"}}>
@@ -2242,16 +2291,22 @@ return(
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>UNIT COST</th>
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>COGS</th>
 </tr></thead>
 <tbody>
 {lineItems.map((li,i)=>(
 <tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.needsReview?.7:1}}>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
-{li.rawDescription||li.description}{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+{li.rawDescription||li.description}
+{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+{li.matchedItemName&&li.matchedItemName!==li.rawDescription&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:5}}>→ {li.matchedItemName}</span>}
 </td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>${Number(li.unitCost||0).toFixed(2)}</td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,textAlign:"right",padding:"5px 0",fontWeight:600}}>${Number((li.quantity||0)*(li.unitCost||0)).toFixed(2)}</td>
+<td style={{textAlign:"right",padding:"5px 0"}}>
+{li.cogsAccountId?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.teal,background:B.tealBg,padding:"2px 4px",borderRadius:3}}>MAPPED</span>:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}15`,padding:"2px 4px",borderRadius:3}}>UNMAP</span>}
+</td>
 </tr>
 ))}
 </tbody>
@@ -12944,6 +12999,8 @@ const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
 const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
 const [invoiceCreated,setInvoiceCreated]=useState({});
+const [billCreated,setBillCreated]=useState({});
+const [billPdfStore,setBillPdfStore]=useState({});
 const [sendingQuote,setSendingQuote]=useState(null);
 const endRef=useRef(null);
 const inputRef=useRef(null);
@@ -13463,21 +13520,68 @@ return(
 );
 }
 if(a.type==="ledger_vendor_bill"){
-const key=`${msgIdx}_${ai}`;const expanded=expandedLedgerBill===key;
-const meta=a.result?.metadata||{};const bill=meta.bill||{};
+const bkey=`${msgIdx}_${ai}`;
+const expanded=expandedLedgerBill===bkey;
+const meta=a.result?.metadata||{};
+const bill=meta.bill||{};
 const lineItems=bill.lineItems||meta.lineItems||[];
-const summary=a.result?.output||"Vendor bill processed";
+const created=billCreated[bkey];
+const hasPdf=Boolean(billPdfStore[bkey]);
+const createBill=async()=>{
+  const pdf=billPdfStore[bkey];
+  if(!pdf){toast("Upload a PDF first","error");return;}
+  setBillCreated(p=>({...p,[bkey+"_creating"]:true}));
+  try{
+    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
+    const d=await r.json();
+    if(d.ok){setBillCreated(p=>({...p,[bkey]:d}));toast(`Bill ${d.billNumber||d.zohoBillId} created`,"success");}
+    else toast(d.error||"Bill creation failed","error");
+  }catch(e){toast(e.message,"error");}
+  setBillCreated(p=>({...p,[bkey+"_creating"]:false}));
+};
+const onFileChange=async(e)=>{
+  const file=e.target.files?.[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const b64=ev.target.result.split(",")[1];
+    setBillPdfStore(p=>({...p,[bkey]:b64,[bkey+"_name"]:file.name}));
+    toast("PDF loaded — review extraction and click CREATE BILL","success");
+  };
+  reader.readAsDataURL(file);
+};
+const isDone=created?.ok&&created?.vendorBillId;
 return(
 <div key={ai} style={{background:B.white,border:`1px solid ${B.orange}50`,borderRadius:6,overflow:"hidden"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded?`1px solid ${B.orange}20`:"none"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.orangeBg,borderBottom:expanded||lineItems.length>0?`1px solid ${B.orange}20`:"none"}}>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
 <span style={{fontSize:14}}>◉</span>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{summary}{lineItems.length>0?` · ${lineItems.length} line item${lineItems.length!==1?"s":""}`:""}</div>
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:600}}>{bill.supplierName||meta.supplierName||"Vendor Bill"}</span>
+{meta.dryRun&&!isDone&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}20`,padding:"2px 5px",borderRadius:3,letterSpacing:.4}}>PREVIEW</span>}
+{isDone&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3,letterSpacing:.4}}>CREATED</span>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>
+{bill.vendorInvoiceNo?`Inv ${bill.vendorInvoiceNo}`:""}
+{bill.poNumber?` · PO: ${bill.poNumber}`:""}
+{bill.totalAmount?` · $${Number(bill.totalAmount).toFixed(2)}`:""}
+{lineItems.length>0?` · ${lineItems.length} item${lineItems.length!==1?"s":""}, ${bill.reviewCount||0} need review`:""}
 </div>
 </div>
-{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
+<div style={{display:"flex",gap:5,alignItems:"center",flexShrink:0}}>
+{isDone&&created.reviewUrl&&<a href={created.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.orange}40`,color:B.orange,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,textDecoration:"none"}}>VIEW →</a>}
+{!isDone&&(
+<>
+<label style={{background:"none",border:`1px solid ${hasPdf?B.green:B.border}`,color:hasPdf?B.green:B.muted,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>
+{hasPdf?"PDF ✓":"UPLOAD PDF"}
+<input type="file" accept="application/pdf" style={{display:"none"}} onChange={onFileChange}/>
+</label>
+{hasPdf&&<button onClick={createBill} disabled={!!billCreated[bkey+"_creating"]} style={{background:B.orange,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:billCreated[bkey+"_creating"]?.6:1}}>{billCreated[bkey+"_creating"]?"CREATING...":"◉ CREATE BILL"}</button>}
+</>
+)}
+{lineItems.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
+</div>
 </div>
 {expanded&&lineItems.length>0&&(
 <div style={{padding:"10px 12px"}}>
@@ -13487,16 +13591,22 @@ return(
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>UNIT COST</th>
 <th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>TOTAL</th>
+<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>COGS</th>
 </tr></thead>
 <tbody>
 {lineItems.map((li,i)=>(
 <tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.needsReview?.7:1}}>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
-{li.rawDescription||li.description}{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+{li.rawDescription||li.description}
+{li.needsReview&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,marginLeft:5}}>REVIEW</span>}
+{li.matchedItemName&&li.matchedItemName!==li.rawDescription&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginLeft:5}}>→ {li.matchedItemName}</span>}
 </td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.quantity}</td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>${Number(li.unitCost||0).toFixed(2)}</td>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,textAlign:"right",padding:"5px 0",fontWeight:600}}>${Number((li.quantity||0)*(li.unitCost||0)).toFixed(2)}</td>
+<td style={{textAlign:"right",padding:"5px 0"}}>
+{li.cogsAccountId?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.teal,background:B.tealBg,padding:"2px 4px",borderRadius:3}}>MAPPED</span>:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:`${B.yellow}15`,padding:"2px 4px",borderRadius:3}}>UNMAP</span>}
+</td>
 </tr>
 ))}
 </tbody>
