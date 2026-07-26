@@ -623,7 +623,6 @@ return()=>window.removeEventListener("keydown",handler);
 },[]);
 const NAV = useMemo(()=>[
 {id:"_s_sales"},
-{id:"alerts",       icon:"◎", label:"Alerts",         badge:(s.alerts||[]).filter(a=>!a.sent).length},
 {id:"briefing",    icon:"⌂", label:"Home",            badge:urgentCount(s)},
 {id:"analytics",   icon:"▣", label:"Analytics"},
 {id:"crm",           icon:"◈", label:"CRM"},
@@ -649,7 +648,7 @@ const NAV = useMemo(()=>[
 {id:"settings",      icon:"⚙", label:"Settings"},
 {id:"integrations",  icon:"⚡", label:"Integrations"},
 ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
-],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
+],[s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 usePrefetchPanels();
 if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 const navLabel = (id) => {
@@ -837,7 +836,6 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="marketing"   && <ModMarketing/>}
 {mod==="compete"     && <ModCompete/>}
 {mod==="agent"       && <ModAgent/>}
-{mod==="alerts"      && <ModAlerts/>}
 {mod==="activity"    && <ModActivity/>}
 {mod==="settings"    && <ModSettings/>}
 {mod==="admin"       && <ModAdmin/>}
@@ -14270,63 +14268,6 @@ return(
 {!openDeals.length&&!topContacts.length&&!openRfps.length&&(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,lineHeight:1.6}}>Add deals and contacts to see live context here.</div>
 )}
-</div>
-</div>
-);
-}
-function ModAlerts() {
-const {s,dispatch,toast}=useApp();
-const [channel,setChannel]=useState((s.integrations||{}).slackChannel||"C0AQ7CMB01X");
-const [sending,setSending]=useState(false);
-const pending=(s.alerts||[]).filter(a=>!a.sent);
-const sendToSlack=async(msg)=>{
-const ch=channel||"C0AQ7CMB01X";
-try{
-const r=await fetch("/api/slack-message",{
-method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({channel:ch,text:msg})
-});
-const d=await r.json();
-return d.ok===true;
-}catch{return false;}
-};
-const send=async(id)=>{
-const alert=(s.alerts||[]).find(a=>a.id===id);
-if(!alert)return;
-setSending(true);
-const msg=`<@U09F64R5QBA> 🔥 *ST1 RevOps Alert*\n${alert.msg}${alert.action?`\n→ ${alert.action}`:""}`;
-const ok=await sendToSlack(msg);
-dispatch("DISMISS_ALERT",id);
-dispatch("LOG",{msg:`Alert ${ok?"sent to":"queued for"} Slack ${channel}`});
-toast(ok?`✓ Sent to ${channel}`:`Queued (check Slack config)`,"success");
-setSending(false);
-};
-const sendAll=async()=>{
-setSending(true);
-for(const a of pending){await send(a.id);}
-setSending(false);
-};
-return (
-<div style={{padding:"22px 26px"}}>
-<PH title="ALERT QUEUE" sub="High-intent signals queued for Slack"/>
-<div style={{display:"flex",alignItems:"center",gap:9,marginBottom:16,flexWrap:"wrap"}}>
-<Lbl>Slack:</Lbl>
-<input value={channel} onChange={e=>setChannel(e.target.value)} style={{background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 10px",fontSize:12,width:180}}/>
-{pending.length>0&&<OBtn sm onClick={sendAll} disabled={sending}>{sending?"SENDING…":`SEND ALL (${pending.length})`}</OBtn>}
-{sending&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Sending to Slack…</span>}
-</div>
-{(s.alerts||[]).length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"60px 0"}}>No alerts yet — signals from deals, invoices, and prospecting appear here</div>}
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{(s.alerts||[]).map(a=>(
-<div key={a.id} className="card" style={{padding:"10px 13px",borderLeft:`3px solid ${a.sent?B.border:B.orange}`,opacity:a.sent?.5:1,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-<div style={{flex:1}}>
-<Lbl c={a.sent?B.muted:B.orange} s={{marginBottom:3}}>{a.sent?"✓ SENT":"🔥 PENDING"}</Lbl>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:2}}>{a.msg}</div>
-{a.action&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange}}>→ {a.action}</div>}
-</div>
-{!a.sent&&<OBtn sm onClick={()=>send(a.id)} disabled={sending} style={{marginLeft:11,flexShrink:0}}>{sending?"…":"SEND →"}</OBtn>}
-</div>
-))}
 </div>
 </div>
 );
