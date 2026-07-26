@@ -641,6 +641,9 @@ const NAV = useMemo(()=>[
 {id:"compete",     icon:"⊗", label:"Competitors"},
 {id:"price-lists", icon:"$", label:"Price Lists"},
 {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
+{id:"agent",       icon:"⊛", label:"AI Agents"},
+{id:"_s_finance"},
+{id:"finance",     icon:"⬡", label:"Finance"},
 {id:"_s_system"},
 {id:"activity",      icon:"≡", label:"Activity"},
 {id:"settings",      icon:"⚙", label:"Settings"},
@@ -840,6 +843,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="admin"       && <ModAdmin/>}
 {/* ── Inline tools (formerly separate pages) ── */}
 {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
+{mod==="finance"     && <ModFinance/>}
 {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
 {mod==="price-lists" &&<ModPriceLists/>}
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
@@ -4274,6 +4278,8 @@ const [draft,setDraft]=useState("");
 const [dealNoteText,setDealNoteText]=useState("");
 const [syncing,setSyncing]=useState(false);
 const [pendingQuoteCount,setPendingQuoteCount]=useState(0);
+const [edgarResult,setEdgarResult]=useState(null);
+const [edgarLoading,setEdgarLoading]=useState(false);
 useEffect(()=>{
 const secret=s.company?.inboundEmailSecret||"";
 const url="/api/inbound-email"+(secret?`?secret=${encodeURIComponent(secret)}`:"");
@@ -4344,6 +4350,19 @@ dispatch("UPDATE_DEAL",{id:sel_d.id,touchHistory:[...(sel_d.touchHistory||[]),{i
 dispatch("LOG",{msg:`${cu?.name} logged touch on ${sel_d.name}: ${note}`});
 crmAddNote("Deals",sel_d.zohoId,note);
 setNote("");toast("Touch logged","success");
+};
+const runEdgar=async()=>{
+if(!sel_d) return;
+setEdgarLoading(true);setEdgarResult(null);
+try{
+const r=await fetch('/api/agents/edgar',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:`Build a quote for: ${sel_d.name} at ${sel_d.school||"school"}, ${sel_d.state||""}. Deal value ~${fmt$(sel_d.value)}.${sel_d.notes?' Notes: '+sel_d.notes.slice(0,200):''}`,
+input:{dealName:sel_d.name,school:sel_d.school,state:sel_d.state,value:sel_d.value}})});
+const d=await r.json();
+setEdgarResult(d.metadata?.quote||null);
+if(d.output) toast(d.output.slice(0,120),'info');
+}catch(e){toast('Edgar error: '+e.message,'error');}
+setEdgarLoading(false);
 };
 const draftEmail=async()=>{
 if(!sel_d) return;setDrafting(true);setDraft("");
@@ -4454,6 +4473,29 @@ style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.or
 <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={7} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical"}}/>
 <GBtn onClick={()=>navigator.clipboard?.writeText(draft)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn>
 </div>}
+<button onClick={runEdgar} disabled={edgarLoading} style={{width:"100%",marginTop:8,padding:"8px 0",background:edgarLoading?B.surface:B.teal,color:edgarLoading?B.muted:B.white,border:`1px solid ${B.teal}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+{edgarLoading?"QUOTING…":"▤ EDGAR QUOTE"}
+</button>
+{edgarResult&&(
+<div style={{marginTop:8,background:B.tealBg,border:`1px solid ${B.teal}30`,borderRadius:6,padding:10}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:.5,marginBottom:6}}>EDGAR QUOTE</div>
+{edgarResult.summary&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:7,lineHeight:1.5}}>{edgarResult.summary}</div>}
+{(edgarResult.lineItems||[]).length>0&&(
+<div style={{maxHeight:160,overflowY:"auto",marginBottom:6}}>
+{(edgarResult.lineItems||[]).filter(li=>!li.notFound).map((li,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"3px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:10}}>
+<span style={{flex:1,color:B.text}}>{li.name}</span>
+<span style={{color:B.muted,marginRight:8}}>×{li.qty||1}</span>
+<span style={{color:B.orange,fontWeight:600}}>{fmt$(li.quotedPrice||0)}</span>
+</div>
+))}
+</div>
+)}
+{(edgarResult.warnings||[]).map((w,i)=>(
+<div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,padding:"2px 0"}}>⚠ {w}</div>
+))}
+</div>
+)}
 </div>
 <div className="card" style={{padding:13}}>
 <Lbl s={{marginBottom:7}}>Touch History ({sel_d.touchHistory?.length||0})</Lbl>
@@ -5360,6 +5402,10 @@ const [timelineContact,setTimelineContact] = useState(null);
 const [bulkEnrolling,setBulkEnrolling] = useState(false);
 const [noteContactId,setNoteContactId] = useState(null);
 const [noteText,setNoteText] = useState("");
+const [bradTask,setBradTask]=useState("Draft first-touch outreach for these contacts");
+const [bradLimit,setBradLimit]=useState(10);
+const [bradLoading,setBradLoading]=useState(false);
+const [bradResult,setBradResult]=useState(null);
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
@@ -5763,7 +5809,7 @@ await pushToZohoLeads(toAdd);
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+const PVIEWS=[["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`],["brad","✉ BRAD OUTREACH"]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="PROSPECTING ENGINE" sub="Scrape contacts, import lists, manage your contact database"
@@ -6574,6 +6620,76 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 ))}
 </div>
 </div>
+</div>
+)}
+{view==="brad"&&(
+<div style={{maxWidth:820}}>
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:18,marginBottom:14}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>BRAD OUTREACH — AI-DRAFTED FIRST-TOUCH EMAILS</div>
+<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,alignItems:"end",marginBottom:10}}>
+<div>
+<Lbl s={{marginBottom:4}}>What should Brad focus on?</Lbl>
+<input value={bradTask} onChange={e=>setBradTask(e.target.value)} placeholder="Draft first-touch outreach for these contacts" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
+</div>
+<div>
+<Lbl s={{marginBottom:4}}>Contact limit</Lbl>
+<select value={bradLimit} onChange={e=>setBradLimit(Number(e.target.value))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
+{[5,10,15,20,25].map(n=><option key={n} value={n}>{n} contacts</option>)}
+</select>
+</div>
+</div>
+<div style={{display:"flex",gap:8,alignItems:"center"}}>
+<OBtn onClick={async()=>{
+setBradLoading(true);setBradResult(null);
+try{
+const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:bradTask,input:{limit:bradLimit,dryRun:true}})});
+const d=await r.json();
+setBradResult(d.metadata||d);
+}catch(e){toast('Brad error: '+e.message,'error');}
+setBradLoading(false);
+}} disabled={bradLoading}>{bradLoading?"BRAD IS THINKING…":"✉ RUN BRAD"}</OBtn>
+{bradResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{bradResult.drafts?.length||0} drafts ready · {bradResult.skipped?.length||0} skipped</span>}
+</div>
+</div>
+{bradResult&&(
+<div style={{display:"flex",flexDirection:"column",gap:10}}>
+{bradResult.skipped?.length>0&&(
+<div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:12}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>SKIPPED ({bradResult.skipped.length})</div>
+<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+{bradResult.skipped.map((sk,i)=>(
+<span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,background:B.border,borderRadius:3,padding:"2px 6px"}}>{sk.contact?.firstName||sk.blockedBy} · {sk.blockedBy}</span>
+))}
+</div>
+</div>
+)}
+{(bradResult.drafts||[]).map((draft,i)=>(
+<div key={i} style={{background:B.white,border:`1px solid ${B.green}40`,borderRadius:8,overflow:"hidden"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",background:B.greenBg}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green,fontWeight:600}}>{draft.contactName}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{draft.contactEmail} · {draft.contactSchool}</div>
+</div>
+<div style={{display:"flex",gap:6}}>
+<GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`)} style={{fontSize:9,padding:"4px 9px"}}>COPY</GBtn>
+<a href={`mailto:${draft.contactEmail}?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`} style={{background:B.green,color:B.white,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,textDecoration:"none"}}>✉ OPEN IN MAIL</a>
+</div>
+</div>
+<div style={{padding:"12px 14px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,fontWeight:500,marginBottom:6}}>{draft.subject}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{draft.body}</div>
+{draft.notes&&<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>💡 {draft.notes}</div>}
+</div>
+</div>
+))}
+{(!bradResult.drafts||bradResult.drafts.length===0)&&(
+<div style={{textAlign:"center",padding:"32px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
+No drafts returned — Brad may have found no eligible contacts, or all were skipped by guardrails (DNC, 14-day retouch, daily cap).
+</div>
+)}
+</div>
+)}
 </div>
 )}
 {/* BULK ACTION BAR */}
@@ -12984,6 +13100,163 @@ return(
 </div>
 );
 }
+function ModFinance() {
+const {toast}=useApp();
+const [invoices,setInvoices]=useState(null);
+const [invLoading,setInvLoading]=useState(true);
+const [reconcileResult,setReconcileResult]=useState(null);
+const [reconciling,setReconciling]=useState(false);
+const [billResult,setBillResult]=useState(null);
+const [billLoading,setBillLoading]=useState(false);
+const [billPreview,setBillPreview]=useState(null);
+const fileRef=useRef();
+useEffect(()=>{
+fetch('/api/agents/ledger/payments',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({dryRun:true,lookAheadDays:7,limit:200})})
+.then(r=>r.json()).then(d=>setInvoices(d)).catch(()=>{}).finally(()=>setInvLoading(false));
+},[]);
+const runReconcile=async()=>{
+setReconciling(true);setReconcileResult(null);
+try{
+const r=await fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:'reconcile',dryRun:true,limit:50})});
+const d=await r.json();
+setReconcileResult(d);
+}catch(e){toast('Reconcile error: '+e.message,'error');}
+setReconciling(false);
+};
+const handleBillFile=async(file)=>{
+if(!file) return;
+setBillLoading(true);setBillPreview(null);setBillResult(null);
+const reader=new FileReader();
+reader.onload=async(ev)=>{
+const pdfBase64=ev.target.result.split(',')[1];
+try{
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({action:'extract',pdfBase64,pdfName:file.name,dryRun:true})});
+const d=await r.json();
+setBillPreview(d);
+}catch(e){toast('Bill upload error: '+e.message,'error');}
+setBillLoading(false);
+};
+reader.readAsDataURL(file);
+};
+const fmtD2=(d)=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'-';
+const overdue=invoices?.overdue||[];
+const upcoming=invoices?.upcoming||[];
+const totals=invoices?.totals||{};
+return(
+<div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
+<PH title="FINANCE" sub="Invoices · bank reconciliation · vendor bills"/>
+{/* KPI row */}
+<div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:11,marginBottom:20}}>
+<KCard l="Checked" v={invLoading?"…":totals.checked??0} c={B.blue}/>
+<KCard l="Overdue" v={invLoading?"…":overdue.length} c={B.red}/>
+<KCard l="Due Soon" v={invLoading?"…":upcoming.length} c={B.yellow}/>
+<KCard l="Paid Today" v={invLoading?"…":totals.paid??0} c={B.green}/>
+</div>
+{/* Quick actions */}
+<div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
+<OBtn onClick={runReconcile} disabled={reconciling}>{reconciling?"RECONCILING…":"⟳ RECONCILE DEPOSITS"}</OBtn>
+<input ref={fileRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={e=>{handleBillFile(e.target.files?.[0]);e.target.value="";}}/>
+<button onClick={()=>fileRef.current?.click()} style={{padding:"8px 16px",background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+{billLoading?"EXTRACTING…":"⬆ UPLOAD VENDOR BILL"}
+</button>
+<button onClick={async()=>{
+try{
+const r=await fetch('/api/agents/ledger/payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:false,lookAheadDays:7,limit:200})});
+const d=await r.json();setInvoices(d);toast(`Payment check done — ${d.totals?.updated||0} updated`,'success');
+}catch(e){toast('Payment check error: '+e.message,'error');}
+}} style={{padding:"8px 16px",background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
+◎ RUN PAYMENT CHECK
+</button>
+</div>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+{/* Overdue invoices */}
+<div className="card" style={{padding:16}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+<Lbl>OVERDUE INVOICES ({overdue.length})</Lbl>
+</div>
+{invLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Loading…</div>}
+{!invLoading&&overdue.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No overdue invoices 🎉</div>}
+{overdue.map((inv,i)=>(
+<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.crmDealName||'—'}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Due {fmtD2(inv.dueDate)}</div>
+</div>
+<div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.red}}>{fmt$(inv.amountTotal)}</div>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.white,background:B.red,padding:"2px 6px",borderRadius:3,letterSpacing:.3}}>{Math.abs(inv.daysFromNow||0)}d OVERDUE</span>
+</div>
+</div>
+))}
+</div>
+{/* Upcoming invoices */}
+<div className="card" style={{padding:16}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+<Lbl>DUE SOON ({upcoming.length})</Lbl>
+</div>
+{invLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Loading…</div>}
+{!invLoading&&upcoming.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Nothing due in the next 7 days</div>}
+{upcoming.map((inv,i)=>(
+<div key={i} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{inv.crmDealName||'—'}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Due {fmtD2(inv.dueDate)}</div>
+</div>
+<div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.yellow}}>{fmt$(inv.amountTotal)}</div>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,background:B.yellowBg,padding:"2px 6px",borderRadius:3,border:`1px solid ${B.yellow}40`,letterSpacing:.3}}>{inv.daysFromNow||0}d</span>
+</div>
+</div>
+))}
+</div>
+</div>
+{/* Reconcile result */}
+{reconcileResult&&(
+<div className="card" style={{padding:16,marginTop:16}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:.5,marginBottom:10}}>
+RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLeft:8}}>DRY RUN</span>}
+</div>
+<div style={{display:"flex",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+{[["Polled",reconcileResult.totals?.polled,B.blue],["Store Match",reconcileResult.totals?.matchedStore,B.green],["Invoice Match",reconcileResult.totals?.matchedInvoice,B.teal],["Needs Review",reconcileResult.totals?.needsReview,B.red]].map(([l,v,c])=>(
+<div key={l} style={{textAlign:"center",padding:"8px 14px",background:B.surface,borderRadius:6,borderTop:`2px solid ${c}`}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c}}>{v??0}</div>
+<Lbl>{l}</Lbl>
+</div>
+))}
+</div>
+{(reconcileResult.transactions||[]).filter(t=>t.status==='NEEDS_REVIEW').map((t,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+<span style={{color:B.text}}>{t.description||t.extractedName||'Unknown'}</span>
+<span style={{color:B.red,fontWeight:500}}>{fmt$(t.amount)}</span>
+</div>
+))}
+</div>
+)}
+{/* Vendor bill preview */}
+{billPreview&&(
+<div className="card" style={{padding:16,marginTop:16}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5,marginBottom:10}}>VENDOR BILL PREVIEW — DRY RUN</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:8}}>{billPreview.bill?.supplierName||'Unknown Vendor'} · {billPreview.bill?.vendorInvoiceNo||''}</div>
+<div style={{display:"flex",gap:10,marginBottom:10}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:3}}>{billPreview.bill?.mappedCount||0} MAPPED</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"2px 7px",borderRadius:3}}>{billPreview.bill?.reviewCount||0} NEED REVIEW</span>
+<span style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.orange,marginLeft:"auto"}}>{fmt$(billPreview.bill?.totalAmount||0)}</span>
+</div>
+{(billPreview.bill?.lineItems||[]).map((li,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"5px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+<span style={{flex:1,color:li.needsReview?B.red:B.text}}>{li.rawDescription}</span>
+{li.matchedItemName&&<span style={{color:B.muted,fontSize:10,margin:"0 8px"}}>→ {li.matchedItemName}</span>}
+<span style={{color:B.orange,fontWeight:500,flexShrink:0}}>{fmt$(li.lineTotal||li.unitCost*li.quantity||0)}</span>
+</div>
+))}
+</div>
+)}
+</div>
+);
+}
 function ModAgent() {
 const {s,dispatch,toast,cu,setMod}=useApp();
 const history=s.agentHistory||[];
@@ -13218,8 +13491,8 @@ const STARTERS=[
 "How do I counter BSN Sports on pricing?",
 "Build a 3-touch sequence for Baseball coaches in Iowa",
 "Analyze my open RFPs — what should I prioritize?",
-"What product should I push hardest this season?",
-"Who hasn't heard from us in 30+ days?",
+"Reconcile bank deposits — what needs manual review?",
+"Check overdue invoices and flag anything past due",
 ];
 return (
 <div style={{display:"flex",height:"calc(100vh - 46px)"}}>
