@@ -35,6 +35,28 @@ const ST1_VOICE =
 // ── Contact loading ───────────────────────────────────────────────────────────
 
 async function loadContacts(input = {}) {
+  // Client can pass contacts directly (from Redux store) — no DB required
+  if (Array.isArray(input.contacts) && input.contacts.length) {
+    return input.contacts
+      .filter(c => c.email && !c.optedOut && c.status !== 'unsubscribed')
+      .slice(0, 30)
+      .map(c => ({
+        id:          c.id || `local_${c.email}`,
+        firstName:   c.firstName || (c.fullName || '').split(' ')[0] || '',
+        lastName:    c.lastName  || (c.fullName || '').split(' ').slice(1).join(' ') || '',
+        email:       c.email,
+        phone:       c.phone || null,
+        title:       c.title || '',
+        companyName: typeof c.school === 'string' ? c.school : (c.school?.name || c.companyName || ''),
+        score:       Number(c.score || 0),
+        segment:     c.segment || '',
+        notes:       c.notes || '',
+        status:      'active',
+        activities:  [],
+      }))
+  }
+
+  // DB fallback (when contacts aren't passed from client)
   const where = { NOT: { status: 'unsubscribed' } }
   if (input.contactId) where.id = input.contactId
   if (input.minScore != null) where.score = { gte: Number(input.minScore) }

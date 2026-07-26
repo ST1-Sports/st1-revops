@@ -5423,6 +5423,12 @@ const [bradTask,setBradTask]=useState("");
 const [bradLoading,setBradLoading]=useState(false);
 const [bradResult,setBradResult]=useState(null);
 const [bradSending,setBradSending]=useState(null);
+const [oneOffName,setOneOffName]=useState("");
+const [oneOffEmail,setOneOffEmail]=useState("");
+const [oneOffContext,setOneOffContext]=useState("");
+const [oneOffDraft,setOneOffDraft]=useState(null);
+const [oneOffLoading,setOneOffLoading]=useState(false);
+const [oneOffSending,setOneOffSending]=useState(false);
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
@@ -5434,12 +5440,45 @@ const BRAD_AUTO_TASK="Look at my top-scored contacts and identify who I should r
 const runBrad=async(task)=>{
 setBradLoading(true);setBradResult(null);
 try{
+const localContacts=(s.contacts||[]).filter(c=>c.email&&!c.optedOut).slice(0,50);
 const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true}})});
+body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true,contacts:localContacts}})});
 const d=await r.json();
 setBradResult(d.metadata||d);
 }catch(e){toast('Brad error: '+e.message,'error');}
 setBradLoading(false);
+};
+const runOneOff=async()=>{
+if(!oneOffEmail.trim()){toast("Email is required","error");return;}
+setOneOffLoading(true);setOneOffDraft(null);
+try{
+const name=oneOffName.trim()||oneOffEmail.split("@")[0];
+const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({
+task:`Draft a warm, personalized first-touch email to ${name}${oneOffContext?` at ${oneOffContext}`:""}. Use the ST1 voice — direct, athlete-aware, under 120 words.${oneOffContext?" Context: "+oneOffContext:""}`,
+input:{limit:1,dryRun:true,contacts:[{id:`oneoff-${Date.now()}`,firstName:name.split(" ")[0],lastName:name.split(" ").slice(1).join(" "),email:oneOffEmail.trim(),companyName:oneOffContext,school:oneOffContext,score:0,segment:"",notes:oneOffContext||"",status:"active"}]}
+})});
+const d=await r.json();
+const draft=(d.metadata?.drafts||d.drafts||[])[0];
+if(draft)setOneOffDraft(draft);
+else toast(d.output||"No draft returned — Brad may have blocked this contact","error");
+}catch(e){toast("Error: "+e.message,"error");}
+setOneOffLoading(false);
+};
+const sendOneOff=async()=>{
+if(!oneOffDraft)return;
+setOneOffSending(true);
+try{
+const r=await fetch('/api/agents/brad-send',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({contactEmail:oneOffDraft.contactEmail,contactName:oneOffDraft.contactName,subject:oneOffDraft.subject,body:oneOffDraft.body})});
+const d=await r.json();
+if(d.sent){
+toast(`✉ Sent to ${oneOffDraft.contactName||oneOffDraft.contactEmail}`,'success');
+dispatch("LOG",{msg:`Brad one-off sent: ${oneOffDraft.contactName} — "${oneOffDraft.subject}"`});
+setOneOffDraft(null);setOneOffName("");setOneOffEmail("");setOneOffContext("");
+}else toast(d.error||"Send failed","error");
+}catch(e){toast("Send error: "+e.message,"error");}
+setOneOffSending(false);
 };
 const sendDraftEmail=async(draft,key)=>{
 if(!draft.contactEmail){toast("No email address on file","error");return;}
@@ -6733,6 +6772,38 @@ return(
 <div style={{marginTop:16,display:"flex",gap:8,alignItems:"center"}}>
 <input value={bradTask} onChange={e=>setBradTask(e.target.value)} placeholder="Give Brad specific instructions — or leave blank for today's recommendations…" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 <OBtn sm onClick={()=>runBrad(bradTask||undefined)} disabled={bradLoading}>RUN</OBtn>
+</div>
+{/* One-off compose */}
+<div style={{marginTop:24,borderTop:`1px solid ${B.border}`,paddingTop:20}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>SEND TO ANYONE</div>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+<input value={oneOffName} onChange={e=>setOneOffName(e.target.value)} placeholder="Name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<input value={oneOffEmail} onChange={e=>setOneOffEmail(e.target.value)} placeholder="Email *" type="email" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+</div>
+<div style={{display:"flex",gap:8,marginBottom:oneOffDraft?12:0}}>
+<input value={oneOffContext} onChange={e=>setOneOffContext(e.target.value)} placeholder="School / sport / context (optional)" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<OBtn sm onClick={runOneOff} disabled={oneOffLoading||!oneOffEmail.trim()}>{oneOffLoading?"DRAFTING…":"DRAFT →"}</OBtn>
+</div>
+{oneOffDraft&&(
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{padding:"10px 14px",background:B.surface,borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{oneOffDraft.contactName}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{oneOffDraft.contactEmail}</div>
+</div>
+<div style={{display:"flex",gap:6}}>
+<GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${oneOffDraft.subject}\n\n${oneOffDraft.body}`).then(()=>toast("Copied","info"))} style={{fontSize:9,padding:"4px 9px"}}>📋 COPY</GBtn>
+<button onClick={sendOneOff} disabled={oneOffSending} style={{background:oneOffSending?B.muted:B.green,border:"none",color:B.white,borderRadius:4,padding:"4px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:oneOffSending?"default":"pointer",opacity:oneOffSending?.7:1}}>{oneOffSending?"SENDING…":"✉ SEND"}</button>
+<GBtn onClick={()=>setOneOffDraft(null)} style={{fontSize:9,padding:"4px 9px"}}>DISCARD</GBtn>
+</div>
+</div>
+<div style={{padding:"12px 14px"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>SUBJECT</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text,marginBottom:10}}>{oneOffDraft.subject}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap"}}>{oneOffDraft.body}</div>
+</div>
+</div>
+)}
 </div>
 </div>
 )}
