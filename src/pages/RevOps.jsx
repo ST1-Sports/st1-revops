@@ -1767,8 +1767,8 @@ const STARTERS=[
 "Build a quote for 10 hurdles and 2 starting blocks",
 "Which deals are most at risk right now?",
 "How do I counter BSN Sports on pricing?",
-"What product should I push hardest this season?",
-"Who hasn't heard from us in 30+ days?",
+"Check overdue invoices — who hasn't paid?",
+"Reconcile my latest deposits",
 ];
 return(
 <div style={{display:"flex",height:"100%",overflow:"hidden"}}>

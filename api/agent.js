@@ -15,6 +15,7 @@
  */
 
 import { getZohoToken } from './_lib/zoho-token.js';
+import { recall, remember, memoryBlock, logInteraction } from './_lib/memory.js';
 
 export const config = { maxDuration: 120 };
 
@@ -271,6 +272,19 @@ const TOOLS = [
     },
   },
   {
+    name: "remember_this",
+    description: "Save an important fact to org memory so it persists across conversations. Use for: customer preferences, pricing anchors, contact context, deal outcomes, competitive intelligence, or anything Matt explicitly shares. Auto-executes silently.",
+    input_schema: {
+      type: "object",
+      properties: {
+        key:    { type: "string", description: "Short factual label (e.g. 'budget', 'preferred-contact', 'last-outcome', 'pricing-note')" },
+        value:  { type: "string", description: "The fact to remember" },
+        entity: { type: "string", description: "What this fact is about — 'org' for general, or namespaced: 'customer:Lincoln High', 'contact:Coach Smith', 'competitor:BSN Sports'" },
+      },
+      required: ["key", "value", "entity"],
+    },
+  },
+  {
     name: "call_ledger",
     description: "Execute the Ledger agent for finance and accounting tasks. Four modes: (1) invoice — create a Zoho Books invoice when a CRM deal is marked Closed Won; (2) reconcile — match uncategorized Stripe/Shopify deposits; (3) vendor-bill — parse a vendor invoice file; (4) payments — poll open invoices for status changes and send Slack reminders for overdue/upcoming.",
     input_schema: {
@@ -412,7 +426,7 @@ async function callBrad(input, baseUrl) {
 }
 
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho, inventory = []) {
+async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
@@ -434,10 +448,13 @@ function buildSystemPrompt(localCtx, zoho, inventory = []) {
     ? `\n=== LIVE ZOHO CRM (${new Date().toLocaleTimeString()}) ===\nDeals: ${zoho.deals.map(d => `${d.Deal_Name} (${d.Account_Name}) — ${d.Stage} — $${d.Amount||"?"}`).join(" | ")}\nContacts: ${zoho.contacts.slice(0,6).map(c => `${c.First_Name||""} ${c.Last_Name} / ${c.Title||""} @ ${c.Account_Name||""}`).join(" | ")}\n`
     : "\n(Zoho CRM not connected — using local data)\n";
 
+  let orgMemory = '';
+  try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
+
   return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist with full visibility into the pipeline, contacts, and business context.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-
+${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
 ${zohoSection}
 === LOCAL PIPELINE ===
 ${open.length} open deals · $${Math.round(pipeline).toLocaleString()} total · ${overdue.length} overdue · ${hot.length} hot 🔥
@@ -572,6 +589,14 @@ USE propose_add_to_nurture when:
 USE propose_log_note when:
 - User says "log", "note", "record" something on a deal — or as part of the email chain
 
+USE remember_this (auto-executes silently) when:
+- Matt tells you something factual about a customer, school, or contact that should persist
+- A customer states their budget, timeline, contact preference, or sport priority
+- A deal closes (won or lost) — record the outcome and reason
+- Matt shares any preference, constraint, or context he expects you to recall next time
+- You learn something new about a competitor beyond what propose_store_competitor_intel captures
+- Always entity-namespace correctly: 'customer:Name', 'contact:Name', 'competitor:Name', or 'org' for general
+
 USE propose_store_competitor_intel (auto-executes silently) when:
 - ANYTHING about a competitor is mentioned, researched, or discussed — always save it
 
@@ -589,6 +614,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
+14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
 
 IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
@@ -705,7 +731,7 @@ async function _handler(req, res) {
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system  = buildSystemPrompt(localContext, zoho, inventory);
+  const system  = await buildSystemPrompt(localContext, zoho, inventory);
   const baseUrl = `https://${req.headers.host}`;
 
   // Convert history to Anthropic format
@@ -758,6 +784,18 @@ async function _handler(req, res) {
         agentResults.push({ name: "call_ledger", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
+      if (t.name === "remember_this") {
+        try {
+          await remember({
+            scope: 'org',
+            entity: t.input.entity || 'org',
+            key: t.input.key,
+            value: t.input.value,
+            agentId: 'revops-agent',
+          });
+        } catch { /* non-fatal */ }
+        return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ ok: true, remembered: true }) };
+      }
       return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ proposed: true, ...t.input }) };
     }));
     messages.push({ role: "user", content: toolResults });
@@ -807,12 +845,21 @@ async function _handler(req, res) {
     propose_create_campaign_sequence: "create_campaign_sequence",
   };
   const proposedActions = allToolCalls
-    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger")
+    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger" && t.name !== "remember_this")
     .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
 
   const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
   const suggestions = parsed?.suggestions || [];
   const message     = parsed?.message || finalText;
+
+  // Fire-and-forget: log this interaction to agent memory
+  logInteraction({
+    agentId: 'revops-agent',
+    action: 'chat',
+    input: { query: rawMessages[rawMessages.length - 1]?.content?.slice(0, 200) },
+    output: { actionCount: actions.length, message: message.slice(0, 200) },
+    dryRun: false,
+  }).catch(() => {});
 
   return res.json({ message, actions, suggestions, liveZoho: zoho.ok, searchUsed });
 }
