@@ -6873,7 +6873,10 @@ style={{background:B.green,color:B.white,border:"none",fontSize:9,fontFamily:"'L
 :bradResult?`${bradResult.drafts?.length||0} recommendation${(bradResult.drafts?.length||0)!==1?"s":""} · ${bradResult.skipped?.length||0} skipped`
 :"Brad reads your CRM and recommends who to contact today."}
 </div>
+<div style={{display:"flex",gap:6}}>
+<GBtn onClick={async()=>{setBradRepliesLoading(true);try{await fetch('/api/cron/brad-inbox',{method:'POST'});await loadBradReplies();}catch(e){toast("Inbox check failed: "+e.message,"error");}setBradRepliesLoading(false);}} style={{fontSize:9,padding:"4px 10px",opacity:bradRepliesLoading?.6:1,pointerEvents:bradRepliesLoading?"none":"auto"}}>{bradRepliesLoading?"CHECKING…":"📬 CHECK INBOX"}</GBtn>
 <OBtn sm onClick={()=>runBrad(bradTask||undefined)} disabled={bradLoading}>{bradLoading?"THINKING…":"↺ REFRESH"}</OBtn>
+</div>
 </div>
 {/* Loading */}
 {bradLoading&&(

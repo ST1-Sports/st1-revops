@@ -40,6 +40,7 @@
     "api/pricelists/market.js":                    { "maxDuration": 30 },
     "api/agents/edgar.js":                         { "maxDuration": 60 },
     "api/agents/brad.js":                          { "maxDuration": 60 },
+    "api/cron/brad-inbox.js":                      { "maxDuration": 60 },
     "api/agents/ledger/reconcile.js":              { "maxDuration": 60 },
     "api/agents/ledger/invoice.js":               { "maxDuration": 60 },
     "api/agents/ledger/payments.js":             { "maxDuration": 60 },
@@ -53,7 +54,8 @@
     { "path": "/api/cron/send-batches",       "schedule": "*/15 * * * *" },
     { "path": "/api/cron/reddit-daily",       "schedule": "0 14 * * 1-5" },
     { "path": "/api/cron/ledger-reconcile",   "schedule": "0 8 * * 1-5" },
-    { "path": "/api/cron/ledger-payments",    "schedule": "0 14 * * 1-5" }
+    { "path": "/api/cron/ledger-payments",    "schedule": "0 14 * * 1-5" },
+    { "path": "/api/cron/brad-inbox",         "schedule": "*/10 * * * *" }
   ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
