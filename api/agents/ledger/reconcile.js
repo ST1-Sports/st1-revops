@@ -17,7 +17,7 @@
 
 import { setCors }                              from '../../_lib/cors.js'
 import { prisma }                              from '../../_lib/prisma.js'
-import { ORG, BOOKS, booksGet, booksPost,
+import { booksGet, booksPost,
          isPrismaTableMissing }                from '../../_lib/zoho-books.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
