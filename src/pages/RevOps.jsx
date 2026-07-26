@@ -6016,7 +6016,7 @@ return(
 {inZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:`${B.purple}15`,borderRadius:3,padding:"2px 5px"}}>IN ZOHO</span>}
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.companyName,c.email].filter(Boolean).join(" · ")}</div>
-{c.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:3}}>{c.notes}</div>}
+{(c.sport||c.state||c.city)&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:3}}>{c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}{(c.city||c.state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")}</span>}</div>}
 </div>
 <div style={{display:"flex",gap:6,flexShrink:0}}>
 <button onClick={()=>{setOneOffName(name);setOneOffEmail(c.email);setOneOffContext(c.companyName||"");setView("brad");setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),200);}}

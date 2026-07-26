@@ -6,7 +6,8 @@
  * Deduplicates by email — existing records are skipped (not overwritten).
  *
  * Body: { contacts: [{ email, firstName, lastName, title, school,
- *                      phone, linkedIn, score, segment, notes, source }] }
+ *                      phone, linkedIn, sport, state, city,
+ *                      score, segment, notes, source }] }
  * Returns: { added, skipped, total }
  */
 import { setCors } from '../_lib/cors.js'
@@ -30,9 +31,11 @@ export default async function handler(req, res) {
   const data = contacts
     .filter(c => c.email && typeof c.email === 'string' && c.email.includes('@'))
     .map(c => {
-      const score = Number.isFinite(Number(c.score)) ? Math.min(Math.max(Number(c.score), 0), 1000) : 0
+      const score   = Number.isFinite(Number(c.score)) ? Math.min(Math.max(Number(c.score), 0), 1000) : 0
       const segment = c.segment || (c.priority === 'high' ? 'warm' : 'cold')
-      const noteParts = [c.sport, c.state && c.city ? `${c.city}, ${c.state}` : (c.state || c.city), c.notes].filter(Boolean)
+      const sport   = typeof c.sport === 'string' ? c.sport.trim() : (c.sport?.name || '')
+      const state   = (c.state  || '').trim()
+      const city    = (c.city   || '').trim()
       return {
         email:       c.email.trim().toLowerCase().slice(0, 255),
         firstName:   ((c.firstName || '').trim() || null)?.slice(0, 100),
@@ -41,10 +44,13 @@ export default async function handler(req, res) {
         companyName: ((c.school || c.companyName || '').trim() || null)?.slice(0, 200),
         phone:       ((c.phone     || '').trim() || null)?.slice(0, 50),
         linkedinUrl: ((c.linkedIn  || c.linkedinUrl || '').trim() || null)?.slice(0, 500),
-        source:      (c.source     || 'csv-import').slice(0, 50),
+        sport:       (sport || null)?.slice(0, 100),
+        state:       (state || null)?.slice(0, 100),
+        city:        (city  || null)?.slice(0, 100),
+        source:      (c.source || 'csv-import').slice(0, 50),
         score,
         segment,
-        notes:       (noteParts.join(' · ') || null)?.slice(0, 500),
+        notes:       ((c.notes || '').trim() || null)?.slice(0, 500),
         status:      'new',
       }
     })

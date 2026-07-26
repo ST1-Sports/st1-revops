@@ -232,6 +232,9 @@ model SalesContact {
   companyName  String?
   phone        String?
   linkedinUrl  String?
+  sport        String?
+  state        String?
+  city         String?
   source       String          @default("manual")
   enriched     Boolean         @default(false)
   score        Int             @default(0)
@@ -243,6 +246,10 @@ model SalesContact {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   activities   SalesActivity[]
+
+  @@index([state])
+  @@index([sport])
+  @@index([segment])
 }
 
 model SalesDiscoverRun {

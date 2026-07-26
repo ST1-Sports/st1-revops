@@ -5,8 +5,7 @@
  * Used to show "N matching contacts" on each area card.
  *
  * Body: { sports: string[], states: string[], roles: string[] }
- * Match logic: any contact whose notes contains a sport OR state name,
- * or whose title contains a role keyword.
+ * Match logic: dedicated sport/state fields (exact + partial); title for roles.
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
@@ -21,14 +20,15 @@ export default async function handler(req, res) {
   const orClauses = []
 
   for (const sport of sports) {
-    if (sport) orClauses.push({ notes: { contains: sport, mode: 'insensitive' } })
+    const s = typeof sport === 'string' ? sport.trim() : sport?.name || String(sport)
+    if (s) orClauses.push({ sport: { contains: s, mode: 'insensitive' } })
   }
   for (const state of states) {
-    const s = typeof state === 'string' ? state : state?.name || String(state)
-    if (s) orClauses.push({ notes: { contains: s, mode: 'insensitive' } })
+    const s = typeof state === 'string' ? state.trim() : state?.name || String(state)
+    if (s) orClauses.push({ state: { contains: s, mode: 'insensitive' } })
   }
   for (const role of roles) {
-    const r = typeof role === 'string' ? role : role?.name || String(role)
+    const r = typeof role === 'string' ? role.trim() : role?.name || String(role)
     if (r) orClauses.push({ title: { contains: r, mode: 'insensitive' } })
   }
 
