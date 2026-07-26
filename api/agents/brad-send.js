@@ -29,12 +29,14 @@ export default async function handler(req, res) {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action:    'send',
-        to_email:  contactEmail,
-        to_name:   contactName,
+        action:     'send',
+        to_email:   contactEmail,
+        to_name:    contactName,
         subject,
         body,
-        from_name: 'Brad @ ST1 Sports',
+        from_name:  'Brad @ ST1 Sports',
+        from_email: 'brad@shopst1sports.com',
+        repEnvKey:  'BRAD',
       }),
     })
     const gmailData = await gmailRes.json()
