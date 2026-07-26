@@ -5429,10 +5429,42 @@ const [oneOffContext,setOneOffContext]=useState("");
 const [oneOffDraft,setOneOffDraft]=useState(null);
 const [oneOffLoading,setOneOffLoading]=useState(false);
 const [oneOffSending,setOneOffSending]=useState(false);
+const [dbContacts,setDbContacts]=useState([]);
+const [dbTotal,setDbTotal]=useState(0);
+const [dbPage,setDbPage]=useState(1);
+const [dbSearch,setDbSearch]=useState("");
+const [dbLoading,setDbLoading]=useState(false);
+const [dbPromoting,setDbPromoting]=useState(null);
+const dbSearchRef=React.useRef("");
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
 bgTasks.appendLog(SCRAPE_TASK_ID,msg,type);
+};
+const loadDbContacts=async(page=1,search=dbSearchRef.current)=>{
+setDbLoading(true);
+try{
+const params=new URLSearchParams({page,limit:50});
+if(search)params.set("search",search);
+const r=await fetch(`/api/contacts?${params}`);
+const d=await r.json();
+setDbContacts(d.contacts||[]);
+setDbTotal(d.total||0);
+setDbPage(page);
+}catch(e){toast("Could not load contacts: "+e.message,"error");}
+setDbLoading(false);
+};
+const promoteToZoho=async(contactId)=>{
+setDbPromoting(contactId);
+try{
+const r=await fetch('/api/contacts/promote',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contactId})});
+const d=await r.json();
+if(d.ok){
+toast("Promoted to Zoho CRM","success");
+setDbContacts(cs=>cs.map(c=>c.id===contactId?{...c,pushedToZoho:true,zohoCrmId:d.zohoId}:c));
+}else toast(d.error||"Promote failed","error");
+}catch(e){toast("Promote error: "+e.message,"error");}
+setDbPromoting(null);
 };
 const tog=(arr,v)=>arr.includes(v)?arr.filter(x=>x!==v):[...arr,v];
 const hotLeads=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,5),[s.contacts]);
@@ -5440,9 +5472,8 @@ const BRAD_AUTO_TASK="Look at my top-scored contacts and identify who I should r
 const runBrad=async(task)=>{
 setBradLoading(true);setBradResult(null);
 try{
-const localContacts=(s.contacts||[]).filter(c=>c.email&&!c.optedOut).slice(0,50);
 const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true,contacts:localContacts}})});
+body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true}})});
 const d=await r.json();
 setBradResult(d.metadata||d);
 }catch(e){toast('Brad error: '+e.message,'error');}
@@ -5497,6 +5528,7 @@ if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId
 setBradSending(null);
 };
 useEffect(()=>{runBrad();},[]);
+useEffect(()=>{if(view==="contacts"&&dbContacts.length===0)loadDbContacts(1,"");},[view]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
 abortRef.current=false;setPhase("finding");
@@ -5871,33 +5903,91 @@ toast(`Import error: ${err.message}`,"error");
 setImportPhase("setup"); setImportProgress(0); setImportStatus("");
 }
 };
-const commitListImport=async(pushZoho=false)=>{
-const selected=importRows.filter(c=>importSel.has(c.id));
-const existingByEmail=Object.fromEntries((s.contacts||[]).filter(c=>c.email).map(c=>[c.email.toLowerCase(),c.id]));
-const toAdd=selected.filter(c=>!c.email||!existingByEmail[c.email.toLowerCase()]);
-const dupes=selected.length-toAdd.length;
-dispatch("ADD_CONTACTS",toAdd);
-const listName=(importListName||"Imported List").trim();
-const allListIds=[
-...toAdd.map(c=>c.id),
-...selected.filter(c=>c.email&&existingByEmail[c.email.toLowerCase()]).map(c=>existingByEmail[c.email.toLowerCase()]),
-];
-const newList={id:mkId(),name:listName,contactIds:allListIds,createdAt:Date.now(),source:"import"};
-dispatch("ADD_CONTACT_LIST",newList);
-toast(`Saved list "${listName}" with ${allListIds.length} contacts${dupes>0?` · ${dupes} already in DB (included in list)`:""}${pushZoho?" · pushing to Zoho…":""}  `,"success");
-setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
-setView("lists");
-if(pushZoho&&toAdd.length>0){
-await pushToZohoLeads(toAdd);
+const commitListImport=async()=>{
+const selected=importRows.filter(c=>importSel.has(c.id)&&c.email);
+if(selected.length===0){toast("No contacts with emails selected","error");return;}
+const BATCH=500;
+let totalAdded=0,totalSkipped=0;
+setImportPhase("parsing");
+for(let i=0;i<selected.length;i+=BATCH){
+const batch=selected.slice(i,i+BATCH);
+setImportProgress(Math.round((i/selected.length)*100));
+setImportStatus(`Uploading ${Math.min(i+BATCH,selected.length)} of ${selected.length}…`);
+try{
+const r=await fetch('/api/contacts/import',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({contacts:batch.map(c=>({...c,score:c.priority==='high'?80:c.priority==='medium'?40:20}))})});
+const d=await r.json();
+totalAdded+=d.added||0;totalSkipped+=d.skipped||0;
+}catch(e){toast(`Upload error at batch ${Math.floor(i/BATCH)+1}: ${e.message}`,"error");}
 }
+setImportProgress(100);setImportStatus("Done!");
+const listName=(importListName||"Imported List").trim();
+const newList={id:mkId(),name:listName,contactIds:selected.map(c=>c.id),createdAt:Date.now(),source:"import"};
+dispatch("ADD_CONTACT_LIST",newList);
+toast(`"${listName}" uploaded · ${totalAdded} new · ${totalSkipped} already existed`,"success");
+setTimeout(()=>{
+setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
+setDbTotal(t=>totalAdded>0?t+totalAdded:t);
+setView("contacts");loadDbContacts(1,"");
+},800);
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["brad","✉ BRAD"],["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import",`IMPORT & SYNC (${(s.contacts||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","FOCUS AREAS"],["results",`RESULTS (${contacts.length})`],["import","IMPORT & SYNC"],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
 action={<div style={{display:"flex",gap:6}}>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
+{view==="contacts"&&(
+<div>
+{/* Search + stats bar */}
+<div style={{display:"flex",gap:8,alignItems:"center",marginBottom:14,flexWrap:"wrap"}}>
+<input value={dbSearch} onChange={e=>{setDbSearch(e.target.value);dbSearchRef.current=e.target.value;}}
+onKeyDown={e=>e.key==="Enter"&&loadDbContacts(1,dbSearch)}
+placeholder="Search by name, email, school…"
+style={{flex:1,minWidth:180,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
+<OBtn sm onClick={()=>loadDbContacts(1,dbSearch)} disabled={dbLoading}>{dbLoading?"LOADING…":"SEARCH"}</OBtn>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,whiteSpace:"nowrap"}}>{dbTotal.toLocaleString()} total contacts</div>
+</div>
+{/* Contact rows */}
+<div style={{display:"flex",flexDirection:"column",gap:6}}>
+{dbLoading&&<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Loading…</div>}
+{!dbLoading&&dbContacts.length===0&&<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>{dbTotal===0?"No contacts imported yet — use IMPORT & SYNC to upload your list.":"No contacts matched your search."}</div>}
+{dbContacts.map(c=>{
+const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email;
+const inZoho=c.pushedToZoho;
+const promoting=dbPromoting===c.id;
+return(
+<div key={c.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${inZoho?B.purple:B.border}`}}>
+<div style={{flex:1,minWidth:0}}>
+<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:2}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{name}</span>
+{c.score>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,borderRadius:3,padding:"2px 5px"}}>{c.score}pts</span>}
+{inZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:`${B.purple}15`,borderRadius:3,padding:"2px 5px"}}>IN ZOHO</span>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.companyName,c.email].filter(Boolean).join(" · ")}</div>
+{c.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:3}}>{c.notes}</div>}
+</div>
+<div style={{display:"flex",gap:6,flexShrink:0}}>
+<button onClick={()=>{setOneOffName(name);setOneOffEmail(c.email);setOneOffContext(c.companyName||"");setView("brad");setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),200);}}
+style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ DRAFT</button>
+{!inZoho&&<button onClick={()=>promoteToZoho(c.id)} disabled={promoting}
+style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,border:"none",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,padding:"3px 10px",borderRadius:3,cursor:promoting?"default":"pointer",letterSpacing:.3}}>{promoting?"…":"↑ ZOHO"}</button>}
+</div>
+</div>
+);
+})}
+</div>
+{/* Pagination */}
+{dbTotal>50&&(
+<div style={{display:"flex",justifyContent:"center",alignItems:"center",gap:10,marginTop:16}}>
+<GBtn onClick={()=>loadDbContacts(dbPage-1,dbSearch)} style={{fontSize:10,padding:"5px 10px",opacity:dbPage<=1?.4:1,pointerEvents:dbPage<=1?"none":"auto"}}>← PREV</GBtn>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Page {dbPage} of {Math.ceil(dbTotal/50)}</span>
+<GBtn onClick={()=>loadDbContacts(dbPage+1,dbSearch)} style={{fontSize:10,padding:"5px 10px",opacity:dbPage>=Math.ceil(dbTotal/50)?.4:1,pointerEvents:dbPage>=Math.ceil(dbTotal/50)?"none":"auto"}}>NEXT →</GBtn>
+</div>
+)}
+</div>
+)}
 {view==="areas"&&(
 <div>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
@@ -6094,8 +6184,7 @@ disabled={importPhase==="parsing"}/>
 </div>
 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-<OBtn sm onClick={()=>commitListImport(false)} disabled={importSel.size===0}>⊕ SAVE LIST ({importSel.size})</OBtn>
-<OBtn sm onClick={()=>commitListImport(true)} disabled={importSel.size===0||zohoPushing} style={{background:B.blue,borderColor:B.blue}}>⊕ SAVE + PUSH ZOHO</OBtn>
+<OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ UPLOAD TO DB ({importSel.size})</OBtn>
 </div>
 </div>
 <div style={{overflowX:"auto"}}>

@@ -33,6 +33,46 @@
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 
+// Classify a reply and auto-promote to Zoho if genuine intent is detected.
+// Runs fire-and-forget so the inbound webhook returns fast.
+async function classifyAndPromote(fromEmail, subject, bodyText, host) {
+  try {
+    const contact = await prisma.salesContact.findUnique({ where: { email: fromEmail } }).catch(() => null)
+    if (!contact || contact.pushedToZoho) return
+
+    const apiKey = process.env.ANTHROPIC_KEY
+    if (!apiKey) return
+
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model:      'claude-haiku-4-5-20251001',
+        max_tokens: 10,
+        system:     'Classify this email reply. Reply with only the word INTENT if the person shows genuine interest, asks a question, or wants to learn more. Reply with only PASS for out-of-office, unsubscribes, bounces, or rejections.',
+        messages:   [{ role: 'user', content: `Subject: ${subject}\n\n${(bodyText || '').slice(0, 600)}` }],
+      }),
+    })
+    const data = await r.json()
+    const verdict = (data.content?.[0]?.text || '').trim().toUpperCase()
+    if (verdict !== 'INTENT') return
+
+    // Positive intent — promote contact to Zoho CRM
+    await fetch(`https://${host}/api/contacts/promote`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ contactId: contact.id }),
+    })
+    console.log(`[inbound-email] promoted ${fromEmail} to Zoho (reply intent)`)
+  } catch (err) {
+    console.error('[inbound-email] classifyAndPromote error:', err.message)
+  }
+}
+
 export const config = {
   api: { bodyParser: { sizeLimit: "4mb" } },
 };
@@ -137,6 +177,9 @@ export default async function handler(req, res) {
           bodyText:   text,
         },
       });
+
+      // Non-blocking: classify reply intent, auto-promote to Zoho if genuine
+      classifyAndPromote(from.email, subject, text, req.headers.host)
 
       return res.json({ ok: true });
     } catch (err) {
