@@ -5380,7 +5380,20 @@ const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest
 const [view,setView]=useState("brad");
 const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
 const [editing,setEditing]=useState(null);
+const [areaCounts,setAreaCounts]=useState({});
 useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
+const loadAreaCounts=async(areaList)=>{
+const counts={};
+await Promise.all((areaList||areas).map(async area=>{
+try{
+const r=await fetch('/api/contacts/area-count',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({sports:area.sports||[],states:area.states||[],roles:area.roles||[]})});
+const d=await r.json();
+counts[area.id]=d.count||0;
+}catch{counts[area.id]=0;}
+}));
+setAreaCounts(counts);
+};
 const [activeArea,setActiveArea]=useState(null);
 const abortRef=useRef(false);
 const importFileRef=useRef();
@@ -5565,6 +5578,7 @@ setBradSending(null);
 };
 useEffect(()=>{runBrad();loadBradReplies();},[]);
 useEffect(()=>{if(view==="contacts"&&dbContacts.length===0)loadDbContacts(1,"");},[view]);
+useEffect(()=>{if(view==="areas")loadAreaCounts();},[view]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
 abortRef.current=false;setPhase("finding");
@@ -6091,8 +6105,18 @@ States included: {(area.states||[]).join(", ")||"none"}
 ):(
 <div>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
+<div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>{area.name}</div>
+{areaCounts[area.id]!=null&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:areaCounts[area.id]>0?B.green:B.muted,marginTop:2}}>
+{areaCounts[area.id]>0?`${areaCounts[area.id].toLocaleString()} matching contacts in DB`:"No matching contacts in DB yet"}
+</div>
+)}
+</div>
+<div style={{display:"flex",gap:5}}>
 <GBtn onClick={()=>setEditing(area.id)} style={{fontSize:9,padding:"3px 8px"}}>EDIT</GBtn>
+<button onClick={()=>setAreas(as=>as.filter(a=>a.id!==area.id))} style={{background:"none",border:`1px solid ${B.border}`,color:B.red,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>✕</button>
+</div>
 </div>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:7}}>
 {(area.regions||[]).map(r=>{const rs=typeof r==="string"?r:r?.name||String(r);const c=US_REGIONS[rs]?.color||B.orange;return<span key={rs} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:c,background:c+"18",padding:"2px 7px",borderRadius:3}}>{rs}</span>;})}
