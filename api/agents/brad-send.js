@@ -18,6 +18,17 @@ export const config = { api: { bodyParser: { sizeLimit: '50kb' } } }
 
 const INSTANTLY_BASE = 'https://api.instantly.ai/api/v1'
 
+async function resolveCampaign(apiKey, override) {
+  if (override) return override
+  // No env var set — fetch the first active campaign automatically
+  const r = await fetch(`${INSTANTLY_BASE}/campaign/list?api_key=${encodeURIComponent(apiKey)}&limit=10&skip=0`)
+  const data = await r.json().catch(() => ({}))
+  const campaigns = data.data || []
+  const active = campaigns.find(c => c.status === 1 || c.status === 'active') || campaigns[0]
+  if (!active) throw new Error('No campaigns found in Instantly — create one first')
+  return active.id
+}
+
 async function addLead({ apiKey, campaignId, contactEmail, contactName, contactSchool, body }) {
   const parts     = (contactName || '').trim().split(/\s+/)
   const firstName = parts[0] || ''
@@ -52,8 +63,7 @@ export default async function handler(req, res) {
   const apiKey     = process.env.INSTANTLY_API_KEY
   const campaignId = process.env.INSTANTLY_CAMPAIGN_ID
 
-  if (!apiKey)     return res.status(500).json({ error: 'INSTANTLY_API_KEY not configured' })
-  if (!campaignId) return res.status(500).json({ error: 'INSTANTLY_CAMPAIGN_ID not configured' })
+  if (!apiKey) return res.status(500).json({ error: 'INSTANTLY_API_KEY not configured' })
 
   const { contactEmail, contactName, contactSchool, subject, body, contactId } = req.body || {}
 
@@ -61,9 +71,11 @@ export default async function handler(req, res) {
   if (!body)         return res.status(400).json({ error: 'body required' })
 
   try {
+    const resolvedCampaignId = await resolveCampaign(apiKey, req.body.campaignId || campaignId)
+
     await addLead({
       apiKey,
-      campaignId: req.body.campaignId || campaignId,
+      campaignId: resolvedCampaignId,
       contactEmail,
       contactName,
       contactSchool,
