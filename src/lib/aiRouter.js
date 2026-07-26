@@ -16,6 +16,7 @@ const VALID_SLUGS = new Set([
   'copy', 'quote', 'finance', 'email', 'social', 'image',
   'research', 'web-search', 'competitor-intel', 'code-execution',
   'video-clips', 'database', 'workflow', 'general',
+  'invoice', 'reconcile', 'vendor-bill',
 ])
 
 const TEXT_CAPABILITIES = new Set([
@@ -26,7 +27,11 @@ const CLASSIFIER_SYSTEM =
   'You are a task classifier. Given a user task description, return ' +
   'ONLY a single capability slug from this list: copy, quote, finance, email, ' +
   'social, image, research, web-search, competitor-intel, code-execution, ' +
-  'video-clips, database, workflow, general. Return nothing else.'
+  'video-clips, database, workflow, general, invoice, reconcile, vendor-bill. ' +
+  'Return nothing else. ' +
+  'Use "invoice" for creating invoices from won deals or CRM deal-won events. ' +
+  'Use "reconcile" for matching bank deposits, /reconcile commands, or deposit review. ' +
+  'Use "vendor-bill" for processing vendor invoices, /bill commands, or mapping supplier bills.'
 
 async function classify(task) {
   const headers = { 'Content-Type': 'application/json' }

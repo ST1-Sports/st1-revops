@@ -270,6 +270,25 @@ const TOOLS = [
       required: ["task"],
     },
   },
+  {
+    name: "call_ledger",
+    description: "Execute the Ledger agent for finance and accounting tasks. Three modes: (1) invoice — create a Zoho Books invoice when a CRM deal is marked Closed Won; (2) reconcile — match uncategorized Stripe/Shopify deposits to team stores or open invoices, flagging anything ambiguous; (3) vendor-bill — parse and map a vendor invoice file to a Zoho Books bill. Use for deal-won invoice creation, /reconcile commands, /bill commands, or any deposit-matching request.",
+    input_schema: {
+      type: "object",
+      properties: {
+        task: {
+          type: "string",
+          enum: ["invoice", "reconcile", "vendor-bill"],
+          description: '"invoice" — create Zoho Books invoice for a won CRM deal. "reconcile" — match uncategorized bank deposits. "vendor-bill" — process a vendor invoice file.',
+        },
+        crmDealId:   { type: "string",  description: "CRM deal ID (required for invoice task)" },
+        crmDealName: { type: "string",  description: "Deal or account name (invoice task)" },
+        dryRun:      { type: "boolean", description: "Preview without writing — defaults true for reconcile, safe to omit" },
+        limit:       { type: "number",  description: "Max bank transactions to inspect (reconcile only, default 10)" },
+      },
+      required: ["task"],
+    },
+  },
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -325,6 +344,30 @@ async function fetchZohoInventory() {
 }
 
 // ── AGENT CALLERS (server-to-server within the same deployment) ───────────────
+async function callLedger(input, baseUrl) {
+  try {
+    const r = await fetchWithTimeout(
+      `${baseUrl}/api/agents/ledger/reconcile`,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          task:        input.task,
+          dryRun:      input.dryRun      ?? true,
+          limit:       input.limit       ?? 10,
+          crmDealId:   input.crmDealId   || undefined,
+          crmDealName: input.crmDealName || undefined,
+        }),
+      },
+      20_000
+    );
+    if (!r.ok) return { error: `Ledger returned HTTP ${r.status}` };
+    return r.json();
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 async function callEdgar(input, baseUrl) {
   try {
     const r = await fetchWithTimeout(
@@ -494,6 +537,12 @@ USE call_edgar (preferred for all quoting) when:
 - Always prefer call_edgar over propose_create_quote — Edgar reads live dealer costs and enforces GM floor + MAP
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
 
+USE call_ledger when:
+- A CRM deal is marked "Closed Won" and an invoice needs to be created → task:"invoice", pass crmDealId and crmDealName
+- User says "/reconcile", "reconcile my deposits", "match deposits", "what's unmatched", "check bank transactions" → task:"reconcile"
+- User says "/bill", "process a vendor bill", "map this vendor invoice", "vendor invoice" → task:"vendor-bill"
+- Finance or accounting tasks that are not about quoting customers or prospecting leads
+
 USE call_brad (preferred for prospecting outreach) when:
 - User asks to "prospect", "find leads", "reach out to coaches/ADs", "run outreach", or "email [segment]" without naming a specific person
 - Brad automatically applies DNC checks, 14-day re-touch barriers, and daily caps
@@ -531,6 +580,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
+13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill action)
 
 IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
@@ -575,7 +625,8 @@ After using tools, respond with a JSON object:
 
 Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"
 call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically.
-call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.`;
+call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.
+call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill" depending on the task.`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -694,6 +745,11 @@ async function _handler(req, res) {
         agentResults.push({ name: "call_brad", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
+      if (t.name === "call_ledger") {
+        const output = await callLedger(t.input, baseUrl);
+        agentResults.push({ name: "call_ledger", input: t.input, output });
+        return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
+      }
       return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ proposed: true, ...t.input }) };
     }));
     messages.push({ role: "user", content: toolResults });
@@ -720,6 +776,12 @@ async function _handler(req, res) {
       if (!drafts.length) return null;
       return { type: "brad_outreach", drafts, skipped: r.output?.metadata?.skipped || [], task: r.input.task };
     }
+    if (r.name === "call_ledger") {
+      if (r.output?.error) return null;
+      // action type mirrors the task: ledger_invoice | ledger_reconcile | ledger_vendor_bill
+      const actionType = `ledger_${(r.input.task || 'reconcile').replace('-', '_')}`;
+      return { type: actionType, task: r.input.task, result: r.output, dryRun: r.input.dryRun ?? true };
+    }
     return null;
   }).filter(Boolean);
 
@@ -737,7 +799,7 @@ async function _handler(req, res) {
     propose_create_campaign_sequence: "create_campaign_sequence",
   };
   const proposedActions = allToolCalls
-    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad")
+    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger")
     .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
 
   const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
