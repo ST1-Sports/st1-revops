@@ -1469,6 +1469,7 @@ const [billPdfStore,setBillPdfStore]=useState({});
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
+const [sendingInstantly,setSendingInstantly]=useState(null);
 const [sendingQuote,setSendingQuote]=useState(null);
 const [launchingCampaign,setLaunchingCampaign]=useState(null);
 const [campaignSendTime,setCampaignSendTime]=useState({});
@@ -1649,6 +1650,18 @@ setTimeout(()=>send(`Email sent ✓ to ${action.to_name||action.to_email} — "$
 }else{toast(d.error||"Send failed","error");}
 }catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingEmail(null);
+};
+const sendBradToInstantly=async(draft,key)=>{
+if(!draft.contactEmail){toast("No email — can't send to Instantly","error");return;}
+setSendingInstantly(key);
+try{
+const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,contactSchool:draft.contactSchool,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+const d=await r.json();
+if(d.ok){toast(`✓ ${draft.contactName||draft.contactEmail} queued in Instantly`,"success");dispatch("LOG",{msg:`Brad → Instantly: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});}
+else toast(d.error||"Instantly error","error");
+}catch(e){toast(`Instantly error: ${e.message}`,"error");}
+setSendingInstantly(null);
 };
 const send=async(overrideMsg)=>{
 const msg=(overrideMsg||input).trim();
@@ -2072,7 +2085,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.subject}</div>
 </div>
 <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}}>
-{d.contactEmail&&<button onClick={()=>sendEmailNow(emailAction,dKey)} disabled={sendingEmail===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===dKey?.6:1}}>{sendingEmail===dKey?"SENDING...":"✉ SEND"}</button>}
+{d.contactEmail&&<button onClick={()=>sendBradToInstantly(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"QUEUING...":"⚡ INSTANTLY"}</button>}
 <button onClick={()=>copyEmail(emailAction)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋</button>
 <button onClick={()=>setExpandedEmail(e=>e===dKey?null:dKey)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{dExpanded?"▲":"▼"}</button>
 </div>
@@ -13267,6 +13280,7 @@ const [expandedEmail,setExpandedEmail]=useState(null);
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
+const [sendingInstantly,setSendingInstantly]=useState(null);
 const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
@@ -13394,6 +13408,18 @@ toast(d.error||"Send failed","error");
 }
 }catch(e){toast(`Send error: ${e.message}`,"error");}
 setSendingEmail(null);
+};
+const sendBradToInstantly=async(draft,key)=>{
+if(!draft.contactEmail){toast("No email — can't send to Instantly","error");return;}
+setSendingInstantly(key);
+try{
+const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,contactSchool:draft.contactSchool,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+const d=await r.json();
+if(d.ok){toast(`✓ ${draft.contactName||draft.contactEmail} queued in Instantly`,"success");dispatch("LOG",{msg:`Brad → Instantly: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});}
+else toast(d.error||"Instantly error","error");
+}catch(e){toast(`Instantly error: ${e.message}`,"error");}
+setSendingInstantly(null);
 };
 const createQuoteNow=async(action,key)=>{
 setSendingQuote(key);
@@ -13641,7 +13667,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.subject}</div>
 </div>
 <div style={{display:"flex",gap:5,flexShrink:0,marginLeft:8}}>
-{d.contactEmail&&<button onClick={()=>sendEmailNow(emailAction,dKey)} disabled={sendingEmail===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingEmail===dKey?.6:1}}>{sendingEmail===dKey?"SENDING...":"✉ SEND"}</button>}
+{d.contactEmail&&<button onClick={()=>sendBradToInstantly(d,dKey)} disabled={sendingInstantly===dKey} style={{background:B.green,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingInstantly===dKey?.6:1}}>{sendingInstantly===dKey?"QUEUING...":"⚡ INSTANTLY"}</button>}
 <button onClick={()=>copyEmail(emailAction)} style={{background:"none",border:`1px solid ${B.green}50`,color:B.green,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>📋</button>
 <button onClick={()=>setExpandedEmail(e=>e===dKey?null:dKey)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{dExpanded?"▲":"▼"}</button>
 </div>
