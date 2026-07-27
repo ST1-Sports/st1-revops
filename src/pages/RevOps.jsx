@@ -6047,19 +6047,38 @@ const mapped=rows.map(row=>{
 const firstName=get(row,"First Name","FirstName","first","fname","first_name");
 const lastName=get(row,"Last Name","LastName","last","lname","last_name");
 const fullName=get(row,"Full Name","FullName","Name","full_name")||[firstName,lastName].filter(Boolean).join(" ");
-const email=get(row,"Email","Email Address","EmailAddress","E-mail","email_address");
-const phone=get(row,"Phone","Phone Number","PhoneNumber","Mobile","Cell","Telephone","phone_number");
-const title=get(row,"Title","Job Title","JobTitle","Position","Role","job_title");
-const school=get(row,"Company","School","Organization","Org","Institution","District","Club","Employer","Account Name");
-const city=get(row,"City","Town");
-const state=get(row,"State","St","Province");
-const linkedIn=get(row,"LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url");
+const email=get(row,"Email","Email Address","EmailAddress","E-mail","email_address","Work Email");
+const phone=get(row,"Phone","Phone Number","PhoneNumber","Mobile","Cell","Telephone","phone_number","Work Phone","Direct Phone");
+const title=get(row,"Title","Job Title","JobTitle","Position","Role","job_title","Seniority");
+const school=get(row,"Company","School","Organization","Org","Institution","District","Club","Employer","Account Name","Company Name");
+const notes=get(row,"Notes","Note","Comments","Comment","Description","Bio");
+// City: try explicit column first, then extract from Location "City, ST" field
+let city=get(row,"City","Town","Mailing City","MailingCity");
+// State: try all known column name variants, then parse from Location/Address
+let state=get(row,"State","Province","Mailing State","MailingState","State/Province","StateName","State Name");
+if(!state){
+  // Location field often contains "City, State" or "City, State, Country"
+  const loc=get(row,"Location","Address","Region","Geography","Mailing Address");
+  if(loc){
+    // "Des Moines, Iowa, United States" or "Des Moines, IA"
+    const parts=loc.split(",").map(p=>p.trim()).filter(Boolean);
+    if(parts.length>=2){
+      // Last part is often country, second-to-last is state
+      const candidate=parts.length>=3?parts[parts.length-2]:parts[parts.length-1];
+      state=candidate;
+      if(!city) city=parts[0];
+    }
+  }
+}
+const linkedIn=get(row,"LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url","LinkedIn Profile","Profile URL");
 if(!fullName&&!email) return null;
-const sport=inferSport(title);
+// Sport: use explicit Sport column if present, fall back to inferring from title
+const sportCol=get(row,"Sport","Sports","Sport Name");
+const sport=sportCol||inferSport(title);
 return {
 id:mkId(), firstName, lastName,
 fullName:fullName||email||"Unknown",
-email, phone, title, school, city, state, linkedIn,
+email, phone, title, school, city, state, linkedIn, notes,
 orgType:"school", sport,
 priority:inferPriority(title),
 tags:[], outreachWindow:outreachByS[sport]||"Oct–Dec",
