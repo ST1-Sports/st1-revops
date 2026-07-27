@@ -508,6 +508,7 @@ const US_REGIONS = {
 "West Coast":    {states:["CA","WA","OR"],color:"#6B3FA0"},
 "Northeast":     {states:["NY","PA","NJ","CT","MA","MD","DE","NH","VT","ME","RI"],color:"#C0392B"},
 };
+const US_STATES=["AK","AL","AR","AZ","CA","CO","CT","DC","DE","FL","GA","HI","IA","ID","IL","IN","KS","KY","LA","MA","MD","ME","MI","MN","MO","MS","MT","NC","ND","NE","NH","NJ","NM","NV","NY","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VA","VT","WA","WI","WY"];
 const PRODUCT_CATS = ["Track & Field Equipment","Baseball / Softball","Volleyball","Timing Systems","Custom Team Stores","Apparel","Competition Spikes","Cross Country","Other"];
 const CLUB_ROLES = ["Club Director","Program Coordinator","League Administrator","Head Coach","Travel Team Director","Tournament Director","Activities Coordinator"];
 function urgentCount(s) {
@@ -5445,6 +5446,7 @@ const [oneOffSubject,setOneOffSubject]=useState("");
 const [oneOffBody,setOneOffBody]=useState("");
 const [bradReplies,setBradReplies]=useState([]);
 const [bradRepliesLoading,setBradRepliesLoading]=useState(false);
+const [bradTab,setBradTab]=useState("prospect");
 const [dbContacts,setDbContacts]=useState([]);
 const [dbTotal,setDbTotal]=useState(0);
 const [dbPage,setDbPage]=useState(1);
@@ -6030,7 +6032,7 @@ setView("contacts");loadDbContacts(1,"");
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","SEGMENTS"],["results",`RESULTS (${contacts.length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]];
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","SEGMENTS"],["results",`RESULTS (${contacts.length})`]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
@@ -6145,19 +6147,32 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 ))}
 </div>
 </div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:18}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:12}}>
 <div>
-<Lbl s={{marginBottom:6}}>REGION</Lbl>
+<Lbl s={{marginBottom:6}}>REGION <span style={{fontFamily:"'Lexend',sans-serif",fontWeight:400,fontSize:9,color:B.muted,letterSpacing:0}}>(bulk-select states)</span></Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{const sel=(buildingSegment.regions||[]).includes(r);return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const newStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];return{...s,regions:newRegions,states:newStates};})} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400,cursor:"pointer"}}>{r} <span style={{fontSize:8,opacity:.7}}>({rs.length})</span></button>);})}
+{Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{const sel=(buildingSegment.regions||[]).includes(r);return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const regionStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];const curIndividual=(s.states||[]).filter(st=>!Object.values(US_REGIONS).flatMap(v=>v.states).includes(st));const newStates=[...new Set([...regionStates,...curIndividual])];return{...s,regions:newRegions,states:newStates};})} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400,cursor:"pointer"}}>{r} <span style={{fontSize:8,opacity:.7}}>({rs.length})</span></button>);})}
 </div>
-{(buildingSegment.regions||[]).length>0&&<div style={{fontSize:9,color:B.muted,lineHeight:1.6,padding:"3px 6px",background:B.surface,borderRadius:3,marginTop:5}}>{(buildingSegment.states||[]).join(", ")||"none"}</div>}
 </div>
 <div>
 <Lbl s={{marginBottom:6}}>SPORTS</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
 {SPORTS_LIST.map(o=>(<button key={o} onClick={()=>setBuildingSegment(s=>({...s,sports:tog(s.sports||[],o)}))} style={{background:(buildingSegment.sports||[]).includes(o)?`${B.orange}15`:B.white,color:(buildingSegment.sports||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(buildingSegment.sports||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{o}</button>))}
 </div>
+</div>
+</div>
+<div style={{marginBottom:18}}>
+<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+<Lbl>STATES</Lbl>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(buildingSegment.states||[]).length} selected</span>
+{(buildingSegment.states||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,states:[],regions:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR ALL</button>}
+</div>
+<div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+{US_STATES.map(st=>{
+const sel=(buildingSegment.states||[]).includes(st);
+const regionColor=Object.entries(US_REGIONS).find(([,v])=>v.states.includes(st))?.[1]?.color||null;
+return(<button key={st} onClick={()=>setBuildingSegment(s=>{const cur=s.states||[];const newStates=sel?cur.filter(x=>x!==st):[...cur,st];return{...s,states:newStates};})} style={{background:sel?(regionColor?`${regionColor}18`:`${B.orange}18`):B.white,color:sel?(regionColor||B.orange):B.muted,border:`1px solid ${sel?(regionColor||B.orange):B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,fontWeight:sel?600:400}}>{st}</button>);
+})}
 </div>
 </div>
 <div style={{marginBottom:20}}>
@@ -6939,7 +6954,14 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 </div>
 )}
 {view==="brad"&&(
-<div style={{maxWidth:860}}>
+<div style={{maxWidth:900}}>
+{/* Brad sub-tab bar */}
+<div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`,paddingBottom:12}}>
+{[["prospect","✉ PROSPECT"],["campaigns",`CAMPAIGNS (${(s.campaigns||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]].map(([t,l])=>(
+<button key={t} onClick={()=>setBradTab(t)} style={{background:bradTab===t?B.orange:B.white,color:bradTab===t?B.white:B.muted,border:`1px solid ${bradTab===t?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
+))}
+</div>
+{bradTab==="prospect"&&<div>
 {/* Positive reply queue */}
 {bradReplies.length>0&&(
 <div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
@@ -7129,6 +7151,117 @@ return(
 </div>
 )}
 </div>
+</div>
+}
+{/* CAMPAIGNS TAB */}
+{bradTab==="campaigns"&&(
+<div>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{(s.campaigns||[]).length} CAMPAIGN{(s.campaigns||[]).length!==1?"S":""}</div>
+<div style={{display:"flex",gap:6}}>
+<GBtn onClick={()=>setMod("marketing")} style={{fontSize:9,padding:"4px 10px"}}>FULL EDITOR ↗</GBtn>
+<OBtn sm onClick={()=>setMod("marketing")}>+ NEW CAMPAIGN</OBtn>
+</div>
+</div>
+{(s.campaigns||[]).length===0?(
+<div style={{textAlign:"center",padding:"60px 0",background:B.surface,borderRadius:8,border:`1px solid ${B.border}`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>No campaigns yet — create one from a contact list.</div>
+<OBtn onClick={()=>setMod("marketing")}>+ CREATE FIRST CAMPAIGN →</OBtn>
+</div>
+):(
+<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:20}}>
+{(s.campaigns||[]).map(camp=>{
+const enrs=camp.enrollments||[];
+const active=enrs.filter(e=>e.status==="active").length;
+const replied=enrs.filter(e=>e.status==="replied").length;
+const sc={draft:B.muted,active:B.green,paused:B.yellow,completed:B.blue}[camp.status]||B.muted;
+return(
+<div key={camp.id} className="card" style={{padding:0,overflow:"hidden",borderTop:`3px solid ${camp.color||B.orange}`}}>
+<div style={{padding:"14px 16px"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,flex:1,paddingRight:8}}>{camp.name}</div>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,padding:"2px 7px",borderRadius:3,letterSpacing:.5,flexShrink:0}}>{(camp.status||"draft").toUpperCase()}</span>
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{camp.product}{camp.audience?` · ${camp.audience}`:""}</div>
+<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>✉ {(camp.touches||[]).length} touches</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{active} enrolled</span>
+{replied>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>{replied} replied</span>}
+</div>
+</div>
+<div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${camp.name}"?`))dispatch("DELETE_CAMPAIGN",camp.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
+<button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:B.orange,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",padding:0,letterSpacing:.5}}>OPEN IN EDITOR →</button>
+</div>
+</div>
+);
+})}
+</div>
+)}
+{(s.contactLists||[]).length>0&&(
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginTop:16,borderLeft:`3px solid ${B.teal}`}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:2,marginBottom:10}}>LAUNCH FROM A LIST</div>
+<div style={{display:"flex",flexDirection:"column",gap:8}}>
+{(s.contactLists||[]).map(list=>(
+<div key={list.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 10px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{list.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(list.contactIds||[]).length} contacts</div>
+</div>
+<OBtn sm col={B.teal} onClick={()=>setMod("marketing")}>START CAMPAIGN →</OBtn>
+</div>
+))}
+</div>
+</div>
+)}
+</div>
+)}
+{/* MY LISTS TAB */}
+{bradTab==="lists"&&(
+<div>
+{(s.contactLists||[]).length===0?(
+<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No lists yet — create one from a Segment or browse contacts.</div>
+):(
+<div style={{display:"flex",flexDirection:"column",gap:12}}>
+{(s.contactLists||[]).map(list=>{
+const isOpen=expandedListId===list.id;
+const isRenaming=renamingListId===list.id;
+return(
+<div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px"}}>
+{isRenaming?(
+<input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
+onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
+style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
+):(
+<div style={{flex:1,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{(list.contactIds||[]).length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}  {isOpen?"· click to collapse":""}</div>
+</div>
+)}
+<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+{isRenaming?(<><OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn><button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
+<button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
+<OBtn sm col={B.teal} onClick={()=>setBradTab("campaigns")}>USE IN CAMPAIGN →</OBtn>
+<button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
+<span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span></>)}
+</div>
+</div>
+{isOpen&&(list.contactIds||[]).length>0&&(
+<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:260,overflowY:"auto"}}>
+<div style={{display:"flex",flexDirection:"column",gap:3}}>
+{(list.contactIds||[]).slice(0,100).map(id=>{const c=(s.contacts||[]).find(x=>x.id===id);const name=c?[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email:id;return(<div key={id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>{name}{c?.title?<span style={{color:B.muted,fontSize:10,marginLeft:6}}>{c.title}</span>:null}</div>);})}
+{(list.contactIds||[]).length>100&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {(list.contactIds||[]).length-100} more</div>}
+</div>
+</div>
+)}
+</div>
+);
+})}
+</div>
+)}
+</div>
+)}
 </div>
 )}
 {/* BULK ACTION BAR */}
