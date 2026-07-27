@@ -57,12 +57,44 @@ export default async function handler(req, res) {
     })
 
   if (data.length === 0) {
-    return res.json({ added: 0, skipped: contacts.length, total: 0 })
+    return res.json({ added: 0, updated: 0, total: 0 })
   }
 
   try {
-    const result = await prisma.salesContact.createMany({ data, skipDuplicates: true })
-    return res.json({ added: result.count, skipped: data.length - result.count, total: data.length })
+    // Find which emails already exist so we can report added vs updated
+    const incomingEmails = data.map(d => d.email)
+    const existing = await prisma.salesContact.findMany({
+      where: { email: { in: incomingEmails } },
+      select: { email: true },
+    })
+    const existingSet = new Set(existing.map(e => e.email))
+
+    // Upsert: create new contacts, enrich existing ones with any fields they're missing
+    await prisma.$transaction(
+      data.map(contact =>
+        prisma.salesContact.upsert({
+          where: { email: contact.email },
+          create: contact,
+          update: {
+            // Only overwrite a field if the new value is non-empty (|| undefined → Prisma skips it)
+            firstName:   contact.firstName   || undefined,
+            lastName:    contact.lastName    || undefined,
+            title:       contact.title       || undefined,
+            companyName: contact.companyName || undefined,
+            phone:       contact.phone       || undefined,
+            linkedinUrl: contact.linkedinUrl || undefined,
+            sport:       contact.sport       || undefined,
+            state:       contact.state       || undefined,
+            city:        contact.city        || undefined,
+            notes:       contact.notes       || undefined,
+          },
+        })
+      )
+    )
+
+    const added   = data.filter(d => !existingSet.has(d.email)).length
+    const updated = existingSet.size
+    return res.json({ added, updated, total: data.length })
   } catch (err) {
     console.error('[contacts/import]', err.message)
     return res.status(500).json({ error: err.message })

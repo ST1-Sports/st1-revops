@@ -6020,11 +6020,44 @@ const wb=XLSX.read(buf,{type:"array"});
 const ws=wb.Sheets[wb.SheetNames[0]];
 const rows=XLSX.utils.sheet_to_json(ws,{defval:""});
 if(rows.length===0){toast("File appears empty — check the file and try again","error");setImportPhase("setup");setImportProgress(0);return;}
-setImportProgress(50); setImportStatus(`Mapping ${rows.length} contacts…`);
+// --- AI column mapping ---
+setImportProgress(25); setImportStatus("AI is reading your columns…");
+const headers=Object.keys(rows[0]||{});
+let aiMap={}; // fieldName → exact column header as it appears in the file
+try{
+const samp=Object.fromEntries(Object.entries(rows[0]||{}).slice(0,30));
+const result=await aiCall(
+`You are mapping CSV column headers to a contact database. Return ONLY valid JSON.
+
+Column headers: ${headers.slice(0,50).join(", ")}
+First row values: ${JSON.stringify(samp)}
+
+Map each header to ONE of these field names (only include confident mappings):
+firstName, lastName, email, phone, title, companyName, city, state, sport, linkedIn, notes, location
+
+Rules:
+- "location" = a single column that has combined city+state like "Des Moines, Iowa" or "Des Moines, IA"
+- state variants: "Mailing State", "State/Province", "Province", "State Name" → state
+- city variants: "Mailing City", "City/Town" → city
+- company variants: "School", "Organization", "District", "Employer", "Account Name" → companyName
+- If a column clearly maps to a field, include it. Skip ambiguous columns.
+
+Return JSON: {"fieldName": "Exact Column Header As Written"}`,
+{json:true,tokens:400,model:"claude-haiku-4-5-20251001"}
+);
+if(result&&typeof result==='object'&&!Array.isArray(result)) aiMap=result;
+}catch(e){}
+setImportProgress(50); setImportStatus(`Reading ${rows.length} contacts…`);
 const norm=s=>String(s||"").toLowerCase().replace(/[\s_\-\.]/g,"");
 const get=(row,...keys)=>{
 const entry=Object.entries(row).find(([k])=>keys.some(kk=>norm(k)===norm(kk)));
 return entry?String(entry[1]||"").trim():"";
+};
+// AI mapping takes priority; falls back to fuzzy header matching
+const res=(row,field,...fallback)=>{
+const col=aiMap[field];
+if(col&&col in row) return String(row[col]||"").trim();
+return get(row,...fallback);
 };
 const inferSport=t=>{
 const tl=(t||"").toLowerCase();
@@ -6044,36 +6077,30 @@ return "medium";
 };
 const outreachByS={"Track & Field":"Nov–Jan","Baseball/Softball":"Sep–Nov","Volleyball":"Mar–May","Football":"Mar–May","Basketball":"Jun–Aug","Cross Country":"Mar–May","Wrestling":"Jul–Sep","General":"Oct–Dec"};
 const mapped=rows.map(row=>{
-const firstName=get(row,"First Name","FirstName","first","fname","first_name");
-const lastName=get(row,"Last Name","LastName","last","lname","last_name");
-const fullName=get(row,"Full Name","FullName","Name","full_name")||[firstName,lastName].filter(Boolean).join(" ");
-const email=get(row,"Email","Email Address","EmailAddress","E-mail","email_address","Work Email");
-const phone=get(row,"Phone","Phone Number","PhoneNumber","Mobile","Cell","Telephone","phone_number","Work Phone","Direct Phone");
-const title=get(row,"Title","Job Title","JobTitle","Position","Role","job_title","Seniority");
-const school=get(row,"Company","School","Organization","Org","Institution","District","Club","Employer","Account Name","Company Name");
-const notes=get(row,"Notes","Note","Comments","Comment","Description","Bio");
-// City: try explicit column first, then extract from Location "City, ST" field
-let city=get(row,"City","Town","Mailing City","MailingCity");
-// State: try all known column name variants, then parse from Location/Address
-let state=get(row,"State","Province","Mailing State","MailingState","State/Province","StateName","State Name");
+const firstName=res(row,"firstName","First Name","FirstName","first","fname","first_name");
+const lastName=res(row,"lastName","Last Name","LastName","last","lname","last_name");
+const fullName=res(row,"fullName","Full Name","FullName","Name","full_name")||[firstName,lastName].filter(Boolean).join(" ");
+const email=res(row,"email","Email","Email Address","EmailAddress","E-mail","email_address","Work Email");
+const phone=res(row,"phone","Phone","Phone Number","PhoneNumber","Mobile","Cell","Telephone","phone_number","Work Phone","Direct Phone");
+const title=res(row,"title","Title","Job Title","JobTitle","Position","Role","job_title","Seniority");
+const school=res(row,"companyName","Company","School","Organization","Org","Institution","District","Club","Employer","Account Name","Company Name");
+const notes=res(row,"notes","Notes","Note","Comments","Comment","Description","Bio");
+const linkedIn=res(row,"linkedIn","LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url","LinkedIn Profile","Profile URL");
+let city=res(row,"city","City","Town","Mailing City","MailingCity");
+let state=res(row,"state","State","Province","Mailing State","MailingState","State/Province","StateName","State Name");
 if(!state){
-  // Location field often contains "City, State" or "City, State, Country"
-  const loc=get(row,"Location","Address","Region","Geography","Mailing Address");
-  if(loc){
-    // "Des Moines, Iowa, United States" or "Des Moines, IA"
-    const parts=loc.split(",").map(p=>p.trim()).filter(Boolean);
-    if(parts.length>=2){
-      // Last part is often country, second-to-last is state
-      const candidate=parts.length>=3?parts[parts.length-2]:parts[parts.length-1];
-      state=candidate;
-      if(!city) city=parts[0];
-    }
-  }
+// location column: "Des Moines, Iowa, United States" or "Des Moines, IA"
+const loc=res(row,"location","Location","Address","Region","Geography","Mailing Address");
+if(loc){
+const parts=loc.split(",").map(p=>p.trim()).filter(Boolean);
+if(parts.length>=2){
+state=parts.length>=3?parts[parts.length-2]:parts[parts.length-1];
+if(!city) city=parts[0];
 }
-const linkedIn=get(row,"LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url","LinkedIn Profile","Profile URL");
+}
+}
 if(!fullName&&!email) return null;
-// Sport: use explicit Sport column if present, fall back to inferring from title
-const sportCol=get(row,"Sport","Sports","Sport Name");
+const sportCol=res(row,"sport","Sport","Sports","Sport Name");
 const sport=sportCol||inferSport(title);
 return {
 id:mkId(), firstName, lastName,
@@ -6101,7 +6128,7 @@ const commitListImport=async()=>{
 const selected=importRows.filter(c=>importSel.has(c.id)&&c.email);
 if(selected.length===0){toast("No contacts with emails selected","error");return;}
 const BATCH=500;
-let totalAdded=0,totalSkipped=0;
+let totalAdded=0,totalUpdated=0;
 setImportPhase("parsing");
 for(let i=0;i<selected.length;i+=BATCH){
 const batch=selected.slice(i,i+BATCH);
@@ -6111,14 +6138,17 @@ try{
 const r=await fetch('/api/contacts/import',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({contacts:batch.map(c=>({...c,score:c.priority==='high'?80:c.priority==='medium'?40:20}))})});
 const d=await r.json();
-totalAdded+=d.added||0;totalSkipped+=d.skipped||0;
+totalAdded+=d.added||0;totalUpdated+=d.updated||0;
 }catch(e){toast(`Upload error at batch ${Math.floor(i/BATCH)+1}: ${e.message}`,"error");}
 }
 setImportProgress(100);setImportStatus("Done!");
 const listName=(importListName||"Imported List").trim();
 const newList={id:mkId(),name:listName,contactIds:selected.map(c=>c.id),createdAt:Date.now(),source:"import"};
 dispatch("ADD_CONTACT_LIST",newList);
-toast(`"${listName}" uploaded · ${totalAdded} new · ${totalSkipped} already existed`,"success");
+const toastMsg=totalUpdated>0
+?`"${listName}" · ${totalAdded} new · ${totalUpdated} enriched with missing fields`
+:`"${listName}" · ${totalAdded} new contacts added`;
+toast(toastMsg,"success");
 setTimeout(()=>{
 setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
 setDbTotal(t=>totalAdded>0?t+totalAdded:t);
