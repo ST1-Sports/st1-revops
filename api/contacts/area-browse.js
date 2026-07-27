@@ -2,22 +2,20 @@
  * POST /api/contacts/area-browse
  *
  * Returns paginated SalesContacts matching a segment's criteria.
- * Used by the "Browse Contacts" view when a segment card is selected.
- *
- * Match logic: AND across groups — sport group OR'd internally, same for states and roles.
+ * Sport matching includes aliases (XC = Cross Country) and also checks the title field.
  *
  * Body: {
- *   sports: string[],
- *   states: string[],
- *   roles:  string[],
- *   page:        number  (default 1)
- *   limit:       number  (default 50, max 100)
- *   stateFilter: string  (narrow to a specific state)
- *   sportFilter: string  (narrow to a specific sport)
+ *   sports: string[], states: string[], roles: string[],
+ *   page: number, limit: number, stateFilter: string, sportFilter: string
  * }
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+
+const SPORT_ALIASES = {
+  'Cross Country': ['XC', 'cross-country'],
+  'Track & Field': ['T&F', 'Track and Field'],
+}
 
 export default async function handler(req, res) {
   setCors(res)
@@ -36,14 +34,26 @@ export default async function handler(req, res) {
   const andClauses = [{ NOT: { status: 'unsubscribed' } }]
 
   if (sports.length) {
-    andClauses.push({ OR: sports.map(s => ({ sport: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
+    const sportTerms = []
+    for (const sp of sports) {
+      const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
+      const aliases = SPORT_ALIASES[s] || []
+      for (const term of [s, ...aliases]) {
+        sportTerms.push({ sport: { contains: term, mode: 'insensitive' } })
+        sportTerms.push({ title: { contains: term, mode: 'insensitive' } })
+      }
+    }
+    andClauses.push({ OR: sportTerms })
   }
+
   if (states.length) {
     andClauses.push({ OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
   }
+
   if (roles.length) {
     andClauses.push({ OR: roles.map(r => ({ title: { contains: (typeof r === 'string' ? r : r?.name || String(r)).trim(), mode: 'insensitive' } })) })
   }
+
   if (stateFilter.trim()) andClauses.push({ state: { contains: stateFilter.trim(), mode: 'insensitive' } })
   if (sportFilter.trim()) andClauses.push({ sport: { contains: sportFilter.trim(), mode: 'insensitive' } })
 

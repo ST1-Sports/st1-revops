@@ -499,6 +499,10 @@ Received:B.blue,Reviewing:B.purple,Pricing:B.orange,"Building Response":B.yellow
 };
 const ST1 = `ST1 Sports (st1sports.com) — track & field and athletic equipment supplier, Ames Iowa. Owner: Matt Stone (matt@st1sports.com, 719-256-0275). Brands: Blazer, Gill Athletics, Diamond, All-Star, Molten, Wilson, DeMarini, Louisville Slugger, FinishLynx, Pro-Nine. Markets: Iowa, Colorado, Minnesota, North Dakota. Sells to K-12 school districts, ADs, coaches. Brand voice: warm/direct, athlete-first, relationship before product. Owns: Human Contact ("I pick up the phone"), All-Sport Breadth, Exclusive Culture (graphic tee drops). Avoid efficiency-first hooks, corporate tone, generic inspiration.`;
 const SPORTS_LIST = ["Track & Field","Baseball","Softball","Volleyball","Cross Country","Football","Basketball","Wrestling"];
+const SPORT_ALIASES_MAP = {
+  "Cross Country": ["xc","cross-country"],
+  "Track & Field": ["t&f","track and field"],
+};
 const STATES_LIST = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY"];
 const US_REGIONS = {
 "Midwest":       {states:["IA","MN","WI","MO","IL","IN","MI","OH","ND","SD","NE","KS"],color:"#1A5FA8"},
@@ -5650,17 +5654,27 @@ const localSegFacets=useMemo(()=>{
   const roles=buildingSegment.roles||[];
   const allC=s.contacts||[];
   if(!sports.length&&!states.length) return {byState:{},titles:{},count:0};
-  const sportMatch=(c)=>!sports.length||sports.some(sp=>(c.sport||'').toLowerCase().includes(sp.toLowerCase()));
+  // Sport match: check sport field + title field, with aliases (XC = Cross Country)
+  const sportMatch=(c)=>{
+    if(!sports.length) return true;
+    return sports.some(sp=>{
+      const terms=[sp.toLowerCase(),...(SPORT_ALIASES_MAP[sp]||[])];
+      const sportVal=(c.sport||'').toLowerCase();
+      const titleVal=(c.title||'').toLowerCase();
+      return terms.some(t=>sportVal.includes(t)||titleVal.includes(t));
+    });
+  };
   const stateMatch=(c)=>!states.length||states.some(st=>(c.state||'').toUpperCase()===st.toUpperCase());
   const roleMatch=(c)=>!roles.length||roles.some(r=>(c.title||'').toLowerCase().includes(r.toLowerCase()));
-  // byState: sport-only filter to show landscape
+  // byState: sport-only filter (geographic landscape for selected sports)
   const byState={};
   allC.filter(sportMatch).forEach(c=>{if(c.state) byState[c.state]=(byState[c.state]||0)+1;});
-  // titles+count: full AND filter
-  const andFiltered=allC.filter(c=>sportMatch(c)&&stateMatch(c));
+  // titles: state-only filter (NOT sport-filtered — shows ADs and all roles in the state)
+  const stateFiltered=states.length?allC.filter(stateMatch):allC.filter(sportMatch);
   const titleMap={};
-  andFiltered.forEach(c=>{if(c.title?.trim()) titleMap[c.title]=(titleMap[c.title]||0)+1;});
-  const count=andFiltered.filter(roleMatch).length;
+  stateFiltered.forEach(c=>{if(c.title?.trim()) titleMap[c.title]=(titleMap[c.title]||0)+1;});
+  // count: full AND filter
+  const count=allC.filter(c=>sportMatch(c)&&stateMatch(c)&&roleMatch(c)).length;
   return {byState,titles:titleMap,count};
 },[
   JSON.stringify(buildingSegment?.sports),
@@ -6243,7 +6257,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 </div>
 </div>
 {/* Step 3: Roles — merged from DB + uploaded contacts */}
-{(buildingSegment.sports||[]).length>0&&(()=>{
+{((buildingSegment.sports||[]).length>0||(buildingSegment.states||[]).length>0)&&(()=>{
   const merged={};
   (segFacets?.titles||[]).forEach(({value,count})=>{merged[value]=(merged[value]||0)+count;});
   Object.entries(localSegFacets?.titles||{}).forEach(([value,count])=>{merged[value]=(merged[value]||0)+count;});
@@ -6257,8 +6271,8 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
   {allTitles.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{allTitles.length} unique titles in your data</span>}
   {(buildingSegment.roles||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,roles:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR</button>}
   </div>
-  {noStates&&allTitles.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Select states above to see available roles.</div>}
-  {!noStates&&!segFacetsLoading&&allTitles.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts found for this sport + state combination yet.</div>}
+  {noStates&&(buildingSegment.sports||[]).length===0&&allTitles.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Select a sport or state above to see available roles.</div>}
+  {!segFacetsLoading&&allTitles.length===0&&((buildingSegment.sports||[]).length>0||(buildingSegment.states||[]).length>0)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts found yet for this combination.</div>}
   <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
   {allTitles.map(({value,count})=>{
     const sel=(buildingSegment.roles||[]).includes(value);
@@ -6321,7 +6335,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
 {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).map(r=>typeof r==="string"?r:r?.name||String(r)).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
 </div>
-<div style={{display:"flex",gap:6}}><OBtn onClick={()=>runScrape(area)} style={{flex:1}} sm>⊕ SCRAPE</OBtn>{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={()=>{setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{flex:1}}>BROWSE {(areaCounts[area.id]||0).toLocaleString()}</OBtn>}</div>
+<div style={{display:"flex",gap:6}}><OBtn onClick={()=>runScrape(area)} style={{flex:1}} sm>{(areaCounts[area.id]||0)>0?"↺ FIND MORE":"⊕ PROSPECT"}</OBtn>{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={()=>{setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{flex:1}}>BROWSE {(areaCounts[area.id]||0).toLocaleString()}</OBtn>}</div>
 </div>
 </div>
 ))}

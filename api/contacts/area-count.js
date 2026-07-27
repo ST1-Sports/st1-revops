@@ -2,15 +2,18 @@
  * POST /api/contacts/area-count
  *
  * Returns how many SalesContacts in the DB match a segment's criteria.
- * Used to show "N matching contacts" on each segment card.
- *
- * Match logic: AND across groups — sport group OR'd internally, same for states and roles.
- * e.g. (sport=XC OR sport=Track) AND (state=IA OR state=MN) AND (title contains Coach)
+ * Match logic: AND across groups — each group is internally OR'd.
+ * Sport matching includes aliases (XC = Cross Country) and also checks the title field.
  *
  * Body: { sports: string[], states: string[], roles: string[] }
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+
+const SPORT_ALIASES = {
+  'Cross Country': ['XC', 'cross-country'],
+  'Track & Field': ['T&F', 'Track and Field'],
+}
 
 export default async function handler(req, res) {
   setCors(res)
@@ -22,11 +25,22 @@ export default async function handler(req, res) {
   const andClauses = [{ NOT: { status: 'unsubscribed' } }]
 
   if (sports.length) {
-    andClauses.push({ OR: sports.map(s => ({ sport: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
+    const sportTerms = []
+    for (const sp of sports) {
+      const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
+      const aliases = SPORT_ALIASES[s] || []
+      for (const term of [s, ...aliases]) {
+        sportTerms.push({ sport: { contains: term, mode: 'insensitive' } })
+        sportTerms.push({ title: { contains: term, mode: 'insensitive' } })
+      }
+    }
+    andClauses.push({ OR: sportTerms })
   }
+
   if (states.length) {
     andClauses.push({ OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
   }
+
   if (roles.length) {
     andClauses.push({ OR: roles.map(r => ({ title: { contains: (typeof r === 'string' ? r : r?.name || String(r)).trim(), mode: 'insensitive' } })) })
   }
