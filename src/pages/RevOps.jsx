@@ -5642,6 +5642,32 @@ finally{setSegFacetsLoading(false);}
 },300);
 return()=>clearTimeout(t);
 },[JSON.stringify(buildingSegment?.sports),JSON.stringify(buildingSegment?.states)]);
+// Client-side facets from Redux s.contacts (campaign-tab uploads that never hit the DB)
+const localSegFacets=useMemo(()=>{
+  if(!buildingSegment) return {byState:{},titles:{},count:0};
+  const sports=buildingSegment.sports||[];
+  const states=buildingSegment.states||[];
+  const roles=buildingSegment.roles||[];
+  const allC=s.contacts||[];
+  if(!sports.length&&!states.length) return {byState:{},titles:{},count:0};
+  const sportMatch=(c)=>!sports.length||sports.some(sp=>(c.sport||'').toLowerCase().includes(sp.toLowerCase()));
+  const stateMatch=(c)=>!states.length||states.some(st=>(c.state||'').toUpperCase()===st.toUpperCase());
+  const roleMatch=(c)=>!roles.length||roles.some(r=>(c.title||'').toLowerCase().includes(r.toLowerCase()));
+  // byState: sport-only filter to show landscape
+  const byState={};
+  allC.filter(sportMatch).forEach(c=>{if(c.state) byState[c.state]=(byState[c.state]||0)+1;});
+  // titles+count: full AND filter
+  const andFiltered=allC.filter(c=>sportMatch(c)&&stateMatch(c));
+  const titleMap={};
+  andFiltered.forEach(c=>{if(c.title?.trim()) titleMap[c.title]=(titleMap[c.title]||0)+1;});
+  const count=andFiltered.filter(roleMatch).length;
+  return {byState,titles:titleMap,count};
+},[
+  JSON.stringify(buildingSegment?.sports),
+  JSON.stringify(buildingSegment?.states),
+  JSON.stringify(buildingSegment?.roles),
+  s.contacts
+]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
 abortRef.current=false;setPhase("finding");
@@ -6046,7 +6072,7 @@ setView("contacts");loadDbContacts(1,"");
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","SEGMENTS"],["results",`RESULTS (${contacts.length})`]];
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","SEGMENTS"]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
@@ -6168,10 +6194,14 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 <div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
 <Lbl>1 · SPORT</Lbl>
-{(buildingSegment.sports||[]).length>0&&!segFacetsLoading&&segFacets&&(
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,background:`${B.green}12`,padding:"2px 8px",borderRadius:10,letterSpacing:.2}}>{Object.values(segFacets.byState||{}).reduce((a,b)=>a+b,0).toLocaleString()} contacts in DB</span>
-)}
-{segFacetsLoading&&(buildingSegment.sports||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>…</span>}
+{(buildingSegment.sports||[]).length>0&&(()=>{
+  const dbTotal=Object.values(segFacets?.byState||{}).reduce((a,b)=>a+b,0);
+  const localTotal=Object.values(localSegFacets?.byState||{}).reduce((a,b)=>a+b,0);
+  const combined=dbTotal+localTotal;
+  if(segFacetsLoading&&localTotal===0) return <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>…</span>;
+  if(combined===0) return null;
+  return <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,background:`${B.green}12`,padding:"2px 8px",borderRadius:10,letterSpacing:.2}}>{combined.toLocaleString()} contacts found{segFacetsLoading?" (loading more…)":""}</span>;
+})()}
 </div>
 <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
 {SPORTS_LIST.map(o=>{const sel=(buildingSegment.sports||[]).includes(o);return(
@@ -6192,7 +6222,7 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 {Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{
 const sel=(buildingSegment.regions||[]).includes(r);
 const hasSports=(buildingSegment.sports||[]).length>0;
-const regionCount=hasSports?rs.reduce((sum,st)=>sum+(segFacets?.byState?.[st]||0),0):null;
+const regionCount=hasSports?rs.reduce((sum,st)=>sum+(segFacets?.byState?.[st]||0)+(localSegFacets?.byState?.[st]||0),0):null;
 return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const regionStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];const curIndividual=(s.states||[]).filter(st=>!Object.values(US_REGIONS).flatMap(v=>v.states).includes(st));const newStates=[...new Set([...regionStates,...curIndividual])];return{...s,regions:newRegions,states:newStates};})} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400,cursor:"pointer"}}>
 {r}{regionCount!==null?<span style={{fontSize:8,opacity:.8}}> · {regionCount.toLocaleString()}</span>:null} <span style={{fontSize:8,opacity:.5}}>({rs.length})</span>
 </button>);})}
@@ -6203,7 +6233,7 @@ return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||
 {US_STATES.map(st=>{
 const sel=(buildingSegment.states||[]).includes(st);
 const hasSports=(buildingSegment.sports||[]).length>0;
-const cnt=hasSports?(segFacets?.byState?.[st]||0):null;
+const cnt=hasSports?((segFacets?.byState?.[st]||0)+(localSegFacets?.byState?.[st]||0)):null;
 const dimmed=hasSports&&!segFacetsLoading&&cnt===0&&!sel;
 const regionColor=Object.entries(US_REGIONS).find(([,v])=>v.states.includes(st))?.[1]?.color||null;
 return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{const cur=s.states||[];return{...s,states:sel?cur.filter(x=>x!==st):[...cur,st]};});}} style={{background:sel?(regionColor?`${regionColor}18`:`${B.orange}18`):B.white,color:dimmed?`${B.border}`:sel?(regionColor||B.orange):B.muted,border:`1px solid ${sel?(regionColor||B.orange):B.border}`,borderRadius:3,padding:"3px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:dimmed?"default":"pointer",letterSpacing:.3,fontWeight:sel?600:400,opacity:dimmed?.3:1}}>
@@ -6212,38 +6242,46 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 })}
 </div>
 </div>
-{/* Step 3: Roles — dynamic from DB */}
-{(buildingSegment.sports||[]).length>0&&(
-<div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
-<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-<Lbl>3 · ROLES</Lbl>
-{segFacetsLoading&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>loading from your data…</span>}
-{!segFacetsLoading&&(segFacets?.titles||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(segFacets.titles||[]).length} unique titles in your data</span>}
-{(buildingSegment.roles||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,roles:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR</button>}
-</div>
-{!segFacetsLoading&&(segFacets?.titles||[]).length===0&&(buildingSegment.states||[]).length===0&&(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Select states above to see available roles in your data.</div>
-)}
-{!segFacetsLoading&&(segFacets?.titles||[]).length===0&&(buildingSegment.states||[]).length>0&&(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts found for this sport + state combination yet.</div>
-)}
-<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{(segFacets?.titles||[]).map(({value,count})=>{
-const sel=(buildingSegment.roles||[]).includes(value);
-return(<button key={value} onClick={()=>setBuildingSegment(s=>({...s,roles:tog(s.roles||[],value)}))} style={{background:sel?`${B.orange}15`:B.white,color:sel?B.orange:B.text,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:4,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?600:400}}>
-{value}<span style={{fontSize:9,color:sel?B.orange:B.muted,marginLeft:5}}>({count})</span>
-</button>);
-})}
-</div>
-</div>
-)}
+{/* Step 3: Roles — merged from DB + uploaded contacts */}
+{(buildingSegment.sports||[]).length>0&&(()=>{
+  const merged={};
+  (segFacets?.titles||[]).forEach(({value,count})=>{merged[value]=(merged[value]||0)+count;});
+  Object.entries(localSegFacets?.titles||{}).forEach(([value,count])=>{merged[value]=(merged[value]||0)+count;});
+  const allTitles=Object.entries(merged).sort((a,b)=>b[1]-a[1]).map(([value,count])=>({value,count}));
+  const noStates=(buildingSegment.states||[]).length===0;
+  return(
+  <div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
+  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+  <Lbl>3 · ROLES</Lbl>
+  {segFacetsLoading&&allTitles.length===0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>loading…</span>}
+  {allTitles.length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{allTitles.length} unique titles in your data</span>}
+  {(buildingSegment.roles||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,roles:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR</button>}
+  </div>
+  {noStates&&allTitles.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Select states above to see available roles.</div>}
+  {!noStates&&!segFacetsLoading&&allTitles.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts found for this sport + state combination yet.</div>}
+  <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+  {allTitles.map(({value,count})=>{
+    const sel=(buildingSegment.roles||[]).includes(value);
+    return(<button key={value} onClick={()=>setBuildingSegment(s=>({...s,roles:tog(s.roles||[],value)}))} style={{background:sel?`${B.orange}15`:B.white,color:sel?B.orange:B.text,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:4,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?600:400}}>
+    {value}<span style={{fontSize:9,color:sel?B.orange:B.muted,marginLeft:5}}>({count})</span>
+    </button>);
+  })}
+  </div>
+  </div>
+  );
+})()}
 {/* Footer */}
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:16,borderTop:`1px solid ${B.border}`}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>
 {(buildingSegment.roles||[]).length>0?"sport + state + role match":"sport + state match"}
 </div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:buildingSegmentCount>0?B.green:B.muted}}>{buildingSegmentCountLoading?"…":buildingSegmentCount!=null?buildingSegmentCount.toLocaleString():"—"}</div>
+{(()=>{
+  const combined=(buildingSegmentCount||0)+localSegFacets.count;
+  const loading=buildingSegmentCountLoading;
+  const ready=buildingSegmentCount!=null||localSegFacets.count>0;
+  return <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:combined>0?B.green:B.muted}}>{loading&&localSegFacets.count===0?"…":ready?combined.toLocaleString():"—"}</div>;
+})()}
 </div>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
 {!buildingSegmentIsNew&&<button onClick={()=>{setAreas(as=>as.filter(a=>a.id!==buildingSegment.id));setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);setSegFacets(null);toast("Segment deleted","info");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.red,cursor:"pointer",letterSpacing:.3}}>DELETE</button>}
