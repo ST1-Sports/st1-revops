@@ -6086,7 +6086,8 @@ setView("contacts");loadDbContacts(1,"");
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
-const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${dbTotal>0?dbTotal.toLocaleString():"DB"})`],["areas","SEGMENTS"]];
+const totalContactsAll=dbTotal+(s.contacts||[]).length;
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${totalContactsAll>0?totalContactsAll.toLocaleString():"DB"})`],["areas","SEGMENTS"]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
@@ -6100,7 +6101,10 @@ onKeyDown={e=>e.key==="Enter"&&loadDbContacts(1,dbSearch)}
 placeholder="Search by name, email, school…"
 style={{flex:1,minWidth:180,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 <OBtn sm onClick={()=>loadDbContacts(1,dbSearch)} disabled={dbLoading}>{dbLoading?"LOADING…":"SEARCH"}</OBtn>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,whiteSpace:"nowrap"}}>{dbTotal.toLocaleString()} total contacts</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,whiteSpace:"nowrap"}}>
+{totalContactsAll.toLocaleString()} total
+{(s.contacts||[]).length>0&&<span style={{fontSize:9,marginLeft:5,color:B.border}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span>}
+</div>
 </div>
 {/* Contact rows */}
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -6137,6 +6141,38 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 <GBtn onClick={()=>loadDbContacts(dbPage-1,dbSearch)} style={{fontSize:10,padding:"5px 10px",opacity:dbPage<=1?.4:1,pointerEvents:dbPage<=1?"none":"auto"}}>← PREV</GBtn>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Page {dbPage} of {Math.ceil(dbTotal/50)}</span>
 <GBtn onClick={()=>loadDbContacts(dbPage+1,dbSearch)} style={{fontSize:10,padding:"5px 10px",opacity:dbPage>=Math.ceil(dbTotal/50)?.4:1,pointerEvents:dbPage>=Math.ceil(dbTotal/50)?"none":"auto"}}>NEXT →</GBtn>
+</div>
+)}
+{/* Uploaded contacts section (Redux — CSVs, scraped, campaign uploads) */}
+{(s.contacts||[]).length>0&&(
+<div style={{marginTop:24,paddingTop:20,borderTop:`1px solid ${B.border}`}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>UPLOADED CONTACTS ({(s.contacts||[]).length.toLocaleString()})</div>
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+{(()=>{
+  const q=dbSearch.toLowerCase().trim();
+  const filtered=q?(s.contacts||[]).filter(c=>[c.firstName,c.lastName,c.email,c.title,c.school||c.companyName].filter(Boolean).join(" ").toLowerCase().includes(q)):(s.contacts||[]);
+  return filtered.slice(0,100).map(c=>{
+    const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email;
+    return(
+    <div key={c.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.teal}`}}>
+    <div style={{flex:1,minWidth:0}}>
+    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:2}}>
+    <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{name}</span>
+    {c.score>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,borderRadius:3,padding:"2px 5px"}}>{c.score}pts</span>}
+    </div>
+    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.school||c.companyName,c.email].filter(Boolean).join(" · ")}</div>
+    {(c.sport||c.state)&&<div style={{display:"flex",gap:5,marginTop:2,flexWrap:"wrap"}}>{c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}{c.state&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")}</span>}</div>}
+    </div>
+    </div>
+    );
+  });
+})()}
+{(()=>{
+  const q=dbSearch.toLowerCase().trim();
+  const filtered=q?(s.contacts||[]).filter(c=>[c.firstName,c.lastName,c.email,c.title,c.school||c.companyName].filter(Boolean).join(" ").toLowerCase().includes(q)):(s.contacts||[]);
+  return filtered.length>100?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"8px 0",textAlign:"center"}}>Showing first 100 of {filtered.length.toLocaleString()} — use the search above to narrow results</div>:null;
+})()}
+</div>
 </div>
 )}
 </div>
@@ -6374,7 +6410,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
 <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CSV / EXCEL</OBtn>
 <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()}>↑ APOLLO.IO CSV</OBtn>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(s.contacts||[]).length} contacts in database</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{totalContactsAll.toLocaleString()} contacts total <span style={{fontSize:9}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></span>
 </div>
 )}
 {/* Setup: name, sport, notes, file attached */}
@@ -6507,7 +6543,7 @@ disabled={importPhase==="parsing"}/>
 <input type="checkbox" title="Select all visible contacts" checked={bulkSel.size>0&&(()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);return vis.length>0&&vis.every(c=>bulkSel.has(c.id));})()}
 onChange={()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);const allSel=vis.every(c=>bulkSel.has(c.id));setBulkSel(allSel?new Set():new Set(vis.map(c=>c.id)));}}
 style={{accentColor:B.orange,width:14,height:14,cursor:"pointer",flexShrink:0}}/>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>CONTACT DATABASE ({(s.contacts||[]).length})</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>CONTACT DATABASE ({totalContactsAll.toLocaleString()})</div>
 {bulkSel.size>0&&(
 <div style={{display:"flex",gap:5,alignItems:"center"}}>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>{bulkSel.size} SELECTED</span>
@@ -9574,7 +9610,7 @@ style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:s
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length} contacts in database</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{totalContactsAll.toLocaleString()} contacts <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></div>
 <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
 {segRunning?"✦ ANALYZING...":"✦ AI SMART SEGMENT"}
 </button>
