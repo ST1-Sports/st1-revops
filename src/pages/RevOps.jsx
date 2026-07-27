@@ -5467,6 +5467,8 @@ const [buildingSegment,setBuildingSegment]=useState(null);
 const [buildingSegmentIsNew,setBuildingSegmentIsNew]=useState(false);
 const [buildingSegmentCount,setBuildingSegmentCount]=useState(null);
 const [buildingSegmentCountLoading,setBuildingSegmentCountLoading]=useState(false);
+const [segFacets,setSegFacets]=useState(null);
+const [segFacetsLoading,setSegFacetsLoading]=useState(false);
 const addLog=(msg,type="info")=>{
 const entry={id:mkId(),msg,type,ts:Date.now()};
 setLog(l=>[entry,...l.slice(0,99)]);
@@ -5628,6 +5630,18 @@ try{const r=await fetch("/api/contacts/area-count",{method:"POST",headers:{"Cont
 },400);
 return()=>clearTimeout(t);
 },[JSON.stringify(buildingSegment?.sports),JSON.stringify(buildingSegment?.states),JSON.stringify(buildingSegment?.roles)]);
+useEffect(()=>{
+if(!buildingSegment){setSegFacets(null);return;}
+const sports=buildingSegment.sports||[];
+const states=buildingSegment.states||[];
+if(!sports.length&&!states.length){setSegFacets(null);return;}
+setSegFacetsLoading(true);
+const t=setTimeout(async()=>{
+try{const r=await fetch("/api/contacts/segment-facets",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sports,states})});const d=await r.json();setSegFacets(d);}catch(e){}
+finally{setSegFacetsLoading(false);}
+},300);
+return()=>clearTimeout(t);
+},[JSON.stringify(buildingSegment?.sports),JSON.stringify(buildingSegment?.states)]);
 const runScrape=async(area)=>{
 setActiveArea(area);setView("results");setSchools([]);setContacts([]);setLog([]);setProgress(5);
 abortRef.current=false;setPhase("finding");
@@ -6128,18 +6142,21 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 ))}
 {buildingSegment&&!areaContactsAreaId&&(
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:22,maxWidth:720}}>
+{/* Header */}
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2,marginBottom:4}}>{buildingSegmentIsNew?"NEW SEGMENT":"EDIT SEGMENT"}</div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>Segment Builder</div>
 </div>
-<button onClick={()=>{setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer",letterSpacing:.3}}>✕ CANCEL</button>
+<button onClick={()=>{setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);setSegFacets(null);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer",letterSpacing:.3}}>✕ CANCEL</button>
 </div>
+{/* Name */}
 <div style={{marginBottom:18}}>
 <Lbl s={{marginBottom:6}}>SEGMENT NAME</Lbl>
-<input value={buildingSegment.name} onChange={e=>setBuildingSegment(s=>({...s,name:e.target.value}))} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:14,padding:"9px 11px",border:`1px solid ${B.border}`,borderRadius:5,background:B.surface,color:B.text,boxSizing:"border-box"}} placeholder="e.g. High School Track &amp; Field — Southeast"/>
+<input value={buildingSegment.name} onChange={e=>setBuildingSegment(s=>({...s,name:e.target.value}))} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:14,padding:"9px 11px",border:`1px solid ${B.border}`,borderRadius:5,background:B.surface,color:B.text,boxSizing:"border-box"}} placeholder="e.g. Iowa XC Coaches"/>
 </div>
-<div style={{marginBottom:18}}>
+{/* Org Type */}
+<div style={{marginBottom:20}}>
 <Lbl s={{marginBottom:6}}>ORG TYPE</Lbl>
 <div style={{display:"flex",gap:6}}>
 {[["schools","🏫 Schools"],["clubs","⚽ Youth Clubs"],["both","Both"]].map(([v,l])=>(
@@ -6147,48 +6164,90 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 ))}
 </div>
 </div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20,marginBottom:12}}>
-<div>
-<Lbl s={{marginBottom:6}}>REGION <span style={{fontFamily:"'Lexend',sans-serif",fontWeight:400,fontSize:9,color:B.muted,letterSpacing:0}}>(bulk-select states)</span></Lbl>
+{/* Step 1: Sport */}
+<div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+<Lbl>1 · SPORT</Lbl>
+{(buildingSegment.sports||[]).length>0&&!segFacetsLoading&&segFacets&&(
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,background:`${B.green}12`,padding:"2px 8px",borderRadius:10,letterSpacing:.2}}>{Object.values(segFacets.byState||{}).reduce((a,b)=>a+b,0).toLocaleString()} contacts in DB</span>
+)}
+{segFacetsLoading&&(buildingSegment.sports||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>…</span>}
+</div>
+<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+{SPORTS_LIST.map(o=>{const sel=(buildingSegment.sports||[]).includes(o);return(
+<button key={o} onClick={()=>setBuildingSegment(s=>({...s,sports:tog(s.sports||[],o),roles:[]}))} style={{background:sel?`${B.orange}15`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?600:400}}>{o}</button>
+);})}
+</div>
+</div>
+{/* Step 2: Geography */}
+<div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+<Lbl>2 · GEOGRAPHY</Lbl>
+{(buildingSegment.states||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(buildingSegment.states||[]).length} selected</span>}
+{(buildingSegment.states||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,states:[],regions:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR</button>}
+</div>
+<div style={{marginBottom:10}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>REGION (bulk-select)</div>
 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{const sel=(buildingSegment.regions||[]).includes(r);return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const regionStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];const curIndividual=(s.states||[]).filter(st=>!Object.values(US_REGIONS).flatMap(v=>v.states).includes(st));const newStates=[...new Set([...regionStates,...curIndividual])];return{...s,regions:newRegions,states:newStates};})} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400,cursor:"pointer"}}>{r} <span style={{fontSize:8,opacity:.7}}>({rs.length})</span></button>);})}
+{Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{
+const sel=(buildingSegment.regions||[]).includes(r);
+const hasSports=(buildingSegment.sports||[]).length>0;
+const regionCount=hasSports?rs.reduce((sum,st)=>sum+(segFacets?.byState?.[st]||0),0):null;
+return(<button key={r} onClick={()=>setBuildingSegment(s=>{const cur=s.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const regionStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];const curIndividual=(s.states||[]).filter(st=>!Object.values(US_REGIONS).flatMap(v=>v.states).includes(st));const newStates=[...new Set([...regionStates,...curIndividual])];return{...s,regions:newRegions,states:newStates};})} style={{background:sel?`${color}18`:B.white,color:sel?color:B.muted,border:`1px solid ${sel?color:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?500:400,cursor:"pointer"}}>
+{r}{regionCount!==null?<span style={{fontSize:8,opacity:.8}}> · {regionCount.toLocaleString()}</span>:null} <span style={{fontSize:8,opacity:.5}}>({rs.length})</span>
+</button>);})}
 </div>
 </div>
-<div>
-<Lbl s={{marginBottom:6}}>SPORTS</Lbl>
-<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{SPORTS_LIST.map(o=>(<button key={o} onClick={()=>setBuildingSegment(s=>({...s,sports:tog(s.sports||[],o)}))} style={{background:(buildingSegment.sports||[]).includes(o)?`${B.orange}15`:B.white,color:(buildingSegment.sports||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(buildingSegment.sports||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{o}</button>))}
-</div>
-</div>
-</div>
-<div style={{marginBottom:18}}>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-<Lbl>STATES</Lbl>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(buildingSegment.states||[]).length} selected</span>
-{(buildingSegment.states||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,states:[],regions:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR ALL</button>}
-</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:6}}>INDIVIDUAL STATES</div>
 <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
 {US_STATES.map(st=>{
 const sel=(buildingSegment.states||[]).includes(st);
+const hasSports=(buildingSegment.sports||[]).length>0;
+const cnt=hasSports?(segFacets?.byState?.[st]||0):null;
+const dimmed=hasSports&&!segFacetsLoading&&cnt===0&&!sel;
 const regionColor=Object.entries(US_REGIONS).find(([,v])=>v.states.includes(st))?.[1]?.color||null;
-return(<button key={st} onClick={()=>setBuildingSegment(s=>{const cur=s.states||[];const newStates=sel?cur.filter(x=>x!==st):[...cur,st];return{...s,states:newStates};})} style={{background:sel?(regionColor?`${regionColor}18`:`${B.orange}18`):B.white,color:sel?(regionColor||B.orange):B.muted,border:`1px solid ${sel?(regionColor||B.orange):B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3,fontWeight:sel?600:400}}>{st}</button>);
+return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{const cur=s.states||[];return{...s,states:sel?cur.filter(x=>x!==st):[...cur,st]};});}} style={{background:sel?(regionColor?`${regionColor}18`:`${B.orange}18`):B.white,color:dimmed?`${B.border}`:sel?(regionColor||B.orange):B.muted,border:`1px solid ${sel?(regionColor||B.orange):B.border}`,borderRadius:3,padding:"3px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:dimmed?"default":"pointer",letterSpacing:.3,fontWeight:sel?600:400,opacity:dimmed?.3:1}}>
+{st}{cnt!==null&&cnt>0&&<span style={{fontSize:8,opacity:.7,marginLeft:2}}>{cnt}</span>}
+</button>);
 })}
 </div>
 </div>
-<div style={{marginBottom:20}}>
-<Lbl s={{marginBottom:6}}>ROLES</Lbl>
+{/* Step 3: Roles — dynamic from DB */}
+{(buildingSegment.sports||[]).length>0&&(
+<div style={{marginBottom:20,paddingBottom:20,borderBottom:`1px solid ${B.border}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+<Lbl>3 · ROLES</Lbl>
+{segFacetsLoading&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>loading from your data…</span>}
+{!segFacetsLoading&&(segFacets?.titles||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(segFacets.titles||[]).length} unique titles in your data</span>}
+{(buildingSegment.roles||[]).length>0&&<button onClick={()=>setBuildingSegment(s=>({...s,roles:[]}))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 7px",fontSize:8,color:B.muted,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3}}>CLEAR</button>}
+</div>
+{!segFacetsLoading&&(segFacets?.titles||[]).length===0&&(buildingSegment.states||[]).length===0&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Select states above to see available roles in your data.</div>
+)}
+{!segFacetsLoading&&(segFacets?.titles||[]).length===0&&(buildingSegment.states||[]).length>0&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts found for this sport + state combination yet.</div>
+)}
 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{(buildingSegment.orgType==="clubs"?CLUB_ROLES:buildingSegment.orgType==="both"?[...["Athletic Director","Head Track Coach","Head Baseball Coach","Procurement Manager"],...CLUB_ROLES]:["Athletic Director","Head Track Coach","Head Baseball Coach","Head Softball Coach","Procurement Manager"]).map(o=>(<button key={o} onClick={()=>setBuildingSegment(s=>({...s,roles:tog(s.roles||[],o)}))} style={{background:(buildingSegment.roles||[]).includes(o)?`${B.orange}15`:B.white,color:(buildingSegment.roles||[]).includes(o)?B.orange:B.muted,border:`1px solid ${(buildingSegment.roles||[]).includes(o)?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{o}</button>))}
+{(segFacets?.titles||[]).map(({value,count})=>{
+const sel=(buildingSegment.roles||[]).includes(value);
+return(<button key={value} onClick={()=>setBuildingSegment(s=>({...s,roles:tog(s.roles||[],value)}))} style={{background:sel?`${B.orange}15`:B.white,color:sel?B.orange:B.text,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:4,padding:"5px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?600:400}}>
+{value}<span style={{fontSize:9,color:sel?B.orange:B.muted,marginLeft:5}}>({count})</span>
+</button>);
+})}
 </div>
 </div>
+)}
+{/* Footer */}
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",paddingTop:16,borderTop:`1px solid ${B.border}`}}>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>Matching contacts in DB</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>
+{(buildingSegment.roles||[]).length>0?"sport + state + role match":"sport + state match"}
+</div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:buildingSegmentCount>0?B.green:B.muted}}>{buildingSegmentCountLoading?"…":buildingSegmentCount!=null?buildingSegmentCount.toLocaleString():"—"}</div>
 </div>
 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-{!buildingSegmentIsNew&&<button onClick={()=>{setAreas(as=>as.filter(a=>a.id!==buildingSegment.id));setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);toast("Segment deleted","info");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.red,cursor:"pointer",letterSpacing:.3}}>DELETE</button>}
-<OBtn onClick={()=>{const seg={...buildingSegment};if(buildingSegmentIsNew){setAreas(as=>[...as,seg]);}else{setAreas(as=>as.map(a=>a.id===seg.id?seg:a));}setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);toast(`Segment "${seg.name}" saved`,"success");}}>SAVE SEGMENT</OBtn>
+{!buildingSegmentIsNew&&<button onClick={()=>{setAreas(as=>as.filter(a=>a.id!==buildingSegment.id));setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);setSegFacets(null);toast("Segment deleted","info");}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.red,cursor:"pointer",letterSpacing:.3}}>DELETE</button>}
+<OBtn onClick={()=>{const seg={...buildingSegment};if(buildingSegmentIsNew){setAreas(as=>[...as,seg]);}else{setAreas(as=>as.map(a=>a.id===seg.id?seg:a));}setBuildingSegment(null);setBuildingSegmentIsNew(false);setBuildingSegmentCount(null);setSegFacets(null);toast(`Segment "${seg.name}" saved`,"success");}}>SAVE SEGMENT</OBtn>
 </div>
 </div>
 </div>

@@ -1,8 +1,10 @@
 /**
  * POST /api/contacts/area-browse
  *
- * Returns paginated SalesContacts matching a focus area's criteria.
- * Used by the "Browse Contacts" view when a focus area card is selected.
+ * Returns paginated SalesContacts matching a segment's criteria.
+ * Used by the "Browse Contacts" view when a segment card is selected.
+ *
+ * Match logic: AND across groups — sport group OR'd internally, same for states and roles.
  *
  * Body: {
  *   sports: string[],
@@ -31,22 +33,17 @@ export default async function handler(req, res) {
   const pg = Math.max(1, parseInt(String(page), 10))
   const lm = Math.min(100, Math.max(1, parseInt(String(limit), 10)))
 
-  const orClauses = []
-  for (const sport of sports) {
-    const s = typeof sport === 'string' ? sport.trim() : sport?.name || String(sport)
-    if (s) orClauses.push({ sport: { contains: s, mode: 'insensitive' } })
-  }
-  for (const state of states) {
-    const s = typeof state === 'string' ? state.trim() : state?.name || String(state)
-    if (s) orClauses.push({ state: { contains: s, mode: 'insensitive' } })
-  }
-  for (const role of roles) {
-    const r = typeof role === 'string' ? role.trim() : role?.name || String(role)
-    if (r) orClauses.push({ title: { contains: r, mode: 'insensitive' } })
-  }
-
   const andClauses = [{ NOT: { status: 'unsubscribed' } }]
-  if (orClauses.length) andClauses.push({ OR: orClauses })
+
+  if (sports.length) {
+    andClauses.push({ OR: sports.map(s => ({ sport: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
+  }
+  if (states.length) {
+    andClauses.push({ OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
+  }
+  if (roles.length) {
+    andClauses.push({ OR: roles.map(r => ({ title: { contains: (typeof r === 'string' ? r : r?.name || String(r)).trim(), mode: 'insensitive' } })) })
+  }
   if (stateFilter.trim()) andClauses.push({ state: { contains: stateFilter.trim(), mode: 'insensitive' } })
   if (sportFilter.trim()) andClauses.push({ sport: { contains: sportFilter.trim(), mode: 'insensitive' } })
 

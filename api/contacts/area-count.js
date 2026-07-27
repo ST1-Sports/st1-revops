@@ -1,11 +1,13 @@
 /**
  * POST /api/contacts/area-count
  *
- * Returns how many SalesContacts in the DB match a focus area's criteria.
- * Used to show "N matching contacts" on each area card.
+ * Returns how many SalesContacts in the DB match a segment's criteria.
+ * Used to show "N matching contacts" on each segment card.
+ *
+ * Match logic: AND across groups — sport group OR'd internally, same for states and roles.
+ * e.g. (sport=XC OR sport=Track) AND (state=IA OR state=MN) AND (title contains Coach)
  *
  * Body: { sports: string[], states: string[], roles: string[] }
- * Match logic: dedicated sport/state fields (exact + partial); title for roles.
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
@@ -17,28 +19,22 @@ export default async function handler(req, res) {
 
   const { sports = [], states = [], roles = [] } = req.body || {}
 
-  const orClauses = []
+  const andClauses = [{ NOT: { status: 'unsubscribed' } }]
 
-  for (const sport of sports) {
-    const s = typeof sport === 'string' ? sport.trim() : sport?.name || String(sport)
-    if (s) orClauses.push({ sport: { contains: s, mode: 'insensitive' } })
+  if (sports.length) {
+    andClauses.push({ OR: sports.map(s => ({ sport: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
   }
-  for (const state of states) {
-    const s = typeof state === 'string' ? state.trim() : state?.name || String(state)
-    if (s) orClauses.push({ state: { contains: s, mode: 'insensitive' } })
+  if (states.length) {
+    andClauses.push({ OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
   }
-  for (const role of roles) {
-    const r = typeof role === 'string' ? role.trim() : role?.name || String(role)
-    if (r) orClauses.push({ title: { contains: r, mode: 'insensitive' } })
+  if (roles.length) {
+    andClauses.push({ OR: roles.map(r => ({ title: { contains: (typeof r === 'string' ? r : r?.name || String(r)).trim(), mode: 'insensitive' } })) })
   }
+
+  const where = andClauses.length === 1 ? andClauses[0] : { AND: andClauses }
 
   try {
-    const count = await prisma.salesContact.count({
-      where: {
-        NOT: { status: 'unsubscribed' },
-        ...(orClauses.length ? { OR: orClauses } : {}),
-      },
-    })
+    const count = await prisma.salesContact.count({ where })
     return res.json({ count })
   } catch (err) {
     console.error('[contacts/area-count]', err.message)
