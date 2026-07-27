@@ -2,14 +2,16 @@
  * POST /api/contacts/segment-facets
  *
  * Given selected sports + states, returns:
- *   byState  — { [stateAbbr]: count } for selected sports across ALL states (landscape view)
- *   titles   — [{ value, count }] distinct title values for contacts in selected states,
- *              NOT sport-filtered — so Athletic Directors and other sport-agnostic roles appear
+ *   byState  — { [stateAbbr]: count } for selected sports across ALL states.
+ *              Keys are normalized to 2-letter abbreviations.
+ *   titles   — [{ value, count }] distinct title values for contacts in selected
+ *              states (state-only filter — Athletic Directors always appear).
  *
  * Body: { sports: string[], states: string[] }
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+import { buildStatesClause, toStateAbbr, STATE_NAMES } from '../_lib/stateUtils.js'
 
 const SPORT_ALIASES = {
   'Cross Country': ['XC', 'cross-country'],
@@ -21,18 +23,12 @@ function buildSportsClause(sports) {
   const terms = []
   for (const sp of sports) {
     const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
-    const aliases = SPORT_ALIASES[s] || []
-    for (const term of [s, ...aliases]) {
+    for (const term of [s, ...(SPORT_ALIASES[s] || [])]) {
       terms.push({ sport: { contains: term, mode: 'insensitive' } })
       terms.push({ title: { contains: term, mode: 'insensitive' } })
     }
   }
   return { OR: terms }
-}
-
-function buildStatesClause(states) {
-  if (!states.length) return null
-  return { OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) }
 }
 
 export default async function handler(req, res) {
@@ -46,7 +42,7 @@ export default async function handler(req, res) {
   const sportsClause = buildSportsClause(sports)
   const statesClause = buildStatesClause(states)
 
-  // byState: count per state for selected sports (shows geographic landscape for sport)
+  // byState: count per state for selected sports — normalized to 2-letter abbreviations
   let byState = {}
   if (sportsClause) {
     const rows = await prisma.salesContact.groupBy({
@@ -54,11 +50,14 @@ export default async function handler(req, res) {
       where: { AND: [notUnsub, sportsClause] },
       _count: { state: true },
     })
-    rows.forEach(r => { if (r.state) byState[r.state] = r._count.state })
+    rows.forEach(r => {
+      if (!r.state) return
+      const abbr = toStateAbbr(r.state) || r.state
+      byState[abbr] = (byState[abbr] || 0) + r._count.state
+    })
   }
 
-  // titles: based on STATE only — not sport-filtered
-  // This ensures sport-agnostic roles (Athletic Director, Procurement, etc.) always appear
+  // titles: state-only filter so sport-agnostic roles (Athletic Director etc.) always appear
   let titles = []
   if (statesClause) {
     const rows = await prisma.salesContact.groupBy({

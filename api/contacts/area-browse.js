@@ -1,16 +1,15 @@
 /**
  * POST /api/contacts/area-browse
  *
- * Returns paginated SalesContacts matching a segment's criteria.
- * Sport matching includes aliases (XC = Cross Country) and also checks the title field.
+ * Paginated contacts matching a segment's criteria.
+ * Handles state stored as abbreviation ("IA"), full name ("Iowa"), or "City, IA".
+ * Sport matching includes aliases and checks title field.
  *
- * Body: {
- *   sports: string[], states: string[], roles: string[],
- *   page: number, limit: number, stateFilter: string, sportFilter: string
- * }
+ * Body: { sports, states, roles, page, limit, stateFilter, sportFilter }
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+import { buildStatesClause } from '../_lib/stateUtils.js'
 
 const SPORT_ALIASES = {
   'Cross Country': ['XC', 'cross-country'],
@@ -37,8 +36,7 @@ export default async function handler(req, res) {
     const sportTerms = []
     for (const sp of sports) {
       const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
-      const aliases = SPORT_ALIASES[s] || []
-      for (const term of [s, ...aliases]) {
+      for (const term of [s, ...(SPORT_ALIASES[s] || [])]) {
         sportTerms.push({ sport: { contains: term, mode: 'insensitive' } })
         sportTerms.push({ title: { contains: term, mode: 'insensitive' } })
       }
@@ -46,9 +44,8 @@ export default async function handler(req, res) {
     andClauses.push({ OR: sportTerms })
   }
 
-  if (states.length) {
-    andClauses.push({ OR: states.map(s => ({ state: { contains: (typeof s === 'string' ? s : s?.name || String(s)).trim(), mode: 'insensitive' } })) })
-  }
+  const statesClause = buildStatesClause(states)
+  if (statesClause) andClauses.push(statesClause)
 
   if (roles.length) {
     andClauses.push({ OR: roles.map(r => ({ title: { contains: (typeof r === 'string' ? r : r?.name || String(r)).trim(), mode: 'insensitive' } })) })

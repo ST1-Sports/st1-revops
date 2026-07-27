@@ -12,6 +12,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+import { normalizeStateForStorage } from '../_lib/stateUtils.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -34,7 +35,7 @@ export default async function handler(req, res) {
       const score   = Number.isFinite(Number(c.score)) ? Math.min(Math.max(Number(c.score), 0), 1000) : 0
       const segment = c.segment || (c.priority === 'high' ? 'warm' : 'cold')
       const sport   = typeof c.sport === 'string' ? c.sport.trim() : (c.sport?.name || '')
-      const state   = (c.state  || '').trim()
+      const state   = normalizeStateForStorage(c.state || '')
       const city    = (c.city   || '').trim()
       return {
         email:       c.email.trim().toLowerCase().slice(0, 255),
