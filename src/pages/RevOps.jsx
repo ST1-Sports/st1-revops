@@ -13052,8 +13052,7 @@ RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLef
 }
 function ModAgent() {
 const {s,dispatch,toast,cu,setMod}=useApp();
-const history=s.agentHistory||[];
-const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY", typeof fn==="function"?fn(history):fn);
+const [history,setHistory]=useState([]);
 const [input,setInput]=useState("");
 const [running,setRunning]=useState(false);
 const [expandedEmail,setExpandedEmail]=useState(null);
@@ -13069,12 +13068,43 @@ const [invoiceCreated,setInvoiceCreated]=useState({});
 const [billCreated,setBillCreated]=useState({});
 const [billPdfStore,setBillPdfStore]=useState({});
 const [sendingQuote,setSendingQuote]=useState(null);
+const [sessions,setSessions]=useState([]);
+const [sessionsLoading,setSessionsLoading]=useState(true);
+const [activeSessionId,setActiveSessionId]=useState(null);
+const sessionIdRef=useRef(null);
 const endRef=useRef(null);
 const inputRef=useRef(null);
 useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
 useEffect(()=>{
 if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
 },[s.agentDraft]);
+useEffect(()=>{
+if(!cu?.id){setSessionsLoading(false);return;}
+fetch(`/api/chat?userId=${encodeURIComponent(cu.id)}&context=agent-panel&limit=40`)
+.then(r=>r.json())
+.then(d=>{
+const valid=(d.sessions||[]).filter(s=>(s.messages||[]).some(m=>m.role==="user"));
+setSessions(valid);setSessionsLoading(false);
+})
+.catch(()=>setSessionsLoading(false));
+},[cu?.id]);
+const sessionTitle=(sess)=>{const first=(sess.messages||[]).find(m=>m.role==="user");const txt=first?.content||"Conversation";return txt.length>44?txt.slice(0,44)+"…":txt;};
+const relDate=(iso)=>{const d=new Date(iso);const now=new Date();const days=Math.floor((now-d)/86400000);if(days===0)return"Today";if(days===1)return"Yesterday";if(days<7)return`${days}d ago`;return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});};
+const saveMsg=(role,content,actions)=>{
+if(!sessionIdRef.current)return;
+fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})}).catch(()=>{});
+};
+const newChat=()=>{
+setHistory([]);sessionIdRef.current=null;setActiveSessionId(null);
+setTimeout(()=>inputRef.current?.focus(),100);
+};
+const loadSession=(sess)=>{
+setActiveSessionId(sess.id);sessionIdRef.current=sess.id;
+const msgs=(sess.messages||[]).map(m=>({id:m.id,role:m.role,content:m.content,actions:Array.isArray(m.actions)?m.actions:[],suggestions:[],ts:new Date(m.ts).getTime()}));
+setHistory(msgs);
+setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
+};
 const copyEmail=(action)=>{
 const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
 try{navigator.clipboard.writeText(text);}catch{}
@@ -13152,9 +13182,22 @@ const msg=(overrideMsg||input).trim();
 if(!msg||running)return;
 setInput("");setRunning(true);
 setAgentStatus("thinking");
+if(!sessionIdRef.current){
+try{
+const sr=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"start_session",userId:cu?.id||null,userName:cu?.name||null,context:"agent-panel"})});
+const sd=await sr.json();
+if(sd.sessionId){
+sessionIdRef.current=sd.sessionId;setActiveSessionId(sd.sessionId);
+const stub={id:sd.sessionId,userId:cu?.id,userName:cu?.name,createdAt:new Date().toISOString(),messages:[]};
+setSessions(prev=>[stub,...prev]);
+}
+}catch{}
+}
 const userEntry={role:"user",content:msg,ts:Date.now()};
 const nextHistory=[...history,userEntry];
 setHistory(nextHistory);
+saveMsg("user",msg,null);
 const localContext={
 deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],
 invoices:s.invoices||[],sequences:s.sequences||[]
@@ -13171,6 +13214,10 @@ const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
 setLastMeta(meta);
 const assistantEntry={role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
 setHistory(h=>[...h,assistantEntry]);
+saveMsg("assistant",message,actions);
+setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
+?{...s,messages:[...((s.messages||[])),{role:"user",content:msg,ts:Date.now()},{role:"assistant",content:message,actions,ts:Date.now()}]}
+:s));
 if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Check AI Agent"});
 dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
 actions.forEach(a=>{
@@ -13195,7 +13242,6 @@ setHistory(h=>[...h,{role:"assistant",content:`Error: ${e.message}`,actions:[],s
 setAgentStatus(null);setRunning(false);
 setTimeout(()=>inputRef.current?.focus(),100);
 };
-const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);toast("Conversation cleared","info");};
 const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
 const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
 const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
@@ -13221,7 +13267,7 @@ return (
 action={<div style={{display:"flex",gap:6,alignItems:"center"}}>
 {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
 {lastMeta?.searchUsed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>🔍 WEB</span>}
-{history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}
+<GBtn onClick={newChat} style={{fontSize:9,padding:"3px 9px"}}>+ NEW CHAT</GBtn>
 </div>}/>
 <div style={{flex:1,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:14,marginBottom:12,display:"flex",flexDirection:"column",gap:10,boxShadow:"0 1px 3px rgba(0,0,0,.05)"}}>
 {history.length===0&&(
@@ -13715,6 +13761,18 @@ return(
 </div>
 {/* ── Context sidebar ── */}
 <div style={{width:220,borderLeft:`1px solid ${B.border}`,background:B.surface,padding:"22px 14px",display:"flex",flexDirection:"column",gap:18,overflowY:"auto",flexShrink:0}}>
+{/* Sessions */}
+<div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>PAST CHATS</div>
+{sessionsLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading…</div>}
+{!sessionsLoading&&sessions.filter(ss=>ss.id!==activeSessionId).slice(0,8).map(sess=>(
+<button key={sess.id} onClick={()=>loadSession(sess)} style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",marginBottom:4,textAlign:"left",cursor:"pointer",display:"block"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,lineHeight:1.3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sessionTitle(sess)}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{relDate(sess.createdAt)}</div>
+</button>
+))}
+{!sessionsLoading&&sessions.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5}}>Conversations will appear here.</div>}
+</div>
 {/* Pipeline */}
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:8}}>PIPELINE</div>
@@ -14831,6 +14889,7 @@ const [customer,setCustomer]=useState("");
 const [loading,setLoading]=useState(false);
 const [result,setResult]=useState(null);
 const [summary,setSummary]=useState("");
+const [sendingZoho,setSendingZoho]=useState(false);
 const inputRef=useRef(null);
 useEffect(()=>{
 if(s.edgarDraft){setTask(s.edgarDraft);dispatch("SET_EDGAR_DRAFT","");setTimeout(()=>inputRef.current?.focus(),80);}
@@ -14854,6 +14913,15 @@ const lineItems=q.lineItems||[];
 const fmtM=v=>v==null?"—":fmt$(v);
 const gmColor=v=>v==null?"#9ca3af":v<0.3?"#ef4444":v<0.4?"#f59e0b":"#10b981";
 const disabled=loading||!task.trim();
+const ownLists=(s.priceLists||[]).filter(pl=>pl.type==="own");
+const newestUpload=ownLists.reduce((mx,pl)=>Math.max(mx,pl.uploadedAt||0),0);
+const staleDays=newestUpload?Math.floor((Date.now()-newestUpload)/86400000):null;
+const createInZoho=()=>sharedCreateQuoteNow({
+customer_name:q.customer||customer||"Customer",
+line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0})),
+notes:(q.warnings||[]).join("\n"),
+send_email:false,
+},"edgar_main",setSendingZoho);
 return(
 <div style={{padding:"22px 26px",maxWidth:900,margin:"0 auto"}}>
 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
@@ -14874,6 +14942,8 @@ return(
 <input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Name or school" style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",width:200}}/>
 </div>
 </div>
+{staleDays===null&&<div style={{marginBottom:8,padding:"5px 10px",background:`${B.yellow}18`,border:`1px solid ${B.yellow}66`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ No price lists uploaded — go to Price Lists to add supplier costs before quoting.</div>}
+{staleDays!==null&&staleDays>30&&<div style={{marginBottom:8,padding:"5px 10px",background:`${B.yellow}18`,border:`1px solid ${B.yellow}66`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ Price lists last updated {staleDays}d ago — consider refreshing before quoting.</div>}
 <button onClick={run} disabled={disabled} style={{background:disabled?B.surface:B.teal,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:"9px 24px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
 </div>
 {summary&&<div className="card" style={{padding:12,marginBottom:14,background:B.tealBg,borderLeft:`3px solid ${B.teal}`}}>
@@ -14921,9 +14991,10 @@ return(
 {q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>⚠ {w}</div>)}
 </div>
 )}
-<div style={{marginTop:12,display:"flex",gap:8}}>
+<div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
+<button onClick={createInZoho} disabled={sendingZoho} style={{background:sendingZoho?B.surface:B.teal,color:sendingZoho?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:sendingZoho?"not-allowed":"pointer",fontWeight:700}}>{sendingZoho?"CREATING…":"▤ CREATE IN ZOHO"}</button>
 <button onClick={()=>setMod("deals")} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
-<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
+<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");setSendingZoho(false);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
 </div>
 </div>
 )}
