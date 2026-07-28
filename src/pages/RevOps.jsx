@@ -110,6 +110,10 @@ savedAds: [],
 socialPosts: [],
 campaigns: [],
 priceLists: [],
+contactLists: [],
+appUsers: [],
+invoiceLastSync: null,
+crmNav: null,
 };
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
@@ -1587,7 +1591,7 @@ if(action.type==="draft_email"){const key=`${msgIdx}_${actionIdx}`;setExpandedEm
 if(action.type==="create_deal"){
 const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
 dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_deal",name:d.name,amount:d.value,stage:d.stage,account_name:d.school})});toast("✓ Created in Zoho CRM","success");}catch{}
+crmCreate("Deals",{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}).then(r=>r?.json()).then(dd=>{const zid=dd?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:zid});toast("✓ Created in Zoho CRM","success");}).catch(()=>{});
 return;
 }
 if(action.type==="flag_deal"){
@@ -1598,19 +1602,19 @@ return;
 if(action.type==="schedule_followup"){
 const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
 if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:action.date,...(action.note?{notes:(d.notes?d.notes+"\n":"")+action.note}:{})});toast(`Follow-up set: ${action.date}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${action.date}. ${action.note||""}`})});}catch{}}
+crmAddNote("Deals",d.zohoId,`Follow-up: ${action.date}. ${action.note||""}`);}
 return;
 }
 if(action.type==="log_note"){
 const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_name||"").toLowerCase()));
 if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+action.note});toast(`Note logged on ${d.name}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:action.note})});}catch{}}
+crmAddNote("Deals",d.zohoId,action.note);}
 return;
 }
 if(action.type==="add_contact"){
 const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school})});toast("✓ Synced to Zoho","success");}catch{}
+crmCreate("Contacts",{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Designation:c.title,Account_Name:c.school}).then(()=>toast("✓ Synced to Zoho","success")).catch(()=>{});
 return;
 }
 if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
@@ -1787,12 +1791,12 @@ actions.forEach(a=>{
 if(a.type==="schedule_followup"){
 const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
 if(d){dispatch("UPDATE_DEAL",{id:d.id,followUpDate:a.date,...(a.note?{notes:(d.notes?d.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});toast(`📅 Auto: follow-up set ${a.date} — ${d.name}`,"info");
-try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}}
+crmAddNote("Deals",d.zohoId,`Follow-up: ${a.date}. ${a.note||""}`);}
 }
 if(a.type==="log_note"){
 const d=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
 if(d){dispatch("UPDATE_DEAL",{id:d.id,notes:(d.notes?d.notes+"\n":"")+`${today()}: ${a.note}`});toast(`📝 Auto: note logged — ${d.name}`,"info");
-try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:d.name,note:a.note})});}catch{}}
+crmAddNote("Deals",d.zohoId,a.note);}
 }
 if(a.type==="store_competitor_intel"&&a.competitor_name&&a.intel){
 dispatch("SET_COMPETE_INTEL",{[a.competitor_name]:a.intel});
@@ -14169,16 +14173,10 @@ setExpandedEmail(e=>e===key?null:key);
 return;
 }
 if(action.type==="create_deal"){
-const newDeal={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
+const newDeal={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:action.followUpDate||"",notes:action.note||""};
 dispatch("ADD_DEAL",newDeal);
 toast(`Deal created: ${newDeal.name}`,"success");
-try{
-await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-action:"create_deal",name:newDeal.name,amount:newDeal.value,stage:newDeal.stage,
-account_name:newDeal.school,closing_date:action.followUpDate||"",description:newDeal.notes
-})});
-toast("✓ Created in Zoho CRM","success");
-}catch{}
+crmCreate("Deals",{Deal_Name:newDeal.name,Amount:newDeal.value,Stage:newDeal.stage,Account_Name:newDeal.school,Closing_Date:newDeal.followUpDate||"",Description:newDeal.notes}).then(r=>r?.json()).then(dd=>{const zid=dd?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_DEAL",{id:newDeal.id,zohoId:zid});toast("✓ Created in Zoho CRM","success");}).catch(()=>{});
 return;
 }
 if(action.type==="flag_deal"){
@@ -14191,8 +14189,7 @@ const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_nam
 if(deal){
 dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:action.date,...(action.note?{notes:(deal.notes?deal.notes+"\n":"")+action.note}:{})});
 toast(`Follow-up set for ${deal.name}: ${action.date}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:`Follow-up scheduled: ${action.date}. ${action.note||""}`})});}catch{}
-}
+crmAddNote("Deals",deal.zohoId,`Follow-up scheduled: ${action.date}. ${action.note||""}`);}
 return;
 }
 if(action.type==="log_note"){
@@ -14200,20 +14197,14 @@ const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((action.deal_nam
 if(deal){
 dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+action.note});
 toast(`Note logged on ${deal.name}`,"success");
-try{await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:action.note})});}catch{}
-}
+crmAddNote("Deals",deal.zohoId,action.note);}
 return;
 }
 if(action.type==="add_contact"){
 const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 toast(`Contact added: ${c.fullName}`,"success");
-try{
-await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-action:"create_contact",firstName:c.firstName,lastName:c.lastName,email:c.email,phone:c.phone,title:c.title,account_name:c.school
-})});
-toast("✓ Contact synced to Zoho","success");
-}catch{}
+crmCreate("Contacts",{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Designation:c.title,Account_Name:c.school}).then(()=>toast("✓ Contact synced to Zoho","success")).catch(()=>{});
 return;
 }
 if(action.type==="add_to_nurture"){
@@ -14349,16 +14340,14 @@ const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||""
 if(deal){
 dispatch("UPDATE_DEAL",{id:deal.id,followUpDate:a.date,...(a.note?{notes:(deal.notes?deal.notes+"\n":"")+`${a.date}: ${a.note}`}:{})});
 toast(`📅 Auto: follow-up set ${a.date} — ${deal.name}`,"info");
-try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:`Follow-up: ${a.date}. ${a.note||""}`})});}catch{}
-}
+crmAddNote("Deals",deal.zohoId,`Follow-up: ${a.date}. ${a.note||""}`);}
 }
 if(a.type==="log_note"){
 const deal=(s.deals||[]).find(d=>d.name?.toLowerCase().includes((a.deal_name||"").toLowerCase()));
 if(deal){
 dispatch("UPDATE_DEAL",{id:deal.id,notes:(deal.notes?deal.notes+"\n":"")+`${today()}: ${a.note}`});
 toast(`📝 Auto: note logged — ${deal.name}`,"info");
-try{fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"add_note",deal_name:deal.name,note:a.note})});}catch{}
-}
+crmAddNote("Deals",deal.zohoId,a.note);}
 }
 });
 } catch(e){
