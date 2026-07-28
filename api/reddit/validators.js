@@ -84,6 +84,11 @@ function validateEvaluatorResult(obj) {
     errors.push(`value_angle exceeds ${MAX_VALUE_ANGLE_WORDS} words (got ${valueWords})`);
   }
 
+  // competitor_mentioned — optional; must be a string if present
+  if ('competitor_mentioned' in obj && typeof obj.competitor_mentioned !== 'string') {
+    errors.push('competitor_mentioned must be a string (may be empty)');
+  }
+
   // do_not_reply_reason must be a string (may be empty)
   if (typeof obj.do_not_reply_reason !== 'string') {
     errors.push('do_not_reply_reason must be a string (may be empty)');

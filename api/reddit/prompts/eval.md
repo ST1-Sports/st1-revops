@@ -29,6 +29,14 @@ Decision rules:
 - Replies should usually not include a link.
 - Do not recommend mentioning the company unless the thread explicitly asks for vendors and the context supports it.
 
+Competitor monitoring rules:
+- Known competitors: BSN Sports, Gopher Sport, Dick's Sporting Goods, VS Athletics, MF Athletic, School Specialty, Epic Sports, SquadLocker, Varsity Group, Anderson's.
+- If a thread mentions a competitor by name — especially complaints about shipping, quality, service, or pricing — this is HIGH VALUE. Elevate fit_score by 1–2 points.
+- If someone explicitly asks for alternatives to a competitor, decision should be REPLY with high fit_score (8–9).
+- If someone is complaining about a competitor's service or product, this is a REPLY opportunity with a helpful angle: what to look for when switching, what good service looks like.
+- Do NOT recommend naming our company or attacking the competitor. The value angle is always helping the person solve their problem.
+- Set competitor_mentioned to the exact competitor name (e.g. "BSN Sports") or empty string if none.
+
 Return valid JSON only.
 
 Schema:
@@ -39,6 +47,7 @@ Schema:
   "confidence": 1-10,
   "intent_type": "buying_now" | "researching" | "general_discussion" | "support_request" | "off_topic",
   "audience_type": "coach" | "parent" | "athlete" | "admin" | "unknown",
+  "competitor_mentioned": "string — exact competitor name or empty string",
   "reasoning_summary": "string, max 70 words",
   "value_angle": "string, max 40 words",
   "do_not_reply_reason": "string or empty"
@@ -59,6 +68,7 @@ author: {{author}}
 </thread>
 
 <business_context>
-We sell sporting goods and support team stores, team ordering, equipment, apparel, and consultative buying help.
+We sell track & field and multi-sport athletic equipment to high schools and universities.
 We want to sound like a knowledgeable sports operator, not a salesperson.
+Competitors we monitor: BSN Sports, Gopher Sport, Dick's Sporting Goods, VS Athletics, MF Athletic, School Specialty.
 </business_context>

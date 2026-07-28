@@ -185,16 +185,18 @@ export default function Reddit() {
   }
 
   // ── derived lists ────────────────────────────────────────────────────────────
-  const reviewable = threads.filter(t =>
+  const reviewable   = threads.filter(t =>
     t.replies?.length > 0 && !['POSTED','REJECTED','SKIPPED','APPROVED'].includes(t.status)
   )
-  const posted   = threads.filter(t => t.status === 'POSTED')
-  const rejected = threads.filter(t => t.status === 'REJECTED' || t.status === 'SKIPPED')
-  const pending  = threads.filter(t => t.status === 'PENDING' || (t.status === 'EVALUATED' && !t.replies?.length))
+  const posted       = threads.filter(t => t.status === 'POSTED')
+  const rejected     = threads.filter(t => t.status === 'REJECTED' || t.status === 'SKIPPED')
+  const pending      = threads.filter(t => t.status === 'PENDING' || (t.status === 'EVALUATED' && !t.replies?.length))
+  const competitors  = threads.filter(t => t.evaluation?.competitor_mentioned)
 
-  const visibleList = filter === 'review'   ? reviewable
-                    : filter === 'posted'   ? posted
-                    : filter === 'rejected' ? rejected
+  const visibleList = filter === 'review'      ? reviewable
+                    : filter === 'posted'      ? posted
+                    : filter === 'rejected'    ? rejected
+                    : filter === 'competitors' ? competitors
                     : threads
 
   const lastScanTime = threads[0]?.ingestedAt
@@ -237,10 +239,11 @@ export default function Reddit() {
           {/* Stats row */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
             {[
-              { label: 'To Review', count: reviewable.length, key: 'review', color: C.orange },
-              { label: 'All',       count: threads.length,    key: 'all',    color: C.muted },
-              { label: 'Posted',    count: posted.length,     key: 'posted', color: C.green },
-              { label: 'Skipped',   count: rejected.length,   key: 'rejected', color: C.muted },
+              { label: 'To Review',   count: reviewable.length,  key: 'review',      color: C.orange },
+              { label: '⚔ Competitors', count: competitors.length, key: 'competitors', color: '#7c3aed' },
+              { label: 'All',         count: threads.length,     key: 'all',         color: C.muted },
+              { label: 'Posted',      count: posted.length,      key: 'posted',      color: C.green },
+              { label: 'Skipped',     count: rejected.length,    key: 'rejected',    color: C.muted },
             ].map(({ label, count, key, color }) => (
               <button key={key} onClick={() => setFilter(key)}
                 style={{ background: filter === key ? (key === 'review' ? C.orangeBg : C.bg) : 'transparent',
@@ -287,6 +290,15 @@ export default function Reddit() {
                   WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {thread.title}
                 </div>
+                {ev.competitor_mentioned && (
+                  <div style={{ marginBottom: 3 }}>
+                    <span style={{ fontSize: 8, color: '#7c3aed', background: '#f5f3ff',
+                      padding: '1px 6px', borderRadius: 3, fontFamily: "'Lexend Zetta',sans-serif",
+                      letterSpacing: .3 }}>
+                      ⚔ {ev.competitor_mentioned}
+                    </span>
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   {ev.fit_score != null && (
                     <span style={{ fontSize: 9, color: scoreColor(ev.fit_score),
@@ -427,6 +439,14 @@ export default function Reddit() {
                   <div style={{ fontSize: 11, color: C.mid, lineHeight: 1.6, marginBottom: 6,
                     borderLeft: `3px solid ${C.orange}`, paddingLeft: 10 }}>
                     {sel.evaluation.reasoning_summary}
+                  </div>
+                )}
+                {sel.evaluation.competitor_mentioned && (
+                  <div style={{ fontSize: 10, color: '#7c3aed', background: '#f5f3ff',
+                    borderRadius: 4, padding: '6px 10px', marginBottom: 6,
+                    fontFamily: "'Lexend',sans-serif" }}>
+                    ⚔ Competitor thread — <strong>{sel.evaluation.competitor_mentioned}</strong> mentioned.
+                    Reply angle: validate frustration, explain what good looks like. Don't name them negatively.
                   </div>
                 )}
                 {sel.evaluation.value_angle && (

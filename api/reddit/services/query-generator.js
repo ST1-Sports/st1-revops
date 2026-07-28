@@ -15,6 +15,12 @@ const DEFAULT_QUERIES = [
   { subreddit: 'Coaching',              query: 'track field equipment purchase' },
   { subreddit: 'HighSchoolSports',      query: 'athletic director equipment' },
   { subreddit: 'SportsBusiness',        query: 'school sports equipment budget' },
+  // Competitor monitoring — complaints, comparisons, alternatives
+  { subreddit: 'HighSchoolSports',      query: 'BSN Sports' },
+  { subreddit: 'Coaching',              query: 'BSN Sports shipping' },
+  { subreddit: 'trackandfield',         query: 'Gopher Sport' },
+  { subreddit: 'HighSchoolSports',      query: 'Dick\'s Sporting Goods team order' },
+  { subreddit: 'Coaching',              query: 'VS Athletics MF Athletic' },
 ];
 
 /**
@@ -40,15 +46,20 @@ async function generateSearchQueries() {
         role: 'user',
         content: `ST1 Sports sells track & field timing systems, cross country equipment, pole vault / high jump gear, throws equipment (javelin/discus/shot put), and multi-sport athletic equipment to high schools and universities in the US.
 
-Generate 14 Reddit search query pairs targeting coaches, athletic directors, parents, and athletes who might be buying, researching, or discussing sports equipment — especially people who need what ST1 sells.
+Key competitors: BSN Sports, Gopher Sport, Dick's Sporting Goods, VS Athletics, MF Athletic, School Specialty, Epic Sports, SquadLocker.
 
-Vary the angle:
+Generate 18 Reddit search query pairs. Mix two types:
+
+TYPE A — Buying intent / topical (12 queries):
 - Buying intent ("looking for", "recommendations", "best X for")
 - Budget / purchasing ("where do schools buy", "AD purchasing")
-- Comparisons / alternatives
 - Problems / complaints about equipment
-- School fundraising / budget discussions
 - Specific event equipment (pole vault, timing, throws, cross country)
+
+TYPE B — Competitor monitoring (6 queries):
+- Direct competitor name searches: people complaining about a competitor, asking for alternatives, comparing options
+- Use the competitor names above; vary across subreddits
+- Examples: "BSN Sports", "Gopher Sport alternative", "Dick's team order problems", "VS Athletics review"
 
 Target subreddits: trackandfield, CrossCountry, HS_Cross_Country, running, athletics, Coaching, HighSchoolSports, physed, polevault, AmateurCompetitionAthletics, SportsBusiness, Teachers
 
