@@ -66,9 +66,73 @@ function daysFromNow(date) {
   return Math.round((new Date(date) - Date.now()) / 86_400_000)
 }
 
+// ── Backfill: adopt Zoho Books invoices RevOps has never tracked ─────────────
+//
+// DealInvoice rows are normally only written by the ledger's own invoice-draft
+// flow (a CRM "Closed Won" webhook, or a manual draft). Real invoices created
+// directly in Zoho Books — the common case day to day — never appear here
+// unless we go pull them in. This adopts any currently-open (sent/overdue/
+// partial) Books invoice that has no local row yet, so the Finance tab and
+// reconcile's invoice-matching always reflect what's actually in Zoho Books.
+async function backfillOpenInvoices(limit) {
+  const filters = ['Status.Sent', 'Status.Overdue', 'Status.PartiallyPaid']
+  const zohoMap = {}
+
+  await Promise.all(filters.map(async filter => {
+    try {
+      const data = await booksGet(`/invoices?filter_by=${filter}&per_page=${limit}&sort_column=due_date&sort_order=A`)
+      for (const inv of data.invoices || []) zohoMap[inv.invoice_id] = inv
+    } catch (e) {
+      console.warn('[payments] backfill booksGet', filter, ':', e.message)
+    }
+  }))
+
+  const ids = Object.keys(zohoMap)
+  if (!ids.length) return 0
+
+  const existing = await prisma.dealInvoice.findMany({
+    where:  { zohoInvoiceId: { in: ids } },
+    select: { zohoInvoiceId: true },
+  })
+  const known    = new Set(existing.map(e => e.zohoInvoiceId))
+  const toCreate = ids.filter(id => !known.has(id))
+  if (!toCreate.length) return 0
+
+  await prisma.dealInvoice.createMany({
+    data: toCreate.map(id => {
+      const zoho = zohoMap[id]
+      return {
+        crmDealId:     `zoho-inv-${id}`,
+        crmDealName:   zoho.customer_name || 'Unknown',
+        zohoInvoiceId: id,
+        status:        STATUS_MAP[zoho.status] || 'SENT',
+        amountTotal:   parseFloat(zoho.total || 0) || null,
+        dueDate:       zoho.due_date ? new Date(zoho.due_date) : null,
+        triggerSource: 'ZOHO_BACKFILL',
+      }
+    }),
+    skipDuplicates: true,
+  })
+
+  return toCreate.length
+}
+
 // ── Core poll ─────────────────────────────────────────────────────────────────
 
 async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
+  // 0. Adopt any Zoho Books invoices RevOps doesn't know about yet — this is a
+  // passive local mirror of what already exists in Books, not a write to
+  // Zoho, so it runs regardless of dryRun.
+  let backfilled = 0
+  try {
+    backfilled = await backfillOpenInvoices(limit)
+  } catch (e) {
+    if (isPrismaTableMissing(e)) {
+      return { ok: true, message: 'DealInvoice table not migrated — nothing to poll', totals: {} }
+    }
+    console.warn('[payments] backfill failed:', e.message)
+  }
+
   // 1. Load all in-flight local invoices (not DRAFT, PAID, VOID)
   let localInvoices
   try {
@@ -87,7 +151,7 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
   }
 
   if (!localInvoices.length) {
-    return { ok: true, message: 'No open invoices to track', totals: { checked: 0 } }
+    return { ok: true, message: 'No open invoices to track', totals: { checked: 0, backfilled } }
   }
 
   // 2. Fetch open invoices from Zoho Books (parallel: sent, overdue, partial)
@@ -199,11 +263,12 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
     ok:      true,
     dryRun,
     totals: {
-      checked:   localInvoices.length,
-      updated:   changes.length,
-      overdue:   overdueList.length,
-      upcoming:  upcomingList.length,
-      paid:      nowPaid.length,
+      checked:    localInvoices.length,
+      backfilled,
+      updated:    changes.length,
+      overdue:    overdueList.length,
+      upcoming:   upcomingList.length,
+      paid:       nowPaid.length,
     },
     changes,
     overdue:  overdueList.map(summarise),

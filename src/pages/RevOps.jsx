@@ -12910,7 +12910,7 @@ return(
 );
 }
 function ModFinance() {
-const {toast}=useApp();
+const {s,toast}=useApp();
 const [invoices,setInvoices]=useState(null);
 const [invLoading,setInvLoading]=useState(true);
 const [reconcileResult,setReconcileResult]=useState(null);
@@ -12918,11 +12918,20 @@ const [reconciling,setReconciling]=useState(false);
 const [billResult,setBillResult]=useState(null);
 const [billLoading,setBillLoading]=useState(false);
 const [billPreview,setBillPreview]=useState(null);
+const [dealPick,setDealPick]=useState("");
+const [manualDealName,setManualDealName]=useState("");
+const [poOverride,setPoOverride]=useState("");
+const [invoicePreview,setInvoicePreview]=useState(null);
+const [invoiceCreated,setInvoiceCreated]=useState(null);
+const [invoiceWorking,setInvoiceWorking]=useState(false);
 const fileRef=useRef();
 useEffect(()=>{
 fetch('/api/agents/ledger/payments',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({dryRun:true,lookAheadDays:7,limit:200})})
-.then(r=>r.json()).then(d=>setInvoices(d)).catch(()=>{}).finally(()=>setInvLoading(false));
+.then(r=>r.json()).then(d=>{
+setInvoices(d);
+if(d?.totals?.backfilled) toast(`Pulled in ${d.totals.backfilled} invoice${d.totals.backfilled!==1?"s":""} from Zoho Books`,"info");
+}).catch(()=>{}).finally(()=>setInvLoading(false));
 },[]);
 const runReconcile=async()=>{
 setReconciling(true);setReconcileResult(null);
@@ -12933,6 +12942,52 @@ const d=await r.json();
 setReconcileResult(d);
 }catch(e){toast('Reconcile error: '+e.message,'error');}
 setReconciling(false);
+};
+const openDealsForInvoice=useMemo(()=>(s.deals||[]).filter(d=>d.stage!=="Closed Lost").sort((a,b)=>(a.name||"").localeCompare(b.name||"")),[s.deals]);
+const selectedDeal=dealPick?openDealsForInvoice.find(d=>d.id===dealPick):null;
+const invoiceParams=()=>({
+crmDealId:selectedDeal?.zohoId||undefined,
+crmDealName:selectedDeal?.name||manualDealName||undefined,
+crmAccountName:selectedDeal?.school||manualDealName||undefined,
+dealAmount:selectedDeal?.value||undefined,
+poNumber:poOverride||undefined,
+});
+const previewInvoice=async()=>{
+if(!selectedDeal&&!manualDealName.trim()){toast("Pick a deal or type a customer name","error");return;}
+setInvoiceWorking(true);setInvoicePreview(null);setInvoiceCreated(null);
+try{
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({action:'draft',dryRun:true,...invoiceParams()})});
+const d=await r.json();
+if(d.error) throw new Error(d.error);
+setInvoicePreview(d);
+}catch(e){toast('Invoice preview error: '+e.message,'error');}
+setInvoiceWorking(false);
+};
+const createInvoiceNow=async()=>{
+setInvoiceWorking(true);
+try{
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({action:'draft',dryRun:false,...invoiceParams()})});
+const d=await r.json();
+if(d.error) throw new Error(d.error);
+setInvoiceCreated(d);setInvoicePreview(null);
+toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as DRAFT in Zoho Books`,"success");
+}catch(e){toast('Invoice create error: '+e.message,'error');}
+setInvoiceWorking(false);
+};
+const sendInvoiceNow=async()=>{
+if(!invoiceCreated?.dealInvoiceId){toast("Nothing to send","error");return;}
+setInvoiceWorking(true);
+try{
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({action:'confirm',dealInvoiceId:invoiceCreated.dealInvoiceId})});
+const d=await r.json();
+if(d.error) throw new Error(d.error);
+setInvoiceCreated(c=>({...c,status:'SENT'}));
+toast("Invoice sent to customer","success");
+}catch(e){toast('Send error: '+e.message,'error');}
+setInvoiceWorking(false);
 };
 const handleBillFile=async(file)=>{
 if(!file) return;
@@ -12979,6 +13034,62 @@ const d=await r.json();setInvoices(d);toast(`Payment check done — ${d.totals?.
 }} style={{padding:"8px 16px",background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
 ◎ RUN PAYMENT CHECK
 </button>
+</div>
+{/* Draft invoice — engage the ledger agent directly */}
+<div className="card" style={{padding:16,marginBottom:20,borderTop:`3px solid ${B.purple}`}}>
+<Lbl c={B.purple} s={{marginBottom:10}}>DRAFT AN INVOICE</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 140px",gap:10,marginBottom:10}}>
+<div>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,display:"block",marginBottom:4}}>DEAL</label>
+<select value={dealPick} onChange={e=>{setDealPick(e.target.value);setManualDealName("");}} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 9px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif"}}>
+<option value="">— pick an open deal or type below —</option>
+{openDealsForInvoice.map(d=>(<option key={d.id} value={d.id}>{d.name}{d.school?` (${d.school})`:""} — {fmt$(d.value||0)}</option>))}
+</select>
+</div>
+<div>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,display:"block",marginBottom:4}}>OR CUSTOMER / SCHOOL NAME</label>
+<input value={manualDealName} onChange={e=>{setManualDealName(e.target.value);if(e.target.value)setDealPick("");}} placeholder="Type if not in Deals yet" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 9px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+</div>
+<div>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,display:"block",marginBottom:4}}>PO # (optional)</label>
+<input value={poOverride} onChange={e=>setPoOverride(e.target.value)} placeholder="PO-1234" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"7px 9px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+</div>
+</div>
+<div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+<OBtn onClick={previewInvoice} disabled={invoiceWorking}>{invoiceWorking?"WORKING…":"👁 PREVIEW"}</OBtn>
+{invoicePreview&&!invoiceCreated&&<OBtn col={B.purple} onClick={createInvoiceNow} disabled={invoiceWorking}>✓ CREATE DRAFT IN ZOHO BOOKS</OBtn>}
+{invoiceCreated&&invoiceCreated.status!=='SENT'&&<OBtn col={B.green} onClick={sendInvoiceNow} disabled={invoiceWorking}>✉ SEND TO CUSTOMER</OBtn>}
+</div>
+{invoicePreview&&!invoiceCreated&&(
+<div style={{marginTop:12,padding:12,background:B.surface,borderRadius:6}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:6}}>Preview — nothing created yet</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>{invoicePreview.preview?.customerName}</div>
+{(invoicePreview.preview?.lineItems||[]).map((li,i)=>(
+<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+<span style={{color:B.text}}>{li.quantity}× {li.name}</span>
+<span style={{color:B.muted}}>{fmt$(li.rate*li.quantity)}</span>
+</div>
+))}
+<div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`2px solid ${B.border}`}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted}}>Due {invoicePreview.preview?.dueDate}</span>
+<span style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.purple}}>{fmt$(invoicePreview.preview?.total)}</span>
+</div>
+</div>
+)}
+{invoiceCreated&&(
+<div style={{marginTop:12,padding:12,background:B.greenBg,borderRadius:6,border:`1px solid ${B.green}40`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{invoiceCreated.customerName} — {invoiceCreated.invoiceNumber||invoiceCreated.zohoInvoiceId}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:invoiceCreated.status==='SENT'?B.green:B.orange,letterSpacing:.5,marginTop:2}}>{invoiceCreated.status||'DRAFT'}</div>
+</div>
+<div style={{display:"flex",alignItems:"center",gap:10}}>
+<span style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.green}}>{fmt$(invoiceCreated.total)}</span>
+{invoiceCreated.reviewUrl&&<a href={invoiceCreated.reviewUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue}}>VIEW IN BOOKS →</a>}
+</div>
+</div>
+</div>
+)}
 </div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
 {/* Overdue invoices */}
