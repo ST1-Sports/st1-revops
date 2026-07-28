@@ -14113,8 +14113,6 @@ const [matchLoading,setMatchLoading]=useState(false);
 const [matchedContact,setMatchedContact]=useState(null);
 const inputRef=useRef(null);
 const matchDebounceRef=useRef(null);
-const contactsRef=useRef(s.contacts);
-useEffect(()=>{contactsRef.current=s.contacts;},[s.contacts]);
 useEffect(()=>{
 if(s.edgarDraft){setTask(s.edgarDraft);dispatch("SET_EDGAR_DRAFT","");setTimeout(()=>inputRef.current?.focus(),80);}
 },[s.edgarDraft]);
@@ -14125,27 +14123,24 @@ if(term.length<3){setMatches([]);return;}
 if(matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
 matchDebounceRef.current=setTimeout(async()=>{
 setMatchLoading(true);
-const lower=term.toLowerCase();
-const local=(contactsRef.current||[]).map(c=>({
-source:"crm",id:c.id,
-name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
-title:typeof c.title==="string"?c.title:c.title?.name||"",
-school:typeof c.school==="string"?c.school:c.school?.name||"",
-email:c.email||"",score:c.score||null,pushedToZoho:true,
-})).filter(m=>m.name.toLowerCase().includes(lower)||m.school.toLowerCase().includes(lower)).slice(0,4);
-let remote=[];
-try{
-const r=await fetch(`/api/contacts?search=${encodeURIComponent(term)}&limit=5`);
-const d=await r.json();
-remote=(d.contacts||[]).map(c=>({
+const [crmResults,bradContacts]=await Promise.all([
+fetch(`/api/crm/search?q=${encodeURIComponent(term)}`).then(r=>r.json()).catch(()=>[]),
+fetch(`/api/contacts?search=${encodeURIComponent(term)}&limit=5`).then(r=>r.json()).then(d=>d.contacts||[]).catch(()=>[]),
+]);
+const crm=(Array.isArray(crmResults)?crmResults:[]).slice(0,4).map(r=>({
+source:"crm",id:r.id,
+name:r.fullName||`${r.firstName||""} ${r.lastName||""}`.trim(),
+title:"",school:r.school||"",email:r.email||"",
+score:null,pushedToZoho:true,module:r.module||"Contact",
+}));
+const brad=bradContacts.map(c=>({
 source:"brad",id:c.id,
 name:`${c.firstName||""} ${c.lastName||""}`.trim()||c.email,
 title:c.title||"",school:c.companyName||"",email:c.email||"",
 score:c.score||0,pushedToZoho:!!c.pushedToZoho,
 }));
-}catch{}
-const seen=new Set(local.map(m=>m.email).filter(Boolean));
-const merged=[...local,...remote.filter(m=>!m.email||!seen.has(m.email))].slice(0,6);
+const seen=new Set(crm.map(m=>m.email).filter(Boolean));
+const merged=[...crm,...brad.filter(m=>!m.email||!seen.has(m.email))].slice(0,6);
 setMatches(merged);
 setMatchLoading(false);
 },400);
@@ -14221,7 +14216,7 @@ return(
 <button key={`${m.source}_${m.id}`} onClick={()=>selectMatch(m)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 11px",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
 <div style={{display:"flex",alignItems:"center",gap:6}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{m.name}</span>
-<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:m.source==="crm"?B.green:B.blue,background:m.source==="crm"?B.greenBg:B.blueBg,padding:"2px 6px",borderRadius:3,letterSpacing:.3,flexShrink:0,fontWeight:700}}>{m.source==="crm"?"IN CRM":m.pushedToZoho?"BRAD · IN ZOHO":"BRAD'S LIST"}</span>
+<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:m.source==="crm"?B.green:B.blue,background:m.source==="crm"?B.greenBg:B.blueBg,padding:"2px 6px",borderRadius:3,letterSpacing:.3,flexShrink:0,fontWeight:700}}>{m.source==="crm"?`ZOHO ${(m.module||"CONTACT").toUpperCase()}`:m.pushedToZoho?"BRAD · IN ZOHO":"BRAD'S LIST"}</span>
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.4,marginTop:2}}>{[m.title,m.school].filter(Boolean).join(" · ")||"—"}</div>
 </button>

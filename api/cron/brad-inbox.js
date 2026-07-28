@@ -66,6 +66,9 @@ async function pollInbox(host) {
   }).then(rows => new Set(rows.map(r => r.input?.gmailMessageId).filter(Boolean)))
 
   let checked = 0, intents = 0
+  // Promote + Slack-notify are independent per contact — collected here and
+  // fired together after the loop instead of blocking message-to-message.
+  const postActions = []
 
   for (const msg of messages) {
     if (processed.has(msg.id)) continue
@@ -115,6 +118,7 @@ async function pollInbox(host) {
     if (verdict !== 'INTENT') continue
 
     intents++
+    // Round-robin rep assignment must stay sequential/in-order here.
     const assigned    = await pickRep()
     const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || from.email
 
@@ -131,13 +135,15 @@ async function pollInbox(host) {
       },
     }).catch(() => {})
 
-    // Promote to Zoho as a real Account + Contact (not a Lead) — this is a
-    // genuine positive reply being handed to a rep, not a cold marketing lead.
-    if (!contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
-
-    // Slack notification
-    await notifyBradSlack(assigned, contactName, from.email, subject, bodyText)
+    postActions.push({ contact, assigned, contactName, from, subject, bodyText })
   }
+
+  // Promote to Zoho (real Account + Contact, not a Lead — a genuine positive
+  // reply being handed to a rep) and notify Slack, all in parallel.
+  await Promise.all(postActions.map(async pa => {
+    if (!pa.contact.pushedToZoho) await promoteContactToZoho(host, pa.contact.id)
+    await notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText)
+  }))
 
   return { checked, intents }
 }
