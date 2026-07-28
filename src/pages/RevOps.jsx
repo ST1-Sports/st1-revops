@@ -5692,8 +5692,11 @@ const localSegFacets=useMemo(()=>{
   const stateMatch=(c)=>!states.length||states.some(st=>toStateAbbrClient(c.state||'')===st.toUpperCase());
   const roleMatch=(c)=>!roles.length||roles.some(r=>(c.title||'').toLowerCase().includes(r.toLowerCase()));
   // byState: sport-only filter (geographic landscape for selected sports)
+  // Keys normalized to 2-letter abbr so the UI's st-keyed lookup works for "Iowa" → "IA" etc.
   const byState={};
-  allC.filter(sportMatch).forEach(c=>{if(c.state) byState[c.state]=(byState[c.state]||0)+1;});
+  allC.filter(sportMatch).forEach(c=>{
+    if(c.state){const abbr=toStateAbbrClient(c.state)||c.state;byState[abbr]=(byState[abbr]||0)+1;}
+  });
   // titles: state-only filter (NOT sport-filtered — shows ADs and all roles in the state)
   const stateFiltered=states.length?allC.filter(stateMatch):allC.filter(sportMatch);
   const titleMap={};
