@@ -14108,10 +14108,52 @@ const [loading,setLoading]=useState(false);
 const [result,setResult]=useState(null);
 const [summary,setSummary]=useState("");
 const [sendingZoho,setSendingZoho]=useState(false);
+const [matches,setMatches]=useState([]);
+const [matchLoading,setMatchLoading]=useState(false);
+const [matchedContact,setMatchedContact]=useState(null);
 const inputRef=useRef(null);
+const matchDebounceRef=useRef(null);
 useEffect(()=>{
 if(s.edgarDraft){setTask(s.edgarDraft);dispatch("SET_EDGAR_DRAFT","");setTimeout(()=>inputRef.current?.focus(),80);}
 },[s.edgarDraft]);
+useEffect(()=>{
+if(matchedContact){setMatches([]);return;}
+const term=customer.trim();
+if(term.length<3){setMatches([]);return;}
+if(matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
+matchDebounceRef.current=setTimeout(async()=>{
+setMatchLoading(true);
+const lower=term.toLowerCase();
+const local=(s.contacts||[]).filter(c=>{
+const school=typeof c.school==="string"?c.school:c.school?.name||"";
+return (c.fullName||"").toLowerCase().includes(lower)||school.toLowerCase().includes(lower);
+}).slice(0,4).map(c=>({
+source:"crm",id:c.id,
+name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
+title:typeof c.title==="string"?c.title:c.title?.name||"",
+school:typeof c.school==="string"?c.school:c.school?.name||"",
+email:c.email||"",score:c.score||null,pushedToZoho:true,
+}));
+let remote=[];
+try{
+const r=await fetch(`/api/contacts?search=${encodeURIComponent(term)}&limit=5`);
+const d=await r.json();
+remote=(d.contacts||[]).map(c=>({
+source:"brad",id:c.id,
+name:`${c.firstName||""} ${c.lastName||""}`.trim()||c.email,
+title:c.title||"",school:c.companyName||"",email:c.email||"",
+score:c.score||0,pushedToZoho:!!c.pushedToZoho,
+}));
+}catch{}
+const seen=new Set(local.map(m=>m.email).filter(Boolean));
+const merged=[...local,...remote.filter(m=>!m.email||!seen.has(m.email))].slice(0,6);
+setMatches(merged);
+setMatchLoading(false);
+},400);
+return()=>clearTimeout(matchDebounceRef.current);
+},[customer,matchedContact,s.contacts]);
+const selectMatch=(m)=>{setMatchedContact(m);setCustomer(m.school?`${m.name} — ${m.school}`:m.name);setMatches([]);};
+const clearMatch=()=>setMatchedContact(null);
 const run=async()=>{
 const t=(task||"").trim();
 if(!t||loading) return;
@@ -14134,30 +14176,63 @@ const disabled=loading||!task.trim();
 const ownLists=(s.priceLists||[]).filter(pl=>pl.type==="own");
 const newestUpload=ownLists.reduce((mx,pl)=>Math.max(mx,pl.uploadedAt||0),0);
 const staleDays=newestUpload?Math.floor((Date.now()-newestUpload)/86400000):null;
-const createInZoho=()=>sharedCreateQuoteNow({
+const createInZoho=async()=>{
+setSendingZoho(true);
+if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho){
+try{
+await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id})});
+toast(`Linked ${matchedContact.name} into Zoho CRM`,"success");
+}catch{}
+}
+const linkNote=matchedContact?`Linked to existing contact: ${matchedContact.name}${matchedContact.email?` (${matchedContact.email})`:""} — ${matchedContact.source==="brad"?"from Brad's prospect list":"already in CRM"}`:"";
+return sharedCreateQuoteNow({
 customer_name:q.customer||customer||"Customer",
+contact_person:matchedContact?.name||"",
+email:matchedContact?.email||"",
 line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0})),
-notes:(q.warnings||[]).join("\n"),
+notes:[...(q.warnings||[]),linkNote].filter(Boolean).join("\n"),
 send_email:false,
 },"edgar_main",setSendingZoho);
+};
 return(
-<div style={{padding:"22px 26px",maxWidth:900,margin:"0 auto"}}>
-<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
-<div style={{width:36,height:36,background:`${B.teal}26`,border:`1px solid ${B.teal}66`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:B.teal,flexShrink:0}}>▤</div>
+<div style={{padding:"26px 34px",maxWidth:1280,margin:"0 auto"}}>
+<div style={{display:"flex",alignItems:"center",gap:12,marginBottom:22}}>
+<div style={{width:42,height:42,background:`${B.teal}26`,border:`1px solid ${B.teal}66`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:21,color:B.teal,flexShrink:0}}>▤</div>
 <div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.3}}>Edgar — Quote Engine</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>GM-aware quoting · MAP guardrails · live price data</div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:B.black,letterSpacing:.3}}>Edgar — Quote Engine</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>GM-aware quoting · MAP guardrails · live price data</div>
 </div>
 </div>
-<div className="card" style={{padding:16,marginBottom:16,borderTop:`3px solid ${B.teal}`}}>
-<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:10}}>
+<div className="card" style={{padding:18,marginBottom:18,borderTop:`3px solid ${B.teal}`}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:14,marginBottom:10}}>
 <div>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:1.3,display:"block",marginBottom:5}}>WHAT DO YOU NEED?</label>
-<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.6,resize:"vertical",outline:"none"}}/>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1.3,display:"block",marginBottom:6}}>WHAT DO YOU NEED?</label>
+<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:13,fontFamily:"'Lexend',sans-serif",lineHeight:1.65,resize:"vertical",outline:"none"}}/>
 </div>
-<div style={{display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.3,display:"block",marginBottom:5}}>CUSTOMER (optional)</label>
-<input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Name or school" style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",width:200}}/>
+<div>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.3,display:"block",marginBottom:6}}>CUSTOMER (optional)</label>
+<input value={customer} onChange={e=>{setCustomer(e.target.value);if(matchedContact)setMatchedContact(null);}} placeholder="Name or school" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:13,fontFamily:"'Lexend',sans-serif",outline:"none",boxSizing:"border-box"}}/>
+{matchLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Searching CRM &amp; Brad's prospect list…</div>}
+{!matchedContact&&matches.length>0&&(
+<div style={{marginTop:5,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,maxHeight:190,overflowY:"auto",boxShadow:"0 4px 12px rgba(0,0,0,.1)"}}>
+{matches.map(m=>(
+<button key={`${m.source}_${m.id}`} onClick={()=>selectMatch(m)} style={{display:"block",width:"100%",textAlign:"left",padding:"7px 10px",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+<div style={{display:"flex",alignItems:"center",gap:6}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:600}}>{m.name}</span>
+<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:m.source==="crm"?B.green:B.blue,background:m.source==="crm"?B.greenBg:B.blueBg,padding:"1px 5px",borderRadius:3,letterSpacing:.3,flexShrink:0}}>{m.source==="crm"?"IN CRM":m.pushedToZoho?"BRAD · IN ZOHO":"BRAD'S LIST"}</span>
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.4,marginTop:1}}>{[m.title,m.school].filter(Boolean).join(" · ")||"—"}</div>
+</button>
+))}
+</div>
+)}
+{matchedContact&&(
+<div style={{marginTop:5,display:"flex",alignItems:"center",gap:6,background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 9px"}}>
+<span style={{fontSize:11,color:B.green}}>✓</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Tied to {matchedContact.name}{matchedContact.email?` (${matchedContact.email})`:""}</span>
+<button onClick={clearMatch} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:0,flexShrink:0}}>✕</button>
+</div>
+)}
 </div>
 </div>
 {staleDays===null&&<div style={{marginBottom:8,padding:"5px 10px",background:`${B.yellow}18`,border:`1px solid ${B.yellow}66`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ No price lists uploaded — go to Price Lists to add supplier costs before quoting.</div>}
@@ -14168,13 +14243,13 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{summary}</div>
 </div>}
 {result&&(
-<div className="card" style={{padding:16,borderTop:`3px solid ${B.teal}`}}>
-{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12}}>Customer: <strong style={{color:B.text}}>{q.customer}</strong></div>}
-<table style={{width:"100%",borderCollapse:"collapse",marginBottom:14}}>
+<div className="card" style={{padding:20,borderTop:`3px solid ${B.teal}`}}>
+{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>Customer: <strong style={{color:B.text}}>{q.customer}</strong></div>}
+<table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
 <thead>
 <tr style={{borderBottom:`2px solid ${B.border}`}}>
 {["ITEM","QTY","COST","PRICE","GM%","NOTES"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"6px 8px 6px 0",fontWeight:700}}>{h}</th>
+<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"7px 10px 7px 0",fontWeight:700}}>{h}</th>
 ))}
 </tr>
 </thead>
@@ -14183,36 +14258,36 @@ return(
 const gm=li.quotedPrice&&li.cost?(li.quotedPrice-li.cost)/li.quotedPrice:null;
 return(
 <tr key={i} style={{borderBottom:`1px solid ${B.border}`,opacity:li.notFound?.7:1}}>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:li.notFound?B.muted:B.text,padding:"8px 8px 8px 0"}}>{li.name}{li.notFound&&<span style={{fontSize:9,color:B.red,marginLeft:5}}>NOT FOUND</span>}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0"}}>{li.qty||1}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(li.cost)}</td>
-<td style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.teal,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(li.quotedPrice)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gmColor(gm),textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtPct(gm)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right",padding:"8px 0",maxWidth:160}}>{li.notes||""}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:li.notFound?B.muted:B.text,padding:"9px 10px 9px 0"}}>{li.name}{li.notFound&&<span style={{fontSize:10,color:B.red,marginLeft:5}}>NOT FOUND</span>}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.textMid,textAlign:"right",padding:"9px 10px 9px 0"}}>{li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.textMid,textAlign:"right",padding:"9px 10px 9px 0"}}>{fmtM(li.cost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.teal,textAlign:"right",padding:"9px 10px 9px 0"}}>{fmtM(li.quotedPrice)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:gmColor(gm),textAlign:"right",padding:"9px 10px 9px 0"}}>{fmtPct(gm)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"9px 0",maxWidth:200}}>{li.notes||""}</td>
 </tr>
 );
 })}
 </tbody>
 <tfoot>
 <tr style={{borderTop:`2px solid ${B.border}`}}>
-<td colSpan={2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,padding:"8px 0",letterSpacing:.3}}>TOTALS</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmtM(q.totalCost)}</td>
-<td style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.teal,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(q.totalRevenue)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:gmColor(q.overallGmPct??null),textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmtPct(q.overallGmPct??null)}</td>
+<td colSpan={2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.muted,padding:"9px 0",letterSpacing:.3}}>TOTALS</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.textMid,textAlign:"right",padding:"9px 10px 9px 0",fontWeight:600}}>{fmtM(q.totalCost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.teal,textAlign:"right",padding:"9px 10px 9px 0"}}>{fmtM(q.totalRevenue)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:gmColor(q.overallGmPct??null),textAlign:"right",padding:"9px 10px 9px 0",fontWeight:600}}>{fmtPct(q.overallGmPct??null)}</td>
 <td/>
 </tr>
 </tfoot>
 </table>
 {(q.warnings||[]).length>0&&(
-<div style={{background:B.yellowBg,border:`1px solid ${B.yellow}80`,borderRadius:5,padding:"8px 12px",marginTop:4}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,letterSpacing:.5,marginBottom:5}}>WARNINGS</div>
-{q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>⚠ {w}</div>)}
+<div style={{background:B.yellowBg,border:`1px solid ${B.yellow}80`,borderRadius:5,padding:"9px 13px",marginTop:4}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.yellow,letterSpacing:.5,marginBottom:6}}>WARNINGS</div>
+{q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.55}}>⚠ {w}</div>)}
 </div>
 )}
-<div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
-<button onClick={createInZoho} disabled={sendingZoho} style={{background:sendingZoho?B.surface:B.teal,color:sendingZoho?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:sendingZoho?"not-allowed":"pointer",fontWeight:700}}>{sendingZoho?"CREATING…":"▤ CREATE IN ZOHO"}</button>
-<button onClick={()=>setMod("deals")} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
-<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");setSendingZoho(false);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
+<div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap"}}>
+<button onClick={createInZoho} disabled={sendingZoho} style={{background:sendingZoho?B.surface:B.teal,color:sendingZoho?B.muted:B.white,border:"none",borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:sendingZoho?"not-allowed":"pointer",fontWeight:700}}>{sendingZoho?"CREATING…":"▤ CREATE IN ZOHO"}</button>
+<button onClick={()=>setMod("deals")} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
+<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");setSendingZoho(false);setMatchedContact(null);setMatches([]);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
 </div>
 </div>
 )}
