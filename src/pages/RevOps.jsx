@@ -618,12 +618,14 @@ await new Promise(r=>setTimeout(r,150));
 }
 return all;
 };
+const dealStageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 const syncContacts=async(force=false)=>{
 if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
 try {
-const [contactRows,leadRows]=await Promise.all([
+const [contactRows,leadRows,dealRows]=await Promise.all([
 fetchAllPages("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source"),
 fetchAllPages("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time"),
+fetchAllPages("/Deals?fields=Deal_Name,Amount,Stage,Closing_Date,Account_Name,Contact_Name,Description,Modified_Time,Created_Time"),
 ]);
 const now=Date.now();
 const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
@@ -633,7 +635,23 @@ const allZoho=[...contacts,...leads];
 const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
 const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
 dispatch("MERGE_CONTACTS",{toAdd,toUpdate,lastSync:now});
-if(force) toast(`Zoho CRM: ${toAdd.length} added, ${toUpdate.length} updated (${allZoho.length} total)`, "success");
+
+const existingDeals=s.deals||[];
+const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
+let dealsAdded=0,dealsUpdated=0;
+dealRows.forEach(zd=>{
+const zStage=zs(zd.Stage)||"Quoted";
+const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quoted");
+if(existingDealZohoIds.has(zd.id)){
+const local=existingDeals.find(d=>d.zohoId===zd.id);
+if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}
+}else{
+dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
+dealsAdded++;
+}
+});
+
+if(force) toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated`, "success");
 } catch(e){
 console.error("CRM sync failed:",e);
 if(force) toast(`CRM sync failed: ${e.message}`,"error");
