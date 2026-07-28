@@ -68,3 +68,13 @@ export function parseAddr(raw = '') {
   if (m) return { name: m[1].trim() || null, email: m[2].trim().toLowerCase() }
   return { name: null, email: raw.split(',')[0].trim().toLowerCase() }
 }
+
+/** Push a positive-intent contact into Zoho as a real Account+Contact. Fire-and-forget. */
+export async function promoteContactToZoho(host, contactId) {
+  if (!host) return
+  await fetch(`https://${host}/api/contacts/promote`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ contactId, createAsContact: true }),
+  }).catch(() => {})
+}

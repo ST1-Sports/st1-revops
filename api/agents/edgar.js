@@ -8,7 +8,7 @@
  */
 import { setCors }             from '../_lib/cors.js'
 import { prisma }              from '../_lib/prisma.js'
-import { recall, logInteraction } from '../_lib/memory.js'
+import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
 
 const COMP_PREFIX   = '__COMPETITOR__:'
 const API_KEY       = process.env.ANTHROPIC_KEY
@@ -67,11 +67,7 @@ async function fetchAccountContext({ contactId, contactEmail }) {
   }
   if (!contact) return { block: '', entityKey: null }
 
-  const interactions = await prisma.agentInteraction.findMany({
-    where:   { entity: `contact:${contact.id}` },
-    orderBy: { createdAt: 'desc' },
-    take:    8,
-  }).catch(() => [])
+  const interactions = await recentActivity(`contact:${contact.id}`, 8).catch(() => [])
 
   const lines = []
   lines.push(`Name: ${[contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email}`)

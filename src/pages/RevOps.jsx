@@ -14113,6 +14113,8 @@ const [matchLoading,setMatchLoading]=useState(false);
 const [matchedContact,setMatchedContact]=useState(null);
 const inputRef=useRef(null);
 const matchDebounceRef=useRef(null);
+const contactsRef=useRef(s.contacts);
+useEffect(()=>{contactsRef.current=s.contacts;},[s.contacts]);
 useEffect(()=>{
 if(s.edgarDraft){setTask(s.edgarDraft);dispatch("SET_EDGAR_DRAFT","");setTimeout(()=>inputRef.current?.focus(),80);}
 },[s.edgarDraft]);
@@ -14124,16 +14126,13 @@ if(matchDebounceRef.current) clearTimeout(matchDebounceRef.current);
 matchDebounceRef.current=setTimeout(async()=>{
 setMatchLoading(true);
 const lower=term.toLowerCase();
-const local=(s.contacts||[]).filter(c=>{
-const school=typeof c.school==="string"?c.school:c.school?.name||"";
-return (c.fullName||"").toLowerCase().includes(lower)||school.toLowerCase().includes(lower);
-}).slice(0,4).map(c=>({
+const local=(contactsRef.current||[]).map(c=>({
 source:"crm",id:c.id,
 name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
 title:typeof c.title==="string"?c.title:c.title?.name||"",
 school:typeof c.school==="string"?c.school:c.school?.name||"",
 email:c.email||"",score:c.score||null,pushedToZoho:true,
-}));
+})).filter(m=>m.name.toLowerCase().includes(lower)||m.school.toLowerCase().includes(lower)).slice(0,4);
 let remote=[];
 try{
 const r=await fetch(`/api/contacts?search=${encodeURIComponent(term)}&limit=5`);
@@ -14151,7 +14150,7 @@ setMatches(merged);
 setMatchLoading(false);
 },400);
 return()=>clearTimeout(matchDebounceRef.current);
-},[customer,matchedContact,s.contacts]);
+},[customer,matchedContact]);
 const selectMatch=(m)=>{setMatchedContact(m);setCustomer(m.school?`${m.name} — ${m.school}`:m.name);setMatches([]);};
 const clearMatch=()=>setMatchedContact(null);
 const run=async()=>{
@@ -14180,7 +14179,7 @@ const ownLists=(s.priceLists||[]).filter(pl=>pl.type==="own");
 const newestUpload=ownLists.reduce((mx,pl)=>Math.max(mx,pl.uploadedAt||0),0);
 const staleDays=newestUpload?Math.floor((Date.now()-newestUpload)/86400000):null;
 const createInZoho=async()=>{
-setSendingZoho(true);
+setSendingZoho("edgar_main");
 if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho){
 try{
 await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id,createAsContact:true})});

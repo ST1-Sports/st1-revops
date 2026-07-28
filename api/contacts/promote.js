@@ -21,10 +21,17 @@ import { getZohoToken } from '../_lib/zoho-token.js'
 
 const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
 
-async function findOrCreateAccount(token, companyName) {
-  const name = (companyName || '').trim()
+async function findOrCreateAccount(contact, headers) {
+  const name = (contact.companyName || '').trim()
   if (!name) return null
-  const headers = { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }
+
+  // Reuse an account already resolved for another prospect at the same
+  // school before hitting Zoho again — many prospects share a school.
+  const sibling = await prisma.salesContact.findFirst({
+    where:  { companyName: contact.companyName, zohoAccountId: { not: null } },
+    select: { zohoAccountId: true },
+  }).catch(() => null)
+  if (sibling?.zohoAccountId) return sibling.zohoAccountId
 
   try {
     const criteria = `(Account_Name:equals:${name})`
@@ -44,6 +51,30 @@ async function findOrCreateAccount(token, companyName) {
   const rec = createData?.data?.[0]
   if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
   return rec?.details?.id || null
+}
+
+/** POST-or-PUT a record into a Zoho module, then mirror the result onto SalesContact. */
+async function upsertZohoRecord({ module, payload, contact, headers, extraContactUpdate = {} }) {
+  const isUpdate = !!contact.zohoCrmId
+  const url    = isUpdate ? `${CRM_BASE}/${module}/${contact.zohoCrmId}` : `${CRM_BASE}/${module}`
+  const method = isUpdate ? 'PUT' : 'POST'
+
+  const zohoRes = await fetch(url, { method, headers, body: JSON.stringify({ data: [payload] }) })
+  const data   = await zohoRes.json()
+  const record = data?.data?.[0]
+
+  if (record?.status === 'error') {
+    throw Object.assign(new Error(record.message || 'Zoho API error'), { isZohoError: true })
+  }
+
+  const zohoId = record?.details?.id || contact.zohoCrmId
+
+  await prisma.salesContact.update({
+    where: { id: contact.id },
+    data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined, ...extraContactUpdate },
+  })
+
+  return zohoId
 }
 
 export default async function handler(req, res) {
@@ -68,74 +99,43 @@ export default async function handler(req, res) {
 
   try {
     if (createAsContact) {
-      const accountId = await findOrCreateAccount(token, contact.companyName)
-
-      const payload = {
-        First_Name:  contact.firstName || '',
-        Last_Name:   contact.lastName  || contact.email.split('@')[0],
-        Email:       contact.email,
-        Phone:       contact.phone    || '',
-        Title:       contact.title    || '',
-        Description: contact.notes    || '',
-        ...(accountId ? { Account_Name: { id: accountId } } : {}),
-      }
-
-      const isUpdate = !!contact.zohoCrmId
-      const url    = isUpdate ? `${CRM_BASE}/Contacts/${contact.zohoCrmId}` : `${CRM_BASE}/Contacts`
-      const method = isUpdate ? 'PUT' : 'POST'
-
-      const zohoRes = await fetch(url, { method, headers, body: JSON.stringify({ data: [payload] }) })
-      const data   = await zohoRes.json()
-      const record = data?.data?.[0]
-
-      if (record?.status === 'error') {
-        return res.status(502).json({ error: record.message || 'Zoho API error' })
-      }
-
-      const zohoId = record?.details?.id || contact.zohoCrmId
-
-      await prisma.salesContact.update({
-        where: { id: contactId },
-        data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined, zohoAccountId: accountId || undefined },
+      const accountId = await findOrCreateAccount(contact, headers)
+      const zohoId = await upsertZohoRecord({
+        module: 'Contacts',
+        payload: {
+          First_Name:  contact.firstName || '',
+          Last_Name:   contact.lastName  || contact.email.split('@')[0],
+          Email:       contact.email,
+          Phone:       contact.phone    || '',
+          Title:       contact.title    || '',
+          Description: contact.notes    || '',
+          ...(accountId ? { Account_Name: { id: accountId } } : {}),
+        },
+        contact, headers,
+        extraContactUpdate: { zohoAccountId: accountId || undefined },
       })
-
       return res.json({ ok: true, zohoId, zohoAccountId: accountId })
     }
 
     // ── Default: push as Lead (bulk/manual promote from Prospecting) ──────────
-    const payload = {
-      First_Name:   contact.firstName || '',
-      Last_Name:    contact.lastName  || contact.email.split('@')[0],
-      Company:      contact.companyName || '',
-      Email:        contact.email,
-      Phone:        contact.phone    || '',
-      Designation:  contact.title    || '',
-      Lead_Source:  'ST1 RevOps',
-      Lead_Status:  'Working',
-      Description:  contact.notes   || '',
-    }
-
-    const isUpdate = !!contact.zohoCrmId
-    const url    = isUpdate ? `${CRM_BASE}/Leads/${contact.zohoCrmId}` : `${CRM_BASE}/Leads`
-    const method = isUpdate ? 'PUT' : 'POST'
-
-    const zohoRes = await fetch(url, { method, headers, body: JSON.stringify({ data: [payload] }) })
-    const data   = await zohoRes.json()
-    const record = data?.data?.[0]
-
-    if (record?.status === 'error') {
-      return res.status(502).json({ error: record.message || 'Zoho API error' })
-    }
-
-    const zohoId = record?.details?.id || contact.zohoCrmId
-
-    await prisma.salesContact.update({
-      where: { id: contactId },
-      data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined },
+    const zohoId = await upsertZohoRecord({
+      module: 'Leads',
+      payload: {
+        First_Name:   contact.firstName || '',
+        Last_Name:    contact.lastName  || contact.email.split('@')[0],
+        Company:      contact.companyName || '',
+        Email:        contact.email,
+        Phone:        contact.phone    || '',
+        Designation:  contact.title    || '',
+        Lead_Source:  'ST1 RevOps',
+        Lead_Status:  'Working',
+        Description:  contact.notes   || '',
+      },
+      contact, headers,
     })
-
     return res.json({ ok: true, zohoId })
   } catch (err) {
+    if (err.isZohoError) return res.status(502).json({ error: err.message })
     console.error('[contacts/promote]', err.message)
     return res.status(500).json({ error: err.message })
   }

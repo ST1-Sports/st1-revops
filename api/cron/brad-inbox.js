@@ -16,7 +16,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
-import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr } from '../_lib/brad-shared.js'
+import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
@@ -133,12 +133,7 @@ async function pollInbox(host) {
 
     // Promote to Zoho as a real Account + Contact (not a Lead) — this is a
     // genuine positive reply being handed to a rep, not a cold marketing lead.
-    if (!contact.pushedToZoho && host) {
-      await fetch(`https://${host}/api/contacts/promote`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactId: contact.id, createAsContact: true }),
-      }).catch(() => {})
-    }
+    if (!contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
 
     // Slack notification
     await notifyBradSlack(assigned, contactName, from.email, subject, bodyText)

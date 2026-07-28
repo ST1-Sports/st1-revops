@@ -32,7 +32,7 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
-import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr } from './_lib/brad-shared.js';
+import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
@@ -61,13 +61,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
 
     // Promote as a real Account + Contact (not a Lead) — a genuine positive
     // reply being handed to a rep, not a cold marketing lead.
-    if (!contact.pushedToZoho) {
-      await fetch(`https://${host}/api/contacts/promote`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ contactId: contact.id, createAsContact: true }),
-      }).catch(() => {})
-    }
+    if (!contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
 
     await notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText)
     console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name}`)

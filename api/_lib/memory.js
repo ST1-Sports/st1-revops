@@ -74,6 +74,16 @@ export async function recentOutcomes({ agentId, entity = null, limit = 5 }) {
   })
 }
 
+/** Recent activity for an entity across all agents, any outcome — a timeline, not just closed feedback. */
+export async function recentActivity(entity, limit = 8) {
+  if (!entity) return []
+  return prisma.agentInteraction.findMany({
+    where:   { entity },
+    orderBy: { createdAt: 'desc' },
+    take:    limit,
+  })
+}
+
 /** Count actions in a rolling window — used for rate limits (no extra table). */
 export async function countActions({ agentId, action, sinceMs }) {
   return prisma.agentInteraction.count({
