@@ -92,6 +92,7 @@ battlecards: {},
 prospectAreas: [],
 agentHistory: [],
 agentDraft: "",
+edgarDraft: "",
 lastBriefDate: null,
 pendingBriefActions: [],
 contactsLastSync: null,
@@ -396,6 +397,7 @@ case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
 case "SET_CRM_NAV":         return {...prev, crmNav:payload};
 case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
 case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
+case "SET_EDGAR_DRAFT":     return {...prev, edgarDraft:payload};
 case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
 case "DISMISS_BRIEF_ACTION":return {...prev, pendingBriefActions:(prev.pendingBriefActions||[]).filter((_,i)=>i!==payload)};
 case "SET_CONTACTS_LAST_SYNC": return {...prev, contactsLastSync:payload};
@@ -550,6 +552,7 @@ const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev);
 const [toasts, setToasts] = useState([]);
 const [showSearch, setShowSearch] = useState(false);
 const [searchQuery, setSearchQuery] = useState("");
+const [edgarQuickInput, setEdgarQuickInput] = useState("");
 const dispatch = useCallback((action, payload) => {
 set(prev => {
 const next = reducer(prev, action, payload);
@@ -666,6 +669,7 @@ const NAV = useMemo(()=>[
 {id:"team-stores", icon:"🛒", label:"Team Stores"},
 {id:"compete",     icon:"⊗", label:"Competitors"},
 {id:"price-lists", icon:"$", label:"Price Lists"},
+{id:"edgar",       icon:"▤", label:"Edgar – Quotes"},
 {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
 {id:"agent",       icon:"⊛", label:"AI Agents"},
 {id:"_s_finance"},
@@ -778,6 +782,15 @@ style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent"
 );
 })}
 </nav>
+{/* ── EDGAR QUICK QUOTE ── */}
+{s.currentUserId&&(slim
+?<button onClick={()=>setMod("edgar")} title="Edgar – Quotes" style={{width:"100%",background:mod==="edgar"?"rgba(20,184,166,0.2)":"rgba(255,255,255,0.04)",border:"none",borderTop:"1px solid rgba(255,255,255,0.07)",color:mod==="edgar"?"#14b8a6":"rgba(255,255,255,0.5)",padding:"9px 0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>▤</button>
+:<div style={{borderTop:"1px solid rgba(255,255,255,0.07)",padding:"9px 11px 10px",background:"rgba(20,184,166,0.06)"}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#14b8a6",letterSpacing:1.5,marginBottom:6}}>▤ EDGAR – QUICK QUOTE</div>
+<textarea rows={2} placeholder="e.g. 12 hurdles, 2 blocks for Valley High..." value={edgarQuickInput} onChange={e=>setEdgarQuickInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(edgarQuickInput.trim()){dispatch("SET_EDGAR_DRAFT",edgarQuickInput.trim());setMod("edgar");}}}} style={{width:"100%",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(20,184,166,0.3)",color:"#e5e7eb",borderRadius:4,padding:"5px 7px",fontSize:10,fontFamily:"'Lexend',sans-serif",lineHeight:1.55,resize:"none",outline:"none",boxSizing:"border-box"}}/>
+<button onClick={()=>{if(edgarQuickInput.trim()){dispatch("SET_EDGAR_DRAFT",edgarQuickInput.trim());setMod("edgar");}}} style={{marginTop:5,width:"100%",background:"rgba(20,184,166,0.18)",border:"1px solid rgba(20,184,166,0.4)",color:"#14b8a6",borderRadius:4,padding:"5px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:"pointer"}}>▤ QUOTE</button>
+</div>
+)}
 {s.currentUserId&&!slim&&<div style={{padding:"9px 11px",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",alignItems:"center",gap:7}}>
 {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
@@ -871,6 +884,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="finance"     && <ModFinance/>}
 {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
 {mod==="price-lists" &&<ModPriceLists/>}
+{mod==="edgar"       &&<ModEdgar/>}
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}
@@ -1863,6 +1877,16 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 <div style={{textAlign:"center",marginBottom:18}}>
 {(()=>{const h=new Date().getHours();const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";const nm=cu?.name?.split(" ")[0]||"there";return<div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.muted}}>{gr}, {nm}. What do you need?</div>;})()}
 </div>
+<button onClick={()=>setMod("edgar")} style={{display:"block",width:"100%",maxWidth:500,margin:"0 auto 10px",background:"rgba(20,184,166,0.08)",border:"1px solid rgba(20,184,166,0.35)",borderRadius:8,padding:"10px 14px",cursor:"pointer",textAlign:"left"}}>
+<div style={{display:"flex",alignItems:"center",gap:8}}>
+<span style={{fontSize:16,color:"#14b8a6"}}>▤</span>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:"#14b8a6",letterSpacing:.3}}>Edgar – Quote Engine</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Build a detailed quote with GM margins and MAP guardrails</div>
+</div>
+<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#14b8a6",flexShrink:0}}>OPEN →</span>
+</div>
+</button>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:500,margin:"0 auto",width:"100%"}}>
 {STARTERS.map(st=>(
 <button key={st} onClick={()=>send(st)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:6,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer",lineHeight:1.5}}>{st}</button>
@@ -15963,6 +15987,112 @@ return (
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10,lineHeight:1.5}}>Click the button below to connect your Google account. <strong>Open it on your own device</strong> and sign in as yourself — not a shared or admin account.</div>
 <a href={setupUrl} target="_blank" rel="noreferrer" style={{display:"inline-block",background:B.orange,color:B.white,borderRadius:5,padding:"9px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,textDecoration:"none",letterSpacing:.3}}>Connect My Gmail →</a>
 <button onClick={check} style={{marginLeft:10,background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer"}}>↻ Recheck</button>
+</div>
+);
+}
+function ModEdgar() {
+const {s,dispatch,toast,setMod}=useApp();
+const [task,setTask]=useState("");
+const [customer,setCustomer]=useState("");
+const [loading,setLoading]=useState(false);
+const [result,setResult]=useState(null);
+const [summary,setSummary]=useState("");
+const inputRef=useRef(null);
+useEffect(()=>{
+if(s.edgarDraft){setTask(s.edgarDraft);dispatch("SET_EDGAR_DRAFT","");setTimeout(()=>inputRef.current?.focus(),80);}
+},[s.edgarDraft]);
+const run=async()=>{
+const t=(task||"").trim();
+if(!t||loading) return;
+setLoading(true);setResult(null);setSummary("");
+try{
+const body={task:customer?`${t} — Customer: ${customer}`:t,input:{}};
+if(customer) body.input.customer=customer;
+const r=await fetch("/api/agents/edgar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+const d=await r.json();
+if(d.error) throw new Error(d.error);
+setResult(d.metadata?.quote||null);
+setSummary(d.output||"");
+}catch(e){toast("Edgar error: "+e.message,"error");}
+setLoading(false);
+};
+const q=result||{};
+const lineItems=q.lineItems||[];
+const fmt$=v=>v==null?"—":"$"+(Number(v)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtPct=v=>v==null?"—":(Number(v)*100).toFixed(1)+"%";
+return(
+<div style={{padding:"22px 26px",maxWidth:900,margin:"0 auto"}}>
+<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
+<div style={{width:36,height:36,background:"rgba(20,184,166,0.15)",border:"1px solid rgba(20,184,166,0.4)",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#14b8a6",flexShrink:0}}>▤</div>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#111827",letterSpacing:.3}}>Edgar — Quote Engine</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#6b7280"}}>GM-aware quoting · MAP guardrails · live price data</div>
+</div>
+</div>
+<div className="card" style={{padding:16,marginBottom:16,borderTop:"3px solid #14b8a6"}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:10}}>
+<div>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#14b8a6",letterSpacing:1.3,display:"block",marginBottom:5}}>WHAT DO YOU NEED?</label>
+<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={3} style={{width:"100%",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.6,resize:"vertical",outline:"none"}}/>
+</div>
+<div style={{display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#6b7280",letterSpacing:1.3,display:"block",marginBottom:5}}>CUSTOMER (optional)</label>
+<input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Name or school" style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",width:200}}/>
+</div>
+</div>
+<button onClick={run} disabled={loading||!task.trim()} style={{background:loading||!task.trim()?"#e5e7eb":"#14b8a6",color:loading||!task.trim()?"#9ca3af":"#fff",border:"none",borderRadius:5,padding:"9px 24px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:loading||!task.trim()?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
+</div>
+{summary&&<div className="card" style={{padding:12,marginBottom:14,background:"rgba(20,184,166,0.05)",borderLeft:"3px solid #14b8a6"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#111827",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{summary}</div>
+</div>}
+{result&&(
+<div className="card" style={{padding:16,borderTop:"3px solid #14b8a6"}}>
+{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#6b7280",marginBottom:12}}>Customer: <strong style={{color:"#111827"}}>{q.customer}</strong></div>}
+<table style={{width:"100%",borderCollapse:"collapse",marginBottom:14}}>
+<thead>
+<tr style={{borderBottom:"2px solid #e5e7eb"}}>
+{["ITEM","QTY","COST","PRICE","GM%","NOTES"].map(h=>(
+<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#6b7280",letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"6px 8px 6px 0",fontWeight:700}}>{h}</th>
+))}
+</tr>
+</thead>
+<tbody>
+{lineItems.map((li,i)=>{
+const gm=li.quotedPrice&&li.cost?(li.quotedPrice-li.cost)/li.quotedPrice:null;
+return(
+<tr key={i} style={{borderBottom:"1px solid #f3f4f6",opacity:li.notFound?.7:1}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:li.notFound?"#9ca3af":"#111827",padding:"8px 8px 8px 0"}}>{li.name}{li.notFound&&<span style={{fontSize:9,color:"#ef4444",marginLeft:5}}>NOT FOUND</span>}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0"}}>{li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(li.cost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:"#14b8a6",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(li.quotedPrice)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gm!=null&&gm<0.3?"#ef4444":gm!=null&&gm<0.4?"#f59e0b":"#10b981",textAlign:"right",padding:"8px 8px 8px 0"}}>{gm!=null?fmtPct(gm):"—"}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:"#9ca3af",textAlign:"right",padding:"8px 0",maxWidth:160}}>{li.notes||""}</td>
+</tr>
+);
+})}
+</tbody>
+<tfoot>
+<tr style={{borderTop:"2px solid #e5e7eb"}}>
+<td colSpan={2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#6b7280",padding:"8px 0",letterSpacing:.3}}>TOTALS</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmt$(q.totalCost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:"#14b8a6",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(q.totalRevenue)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:q.overallGmPct<0.3?"#ef4444":q.overallGmPct<0.4?"#f59e0b":"#10b981",textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{q.overallGmPct!=null?fmtPct(q.overallGmPct):"—"}</td>
+<td/>
+</tr>
+</tfoot>
+</table>
+{(q.warnings||[]).length>0&&(
+<div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:5,padding:"8px 12px",marginTop:4}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#ea580c",letterSpacing:.5,marginBottom:5}}>WARNINGS</div>
+{q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#9a3412",lineHeight:1.5}}>⚠ {w}</div>)}
+</div>
+)}
+<div style={{marginTop:12,display:"flex",gap:8}}>
+<button onClick={()=>setMod("deals")} style={{background:"#f3f4f6",border:"1px solid #e5e7eb",color:"#374151",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
+<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");}} style={{background:"none",border:"1px solid #e5e7eb",color:"#9ca3af",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
+</div>
+</div>
+)}
 </div>
 );
 }
