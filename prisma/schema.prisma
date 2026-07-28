@@ -240,6 +240,7 @@ model SalesContact {
   score        Int             @default(0)
   segment      String          @default("cold")
   zohoCrmId    String?
+  zohoAccountId String?
   pushedToZoho Boolean         @default(false)
   status       String          @default("new")
   notes        String?

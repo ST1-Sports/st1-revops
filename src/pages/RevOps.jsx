@@ -14160,7 +14160,10 @@ if(!t||loading) return;
 setLoading(true);setResult(null);setSummary("");
 try{
 const r=await fetch("/api/agents/edgar",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({task:customer?`${t} — Customer: ${customer}`:t,input:customer?{customer}:{}})});
+body:JSON.stringify({task:customer?`${t} — Customer: ${customer}`:t,input:{
+...(customer?{customer}:{}),
+...(matchedContact?{contactId:matchedContact.id,contactEmail:matchedContact.email||null}:{}),
+}})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
 setResult(d.metadata?.quote||null);
@@ -14180,7 +14183,7 @@ const createInZoho=async()=>{
 setSendingZoho(true);
 if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho){
 try{
-await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id})});
+await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id,createAsContact:true})});
 toast(`Linked ${matchedContact.name} into Zoho CRM`,"success");
 }catch{}
 }
@@ -14200,56 +14203,56 @@ return(
 <div style={{width:42,height:42,background:`${B.teal}26`,border:`1px solid ${B.teal}66`,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:21,color:B.teal,flexShrink:0}}>▤</div>
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:B.black,letterSpacing:.3}}>Edgar — Quote Engine</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>GM-aware quoting · MAP guardrails · live price data</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid}}>GM-aware quoting · MAP guardrails · live price data</div>
 </div>
 </div>
 <div className="card" style={{padding:18,marginBottom:18,borderTop:`3px solid ${B.teal}`}}>
 <div style={{display:"grid",gridTemplateColumns:"1fr 300px",gap:14,marginBottom:10}}>
 <div>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,letterSpacing:1.3,display:"block",marginBottom:6}}>WHAT DO YOU NEED?</label>
-<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:13,fontFamily:"'Lexend',sans-serif",lineHeight:1.65,resize:"vertical",outline:"none"}}/>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:12,fontWeight:700,color:B.teal,letterSpacing:.6,display:"block",marginBottom:7}}>WHAT DO YOU NEED?</label>
+<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={4} style={{width:"100%",background:B.surface,border:`2px solid ${B.borderD}`,color:B.text,borderRadius:5,padding:"11px 13px",fontSize:14,fontFamily:"'Lexend',sans-serif",lineHeight:1.65,resize:"vertical",outline:"none",boxSizing:"border-box"}}/>
 </div>
 <div>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1.3,display:"block",marginBottom:6}}>CUSTOMER (optional)</label>
-<input value={customer} onChange={e=>{setCustomer(e.target.value);if(matchedContact)setMatchedContact(null);}} placeholder="Name or school" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:13,fontFamily:"'Lexend',sans-serif",outline:"none",boxSizing:"border-box"}}/>
-{matchLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:4}}>Searching CRM &amp; Brad's prospect list…</div>}
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:12,fontWeight:700,color:B.textMid,letterSpacing:.6,display:"block",marginBottom:7}}>CUSTOMER (optional)</label>
+<input value={customer} onChange={e=>{setCustomer(e.target.value);if(matchedContact)setMatchedContact(null);}} placeholder="Name or school" style={{width:"100%",background:B.surface,border:`2px solid ${B.borderD}`,color:B.text,borderRadius:5,padding:"11px 13px",fontSize:14,fontFamily:"'Lexend',sans-serif",outline:"none",boxSizing:"border-box"}}/>
+{matchLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginTop:5}}>Searching CRM &amp; Brad's prospect list…</div>}
 {!matchedContact&&matches.length>0&&(
-<div style={{marginTop:5,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,maxHeight:190,overflowY:"auto",boxShadow:"0 4px 12px rgba(0,0,0,.1)"}}>
+<div style={{marginTop:6,background:B.white,border:`2px solid ${B.borderD}`,borderRadius:5,maxHeight:200,overflowY:"auto",boxShadow:"0 4px 12px rgba(0,0,0,.12)"}}>
 {matches.map(m=>(
-<button key={`${m.source}_${m.id}`} onClick={()=>selectMatch(m)} style={{display:"block",width:"100%",textAlign:"left",padding:"7px 10px",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+<button key={`${m.source}_${m.id}`} onClick={()=>selectMatch(m)} style={{display:"block",width:"100%",textAlign:"left",padding:"8px 11px",background:"none",border:"none",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
 <div style={{display:"flex",alignItems:"center",gap:6}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:600}}>{m.name}</span>
-<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:m.source==="crm"?B.green:B.blue,background:m.source==="crm"?B.greenBg:B.blueBg,padding:"1px 5px",borderRadius:3,letterSpacing:.3,flexShrink:0}}>{m.source==="crm"?"IN CRM":m.pushedToZoho?"BRAD · IN ZOHO":"BRAD'S LIST"}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{m.name}</span>
+<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:m.source==="crm"?B.green:B.blue,background:m.source==="crm"?B.greenBg:B.blueBg,padding:"2px 6px",borderRadius:3,letterSpacing:.3,flexShrink:0,fontWeight:700}}>{m.source==="crm"?"IN CRM":m.pushedToZoho?"BRAD · IN ZOHO":"BRAD'S LIST"}</span>
 </div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,lineHeight:1.4,marginTop:1}}>{[m.title,m.school].filter(Boolean).join(" · ")||"—"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.4,marginTop:2}}>{[m.title,m.school].filter(Boolean).join(" · ")||"—"}</div>
 </button>
 ))}
 </div>
 )}
 {matchedContact&&(
-<div style={{marginTop:5,display:"flex",alignItems:"center",gap:6,background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:4,padding:"5px 9px"}}>
-<span style={{fontSize:11,color:B.green}}>✓</span>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Tied to {matchedContact.name}{matchedContact.email?` (${matchedContact.email})`:""}</span>
-<button onClick={clearMatch} style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:0,flexShrink:0}}>✕</button>
+<div style={{marginTop:6,display:"flex",alignItems:"center",gap:7,background:B.greenBg,border:`1.5px solid ${B.green}`,borderRadius:4,padding:"6px 10px"}}>
+<span style={{fontSize:13,color:B.green}}>✓</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>Tied to {matchedContact.name}{matchedContact.email?` (${matchedContact.email})`:""}</span>
+<button onClick={clearMatch} style={{background:"none",border:"none",color:B.textMid,fontSize:13,cursor:"pointer",padding:0,flexShrink:0}}>✕</button>
 </div>
 )}
 </div>
 </div>
-{staleDays===null&&<div style={{marginBottom:8,padding:"5px 10px",background:`${B.yellow}18`,border:`1px solid ${B.yellow}66`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ No price lists uploaded — go to Price Lists to add supplier costs before quoting.</div>}
-{staleDays!==null&&staleDays>30&&<div style={{marginBottom:8,padding:"5px 10px",background:`${B.yellow}18`,border:`1px solid ${B.yellow}66`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ Price lists last updated {staleDays}d ago — consider refreshing before quoting.</div>}
-<button onClick={run} disabled={disabled} style={{background:disabled?B.surface:B.teal,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:"9px 24px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
+{staleDays===null&&<div style={{marginBottom:9,padding:"7px 12px",background:`${B.yellow}18`,border:`1.5px solid ${B.yellow}`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.yellow}}>⚠ No price lists uploaded — go to Price Lists to add supplier costs before quoting.</div>}
+{staleDays!==null&&staleDays>30&&<div style={{marginBottom:9,padding:"7px 12px",background:`${B.yellow}18`,border:`1.5px solid ${B.yellow}`,borderRadius:4,fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.yellow}}>⚠ Price lists last updated {staleDays}d ago — consider refreshing before quoting.</div>}
+<button onClick={run} disabled={disabled} style={{background:disabled?B.surface:B.teal,color:disabled?B.textMid:B.white,border:disabled?`2px solid ${B.borderD}`:"none",borderRadius:5,padding:"10px 26px",fontSize:12,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
 </div>
 {summary&&<div className="card" style={{padding:12,marginBottom:14,background:B.tealBg,borderLeft:`3px solid ${B.teal}`}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{summary}</div>
 </div>}
 {result&&(
 <div className="card" style={{padding:20,borderTop:`3px solid ${B.teal}`}}>
-{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>Customer: <strong style={{color:B.text}}>{q.customer}</strong></div>}
+{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,marginBottom:14}}>Customer: <strong style={{color:B.text}}>{q.customer}</strong></div>}
 <table style={{width:"100%",borderCollapse:"collapse",marginBottom:16}}>
 <thead>
-<tr style={{borderBottom:`2px solid ${B.border}`}}>
+<tr style={{borderBottom:`2px solid ${B.borderD}`}}>
 {["ITEM","QTY","COST","PRICE","GM%","NOTES"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"7px 10px 7px 0",fontWeight:700}}>{h}</th>
+<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.textMid,letterSpacing:.4,textAlign:h==="ITEM"?"left":"right",padding:"7px 10px 7px 0",fontWeight:700}}>{h}</th>
 ))}
 </tr>
 </thead>

@@ -59,11 +59,13 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
       },
     }).catch(() => {})
 
+    // Promote as a real Account + Contact (not a Lead) — a genuine positive
+    // reply being handed to a rep, not a cold marketing lead.
     if (!contact.pushedToZoho) {
       await fetch(`https://${host}/api/contacts/promote`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ contactId: contact.id }),
+        body:    JSON.stringify({ contactId: contact.id, createAsContact: true }),
       }).catch(() => {})
     }
 

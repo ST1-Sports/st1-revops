@@ -55,9 +55,52 @@ async function fetchPriceData(task) {
   return { ownSuppliers, matchedItems, competitors }
 }
 
+// ── Account context (Zoho CRM tie-back + interaction history) ─────────────────
+
+async function fetchAccountContext({ contactId, contactEmail }) {
+  let contact = null
+  if (contactId) {
+    contact = await prisma.salesContact.findUnique({ where: { id: contactId } }).catch(() => null)
+  }
+  if (!contact && contactEmail) {
+    contact = await prisma.salesContact.findUnique({ where: { email: contactEmail } }).catch(() => null)
+  }
+  if (!contact) return { block: '', entityKey: null }
+
+  const interactions = await prisma.agentInteraction.findMany({
+    where:   { entity: `contact:${contact.id}` },
+    orderBy: { createdAt: 'desc' },
+    take:    8,
+  }).catch(() => [])
+
+  const lines = []
+  lines.push(`Name: ${[contact.firstName, contact.lastName].filter(Boolean).join(' ') || contact.email}`)
+  if (contact.title)       lines.push(`Title: ${contact.title}`)
+  if (contact.companyName) lines.push(`School/Company: ${contact.companyName}`)
+  if (contact.state)       lines.push(`State: ${contact.state}`)
+  lines.push(`Score: ${contact.score} · Segment: ${contact.segment}`)
+  lines.push(`In Zoho CRM: ${contact.pushedToZoho ? 'yes' : 'no'}${contact.zohoCrmId ? ` (Contact ID ${contact.zohoCrmId})` : ''}`)
+  if (contact.notes) lines.push(`Notes: ${contact.notes}`)
+
+  if (interactions.length) {
+    lines.push('Recent activity:')
+    for (const i of interactions) {
+      const when = i.createdAt.toISOString().slice(0, 10)
+      const summary = i.action === 'reply_intent'
+        ? `replied with interest${i.output?.assignedName ? ` — assigned to ${i.output.assignedName}` : ''}`
+        : i.action === 'quote'
+          ? `Edgar quoted ${i.output?.itemCount ?? '?'} item(s), $${i.output?.totalRevenue ?? '?'} total`
+          : i.action
+      lines.push(`- [${when}] ${i.agentId}: ${summary}`)
+    }
+  }
+
+  return { block: lines.join('\n'), entityKey: `contact:${contact.id}` }
+}
+
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock) {
+function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountBlock) {
   const intro =
     'You are Edgar, ST1 Sports\'s quoting agent. ST1 Sports is a nationwide B2B athletic equipment ' +
     'supplier. You build accurate, professional quotes for K-12 athletic directors and coaches. ' +
@@ -100,7 +143,8 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock) {
     compSection += '\nUse competitor pricing to confirm ST1 is competitive. Never lower ST1 prices below GM floor or MAP just to match a competitor.\n'
   }
 
-  const memSection = memoryBlock ? `\n=== CUSTOMER HISTORY ===\n${memoryBlock}\n` : ''
+  const acctSection = accountBlock ? `\n=== ACCOUNT ON FILE (from CRM/Brad's prospect history) ===\n${accountBlock}\nUse this to inform tone, urgency, and whether to reference prior contact — but only quote real prices from the price data above.\n` : ''
+  const memSection = memoryBlock ? `\n=== CUSTOMER HISTORY (recalled facts) ===\n${memoryBlock}\n` : ''
 
   const rules = `
 === HARD PRICING RULES ===
@@ -138,7 +182,7 @@ Return valid JSON only (no prose outside the JSON):
   "warnings": []
 }`
 
-  return `${intro}${priceSection}${compSection}${memSection}${rules}`
+  return `${intro}${priceSection}${compSection}${acctSection}${memSection}${rules}`
 }
 
 function formatItem(item, supplierName) {
@@ -232,14 +276,17 @@ export default async function handler(req, res) {
   const { task, input = {} } = req.body || {}
   if (!task) return res.status(400).json({ error: 'task is required' })
 
-  const customer = input.customer || null
+  const customer     = input.customer || null
+  const contactId    = input.contactId || null
+  const contactEmail = input.contactEmail || null
 
   try {
-    const [{ ownSuppliers, matchedItems, competitors }, memFacts] = await Promise.all([
+    const [{ ownSuppliers, matchedItems, competitors }, memFacts, accountCtx] = await Promise.all([
       fetchPriceData(task),
       customer
         ? recall({ entity: `customer:${customer}` }).catch(() => [])
         : Promise.resolve([]),
+      fetchAccountContext({ contactId, contactEmail }),
     ])
 
     const memoryBlock = memFacts.length
@@ -247,7 +294,7 @@ export default async function handler(req, res) {
       : ''
 
     const itemLookup = buildItemLookup(ownSuppliers, matchedItems)
-    const system = buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock)
+    const system = buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountCtx.block)
 
     // Build user message — embed structured items if provided
     let userMsg = task
@@ -308,7 +355,7 @@ export default async function handler(req, res) {
     logInteraction({
       agentId: 'edgar',
       action:  'quote',
-      entity:  customer ? `customer:${customer}` : null,
+      entity:  accountCtx.entityKey || (customer ? `customer:${customer}` : null),
       input:   { task },
       output:  { itemCount: guarded.lineItems?.length ?? 0, totalRevenue: guarded.totalRevenue },
       outcome: 'pending',
