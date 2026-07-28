@@ -14,13 +14,7 @@
  *   SLACK_REDDIT_REVIEW_CHANNEL — channel ID (bot must be invited to the channel)
  */
 
-const { PrismaClient } = require('@prisma/client');
-
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
+const { getPrisma } = require('./_prisma');
 
 function trunc(str, max) {
   if (!str) return '';

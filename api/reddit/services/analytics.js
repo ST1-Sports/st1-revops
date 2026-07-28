@@ -9,13 +9,7 @@
  */
 
 const { getCommentMetrics } = require('../reddit-client');
-const { PrismaClient }      = require('@prisma/client');
 
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 /**
  * Poll Reddit for engagement metrics on all posted replies and update DB.

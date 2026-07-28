@@ -13,13 +13,7 @@
  * Also provides mute-list management functions and post action logging.
  */
 
-const { PrismaClient } = require('@prisma/client');
-
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
+const { getPrisma } = require('./_prisma');
 
 /**
  * Check all DB guardrails for a candidate thread.

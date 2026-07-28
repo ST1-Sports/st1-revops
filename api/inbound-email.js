@@ -32,60 +32,21 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
+import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr } from './_lib/brad-shared.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
 async function classifyAndPromote(fromEmail, subject, bodyText, host) {
   try {
     const contact = await prisma.salesContact.findUnique({ where: { email: fromEmail } }).catch(() => null)
-    if (!contact) return  // unknown sender — not a Brad prospect
+    if (!contact) return
 
-    const apiKey = process.env.ANTHROPIC_KEY
-    if (!apiKey) return
-
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type':      'application/json',
-        'x-api-key':         apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model:      'claude-haiku-4-5-20251001',
-        max_tokens: 10,
-        system:     'Classify this email reply. Reply with only the word INTENT if the person shows genuine interest, asks a question, or wants to learn more. Reply with only PASS for out-of-office, unsubscribes, bounces, or rejections.',
-        messages:   [{ role: 'user', content: `Subject: ${subject}\n\n${(bodyText || '').slice(0, 600)}` }],
-      }),
-    })
-    const data = await r.json()
-    const verdict = (data.content?.[0]?.text || '').trim().toUpperCase()
+    const verdict = await classifyEmailIntent(subject, bodyText)
     if (verdict !== 'INTENT') return
 
-    // ── Round-robin rep assignment ─────────────────────────────────────────────
-    // Set BRAD_ASSIGN_REPS in Vercel as comma-separated "Name:email" pairs:
-    //   Matt Stone:matt@st1sports.com,Josh:josh@st1sports.com
-    const repRaw  = process.env.BRAD_ASSIGN_REPS || 'Matt Stone:matt@st1sports.com'
-    const repList = repRaw.split(',').map(entry => {
-      const [name, email] = entry.trim().split(':')
-      return { name: (name || '').trim(), email: (email || '').trim().toLowerCase() }
-    }).filter(r => r.email)
-
-    const lastMem = await prisma.agentMemory.findUnique({
-      where: { scope_entity_key: { scope: 'org', entity: 'brad', key: 'last_assigned_rep' } },
-    }).catch(() => null)
-
-    const lastIdx  = lastMem ? repList.findIndex(r => r.email === lastMem.value) : -1
-    const nextIdx  = (lastIdx + 1) % repList.length
-    const assigned = repList[nextIdx]
-
-    await prisma.agentMemory.upsert({
-      where:  { scope_entity_key: { scope: 'org', entity: 'brad', key: 'last_assigned_rep' } },
-      update: { value: assigned.email, updatedAt: new Date() },
-      create: { scope: 'org', entity: 'brad', key: 'last_assigned_rep', value: assigned.email, agentId: 'brad', confidence: 1 },
-    }).catch(() => {})
-
-    // ── Log reply so the Brad tab can surface it ───────────────────────────────
+    const assigned    = await pickRep()
     const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || fromEmail
+
     await prisma.agentInteraction.create({
       data: {
         agentId: 'brad',
@@ -98,7 +59,6 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
       },
     }).catch(() => {})
 
-    // ── Promote to Zoho if not already there ──────────────────────────────────
     if (!contact.pushedToZoho) {
       await fetch(`https://${host}/api/contacts/promote`, {
         method:  'POST',
@@ -107,20 +67,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
       }).catch(() => {})
     }
 
-    // ── Slack notification to assigned rep ────────────────────────────────────
-    const slackToken   = process.env.SLACK_BOT_TOKEN
-    const slackChannel = process.env.BRAD_REPLY_SLACK_CHANNEL || process.env.SLACK_CHANNEL
-    if (slackToken && slackChannel) {
-      await fetch('https://slack.com/api/chat.postMessage', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${slackToken}` },
-        body: JSON.stringify({
-          channel: slackChannel,
-          text: `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}…"_`,
-        }),
-      }).catch(() => {})
-    }
-
+    await notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText)
     console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name}`)
   } catch (err) {
     console.error('[inbound-email] classifyAndPromote error:', err.message)
@@ -138,13 +85,6 @@ function checkSecret(req) {
   return provided === secret;
 }
 
-// Parse "Name <email@x.com>" or "email@x.com"
-function parseAddr(raw = "") {
-  const m = raw.match(/^(.+?)\s*<([^>]+)>/);
-  if (m) return { name: m[1].trim() || null, email: m[2].trim().toLowerCase() };
-  const email = raw.split(",")[0].trim().toLowerCase();
-  return { name: null, email };
-}
 
 export default async function handler(req, res) {
   setCors(res, "GET, POST, OPTIONS");

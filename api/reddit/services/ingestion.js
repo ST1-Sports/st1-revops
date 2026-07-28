@@ -7,13 +7,7 @@
 
 const { searchSubredditRSS } = require('./rss-fetcher');
 const { checkGuardrails }    = require('./db-guardrails');
-const { PrismaClient }       = require('@prisma/client');
 
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 /**
  * Ingest candidate threads via RSS.

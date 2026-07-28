@@ -31,13 +31,8 @@ const { generateSearchQueries } = require('./services/query-generator');
 const { evaluateThread }        = require('./services/evaluator');
 const { generateReplies }       = require('./services/reply-generator');
 const { muteSubreddit, muteKeyword } = require('./services/db-guardrails');
-const { PrismaClient }          = require('@prisma/client');
+const { getPrisma } = require('./services/_prisma');
 
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 /** Resolve feature flags from env vars. @returns {import('./types').RedditFlags} */
 function resolveFlags() {

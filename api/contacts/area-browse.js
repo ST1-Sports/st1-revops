@@ -10,11 +10,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { buildStatesClause } from '../_lib/stateUtils.js'
-
-const SPORT_ALIASES = {
-  'Cross Country': ['XC', 'cross-country'],
-  'Track & Field': ['T&F', 'Track and Field'],
-}
+import { buildSportsClause } from './_shared.js'
 
 export default async function handler(req, res) {
   setCors(res)
@@ -32,17 +28,8 @@ export default async function handler(req, res) {
 
   const andClauses = [{ NOT: { status: 'unsubscribed' } }]
 
-  if (sports.length) {
-    const sportTerms = []
-    for (const sp of sports) {
-      const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
-      for (const term of [s, ...(SPORT_ALIASES[s] || [])]) {
-        sportTerms.push({ sport: { contains: term, mode: 'insensitive' } })
-        sportTerms.push({ title: { contains: term, mode: 'insensitive' } })
-      }
-    }
-    andClauses.push({ OR: sportTerms })
-  }
+  const sportsClause = buildSportsClause(sports)
+  if (sportsClause) andClauses.push(sportsClause)
 
   const statesClause = buildStatesClause(states)
   if (statesClause) andClauses.push(statesClause)

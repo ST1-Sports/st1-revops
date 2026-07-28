@@ -14,15 +14,10 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
-const { PrismaClient } = require('@prisma/client');
+const { getPrisma } = require('./_prisma');
 const { load } = require('../prompt-loader');
 const { validateGeneratedReplySet, parseJson, isSkipResponse } = require('../validators');
 
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 /**
  * Generate two reply variants for an evaluated thread.

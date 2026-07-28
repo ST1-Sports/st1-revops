@@ -14,40 +14,7 @@
  * Response: the raw Zoho API JSON response
  */
 
-// Simple in-memory token cache (survives within a warm function instance)
-let _cachedToken = null;
-let _tokenExpiry = 0;
-
-async function getAccessToken() {
-  if (_cachedToken && Date.now() < _tokenExpiry - 60_000) {
-    return _cachedToken;
-  }
-
-  const res = await fetch("https://accounts.zoho.com/oauth/v2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id:     process.env.ZOHO_CLIENT_ID,
-      client_secret: process.env.ZOHO_CLIENT_SECRET,
-      refresh_token: process.env.ZOHO_REFRESH_TOKEN,
-      grant_type:    "refresh_token",
-    }).toString(),
-  });
-
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Zoho token refresh failed (${res.status}): ${txt.slice(0, 200)}`);
-  }
-
-  const data = await res.json();
-  if (!data.access_token) {
-    throw new Error(`No access_token in Zoho response: ${JSON.stringify(data)}`);
-  }
-
-  _cachedToken = data.access_token;
-  _tokenExpiry = Date.now() + (data.expires_in || 3600) * 1000;
-  return _cachedToken;
-}
+import { getZohoToken as getAccessToken } from './_lib/zoho-token.js';
 
 export default async function handler(req, res) {
   // CORS headers for local dev

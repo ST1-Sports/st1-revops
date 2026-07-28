@@ -14,13 +14,7 @@
  * All queries are scoped to a configurable look-back window (default 90 days).
  */
 
-const { PrismaClient } = require('@prisma/client');
-
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
+const { getPrisma } = require('./_prisma');
 
 /**
  * Generate the full analytics report.

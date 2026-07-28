@@ -13,15 +13,10 @@
  */
 
 const Anthropic = require('@anthropic-ai/sdk');
-const { PrismaClient } = require('@prisma/client');
+const { getPrisma } = require('./_prisma');
 const { load } = require('../prompt-loader');
 const { validateGuardrailResult, parseJson } = require('../validators');
 
-let prisma;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
 
 /**
  * Run the content guardrail on a specific reply.

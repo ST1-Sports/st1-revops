@@ -12,24 +12,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { buildStatesClause, toStateAbbr, STATE_NAMES } from '../_lib/stateUtils.js'
-
-const SPORT_ALIASES = {
-  'Cross Country': ['XC', 'cross-country'],
-  'Track & Field': ['T&F', 'Track and Field'],
-}
-
-function buildSportsClause(sports) {
-  if (!sports.length) return null
-  const terms = []
-  for (const sp of sports) {
-    const s = (typeof sp === 'string' ? sp : sp?.name || String(sp)).trim()
-    for (const term of [s, ...(SPORT_ALIASES[s] || [])]) {
-      terms.push({ sport: { contains: term, mode: 'insensitive' } })
-      terms.push({ title: { contains: term, mode: 'insensitive' } })
-    }
-  }
-  return { OR: terms }
-}
+import { buildSportsClause } from './_shared.js'
 
 export default async function handler(req, res) {
   setCors(res)
