@@ -5438,6 +5438,7 @@ const [zohoPullResult, setZohoPullResult] = useState(null);
 const [backfillRunning,setBackfillRunning] = useState(false);
 const [backfillResult,setBackfillResult]   = useState(null);
 const [importPhase,setImportPhase]     = useState("idle");
+const [importState,setImportState]     = useState("");
 const [importRows,setImportRows]       = useState([]);
 const [importSel,setImportSel]             = useState(new Set());
 const [importListName,setImportListName]   = useState("");
@@ -5993,12 +5994,35 @@ const r=contacts.map(c=>[c.firstName||"",c.lastName||"",c.fullName||"",c.title||
 const csv=[h.join(","),...r].join("\n");
 const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download=`ST1_Contacts_${today()}.csv`;a.click();
 };
+const detectImportMeta=(text)=>{
+if(!text) return;
+const lower=text.toLowerCase();
+// State: check full names first, then 2-letter abbreviations as standalone words
+let detectedState='';
+for(const [full,abbr] of Object.entries(STATE_FULL_TO_ABBR)){
+if(lower.includes(full)){detectedState=abbr;break;}
+}
+if(!detectedState){
+for(const abbr of US_STATES){
+if(new RegExp(`\\b${abbr.toLowerCase()}\\b`).test(lower)){detectedState=abbr;break;}
+}
+}
+if(detectedState) setImportState(s=>s||detectedState);
+// Sport: detect from text
+const sp=lower;
+if(/\btrack\b|t&f|cross.?country|\bxc\b/.test(sp)) setImportSport(s=>s||"Track & Field");
+else if(/baseball|softball/.test(sp)) setImportSport(s=>s||"Baseball/Softball");
+else if(/volleyball/.test(sp)) setImportSport(s=>s||"Volleyball");
+else if(/football/.test(sp)) setImportSport(s=>s||"Football");
+else if(/basketball/.test(sp)) setImportSport(s=>s||"Basketball");
+else if(/wrestling/.test(sp)) setImportSport(s=>s||"Wrestling");
+};
 const handleListUpload=async(e)=>{
 const file=e.target.files[0]; if(!file)return;
 e.target.value="";
 const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
 setImportFile(file);
-if(!importListName) setImportListName(autoName);
+if(!importListName){setImportListName(autoName);detectImportMeta(autoName);}
 setImportPhase("setup");
 };
 const handleApolloUpload=async(e)=>{
@@ -6006,7 +6030,7 @@ const file=e.target.files[0]; if(!file)return;
 e.target.value="";
 const autoName=file.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ").replace(/\b\w/g,c=>c.toUpperCase());
 setImportFile({...file, _isApollo:true, name:file.name, _fileObj:file});
-if(!importListName) setImportListName(autoName);
+if(!importListName){setImportListName(autoName);detectImportMeta(autoName);}
 setImportPhase("setup");
 };
 const analyzeImportFile=async()=>{
@@ -6101,9 +6125,12 @@ if(!city) city=parts[0];
 }
 }
 }
+// Fall back to list-level state if no state found in the row
+if(!state&&importState) state=importState;
 if(!fullName&&!email) return null;
 const sportCol=res(row,"sport","Sport","Sports","Sport Name");
-const sport=sportCol||inferSport(title);
+// Fall back to list-level sport if no sport found in the row
+const sport=sportCol||inferSport(title)||(importSport||"General");
 return {
 id:mkId(), firstName, lastName,
 fullName:fullName||email||"Unknown",
@@ -6152,7 +6179,7 @@ const toastMsg=totalUpdated>0
 :`"${listName}" · ${totalAdded} new contacts added`;
 toast(toastMsg,"success");
 setTimeout(()=>{
-setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportFile(null);
+setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportState("");setImportFile(null);
 setDbTotal(t=>totalAdded>0?t+totalAdded:t);
 setView("contacts");loadDbContacts(1,"");
 },800);
@@ -6474,7 +6501,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:16,marginBottom:16,borderLeft:`3px solid ${B.orange}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:importPhase==="idle"?0:14}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2}}>UPLOAD A LIST</div>
-{importPhase!=="idle"&&<button onClick={()=>{setImportPhase("idle");setImportFile(null);setImportRows([]);setImportSel(new Set());setImportProgress(0);setImportStatus("");}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:11}}>✕ cancel</button>}
+{importPhase!=="idle"&&<button onClick={()=>{setImportPhase("idle");setImportFile(null);setImportRows([]);setImportSel(new Set());setImportProgress(0);setImportStatus("");setImportState("");}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:11}}>✕ cancel</button>}
 </div>
 {/* Idle: just the buttons */}
 {importPhase==="idle"&&(
@@ -6523,19 +6550,29 @@ finally{setBackfillRunning(false);}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME <span style={{color:B.orange}}>*</span></div>
-<input value={importListName} onChange={e=>setImportListName(e.target.value)}
-placeholder="e.g. Track Coaches Spring 2025"
+<input value={importListName} onChange={e=>{setImportListName(e.target.value);detectImportMeta(e.target.value);}}
+placeholder="e.g. Iowa Track Coaches 2025"
 style={{width:"100%",background:B.surface,border:`1px solid ${importListName.trim()?B.green:B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
 disabled={importPhase==="parsing"}/>
 </div>
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>PRIMARY SPORT (optional)</div>
 <select value={importSport} onChange={e=>setImportSport(e.target.value)}
-style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:importSport?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+style={{width:"100%",background:B.surface,border:`1px solid ${importSport?B.green:B.border}`,color:importSport?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
 disabled={importPhase==="parsing"}>
 <option value="">— any / mixed sports —</option>
 {SPORTS_LIST.map(sp=><option key={sp} value={sp}>{sp}</option>)}
 </select>
+</div>
+<div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>STATE / REGION (optional)</div>
+<select value={importState} onChange={e=>setImportState(e.target.value)}
+style={{width:"100%",background:B.surface,border:`1px solid ${importState?B.green:B.border}`,color:importState?B.text:B.muted,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}
+disabled={importPhase==="parsing"}>
+<option value="">— all states / unknown —</option>
+{US_STATES.map(st=>{const full=Object.entries(STATE_FULL_TO_ABBR).find(([,a])=>a===st)?.[0]||'';return(<option key={st} value={st}>{st}{full?` – ${full.replace(/\b\w/g,c=>c.toUpperCase())}`:''}</option>);})}
+</select>
+{importState&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green,marginTop:3}}>✓ auto-detected from list name — all contacts without a state will be tagged as {importState}</div>}
 </div>
 </div>
 <div style={{marginBottom:14}}>
