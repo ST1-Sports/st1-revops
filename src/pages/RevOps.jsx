@@ -5435,6 +5435,8 @@ const [zohoPushing, setZohoPushing] = useState(false);
 const [zohoPushed,  setZohoPushed]  = useState(0);
 const [zohoPulling, setZohoPulling] = useState(false);
 const [zohoPullResult, setZohoPullResult] = useState(null);
+const [backfillRunning,setBackfillRunning] = useState(false);
+const [backfillResult,setBackfillResult]   = useState(null);
 const [importPhase,setImportPhase]     = useState("idle");
 const [importRows,setImportRows]       = useState([]);
 const [importSel,setImportSel]             = useState(new Set());
@@ -6481,6 +6483,18 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
 <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CSV / EXCEL</OBtn>
 <OBtn sm color={B.teal} onClick={()=>apolloFileRef.current?.click()}>↑ APOLLO.IO CSV</OBtn>
+<OBtn sm color={B.muted} disabled={backfillRunning} onClick={async()=>{
+setBackfillRunning(true);setBackfillResult(null);
+try{
+const r=await fetch('/api/contacts/backfill-state',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:false})});
+const d=await r.json();
+setBackfillResult(d);
+if(d.updated>0){setDbTotal(t=>t);loadDbContacts(1,dbSearch);toast(`Fixed state data for ${d.updated.toLocaleString()} contacts`,"success");}
+else toast("No contacts updated — state data already populated or no email patterns matched","info");
+}catch(e){toast("Backfill error: "+e.message,"error");}
+finally{setBackfillRunning(false);}
+}}>{backfillRunning?"FIXING…":"⚙ FIX STATE DATA"}</OBtn>
+{backfillResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{backfillResult.updated} fixed · {backfillResult.skipped} no match</span>}
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{totalContactsAll.toLocaleString()} contacts total <span style={{fontSize:9}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></span>
 </div>
 )}
