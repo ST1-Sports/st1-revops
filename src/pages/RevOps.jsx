@@ -79,6 +79,7 @@ const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+const fmtPct = (v) => v==null?"—":(Number(v)*100).toFixed(1)+"%";
 const SEED = {
 currentUserId: null,
 deals: [],
@@ -552,7 +553,6 @@ const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev);
 const [toasts, setToasts] = useState([]);
 const [showSearch, setShowSearch] = useState(false);
 const [searchQuery, setSearchQuery] = useState("");
-const [edgarQuickInput, setEdgarQuickInput] = useState("");
 const dispatch = useCallback((action, payload) => {
 set(prev => {
 const next = reducer(prev, action, payload);
@@ -681,6 +681,19 @@ const NAV = useMemo(()=>[
 ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
 ],[s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 usePrefetchPanels();
+function EdgarSidebarWidget() {
+const {dispatch:d2}=useApp();
+const [val,setVal]=useState("");
+const submit=()=>{if(val.trim()){d2("SET_EDGAR_DRAFT",val.trim());setMod("edgar");setVal("");}};
+if(slim) return <button onClick={()=>setMod("edgar")} title="Edgar – Quotes" style={{width:"100%",background:mod==="edgar"?`${B.teal}33`:"rgba(255,255,255,0.04)",border:"none",borderTop:"1px solid rgba(255,255,255,0.07)",color:mod==="edgar"?B.teal:"rgba(255,255,255,0.5)",padding:"9px 0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>▤</button>;
+return(
+<div style={{borderTop:"1px solid rgba(255,255,255,0.07)",padding:"9px 11px 10px",background:`${B.teal}10`}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:1.5,marginBottom:6}}>▤ EDGAR – QUICK QUOTE</div>
+<textarea rows={2} placeholder="e.g. 12 hurdles, 2 blocks for Valley High..." value={val} onChange={e=>setVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();submit();}}} style={{width:"100%",background:"rgba(255,255,255,0.06)",border:`1px solid ${B.teal}4D`,color:"#e5e7eb",borderRadius:4,padding:"5px 7px",fontSize:10,fontFamily:"'Lexend',sans-serif",lineHeight:1.55,resize:"none",outline:"none",boxSizing:"border-box"}}/>
+<button onClick={submit} style={{marginTop:5,width:"100%",background:`${B.teal}2E`,border:`1px solid ${B.teal}66`,color:B.teal,borderRadius:4,padding:"5px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:"pointer"}}>▤ QUOTE</button>
+</div>
+);
+}
 if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 const navLabel = (id) => {
 for (const n of NAV) {
@@ -783,14 +796,7 @@ style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent"
 })}
 </nav>
 {/* ── EDGAR QUICK QUOTE ── */}
-{s.currentUserId&&(slim
-?<button onClick={()=>setMod("edgar")} title="Edgar – Quotes" style={{width:"100%",background:mod==="edgar"?"rgba(20,184,166,0.2)":"rgba(255,255,255,0.04)",border:"none",borderTop:"1px solid rgba(255,255,255,0.07)",color:mod==="edgar"?"#14b8a6":"rgba(255,255,255,0.5)",padding:"9px 0",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13}}>▤</button>
-:<div style={{borderTop:"1px solid rgba(255,255,255,0.07)",padding:"9px 11px 10px",background:"rgba(20,184,166,0.06)"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#14b8a6",letterSpacing:1.5,marginBottom:6}}>▤ EDGAR – QUICK QUOTE</div>
-<textarea rows={2} placeholder="e.g. 12 hurdles, 2 blocks for Valley High..." value={edgarQuickInput} onChange={e=>setEdgarQuickInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(edgarQuickInput.trim()){dispatch("SET_EDGAR_DRAFT",edgarQuickInput.trim());setMod("edgar");}}}} style={{width:"100%",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(20,184,166,0.3)",color:"#e5e7eb",borderRadius:4,padding:"5px 7px",fontSize:10,fontFamily:"'Lexend',sans-serif",lineHeight:1.55,resize:"none",outline:"none",boxSizing:"border-box"}}/>
-<button onClick={()=>{if(edgarQuickInput.trim()){dispatch("SET_EDGAR_DRAFT",edgarQuickInput.trim());setMod("edgar");}}} style={{marginTop:5,width:"100%",background:"rgba(20,184,166,0.18)",border:"1px solid rgba(20,184,166,0.4)",color:"#14b8a6",borderRadius:4,padding:"5px 0",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:"pointer"}}>▤ QUOTE</button>
-</div>
-)}
+{s.currentUserId&&<EdgarSidebarWidget/>}
 {s.currentUserId&&!slim&&<div style={{padding:"9px 11px",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",alignItems:"center",gap:7}}>
 {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
@@ -1877,14 +1883,14 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 <div style={{textAlign:"center",marginBottom:18}}>
 {(()=>{const h=new Date().getHours();const gr=h<12?"Good morning":h<17?"Good afternoon":"Good evening";const nm=cu?.name?.split(" ")[0]||"there";return<div style={{fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.muted}}>{gr}, {nm}. What do you need?</div>;})()}
 </div>
-<button onClick={()=>setMod("edgar")} style={{display:"block",width:"100%",maxWidth:500,margin:"0 auto 10px",background:"rgba(20,184,166,0.08)",border:"1px solid rgba(20,184,166,0.35)",borderRadius:8,padding:"10px 14px",cursor:"pointer",textAlign:"left"}}>
+<button onClick={()=>setMod("edgar")} style={{display:"block",width:"100%",maxWidth:500,margin:"0 auto 10px",background:B.tealBg,border:`1px solid ${B.teal}59`,borderRadius:8,padding:"10px 14px",cursor:"pointer",textAlign:"left"}}>
 <div style={{display:"flex",alignItems:"center",gap:8}}>
-<span style={{fontSize:16,color:"#14b8a6"}}>▤</span>
+<span style={{fontSize:16,color:B.teal}}>▤</span>
 <div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:"#14b8a6",letterSpacing:.3}}>Edgar – Quote Engine</div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.teal,letterSpacing:.3}}>Edgar – Quote Engine</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Build a detailed quote with GM margins and MAP guardrails</div>
 </div>
-<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#14b8a6",flexShrink:0}}>OPEN →</span>
+<span style={{marginLeft:"auto",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,flexShrink:0}}>OPEN →</span>
 </div>
 </button>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,maxWidth:500,margin:"0 auto",width:"100%"}}>
@@ -16006,9 +16012,8 @@ const t=(task||"").trim();
 if(!t||loading) return;
 setLoading(true);setResult(null);setSummary("");
 try{
-const body={task:customer?`${t} — Customer: ${customer}`:t,input:{}};
-if(customer) body.input.customer=customer;
-const r=await fetch("/api/agents/edgar",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+const r=await fetch("/api/agents/edgar",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({task:customer?`${t} — Customer: ${customer}`:t,input:customer?{customer}:{}})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
 setResult(d.metadata?.quote||null);
@@ -16018,41 +16023,42 @@ setLoading(false);
 };
 const q=result||{};
 const lineItems=q.lineItems||[];
-const fmt$=v=>v==null?"—":"$"+(Number(v)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-const fmtPct=v=>v==null?"—":(Number(v)*100).toFixed(1)+"%";
+const fmtM=v=>v==null?"—":fmt$(v);
+const gmColor=v=>v==null?"#9ca3af":v<0.3?"#ef4444":v<0.4?"#f59e0b":"#10b981";
+const disabled=loading||!task.trim();
 return(
 <div style={{padding:"22px 26px",maxWidth:900,margin:"0 auto"}}>
 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
-<div style={{width:36,height:36,background:"rgba(20,184,166,0.15)",border:"1px solid rgba(20,184,166,0.4)",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:"#14b8a6",flexShrink:0}}>▤</div>
+<div style={{width:36,height:36,background:`${B.teal}26`,border:`1px solid ${B.teal}66`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:B.teal,flexShrink:0}}>▤</div>
 <div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:"#111827",letterSpacing:.3}}>Edgar — Quote Engine</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#6b7280"}}>GM-aware quoting · MAP guardrails · live price data</div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.3}}>Edgar — Quote Engine</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>GM-aware quoting · MAP guardrails · live price data</div>
 </div>
 </div>
-<div className="card" style={{padding:16,marginBottom:16,borderTop:"3px solid #14b8a6"}}>
+<div className="card" style={{padding:16,marginBottom:16,borderTop:`3px solid ${B.teal}`}}>
 <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:10,marginBottom:10}}>
 <div>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#14b8a6",letterSpacing:1.3,display:"block",marginBottom:5}}>WHAT DO YOU NEED?</label>
-<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={3} style={{width:"100%",background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.6,resize:"vertical",outline:"none"}}/>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.teal,letterSpacing:1.3,display:"block",marginBottom:5}}>WHAT DO YOU NEED?</label>
+<textarea ref={inputRef} value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&e.metaKey) run();}} placeholder="e.g. Build a quote for 12 hurdles, 2 starting blocks, and a shot put for Valley High School (Iowa)" rows={3} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",lineHeight:1.6,resize:"vertical",outline:"none"}}/>
 </div>
 <div style={{display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
-<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#6b7280",letterSpacing:1.3,display:"block",marginBottom:5}}>CUSTOMER (optional)</label>
-<input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Name or school" style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",width:200}}/>
+<label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.3,display:"block",marginBottom:5}}>CUSTOMER (optional)</label>
+<input value={customer} onChange={e=>setCustomer(e.target.value)} placeholder="Name or school" style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif",outline:"none",width:200}}/>
 </div>
 </div>
-<button onClick={run} disabled={loading||!task.trim()} style={{background:loading||!task.trim()?"#e5e7eb":"#14b8a6",color:loading||!task.trim()?"#9ca3af":"#fff",border:"none",borderRadius:5,padding:"9px 24px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:loading||!task.trim()?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
+<button onClick={run} disabled={disabled} style={{background:disabled?B.surface:B.teal,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:"9px 24px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>{loading?"EDGAR IS THINKING…":"▤ BUILD QUOTE"}</button>
 </div>
-{summary&&<div className="card" style={{padding:12,marginBottom:14,background:"rgba(20,184,166,0.05)",borderLeft:"3px solid #14b8a6"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#111827",lineHeight:1.7,whiteSpace:"pre-wrap"}}>{summary}</div>
+{summary&&<div className="card" style={{padding:12,marginBottom:14,background:B.tealBg,borderLeft:`3px solid ${B.teal}`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.7,whiteSpace:"pre-wrap"}}>{summary}</div>
 </div>}
 {result&&(
-<div className="card" style={{padding:16,borderTop:"3px solid #14b8a6"}}>
-{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#6b7280",marginBottom:12}}>Customer: <strong style={{color:"#111827"}}>{q.customer}</strong></div>}
+<div className="card" style={{padding:16,borderTop:`3px solid ${B.teal}`}}>
+{q.customer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12}}>Customer: <strong style={{color:B.text}}>{q.customer}</strong></div>}
 <table style={{width:"100%",borderCollapse:"collapse",marginBottom:14}}>
 <thead>
-<tr style={{borderBottom:"2px solid #e5e7eb"}}>
+<tr style={{borderBottom:`2px solid ${B.border}`}}>
 {["ITEM","QTY","COST","PRICE","GM%","NOTES"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#6b7280",letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"6px 8px 6px 0",fontWeight:700}}>{h}</th>
+<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:h==="ITEM"?"left":"right",padding:"6px 8px 6px 0",fontWeight:700}}>{h}</th>
 ))}
 </tr>
 </thead>
@@ -16060,36 +16066,36 @@ return(
 {lineItems.map((li,i)=>{
 const gm=li.quotedPrice&&li.cost?(li.quotedPrice-li.cost)/li.quotedPrice:null;
 return(
-<tr key={i} style={{borderBottom:"1px solid #f3f4f6",opacity:li.notFound?.7:1}}>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:li.notFound?"#9ca3af":"#111827",padding:"8px 8px 8px 0"}}>{li.name}{li.notFound&&<span style={{fontSize:9,color:"#ef4444",marginLeft:5}}>NOT FOUND</span>}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0"}}>{li.qty||1}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(li.cost)}</td>
-<td style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:"#14b8a6",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(li.quotedPrice)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gm!=null&&gm<0.3?"#ef4444":gm!=null&&gm<0.4?"#f59e0b":"#10b981",textAlign:"right",padding:"8px 8px 8px 0"}}>{gm!=null?fmtPct(gm):"—"}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:"#9ca3af",textAlign:"right",padding:"8px 0",maxWidth:160}}>{li.notes||""}</td>
+<tr key={i} style={{borderBottom:`1px solid ${B.border}`,opacity:li.notFound?.7:1}}>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:li.notFound?B.muted:B.text,padding:"8px 8px 8px 0"}}>{li.name}{li.notFound&&<span style={{fontSize:9,color:B.red,marginLeft:5}}>NOT FOUND</span>}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0"}}>{li.qty||1}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(li.cost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.teal,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(li.quotedPrice)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gmColor(gm),textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtPct(gm)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right",padding:"8px 0",maxWidth:160}}>{li.notes||""}</td>
 </tr>
 );
 })}
 </tbody>
 <tfoot>
-<tr style={{borderTop:"2px solid #e5e7eb"}}>
-<td colSpan={2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#6b7280",padding:"8px 0",letterSpacing:.3}}>TOTALS</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:"#374151",textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmt$(q.totalCost)}</td>
-<td style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:"#14b8a6",textAlign:"right",padding:"8px 8px 8px 0"}}>{fmt$(q.totalRevenue)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:q.overallGmPct<0.3?"#ef4444":q.overallGmPct<0.4?"#f59e0b":"#10b981",textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{q.overallGmPct!=null?fmtPct(q.overallGmPct):"—"}</td>
+<tr style={{borderTop:`2px solid ${B.border}`}}>
+<td colSpan={2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,padding:"8px 0",letterSpacing:.3}}>TOTALS</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.textMid,textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmtM(q.totalCost)}</td>
+<td style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.teal,textAlign:"right",padding:"8px 8px 8px 0"}}>{fmtM(q.totalRevenue)}</td>
+<td style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:gmColor(q.overallGmPct??null),textAlign:"right",padding:"8px 8px 8px 0",fontWeight:600}}>{fmtPct(q.overallGmPct??null)}</td>
 <td/>
 </tr>
 </tfoot>
 </table>
 {(q.warnings||[]).length>0&&(
-<div style={{background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:5,padding:"8px 12px",marginTop:4}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#ea580c",letterSpacing:.5,marginBottom:5}}>WARNINGS</div>
-{q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#9a3412",lineHeight:1.5}}>⚠ {w}</div>)}
+<div style={{background:B.yellowBg,border:`1px solid ${B.yellow}80`,borderRadius:5,padding:"8px 12px",marginTop:4}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.yellow,letterSpacing:.5,marginBottom:5}}>WARNINGS</div>
+{q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.5}}>⚠ {w}</div>)}
 </div>
 )}
 <div style={{marginTop:12,display:"flex",gap:8}}>
-<button onClick={()=>setMod("deals")} style={{background:"#f3f4f6",border:"1px solid #e5e7eb",color:"#374151",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
-<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");}} style={{background:"none",border:"1px solid #e5e7eb",color:"#9ca3af",borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
+<button onClick={()=>setMod("deals")} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
+<button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
 </div>
 </div>
 )}
