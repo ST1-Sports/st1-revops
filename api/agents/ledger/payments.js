@@ -244,6 +244,10 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
   const overdueList    = []
   const upcomingList   = []
 
+  // AR aging — the full open-invoice universe, not just the 7-day lookahead window
+  const arBuckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90plus: 0 }
+  let arTotal = 0
+
   for (const inv of current) {
     if (!inv.dueDate) continue
     const dueMs = new Date(inv.dueDate).getTime()
@@ -252,6 +256,15 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
     } else if (dueMs - today <= lookAheadMs) {
       upcomingList.push(inv)
     }
+
+    const amt = inv.amountTotal != null ? Number(inv.amountTotal) : 0
+    arTotal += amt
+    const daysOverdue = Math.floor((today - dueMs) / 86_400_000)
+    if (daysOverdue <= 0)       arBuckets.current += amt
+    else if (daysOverdue <= 30) arBuckets.d1_30    += amt
+    else if (daysOverdue <= 60) arBuckets.d31_60   += amt
+    else if (daysOverdue <= 90) arBuckets.d61_90   += amt
+    else                        arBuckets.d90plus  += amt
   }
 
   // 5. Slack notify (live mode only)
@@ -269,6 +282,10 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
       overdue:    overdueList.length,
       upcoming:   upcomingList.length,
       paid:       nowPaid.length,
+    },
+    ar: {
+      total:   Math.round(arTotal * 100) / 100,
+      buckets: Object.fromEntries(Object.entries(arBuckets).map(([k, v]) => [k, Math.round(v * 100) / 100])),
     },
     changes,
     overdue:  overdueList.map(summarise),

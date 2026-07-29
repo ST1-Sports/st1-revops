@@ -1,6 +1,6 @@
 /**
  * POST /api/agents/ledger/reconcile
- * { task?: "setup"|"seed-stores"|"reconcile", dryRun?: boolean, limit?: number }
+ * { task?: "setup"|"seed-stores"|"configure-card"|"reconcile", dryRun?: boolean, limit?: number }
  *
  * Ledger reconciliation agent.
  *
@@ -8,8 +8,14 @@
  *   persist their IDs to the Setting table.
  *
  * STEP 1+: poll uncategorized deposits from ST1 Operating Account, Stripe Clearing,
- *   and Shopify Clearing; classify each against TeamStore → open DealInvoice →
- *   NEEDS_REVIEW; write Deposit rows; Slack-notify review items.
+ *   and Shopify Clearing (AR side — classify against TeamStore → open DealInvoice →
+ *   NEEDS_REVIEW), plus uncategorized expense transactions from the configured
+ *   Credit Card account if one is set (AP side — classify against open VendorBill
+ *   → NEEDS_REVIEW). Writes Deposit rows either way; Slack-notifies review items.
+ *
+ * task: "configure-card" — { accountId } — persists the Zoho Books account ID to
+ *   poll for credit card charges (no fixed ID exists for this — every org's card
+ *   account is different, so it must be set once from the Finance tab).
  *
  * Safe defaults: task="reconcile", dryRun=true, limit=10.
  * Nothing is written to Zoho Books or the Deposit table in dry-run mode.
@@ -101,28 +107,29 @@ async function setupAccounts() {
 
 async function loadAccountIds() {
   const rows = await prisma.setting.findMany({
-    where: { key: { in: ACCT_DEFS.map(d => d.key) } },
+    where: { key: { in: [...ACCT_DEFS.map(d => d.key), 'ledger_acct_credit_card'] } },
   })
   const map = Object.fromEntries(rows.map(r => [r.key, r.value]))
   return {
     teamStoreSales:  map['ledger_acct_team_store_sales']?.accountId  || null,
     teamStoreCogs:   map['ledger_acct_team_store_cogs']?.accountId   || null,
     shopifyClearing: map['ledger_acct_shopify_clearing']?.accountId  || null,
+    creditCard:      map['ledger_acct_credit_card']?.accountId       || null,
   }
 }
 
-// ── STEP 2 — Fetch uncategorized deposits from one account ───────────────────
+// ── STEP 2 — Fetch uncategorized transactions from one account ──────────────
 
-async function fetchUncategorized(accountId, limit) {
+async function fetchUncategorized(accountId, limit, transactionType = 'deposit') {
   try {
     const data = await booksGet(
       `/banktransactions?account_id=${accountId}` +
-      `&filter_by=Status.Uncategorized&transaction_type=deposit` +
+      `&filter_by=Status.Uncategorized&transaction_type=${transactionType}` +
       `&per_page=${limit}&sort_column=date&sort_order=D`
     )
     return data.banktransactions || []
   } catch (e) {
-    console.warn(`[ledger] fetchUncategorized(${accountId}):`, e.message)
+    console.warn(`[ledger] fetchUncategorized(${accountId}, ${transactionType}):`, e.message)
     return []
   }
 }
@@ -250,6 +257,53 @@ async function matchInvoice(amount, txnDate, referenceNumber) {
   } catch (e) {
     if (isPrismaTableMissing(e)) return null
     throw e
+  }
+}
+
+// Match an open vendor bill by amount ± $0.01 — the AP-side counterpart to
+// matchInvoice, used for credit card charges instead of bank deposits.
+async function matchVendorBill(amount) {
+  try {
+    const bill = await prisma.vendorBill.findFirst({
+      where: {
+        totalAmount: { gte: amount - 0.01, lte: amount + 0.01 },
+        status:      { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED'] },
+      },
+      orderBy: { createdAt: 'desc' },
+    })
+    return bill || null
+  } catch (e) {
+    if (isPrismaTableMissing(e)) return null
+    throw e
+  }
+}
+
+// ── STEP 4b — Classify one credit card charge (AP side) ─────────────────────
+
+async function classifyExpenseTxn(txn) {
+  const amount = Math.abs(parseFloat(txn.amount) || 0)
+
+  const existing = await findExistingDeposit(txn.transaction_id)
+  if (existing && existing.status !== 'NEEDS_REVIEW') {
+    return { txn, source: 'creditcard', skip: true, status: 'ALREADY_RECONCILED', existingId: existing.id }
+  }
+
+  const bill = await matchVendorBill(amount)
+  if (bill) {
+    return {
+      txn, source: 'creditcard', amount,
+      status:              'MATCHED_BILL',
+      confidence:          'high',
+      matchedVendorBillId: bill.id,
+      matchedBillName:     bill.vendorInvoiceNo || bill.id,
+    }
+  }
+
+  return {
+    txn, source: 'creditcard', amount,
+    status:     'NEEDS_REVIEW',
+    confidence: 'none',
+    notes:      `${txn.description || txn.payee || 'Charge'} — no matching vendor bill found (upload it to link)`,
   }
 }
 
@@ -412,15 +466,16 @@ async function writeDeposit(result, dryRun) {
 
   const createData = {
     source,
-    zohoBankTxnId:      txn.transaction_id || `noid-${source}-${Math.abs(result.amount)}-${Date.now()}`,
-    amount:             Math.abs(result.amount),
-    txnDate:            new Date(txn.date),
-    orgNameRaw:         result.extractedName || txn.description || txn.payee || null,
-    status:             result.status,
-    categorizedAs:      result.categorizedAs      || null,
-    matchedTeamStoreId: result.matchedTeamStoreId || null,
-    matchedInvoiceId:   result.matchedInvoiceId   || null,
-    matchConfidence:    CONF_MAP[result.confidence] ?? null,
+    zohoBankTxnId:       txn.transaction_id || `noid-${source}-${Math.abs(result.amount)}-${Date.now()}`,
+    amount:              Math.abs(result.amount),
+    txnDate:             new Date(txn.date),
+    orgNameRaw:          result.extractedName || txn.description || txn.payee || null,
+    status:              result.status,
+    categorizedAs:       result.categorizedAs      || null,
+    matchedTeamStoreId:  result.matchedTeamStoreId || null,
+    matchedInvoiceId:    result.matchedInvoiceId   || null,
+    matchedVendorBillId: result.matchedVendorBillId || null,
+    matchConfidence:     CONF_MAP[result.confidence] ?? null,
   }
 
   try {
@@ -428,11 +483,12 @@ async function writeDeposit(result, dryRun) {
       return await prisma.deposit.upsert({
         where:  { zohoBankTxnId: txn.transaction_id },
         update: {
-          status:             createData.status,
-          categorizedAs:      createData.categorizedAs,
-          matchedTeamStoreId: createData.matchedTeamStoreId,
-          matchedInvoiceId:   createData.matchedInvoiceId,
-          matchConfidence:    createData.matchConfidence,
+          status:              createData.status,
+          categorizedAs:       createData.categorizedAs,
+          matchedTeamStoreId:  createData.matchedTeamStoreId,
+          matchedInvoiceId:    createData.matchedInvoiceId,
+          matchedVendorBillId: createData.matchedVendorBillId,
+          matchConfidence:     createData.matchConfidence,
         },
         create: createData,
       })
@@ -566,6 +622,17 @@ export default async function handler(req, res) {
       return res.json({ ok: true, accounts: accountSetup, seedStores: result })
     }
 
+    if (task === 'configure-card') {
+      const { accountId } = req.body || {}
+      if (!accountId) return res.status(400).json({ error: 'accountId required' })
+      await prisma.setting.upsert({
+        where:  { key: 'ledger_acct_credit_card' },
+        update: { value: { accountId } },
+        create: { key: 'ledger_acct_credit_card', value: { accountId } },
+      })
+      return res.json({ ok: true, accountId })
+    }
+
     // STEP 1 — load dynamic account IDs and build poll list
     const accountIds = await loadAccountIds()
 
@@ -578,18 +645,26 @@ export default async function handler(req, res) {
     }
 
     const pollAccounts = [
-      { id: FIXED.operating,      source: 'other',   label: 'ST1 Operating Account' },
-      { id: FIXED.stripeClearing, source: 'stripe',  label: 'Stripe Clearing' },
+      { id: FIXED.operating,      source: 'other',   label: 'ST1 Operating Account', txnType: 'deposit' },
+      { id: FIXED.stripeClearing, source: 'stripe',  label: 'Stripe Clearing',       txnType: 'deposit' },
     ]
     if (accountIds.shopifyClearing) {
-      pollAccounts.push({ id: accountIds.shopifyClearing, source: 'shopify', label: 'Shopify Clearing' })
+      pollAccounts.push({ id: accountIds.shopifyClearing, source: 'shopify', label: 'Shopify Clearing', txnType: 'deposit' })
+    }
+    if (accountIds.creditCard) {
+      pollAccounts.push({ id: accountIds.creditCard, source: 'creditcard', label: 'Credit Card', txnType: 'expense' })
     }
 
-    // STEP 2 — fetch uncategorized deposits from each account
+    // STEP 2 — fetch uncategorized transactions from each account
     const allTxns = []
+    const accountsPolled = []
     for (const acct of pollAccounts) {
-      const txns = await fetchUncategorized(acct.id, limit)
-      for (const t of txns) allTxns.push({ ...t, _source: acct.source, _label: acct.label })
+      const txns = await fetchUncategorized(acct.id, limit, acct.txnType)
+      accountsPolled.push({ label: acct.label, source: acct.source, found: txns.length })
+      for (const t of txns) allTxns.push({ ...t, _source: acct.source, _label: acct.label, _txnType: acct.txnType })
+    }
+    if (!accountIds.creditCard) {
+      accountsPolled.push({ label: 'Credit Card', source: 'creditcard', found: null, notConfigured: true })
     }
 
     // Deduplicate by transaction_id (same txn can appear across accounts)
@@ -605,7 +680,9 @@ export default async function handler(req, res) {
 
     for (const txn of uniq) {
       try {
-        const result = await classifyTxn(txn, txn._source, accountIds)
+        const result = txn._txnType === 'expense'
+          ? await classifyExpenseTxn(txn)
+          : await classifyTxn(txn, txn._source, accountIds)
 
         if (result.skip) continue  // already reconciled with terminal status
 
@@ -643,18 +720,25 @@ export default async function handler(req, res) {
       confidence:    r.confidence || null,
       categorizedAs: r.categorizedAs || null,
       cogsAccountId: r.cogsAccountId || null,
-      match:         r.matchedTeamStoreName || r.matchedInvoiceName || null,
+      match:         r.matchedTeamStoreName || r.matchedInvoiceName || r.matchedBillName || null,
       notes:         r.notes || null,
     }))
+
+    const zeroPolledHint = uniq.length === 0
+      ? 'No uncategorized transactions found in any polled account — either everything is already categorized in Zoho Books, the bank feed isn\'t syncing new transactions, or (for credit card charges) no account is configured yet.'
+      : null
 
     return res.json({
       ok:     true,
       dryRun,
       accounts: accountSetup,
+      accountsPolled,
+      message: zeroPolledHint,
       totals: {
         polled:         uniq.length,
         matchedStore:   results.filter(r => r.status === 'MATCHED_STORE').length,
         matchedInvoice: results.filter(r => r.status === 'MATCHED_INVOICE').length,
+        matchedBill:    results.filter(r => r.status === 'MATCHED_BILL').length,
         needsReview:    needsReview.length,
         duplicates:     results.filter(r => r.status === 'DUPLICATE').length,
         reversals:      results.filter(r => r.status === 'REVERSED').length,

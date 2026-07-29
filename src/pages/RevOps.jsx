@@ -286,6 +286,20 @@ body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Da
 const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
 const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
 const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
+// Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
+// invoice with the ledger agent so it's waiting for review in Finance the moment a deal closes.
+const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast)=>{
+if(newStage!=="Closed Won"||prevStage==="Closed Won")return;
+fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+action:"draft",dryRun:false,
+crmDealId:deal.zohoId||undefined,
+crmDealName:deal.name,
+crmAccountName:deal.school,
+dealAmount:deal.value,
+})}).then(r=>r.json()).then(d=>{
+if(d?.zohoInvoiceId||d?.invoiceNumber) toast?.(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} drafted for ${deal.name} — review in Finance`,"info");
+}).catch(()=>{});
+};
 const SPORT_WINDOWS = {
 "Track & Field":    "Nov–Jan",
 "Cross Country":    "Jun–Jul",
@@ -644,7 +658,7 @@ const zStage=zs(zd.Stage)||"Quoted";
 const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quoted");
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
-if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}
+if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
 }else{
 dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
 dealsAdded++;
@@ -3889,7 +3903,7 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");if(st==="Quoted")setCrmTab("quote");}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=activeDeal.stage;dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");if(st==="Quoted")setCrmTab("quote");autoInvoiceOnClosedWon(activeDeal,prevStage,st,toast);}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
 ))}
 </div>
 <div style={{display:"flex",gap:6,marginBottom:10}}>
@@ -4548,7 +4562,7 @@ style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.or
 <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
 ))}
 </div>
 <div style={{marginBottom:9}}>
@@ -5666,7 +5680,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;}}else{dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else{dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
 return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
 };
 const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];
@@ -12918,6 +12932,11 @@ const [reconciling,setReconciling]=useState(false);
 const [billResult,setBillResult]=useState(null);
 const [billLoading,setBillLoading]=useState(false);
 const [billPreview,setBillPreview]=useState(null);
+const [billFileData,setBillFileData]=useState(null);
+const [billCreating,setBillCreating]=useState(false);
+const [billCreated,setBillCreated]=useState(null);
+const [cardAccountId,setCardAccountId]=useState("");
+const [cardConfigSaving,setCardConfigSaving]=useState(false);
 const [dealPick,setDealPick]=useState("");
 const [manualDealName,setManualDealName]=useState("");
 const [poOverride,setPoOverride]=useState("");
@@ -12991,10 +13010,11 @@ setInvoiceWorking(false);
 };
 const handleBillFile=async(file)=>{
 if(!file) return;
-setBillLoading(true);setBillPreview(null);setBillResult(null);
+setBillLoading(true);setBillPreview(null);setBillResult(null);setBillCreated(null);setBillFileData(null);
 const reader=new FileReader();
 reader.onload=async(ev)=>{
 const pdfBase64=ev.target.result.split(',')[1];
+setBillFileData({pdfBase64,pdfName:file.name});
 try{
 const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({action:'extract',pdfBase64,pdfName:file.name,dryRun:true})});
@@ -13004,6 +13024,31 @@ setBillPreview(d);
 setBillLoading(false);
 };
 reader.readAsDataURL(file);
+};
+const createBillNow=async()=>{
+if(!billFileData){toast("Upload a bill first","error");return;}
+setBillCreating(true);
+try{
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({action:'create',dryRun:false,pdfBase64:billFileData.pdfBase64,pdfName:billFileData.pdfName,supplierId:billPreview?.supplierId||undefined})});
+const d=await r.json();
+if(!d.ok) throw new Error(d.error||"Create failed");
+setBillCreated(d);setBillPreview(null);
+toast(`Bill ${d.billNumber||d.zohoBillId} created in Zoho Books`,"success");
+}catch(e){toast('Bill create error: '+e.message,'error');}
+setBillCreating(false);
+};
+const saveCardAccount=async()=>{
+if(!cardAccountId.trim()){toast("Enter the Zoho Books account ID","error");return;}
+setCardConfigSaving(true);
+try{
+const r=await fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:'configure-card',accountId:cardAccountId.trim()})});
+const d=await r.json();
+if(!d.ok) throw new Error(d.error||"Save failed");
+toast("Credit card account saved — RECONCILE DEPOSITS will now include it","success");
+}catch(e){toast('Save error: '+e.message,'error');}
+setCardConfigSaving(false);
 };
 const fmtD2=(d)=>d?new Date(d+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'}):'-';
 const overdue=invoices?.overdue||[];
@@ -13019,6 +13064,23 @@ return(
 <KCard l="Due Soon" v={invLoading?"…":upcoming.length} c={B.yellow}/>
 <KCard l="Paid Today" v={invLoading?"…":totals.paid??0} c={B.green}/>
 </div>
+{/* AR summary */}
+{invoices?.ar&&(invoices.ar.total>0)&&(
+<div className="card" style={{padding:16,marginBottom:20,borderTop:`3px solid ${B.blue}`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+<Lbl c={B.blue}>ACCOUNTS RECEIVABLE</Lbl>
+<span style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.blue}}>{fmt$(invoices.ar.total)}</span>
+</div>
+<div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8}}>
+{[["Current",invoices.ar.buckets.current,B.green],["1-30d",invoices.ar.buckets.d1_30,B.yellow],["31-60d",invoices.ar.buckets.d31_60,B.orange],["61-90d",invoices.ar.buckets.d61_90,B.red],["90d+",invoices.ar.buckets.d90plus,B.red]].map(([l,v,c])=>(
+<div key={l} style={{textAlign:"center",padding:"7px 6px",background:B.surface,borderRadius:5}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:c}}>{fmt$(v||0)}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
+</div>
+))}
+</div>
+</div>
+)}
 {/* Quick actions */}
 <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap"}}>
 <OBtn onClick={runReconcile} disabled={reconciling}>{reconciling?"RECONCILING…":"⟳ RECONCILE DEPOSITS"}</OBtn>
@@ -13140,19 +13202,36 @@ const d=await r.json();setInvoices(d);toast(`Payment check done — ${d.totals?.
 RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLeft:8}}>DRY RUN</span>}
 </div>
 <div style={{display:"flex",gap:12,marginBottom:12,flexWrap:"wrap"}}>
-{[["Polled",reconcileResult.totals?.polled,B.blue],["Store Match",reconcileResult.totals?.matchedStore,B.green],["Invoice Match",reconcileResult.totals?.matchedInvoice,B.teal],["Needs Review",reconcileResult.totals?.needsReview,B.red]].map(([l,v,c])=>(
+{[["Polled",reconcileResult.totals?.polled,B.blue],["Store Match",reconcileResult.totals?.matchedStore,B.green],["Invoice Match",reconcileResult.totals?.matchedInvoice,B.teal],["Bill Match",reconcileResult.totals?.matchedBill,B.purple],["Needs Review",reconcileResult.totals?.needsReview,B.red]].map(([l,v,c])=>(
 <div key={l} style={{textAlign:"center",padding:"8px 14px",background:B.surface,borderRadius:6,borderTop:`2px solid ${c}`}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c}}>{v??0}</div>
 <Lbl>{l}</Lbl>
 </div>
 ))}
 </div>
+{reconcileResult.message&&(
+<div style={{padding:"8px 12px",background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:12}}>ℹ {reconcileResult.message}</div>
+)}
+{reconcileResult.accountsPolled&&(
+<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+{reconcileResult.accountsPolled.map((a,i)=>(
+<span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:a.notConfigured?B.muted:B.textMid,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px"}}>{a.label}: {a.notConfigured?"not configured":`${a.found} found`}</span>
+))}
+</div>
+)}
 {(reconcileResult.transactions||[]).filter(t=>t.status==='NEEDS_REVIEW').map((t,i)=>(
 <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
 <span style={{color:B.text}}>{t.description||t.extractedName||'Unknown'}</span>
 <span style={{color:B.red,fontWeight:500}}>{fmt$(t.amount)}</span>
 </div>
 ))}
+<div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${B.border}`}}>
+<Lbl s={{marginBottom:6}}>CREDIT CARD ACCOUNT (for charge categorization)</Lbl>
+<div style={{display:"flex",gap:8}}>
+<input value={cardAccountId} onChange={e=>setCardAccountId(e.target.value)} placeholder="Zoho Books account ID" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 9px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif"}}/>
+<OBtn sm onClick={saveCardAccount} disabled={cardConfigSaving}>{cardConfigSaving?"SAVING…":"SAVE"}</OBtn>
+</div>
+</div>
 </div>
 )}
 {/* Vendor bill preview */}
@@ -13172,6 +13251,23 @@ RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLef
 <span style={{color:B.orange,fontWeight:500,flexShrink:0}}>{fmt$(li.lineTotal||li.unitCost*li.quantity||0)}</span>
 </div>
 ))}
+{!billPreview.supplierFound&&<div style={{marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>Supplier "{billPreview.bill?.supplierName}" not found in price-list DB — add it first before creating the bill.</div>}
+<div style={{marginTop:12}}>
+<OBtn col={B.orange} onClick={createBillNow} disabled={billCreating||!billPreview.supplierFound}>{billCreating?"CREATING…":"✓ CREATE BILL IN ZOHO BOOKS"}</OBtn>
+</div>
+</div>
+)}
+{billCreated&&(
+<div className="card" style={{padding:16,marginTop:16,background:B.greenBg,border:`1px solid ${B.green}40`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{billCreated.billNumber||billCreated.zohoBillId}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5,marginTop:2}}>{billCreated.status||'PENDING_REVIEW'}</div>
+</div>
+<div style={{display:"flex",alignItems:"center",gap:10}}>
+{billCreated.reviewUrl&&<a href={billCreated.reviewUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue}}>VIEW IN BOOKS →</a>}
+</div>
+</div>
 </div>
 )}
 </div>

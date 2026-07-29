@@ -844,7 +844,7 @@ model TeamStore {
 
 model Deposit {
   id                  String   @id @default(cuid())
-  source              String                       // STRIPE | SHOPIFY
+  source              String                       // STRIPE | SHOPIFY | creditcard | other
   zohoBankTxnId       String   @unique
   amount              Decimal  @db.Decimal(12, 2)
   txnDate             DateTime
@@ -852,8 +852,9 @@ model Deposit {
   matchedInvoiceId    String?
   matchedTeamStoreId  String?
   teamStore           TeamStore? @relation(fields: [matchedTeamStoreId], references: [id])
+  matchedVendorBillId String?                       // AP-side match — credit card charge → VendorBill
   matchConfidence     Float?
-  status              String    @default("NEEDS_REVIEW") // AUTO_MATCHED | TEAM_STORE | NEEDS_REVIEW | DUPLICATE_FLAGGED | REVERSED
+  status              String    @default("NEEDS_REVIEW") // AUTO_MATCHED | TEAM_STORE | MATCHED_BILL | NEEDS_REVIEW | DUPLICATE_FLAGGED | REVERSED
   categorizedAs       String?
   createdAt           DateTime  @default(now())
 
