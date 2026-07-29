@@ -65,6 +65,17 @@ teal:"#0C7B6A", tealBg:"#E6F5F2",
 };
 const STORE = APP_STATE_KEY;
 const mkId   = () => Math.random().toString(36).slice(2,9);
+// Zoho lookup fields (Account_Name, Contact_Name, Title, etc.) come back as
+// {name, id} objects. Older sync code stored those raw; this coerces any
+// leftover object values in persisted state back to plain strings so a
+// stale record can't crash rendering downstream.
+const zstr = v => typeof v==="string" ? v : (v?.name || v?.display_value || "");
+const sanitizeLookupFields = (arr, fields) => Array.isArray(arr) ? arr.map(o => {
+  let changed = false;
+  const patch = {};
+  for (const f of fields) { if (o && typeof o[f] === "object" && o[f] !== null) { patch[f] = zstr(o[f]); changed = true; } }
+  return changed ? {...o, ...patch} : o;
+}) : arr;
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};
 const fmtSchedDt=(dt)=>dt?fmtMT(new Date(dt).getTime()):"";;
@@ -156,17 +167,17 @@ const saved = localStorage.getItem(STORE);
 if (saved) {
 const p = JSON.parse(saved);
 return {...SEED,...p,
-deals:        Array.isArray(p.deals)        ? p.deals        : [],
+deals:        sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
-reorders:     Array.isArray(p.reorders)     ? p.reorders     : [],
-contacts:     Array.isArray(p.contacts)     ? p.contacts     : [],
+reorders:     sanitizeLookupFields(Array.isArray(p.reorders) ? p.reorders : [], ["school","contact"]),
+contacts:     sanitizeLookupFields(Array.isArray(p.contacts) ? p.contacts : [], ["school","title"]),
 sequences:    Array.isArray(p.sequences)    ? p.sequences    : [],
 prospectAreas:Array.isArray(p.prospectAreas)? p.prospectAreas: [],
 agentHistory: Array.isArray(p.agentHistory) ? p.agentHistory.slice(-40) : [],
 competeIntel: p.competeIntel && typeof p.competeIntel==="object" ? p.competeIntel : {},
 battlecards:  p.battlecards  && typeof p.battlecards ==="object" ? p.battlecards  : {},
-orders:       Array.isArray(p.orders)       ? p.orders       : [],
+orders:       sanitizeLookupFields(Array.isArray(p.orders) ? p.orders : [], ["school","contact"]),
 templates:    Array.isArray(p.templates)    ? p.templates    : [],
 alerts:       Array.isArray(p.alerts)       ? p.alerts       : [],
 activity:     Array.isArray(p.activity)     ? p.activity     : [],
@@ -3104,7 +3115,7 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cName(c)}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{typeof c.school==="string"?c.school:c.school?.name||""}</div>
 </div>
 <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{phase}</span>
@@ -4099,7 +4110,7 @@ return(
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:"14px 18px",marginBottom:10}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
 <div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.school||cName(c)}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{(typeof c.school==="string"?c.school:c.school?.name||"")||cName(c)}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{cName(c)}{c.title?` · ${c.title}`:""}</div>
 <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
 {c.schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 7px",borderRadius:3}}>{c.schoolClass}</span>}
@@ -4442,7 +4453,7 @@ return (
 <Pill v={d.stage} sc={DSC} bc={DBG}/>
 {dCamp&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 5px",borderRadius:3}}>✦ {dCamp.name}</span>}
 </div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact} · {d.school} · {d.state}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{typeof d.contact==="string"?d.contact:d.contact?.name||""} · {typeof d.school==="string"?d.school:d.school?.name||""} · {d.state}</div>
 <div style={{display:"flex",gap:7,marginTop:3,alignItems:"center"}}>
 <UCh uid={d.assignee}/>
 {d.followUpDate&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:ov?B.red:dUntil(d.followUpDate)<=2?B.yellow:B.muted,letterSpacing:.3}}>{ov?`${Math.abs(dUntil(d.followUpDate))}d OVERDUE`:dUntil(d.followUpDate)===0?"TODAY":fmtD(d.followUpDate)}</span>}
@@ -4738,7 +4749,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,flex:1,lineHeight:1.4}}>{o.name}</div>
 <button onClick={()=>dispatch("DEL_ORDER",o.id)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:14,padding:0,marginLeft:6,lineHeight:1,opacity:.5}}>×</button>
 </div>
-{o.contact&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{o.contact}{o.school?` · ${o.school}`:""}</div>}
+{o.contact&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:2}}>{typeof o.contact==="string"?o.contact:o.contact?.name||""}{o.school?` · ${typeof o.school==="string"?o.school:o.school?.name||""}`:""}</div>}
 {o.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,marginBottom:2}}>{o.email}</div>}
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(o.value)}</span>
@@ -4967,8 +4978,8 @@ return(
 <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",background:B.white,borderRadius:6,border:`1px solid ${B.border}`,borderLeft:`3px solid ${st.color}`}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,minWidth:18}}>#{i+1}</div>
 <div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{r.school}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.sport}{r.contact?` · ${r.contact}`:""}{r.state?`, ${r.state}`:""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{typeof r.school==="string"?r.school:r.school?.name||""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{r.sport}{r.contact?` · ${typeof r.contact==="string"?r.contact:r.contact?.name||""}`:""}{r.state?`, ${r.state}`:""}</div>
 </div>
 <div style={{textAlign:"right",flexShrink:0,marginRight:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,letterSpacing:.5,marginBottom:1}}>{st.label} · {r.daysSince}d AGO</div>
@@ -5052,7 +5063,7 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{r.school}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:500}}>{typeof r.school==="string"?r.school:r.school?.name||""}</span>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:st.color,background:st.color+"18",padding:"2px 6px",borderRadius:3,letterSpacing:.5}}>{st.label}</span>
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[r.contact,r.state,r.sport].filter(Boolean).join(" · ")}</div>
@@ -7211,7 +7222,7 @@ style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,
 {isOpen&&(list.contactIds||[]).length>0&&(
 <div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:260,overflowY:"auto"}}>
 <div style={{display:"flex",flexDirection:"column",gap:3}}>
-{(list.contactIds||[]).slice(0,100).map(id=>{const c=(s.contacts||[]).find(x=>x.id===id);const name=c?[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email:id;return(<div key={id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>{name}{c?.title?<span style={{color:B.muted,fontSize:10,marginLeft:6}}>{c.title}</span>:null}</div>);})}
+{(list.contactIds||[]).slice(0,100).map(id=>{const c=(s.contacts||[]).find(x=>x.id===id);const name=c?[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email:id;return(<div key={id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>{name}{c?.title?<span style={{color:B.muted,fontSize:10,marginLeft:6}}>{typeof c.title==="string"?c.title:c.title?.name||""}</span>:null}</div>);})}
 {(list.contactIds||[]).length>100&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {(list.contactIds||[]).length-100} more</div>}
 </div>
 </div>
@@ -10174,7 +10185,7 @@ style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,
 <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderBottom:`1px solid ${B.border}`}}>
 <div style={{flex:1}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()}</span>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{c.title}{c.school?` · ${c.school}`:""}{c.state?` · ${c.state}`:""}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginLeft:8}}>{typeof c.title==="string"?c.title:c.title?.name||""}{c.school?` · ${typeof c.school==="string"?c.school:c.school?.name||""}`:""}{c.state?` · ${c.state}`:""}</span>
 </div>
 {c.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green}}>✉</span>}
 </div>
