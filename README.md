@@ -92,7 +92,7 @@ The `src/lib/api.js` handles this automatically.
 | `/rfp` | RFP Automation Tool — upload PDF bids, auto-price, export |
 | `/prices` | Price List Manager — supplier costs, margin alerts |
 | `/expansion` | State Expansion Playbook generator |
-| `/integrations` | Slack, Zoho Books, Zoho CRM, WooCommerce |
+| `/integrations` | Slack, Zoho Books, Zoho CRM, Shopify |
 
 ---
 
@@ -119,10 +119,12 @@ The `src/lib/api.js` handles this automatically.
 Tokens expire after 60 minutes with Self Client. For production-grade, set up a
 Server-based OAuth app with refresh tokens — see [Zoho OAuth docs](https://www.zoho.com/accounts/protocol/oauth.html).
 
-### WooCommerce
-1. WooCommerce → Settings → Advanced → **REST API**
-2. Add Key → Read/Write permissions → Generate
-3. In the app: **Integrations** → WooCommerce tab → paste Consumer Key + Secret
+### Shopify
+1. Shopify admin → Settings → **Apps and sales channels** → **Develop apps** → create an app
+2. Configure Admin API scopes: read/write access to Products and Orders → install the app
+3. Copy the **Admin API access token**
+4. Add to Vercel env vars: `SHOPIFY_STORE_DOMAIN` (e.g. `your-store.myshopify.com`) and `SHOPIFY_ACCESS_TOKEN`
+5. In the app: **Integrations** → Shopify tab → **Test Connection** (credentials live in Vercel, never in the browser or app UI)
 
 ### Slack
 Already connected via MCP — no configuration needed.
@@ -158,13 +160,13 @@ st1-revops/
 │   ├── App.jsx            ← Router — all routes defined here
 │   ├── main.jsx           ← React entry point
 │   ├── lib/
-│   │   └── api.js         ← Central AI + Zoho + WooCommerce clients
+│   │   └── api.js         ← Central AI + Zoho clients
 │   └── pages/
 │       ├── RevOps.jsx     ← Main unified app shell (Daily Briefing, Deals, etc.)
 │       ├── RFPTool.jsx    ← RFP Automation (PDF upload, auto-price, export)
 │       ├── PriceTool.jsx  ← Price List Manager
 │       ├── Expansion.jsx  ← State Expansion Playbook
-│       └── Integrations.jsx ← Slack, Zoho, WooCommerce hub
+│       └── Integrations.jsx ← Slack, Zoho, Shopify hub
 ├── index.html             ← Entry HTML with PWA meta tags
 ├── vite.config.js
 ├── vercel.json            ← Vercel routing + headers config

@@ -87,7 +87,7 @@ export default async function handler(req, res) {
     asset = await prisma.asset.create({
       data: {
         campaignId,
-        productId: productId ? parseInt(productId) : null,
+        productId: productId || null,
         assetType: 'product_photo',
         width: w,
         height: h,

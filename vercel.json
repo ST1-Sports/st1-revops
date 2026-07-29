@@ -11,6 +11,8 @@
     "api/zoho-campaigns.js":                      { "maxDuration": 30 },
     "api/gmail.js":                               { "maxDuration": 30 },
     "api/zoho.js":                                { "maxDuration": 30 },
+    "api/shopify.js":                              { "maxDuration": 30 },
+    "api/adengine/webhooks/shopify.js":            { "maxDuration": 30 },
     "api/reddit/index.js":                         { "maxDuration": 30 },
     "api/ads/*.js":                                { "maxDuration": 30 },
     "api/analytics/*.js":                          { "maxDuration": 30 },

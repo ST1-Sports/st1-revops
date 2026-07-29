@@ -11,7 +11,8 @@ datasource db {
 // ── PRODUCTS ──────────────────────────────────────────────────────────────────
 
 model Product {
-  id                Int       @id
+  id                String    @id // external store product ID (Shopify's numeric ID as a string — avoids
+                                   // Postgres int4 overflow, since Shopify IDs commonly exceed 2.1 billion)
   name              String
   slug              String?
   permalink         String?
@@ -71,7 +72,7 @@ model Campaign {
 model Asset {
   id          String   @id @default(cuid())
   campaignId  String
-  productId   Int?
+  productId   String?
   assetType   String
   width       Int
   height      Int
@@ -93,7 +94,7 @@ model Asset {
 model Copy {
   id              String   @id @default(cuid())
   campaignId      String
-  productId       Int?
+  productId       String?
   headline        String?
   subheadline     String?
   cta             String?
@@ -186,7 +187,7 @@ model CampaignSpecial {
 model CampaignProduct {
   id                String          @id @default(cuid())
   campaignSpecialId String
-  productId         Int
+  productId         String
   campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
   product           Product         @relation(fields: [productId], references: [id])
 }
@@ -206,7 +207,7 @@ model CampaignCoupon {
   id                String          @id @default(cuid())
   campaignSpecialId String
   code              String
-  wooCommerceId     Int?
+  discountCodeId    String?         // external store's discount/coupon ID, if pushed there
   createdAt         DateTime        @default(now())
   campaignSpecial   CampaignSpecial @relation(fields: [campaignSpecialId], references: [id], onDelete: Cascade)
 }

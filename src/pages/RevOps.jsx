@@ -12372,12 +12372,12 @@ style={{background:socialPosting||!socialPlatforms.length||!socialCaption.trim()
 <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"center"}}>
 <input value={prodSearch} onChange={e=>setProdSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loadProducts(prodSearch)} placeholder="Search products…" style={{flex:1,maxWidth:280,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
 <GBtn onClick={()=>loadProducts(prodSearch)} style={{padding:"7px 14px"}}>SEARCH</GBtn>
-<OBtn onClick={syncCatalog} disabled={syncing}>{syncing?"SYNCING...":"⟳ SYNC FROM WOOCOMMERCE"}</OBtn>
+<OBtn onClick={syncCatalog} disabled={syncing}>{syncing?"SYNCING...":"⟳ SYNC FROM SHOPIFY"}</OBtn>
 </div>
 {prodLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11}}><Spin/>Loading…</div>}
 {!prodLoading&&products.length===0&&(
 <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
-No products in catalog. Sync from WooCommerce or add WC_URL, WC_KEY, WC_SECRET to your Vercel env vars.
+No products in catalog. Sync from Shopify or add SHOPIFY_STORE_DOMAIN, SHOPIFY_ACCESS_TOKEN to your Vercel env vars.
 </div>
 )}
 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>

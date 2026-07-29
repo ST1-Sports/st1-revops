@@ -69,7 +69,7 @@ Return ONLY valid JSON with no markdown fences:
   const copy = await prisma.copy.create({
     data: {
       campaignId,
-      productId: productId ? parseInt(productId) : null,
+      productId: productId || null,
       headline: copyData.headline ?? null,
       subheadline: copyData.subheadline ?? null,
       cta: copyData.cta ?? null,

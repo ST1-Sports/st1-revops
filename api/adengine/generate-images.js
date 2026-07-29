@@ -81,7 +81,7 @@ export default async function handler(req, res) {
   const asset = await prisma.asset.create({
     data: {
       campaignId,
-      productId: productId ? parseInt(productId) : null,
+      productId: productId || null,
       assetType: 'generated_image',
       width: w,
       height: h,

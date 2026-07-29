@@ -1,5 +1,7 @@
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { shopifyRequest, shopifyConfigured, shopifyMissingEnvVars } from '../_lib/shopify.js';
+import { mapShopifyProduct } from '../_lib/shopify-map.js';
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
@@ -25,64 +27,62 @@ export default async function handler(req, res) {
     return res.json({ products, total });
   }
 
-  // ── SYNC FROM WOOCOMMERCE ────────────────────────────────────────────────────
+  // ── SYNC FROM SHOPIFY ────────────────────────────────────────────────────────
   if (req.method === 'POST') {
-    const wcUrl   = (process.env.WC_URL || "").replace(/\/+$/, "");
-    const wcKey   = process.env.WC_KEY;
-    const wcSecret= process.env.WC_SECRET;
-
-    if (!wcUrl || !wcKey || !wcSecret) {
+    if (!shopifyConfigured()) {
       return res.status(400).json({
-        error: `WooCommerce credentials not configured. Missing: ${[!wcUrl&&"WC_URL",!wcKey&&"WC_KEY",!wcSecret&&"WC_SECRET"].filter(Boolean).join(", ")}`,
+        error: `Shopify credentials not configured. Missing: ${shopifyMissingEnvVars().join(', ')}`,
       });
     }
 
-    const auth = `Basic ${Buffer.from(`${wcKey}:${wcSecret}`).toString('base64')}`;
-    let page = 1, synced = 0, errors = 0;
+    let synced = 0, errors = 0;
+    // Shopify REST pagination is cursor-based (page_info in the Link response
+    // header), not page-number based like WooCommerce — follow rel="next"
+    // until it's absent.
+    let endpoint = '/products.json?limit=250&status=active';
 
-    while (true) {
-      const r = await fetch(
-        `${wcUrl}/wp-json/wc/v3/products?per_page=100&page=${page}&status=publish`,
-        { headers: { Authorization: auth } }
-      );
-      if (!r.ok) {
-        const errText = await r.text().catch(()=>"");
-        return res.json({ ok: false, synced, errors, wcError: `HTTP ${r.status}: ${errText.slice(0,200)}` });
+    while (endpoint) {
+      let r;
+      try {
+        r = await shopifyRequest(endpoint);
+      } catch (e) {
+        return res.json({ ok: false, synced, errors, shopifyError: e.message });
       }
-      const products = await r.json();
-      if (!Array.isArray(products) || products.length === 0) break;
+      if (!r.ok) {
+        return res.json({ ok: false, synced, errors, shopifyError: `HTTP ${r.status}: ${JSON.stringify(r.data).slice(0,200)}` });
+      }
+
+      const products = Array.isArray(r.data?.products) ? r.data.products : [];
+      if (!products.length) break;
 
       for (const p of products) {
-        const data = {
-          name: p.name,
-          slug: p.slug,
-          permalink: p.permalink,
-          price: p.price,
-          regular_price: p.regular_price,
-          sale_price: p.sale_price || null,
-          on_sale: !!p.on_sale,
-          stock_status: p.stock_status || 'instock',
-          short_description: p.short_description?.replace(/<[^>]*>/g, '') || null,
-          main_image_url: p.images?.[0]?.src || null,
-          images: p.images || [],
-          categories: p.categories || [],
-          tags: p.tags || [],
-          attributes: p.attributes || [],
-          date_modified: p.date_modified ? new Date(p.date_modified) : null,
-        };
+        const data = mapShopifyProduct(p);
+        const id = String(p.id);
         try {
           await prisma.product.upsert({
-            where: { id: p.id },
-            create: { id: p.id, ...data },
+            where: { id },
+            create: { id, ...data },
             update: data,
           });
           synced++;
         } catch (e) {
-          console.error(`Product ${p.id} upsert failed:`, e.message);
+          console.error(`Product ${id} upsert failed:`, e.message);
           errors++;
         }
       }
-      page++;
+
+      // Parse Link header for the next cursor: <...&page_info=xxx>; rel="next"
+      const link = r.headers?.get?.('link') || '';
+      const nextMatch = link.split(',').map(s => s.trim()).find(s => s.endsWith('rel="next"'));
+      if (nextMatch) {
+        const urlMatch = nextMatch.match(/<([^>]+)>/);
+        if (urlMatch) {
+          const nextUrl = new URL(urlMatch[1]);
+          endpoint = `/products.json?${nextUrl.searchParams.toString()}`;
+          continue;
+        }
+      }
+      endpoint = null;
     }
 
     return res.json({ ok: true, synced, errors });

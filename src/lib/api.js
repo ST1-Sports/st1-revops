@@ -140,19 +140,3 @@ export async function crmAPI(endpoint, method = 'GET', body = null, token) {
   if (!r.ok) throw new Error(`CRM ${r.status}`)
   return r.json()
 }
-
-/**
- * WooCommerce REST call (direct from browser — st1sports.com)
- */
-export async function wooAPI(endpoint, method = 'GET', body = null, ck, cs) {
-  const r = await fetch(`https://st1sports.com/wp-json/wc/v3${endpoint}`, {
-    method,
-    headers: {
-      Authorization: `Basic ${btoa(`${ck}:${cs}`)}`,
-      'Content-Type': 'application/json',
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  })
-  if (!r.ok) throw new Error(`WooCommerce ${r.status}`)
-  return r.json()
-}

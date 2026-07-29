@@ -35,16 +35,16 @@ async function zohoAPI(service, endpoint, method="GET", body=null) {
   return data;
 }
 
-// ─── WOOCOMMERCE API ──────────────────────────────────────────────────────────
-async function wooAPI(endpoint, method="GET", body=null, ck, cs) {
-  const base64 = btoa(`${ck}:${cs}`);
-  const r = await fetch(`https://st1sports.com/wp-json/wc/v3${endpoint}`, {
-    method,
-    headers:{"Authorization":`Basic ${base64}`,"Content-Type":"application/json"},
-    ...(body?{body:JSON.stringify(body)}:{})
+// ─── SHOPIFY API (server-side proxy via /api/shopify — credentials never touch the browser) ──
+async function shopifyAPI(endpoint, method="GET", body=null) {
+  const r = await fetch("/api/shopify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint, method, body }),
   });
-  if(!r.ok) throw new Error(`WooCommerce ${r.status}: ${await r.text().catch(()=>"")}`);
-  return r.json();
+  const data = await r.json();
+  if (!r.ok || data.error) throw new Error(data.error || `Shopify ${r.status}`);
+  return data;
 }
 
 // ─── CLAUDE AI ────────────────────────────────────────────────────────────────
@@ -96,22 +96,19 @@ export default function IntegrationsHub() {
   const [creds, setCreds] = useState(loadCreds);
   const [status, setStatus] = useState(() => {
     const saved = loadStatus();
-    const cr    = loadCreds();
     return {
       slack: true,
       books: false,
       crm:   false,
-      woo:   false,
+      shopify: false,
       ...saved,
-      // Restore WooCommerce automatically if credentials are saved
-      ...(cr.wooKey && cr.wooSecret ? {woo: true} : {}),
     };
   });
   const [testing,  setTesting]  = useState(null);
   const [log, setLog]     = useState([]);
   const [invoices,setInvoices]  = useState(DEMO_INVOICES);
   const [products,setProducts]  = useState(DEMO_PRODUCTS);
-  const [wooOrders,setWooOrders]= useState([]);
+  const [shopifyOrders,setShopifyOrders]= useState([]);
   const [syncing, setSyncing]   = useState(false);
   const [slackChannel, setSlackChannel] = useState("C0AQ7CMB01X"); // #sales
   const [slackChannelName, setSlackChannelName] = useState("#sales");
@@ -324,19 +321,26 @@ export default function IntegrationsHub() {
     setColdLeadSyncing(false);
   };
 
-  const testWoo = async () => {
-    if(!creds.wooKey||!creds.wooSecret) { addLog("Enter WooCommerce API keys first","warn"); return; }
-    setTesting("woo"); addLog("Testing WooCommerce connection...");
+  const testShopify = async () => {
+    setTesting("shopify"); addLog("Testing Shopify connection...");
     try {
-      const prods = await wooAPI("/products?per_page=10","GET",null,creds.wooKey,creds.wooSecret);
-      setProducts(prods);
-      const orders = await wooAPI("/orders?per_page=10","GET",null,creds.wooKey,creds.wooSecret);
-      setWooOrders(orders||[]);
-      setStatus(s=>({...s,woo:true}));
-      addLog(`✓ WooCommerce connected — ${prods.length} products, ${orders?.length||0} recent orders`,"success");
+      const shop = await shopifyAPI("/shop.json");
+      const prodData = await shopifyAPI("/products.json?limit=10");
+      const prods = prodData.products || [];
+      setProducts(prods.map(p => ({
+        id: p.id, variantId: p.variants?.[0]?.id, sku: p.variants?.[0]?.sku || "", name: p.title,
+        categories: p.product_type ? [{name: p.product_type}] : [],
+        price: p.variants?.[0]?.price || "0.00",
+        stock_quantity: p.variants?.reduce((s,v)=>s+(v.inventory_quantity||0),0),
+        stock_status: p.variants?.some(v=>(v.inventory_quantity||0)>0) ? "instock" : "outofstock",
+      })));
+      const orderData = await shopifyAPI("/orders.json?limit=10&status=any");
+      setShopifyOrders(orderData.orders || []);
+      setStatus(s=>({...s,shopify:true}));
+      addLog(`✓ Shopify connected — ${shop.shop?.name || "store"} — ${prods.length} products, ${orderData.orders?.length||0} recent orders`,"success");
     } catch(e) {
-      addLog(`WooCommerce: ${e.message.slice(0,80)}`,"error");
-      setStatus(s=>({...s,woo:false}));
+      addLog(`Shopify: ${e.message.slice(0,80)}`,"error");
+      setStatus(s=>({...s,shopify:false}));
     }
     setTesting(null);
   };
@@ -664,16 +668,17 @@ Action: Reminder email sent to ${inv.email}
     }
   };
 
-  // ── WOOCOMMERCE: UPDATE PRODUCT PRICE ──────────────────────────────────────
-  const updateWooPrice = async (productId, newPrice) => {
-    if(!status.woo) { addLog("Connect WooCommerce first","warn"); return; }
+  // ── SHOPIFY: UPDATE PRODUCT PRICE ──────────────────────────────────────────
+  const updateShopifyPrice = async (productId, variantId, newPrice) => {
+    if(!status.shopify) { addLog("Connect Shopify first","warn"); return; }
+    if(!variantId) { addLog("No variant ID for this product — can't update price","error"); return; }
     addLog(`Updating product ${productId} price to ${fmt$(newPrice)}...`);
     try {
-      await wooAPI(`/products/${productId}`,"PUT",{regular_price:String(newPrice)},creds.wooKey,creds.wooSecret);
+      await shopifyAPI(`/variants/${variantId}.json`,"PUT",{variant:{id:variantId,price:String(newPrice)}});
       setProducts(prev=>prev.map(p=>p.id===productId?{...p,price:String(newPrice)}:p));
-      addLog(`✓ WooCommerce price updated`,"success");
+      addLog(`✓ Shopify price updated`,"success");
     } catch(e) {
-      addLog(`WooCommerce price update failed: ${e.message.slice(0,80)}`,"error");
+      addLog(`Shopify price update failed: ${e.message.slice(0,80)}`,"error");
     }
   };
 
@@ -780,7 +785,7 @@ Channel: ${slackChannelName}`);
           </div>
           <div>
             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>INTEGRATIONS HUB</div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SLACK · ZOHO · CAMPAIGNS · SOCIAL · WOOCOMMERCE</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SLACK · ZOHO · CAMPAIGNS · SOCIAL · SHOPIFY</div>
           </div>
         </div>
         {/* Live connection status */}
@@ -795,7 +800,7 @@ Channel: ${slackChannelName}`);
             ["Meta Ads",    adsStatus.meta?.status==="connected",          "#1877F2"],
             ["Google Ads",  adsStatus.google?.status==="connected",        "#4285F4"],
             ["LinkedIn",    adsStatus.linkedin?.status==="connected",      "#0A66C2"],
-            ["WooCommerce", status.woo,                                    "#7F54B3"],
+            ["Shopify",     status.shopify,                                "#95BF47"],
           ].map(([l,ok,c])=>(
             <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
               <div style={{width:6,height:6,borderRadius:"50%",background:ok?B.green:B.muted}}/>
@@ -807,7 +812,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["woo","WooCommerce"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["shopify","Shopify"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -870,22 +875,22 @@ Channel: ${slackChannelName}`);
                   <OBtn sm onClick={()=>setTab("zoho")}>CONFIGURE →</OBtn>
                 </div>
 
-                {/* WooCommerce */}
-                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${status.woo?"#7F54B3":B.border}`}}>
+                {/* Shopify */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${status.shopify?"#95BF47":B.border}`}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
                     <div style={{display:"flex",gap:9,alignItems:"center"}}>
-                      <span style={{fontSize:22}}>🛒</span>
+                      <span style={{fontSize:22}}>🛍️</span>
                       <div>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>WooCommerce</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>st1sports.com — products, orders, inventory</div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>Shopify</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>products, orders, inventory</div>
                       </div>
                     </div>
-                    <StatusBadge ok={status.woo}/>
+                    <StatusBadge ok={status.shopify}/>
                   </div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:9}}>
-                    {status.woo?"Products and orders loaded.":"Paste Consumer Key and Secret from WooCommerce → Settings → REST API."}
+                    {status.shopify?"Products and orders loaded.":"Add SHOPIFY_STORE_DOMAIN and SHOPIFY_ACCESS_TOKEN to Vercel env vars, then test connection."}
                   </div>
-                  <OBtn sm onClick={()=>setTab("woo")}>CONFIGURE →</OBtn>
+                  <OBtn sm onClick={()=>setTab("shopify")}>CONFIGURE →</OBtn>
                 </div>
 
                 {/* Ad platforms */}
@@ -947,7 +952,21 @@ Channel: ${slackChannelName}`);
                     {[
                       ["🔔 Alert overdue invoices to Slack",()=>fireOverdueAlerts()],
                       ["🔄 Sync all invoiced customers to CRM",()=>bulkCRMSync()],
-                      ["📦 Refresh WooCommerce inventory",async()=>{if(status.woo){try{const p=await wooAPI("/products?per_page=10","GET",null,creds.wooKey,creds.wooSecret);setProducts(p);addLog(`✓ ${p.length} products refreshed`,"success");}catch(e){addLog("WooCommerce refresh (demo)","warn");}}}],
+                      ["📦 Refresh Shopify inventory",async()=>{
+                        if(!status.shopify){addLog("Connect Shopify first","warn");return;}
+                        try{
+                          const d=await shopifyAPI("/products.json?limit=10");
+                          const prods=d.products||[];
+                          setProducts(prods.map(p=>({
+                            id:p.id,variantId:p.variants?.[0]?.id,sku:p.variants?.[0]?.sku||"",name:p.title,
+                            categories:p.product_type?[{name:p.product_type}]:[],
+                            price:p.variants?.[0]?.price||"0.00",
+                            stock_quantity:p.variants?.reduce((s,v)=>s+(v.inventory_quantity||0),0),
+                            stock_status:p.variants?.some(v=>(v.inventory_quantity||0)>0)?"instock":"outofstock",
+                          })));
+                          addLog(`✓ ${prods.length} products refreshed`,"success");
+                        }catch(e){addLog(`Shopify refresh failed: ${e.message.slice(0,80)}`,"error");}
+                      }],
                     ].map(([l,fn])=>(
                       <button key={l} onClick={fn} style={{background:B.white,border:`1px solid ${B.orange}30`,color:B.textMid,borderRadius:5,padding:"8px 11px",fontFamily:"'Lexend',sans-serif",fontSize:11,textAlign:"left",cursor:"pointer"}}>{l}</button>
                     ))}
@@ -1662,33 +1681,44 @@ Channel: ${slackChannelName}`);
             </div>
           )}
 
-          {/* ── WOOCOMMERCE ── */}
-          {tab==="woo"&&(
+          {/* ── SHOPIFY ── */}
+          {tab==="shopify"&&(
             <div className="fu">
               <div style={{marginBottom:20}}>
-                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>WOOCOMMERCE</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>st1sports.com — products, pricing, inventory, orders</div>
-                <div style={{width:32,height:3,background:"#7F54B3",marginTop:7,borderRadius:2}}/>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>SHOPIFY</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>products, pricing, inventory, orders</div>
+                <div style={{width:32,height:3,background:"#95BF47",marginTop:7,borderRadius:2}}/>
               </div>
 
-              <ConnCard id="woo" title="WooCommerce REST API" sub="st1sports.com/wp-json/wc/v3" color="#7F54B3" icon="🛒" connected={status.woo}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
-                  <Field label="CONSUMER KEY" val={creds.wooKey} onChange={v=>setC("wooKey",v)} type="password" placeholder="ck_xxxx..."/>
-                  <Field label="CONSUMER SECRET" val={creds.wooSecret} onChange={v=>setC("wooSecret",v)} type="password" placeholder="cs_xxxx..."/>
-                </div>
+              <ConnCard id="shopify" title="Shopify Admin API" sub="server-side proxy — credentials never touch the browser" color="#95BF47" icon="🛍️" connected={status.shopify}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10,lineHeight:1.6}}>
-                  Get keys: WooCommerce → Settings → Advanced → REST API → Add Key. Set permissions to Read/Write.
+                  Add to Vercel env vars: <code style={{background:"#f0f0f0",padding:"2px 6px",borderRadius:3,fontFamily:"monospace"}}>SHOPIFY_STORE_DOMAIN</code> (e.g. your-store.myshopify.com)
+                  and <code style={{background:"#f0f0f0",padding:"2px 6px",borderRadius:3,fontFamily:"monospace"}}>SHOPIFY_ACCESS_TOKEN</code> (from
+                  Shopify admin → Settings → Apps and sales channels → Develop apps → create an app → Admin API access token, with read/write access to Products and Orders).
                 </div>
-                <OBtn onClick={testWoo} disabled={testing==="woo"||!creds.wooKey||!creds.wooSecret} style={{width:"100%"}}>
-                  {testing==="woo"?"CONNECTING...":status.woo?"✓ RECONNECT":"CONNECT WOOCOMMERCE"}
+                <OBtn onClick={testShopify} disabled={testing==="shopify"} style={{width:"100%"}}>
+                  {testing==="shopify"?"CONNECTING...":status.shopify?"✓ RECONNECT":"TEST CONNECTION"}
                 </OBtn>
               </ConnCard>
 
               {/* Products table */}
               <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,overflow:"hidden",marginTop:14}}>
                 <div style={{padding:"11px 14px",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>PRODUCTS — {status.woo?"LIVE FROM WOOCOMMERCE":"DEMO DATA"}</div>
-                  {status.woo&&<OBtn sm onClick={async()=>{try{const p=await wooAPI("/products?per_page=10","GET",null,creds.wooKey,creds.wooSecret);setProducts(p);addLog(`Refreshed ${p.length} products`,"success");}catch(e){addLog("Refresh error: "+e.message.slice(0,50),"error");}}}>↻ REFRESH</OBtn>}
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>PRODUCTS — {status.shopify?"LIVE FROM SHOPIFY":"DEMO DATA"}</div>
+                  {status.shopify&&<OBtn sm onClick={async()=>{
+                    try{
+                      const d=await shopifyAPI("/products.json?limit=10");
+                      const prods=d.products||[];
+                      setProducts(prods.map(p=>({
+                        id:p.id,variantId:p.variants?.[0]?.id,sku:p.variants?.[0]?.sku||"",name:p.title,
+                        categories:p.product_type?[{name:p.product_type}]:[],
+                        price:p.variants?.[0]?.price||"0.00",
+                        stock_quantity:p.variants?.reduce((s,v)=>s+(v.inventory_quantity||0),0),
+                        stock_status:p.variants?.some(v=>(v.inventory_quantity||0)>0)?"instock":"outofstock",
+                      })));
+                      addLog(`Refreshed ${prods.length} products`,"success");
+                    }catch(e){addLog("Refresh error: "+e.message.slice(0,50),"error");}
+                  }}>↻ REFRESH</OBtn>}
                 </div>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                   <thead><tr style={{background:B.surface}}>
@@ -1710,25 +1740,25 @@ Channel: ${slackChannelName}`);
                           </span>
                         </td>
                         <td style={{padding:"7px 10px"}}>
-                          <PriceEditor product={p} onSave={newPrice=>updateWooPrice(p.id,newPrice)}/>
+                          <PriceEditor product={p} onSave={newPrice=>updateShopifyPrice(p.id,p.variantId,newPrice)}/>
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {products.length===0&&<div style={{padding:"30px 0",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Connect WooCommerce to see products</div>}
+                {products.length===0&&<div style={{padding:"30px 0",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Connect Shopify to see products</div>}
               </div>
 
               {/* Recent orders */}
-              {wooOrders.length>0&&(
+              {shopifyOrders.length>0&&(
                 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,marginTop:14}}>
                   <div style={{padding:"11px 14px",borderBottom:`1px solid ${B.border}`}}>
                     <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>RECENT ORDERS</div>
                   </div>
-                  {wooOrders.slice(0,5).map(o=>(
+                  {shopifyOrders.slice(0,5).map(o=>(
                     <div key={o.id} style={{padding:"9px 14px",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{o.billing?.first_name} {o.billing?.last_name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>#{o.id} · {fmtD(o.date_created)}</div></div>
-                      <div style={{textAlign:"right"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(o.total)}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>{o.status?.toUpperCase()}</span></div>
+                      <div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{o.customer?.first_name||o.billing_address?.first_name} {o.customer?.last_name||o.billing_address?.last_name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>#{o.order_number||o.id} · {fmtD(o.created_at)}</div></div>
+                      <div style={{textAlign:"right"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(o.total_price)}</div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 5px",borderRadius:3}}>{(o.financial_status||"").toUpperCase()}{o.fulfillment_status?` · ${o.fulfillment_status.toUpperCase()}`:""}</span></div>
                     </div>
                   ))}
                 </div>
@@ -1791,7 +1821,7 @@ Channel: ${slackChannelName}`);
             {l:"LinkedIn Ads", c:"#0A66C2",desc:"B2B ad targeting",       ok:adsStatus.linkedin?.status==="connected"},
             {l:"TikTok Ads",   c:"#010101",desc:"Video ad campaigns",     ok:adsStatus.tiktok?.status==="connected"},
             {l:"GA4",          c:"#E37400",desc:"Analytics & attribution", ok:adsStatus.ga4?.status==="connected"},
-            {l:"WooCommerce",  c:"#7F54B3",desc:"Products & orders",      ok:status.woo},
+            {l:"Shopify",      c:"#95BF47",desc:"Products & orders",      ok:status.shopify},
           ].map(k=>(
             <div key={k.l} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
