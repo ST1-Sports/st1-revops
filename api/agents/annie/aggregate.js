@@ -251,7 +251,9 @@ async function fetchLedgerLocals() {
 // deal name matched at all (quote for a prospect with no deal yet, or a name
 // mismatch) — it is the honest majority case, not a bug.
 
-function classifyQuote(entityName, allDeals) {
+// Exported — insights.js reuses this for win-rate/margin cross-referencing by
+// product line/brand/territory (Session 5).
+export function classifyQuote(entityName, allDeals) {
   const name = (entityName || '').replace(/^(contact:|customer:)/, '').trim().toLowerCase()
   if (!name) return 'unknown'
 

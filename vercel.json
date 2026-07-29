@@ -47,6 +47,7 @@
     "api/agents/ledger/vendor-bill.js":          { "maxDuration": 90 },
     "api/agents/annie/aggregate.js":              { "maxDuration": 90 },
     "api/agents/annie/forecast.js":                { "maxDuration": 60 },
+    "api/agents/annie/insights.js":                { "maxDuration": 90 },
     "api/cron/ledger-payments.js":               { "maxDuration": 60 },
     "api/cron/ledger-reconcile.js":               { "maxDuration": 60 },
     "api/webhooks/zoho.js":                        { "maxDuration": 30 },

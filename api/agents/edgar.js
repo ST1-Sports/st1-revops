@@ -65,7 +65,7 @@ async function fetchAccountContext({ contactId, contactEmail }) {
   if (!contact && contactEmail) {
     contact = await prisma.salesContact.findUnique({ where: { email: contactEmail } }).catch(() => null)
   }
-  if (!contact) return { block: '', entityKey: null }
+  if (!contact) return { block: '', entityKey: null, state: null }
 
   const interactions = await recentActivity(`contact:${contact.id}`, 8).catch(() => [])
 
@@ -91,7 +91,7 @@ async function fetchAccountContext({ contactId, contactEmail }) {
     }
   }
 
-  return { block: lines.join('\n'), entityKey: `contact:${contact.id}` }
+  return { block: lines.join('\n'), entityKey: `contact:${contact.id}`, state: contact.state || null }
 }
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -203,14 +203,19 @@ function formatItem(item, supplierName) {
 // not whatever Claude chose to echo back in its JSON output.
 function buildItemLookup(ownSuppliers, matchedItems) {
   const lookup = new Map()
-  const register = item => {
+  const register = (item, supplierName) => {
     const key = item.name.toLowerCase()
     if (!lookup.has(key)) {
-      lookup.set(key, { map: dec(item.map), gmFloorPct: item.gmFloorPct ?? DEFAULT_FLOOR })
+      lookup.set(key, {
+        map:         dec(item.map),
+        gmFloorPct:  item.gmFloorPct ?? DEFAULT_FLOOR,
+        category:    item.category || null,
+        brand:       supplierName || item.supplier?.name || null,
+      })
     }
   }
-  for (const item of matchedItems) register(item)
-  for (const sup of ownSuppliers) for (const item of sup.items) register(item)
+  for (const item of matchedItems) register(item, item.supplier?.name)
+  for (const sup of ownSuppliers) for (const item of sup.items) register(item, sup.name)
   return lookup
 }
 
@@ -259,6 +264,33 @@ function enforceGuardrails(quote, itemLookup) {
     overallGmPct: Math.round(overallGm   * 1000) / 10,
     warnings,
   }
+}
+
+// Aggregate quoted line items by category/brand — feeds Annie's win-rate/margin
+// cross-referencing (Session 5, requirement #9).
+function buildCategoryBreakdown(lineItems, itemLookup) {
+  const byKey = new Map()
+  for (const item of lineItems) {
+    if (item.notFound) continue
+    const dbData   = itemLookup?.get(item.name?.toLowerCase())
+    const category = dbData?.category || 'Uncategorized'
+    const brand    = dbData?.brand || 'Unknown'
+    const key      = `${category}::${brand}`
+    const qty      = item.qty || 1
+    const revenue  = (item.quotedPrice || 0) * qty
+    const cost     = (item.cost || 0) * qty
+    const entry    = byKey.get(key) || { category, brand, revenue: 0, cost: 0 }
+    entry.revenue += revenue
+    entry.cost    += cost
+    byKey.set(key, entry)
+  }
+  return [...byKey.values()].map(e => ({
+    category: e.category,
+    brand:    e.brand,
+    revenue:  Math.round(e.revenue * 100) / 100,
+    cost:     Math.round(e.cost * 100) / 100,
+    gmPct:    e.revenue > 0 ? Math.round(((e.revenue - e.cost) / e.revenue) * 1000) / 10 : null,
+  }))
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -354,10 +386,12 @@ export default async function handler(req, res) {
       entity:  accountCtx.entityKey || (customer ? `customer:${customer}` : null),
       input:   { task },
       output:  {
-        itemCount:    guarded.lineItems?.length ?? 0,
-        totalRevenue: guarded.totalRevenue,
-        totalCost:    guarded.totalCost,
-        overallGmPct: guarded.overallGmPct,
+        itemCount:        guarded.lineItems?.length ?? 0,
+        totalRevenue:     guarded.totalRevenue,
+        totalCost:        guarded.totalCost,
+        overallGmPct:     guarded.overallGmPct,
+        territory:        accountCtx.state || null,
+        categoryBreakdown: buildCategoryBreakdown(guarded.lineItems || [], itemLookup),
       },
       outcome: 'pending',
     }).catch(() => {})

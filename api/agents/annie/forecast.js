@@ -49,7 +49,9 @@ const DEFAULT_GROSS_MARGIN_PCT = 35 // fallback when no snapshot or quote histor
 // Spring (Feb–May) and fall (Aug–Oct) K-12 budget/bid cycles run hot; summer
 // break and winter holidays run cold. Heuristic — recalibrate once 12+ months
 // of FinancialSnapshot history exists to fit against real seasonal swings.
-const SEASONALITY = {
+// Exported — insights.js reuses this to detect approaching spring/fall bid
+// season AP waves and give the cash-timing gap check extra lead time.
+export const SEASONALITY = {
   1: 0.90, 2: 1.15, 3: 1.25, 4: 1.20, 5: 1.10, 6: 0.85,
   7: 0.70, 8: 1.10, 9: 1.20, 10: 1.15, 11: 0.95, 12: 0.80,
 }
@@ -57,7 +59,7 @@ const SEASONALITY = {
 // AR collection modeling — used when CustomerReliability.avgDaysLate is
 // unknown for a customer; avgDaysLate (computed from real paid-invoice
 // history) always wins over these defaults when present.
-const RELIABILITY_DEFAULTS = {
+export const RELIABILITY_DEFAULTS = {
   RELIABLE:     { delayDays: 0,  collectPct: 1.00 },
   INCONSISTENT: { delayDays: 15, collectPct: 0.90 },
   CHRONIC_LATE: { delayDays: 30, collectPct: 0.75 },
@@ -66,18 +68,18 @@ const RELIABILITY_DEFAULTS = {
 
 // AP timing — slack days past parsed payment terms, based on how much
 // friction the supplier creates around late payment (their strictness, not ours).
-const FRICTION_SLACK_DAYS = { HIGH: 0, MEDIUM: 5, LOW: 15, UNRATED: 5 }
+export const FRICTION_SLACK_DAYS = { HIGH: 0, MEDIUM: 5, LOW: 15, UNRATED: 5 }
 
 // ── date helpers ──────────────────────────────────────────────────────────────
 
-function monthKey(d)            { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` }
-function addDays(date, days)    { return new Date(date.getTime() + days * 86_400_000) }
+export function monthKey(d)     { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` }
+export function addDays(date, days) { return new Date(date.getTime() + days * 86_400_000) }
 function addMonths(date, months) { const d = new Date(date); d.setUTCMonth(d.getUTCMonth() + months); return d }
 function monthBounds(key) {
   const [y, m] = key.split('-').map(Number)
   return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 0, 23, 59, 59)) }
 }
-function parseTermsDays(terms) {
+export function parseTermsDays(terms) {
   const m = /(\d+)/.exec(terms || '')
   return m ? parseInt(m[1], 10) : 30
 }
@@ -97,7 +99,9 @@ function clampMonthKey(date, months) {
 
 // ── Revenue forecast ──────────────────────────────────────────────────────────
 
-async function computeCloseRates() {
+// Exported — insights.js reuses close-rate history for opportunity-finding
+// (requirement #9 needs win-rate, this gives the aggregate baseline).
+export async function computeCloseRates() {
   const allDeals = await fetchAllDeals().catch(() => [])
   const won  = allDeals.filter(d => d.stage === 'Closed Won')
   const lost = allDeals.filter(d => d.stage === 'Closed Lost')
@@ -126,7 +130,9 @@ function forecastRevenue(openDeals, months, closeRate) {
 
 // ── AR collections (weighted by CustomerReliability, not face value) ────────
 
-async function fetchOpenInvoicesWithReliability() {
+// Exported — insights.js reuses this for AR-side cash-timing and chronic-late
+// risk detection (requirements #1 and #7).
+export async function fetchOpenInvoicesWithReliability() {
   const [invoices, reliability] = await Promise.all([
     prisma.dealInvoice.findMany({ where: { status: { in: ['SENT', 'PARTIAL', 'OVERDUE'] }, dueDate: { not: null } } }).catch(() => []),
     prisma.customerReliability.findMany().catch(() => []),
@@ -166,10 +172,12 @@ function forecastARCollections(invoices, months) {
 
 // ── AP due (weighted by Supplier.paymentFriction/paymentTerms) ──────────────
 
-async function fetchOpenBillsWithFriction() {
+// Exported — insights.js reuses this for AP-side cash-timing, payment-plan
+// vendor selection, and late-penalty exposure flagging (requirements #1, #3, #6).
+export async function fetchOpenBillsWithFriction() {
   const bills = await prisma.vendorBill.findMany({
     where:   { status: { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED'] } },
-    include: { supplier: { select: { name: true, paymentFriction: true, paymentTerms: true } } },
+    include: { supplier: { select: { name: true, paymentFriction: true, paymentTerms: true, latePenaltyTerms: true } } },
   }).catch(() => [])
 
   return bills.map(bill => {
@@ -180,8 +188,9 @@ async function fetchOpenBillsWithFriction() {
     const friction    = bill.supplier?.paymentFriction || 'UNRATED'
     const slack        = FRICTION_SLACK_DAYS[friction] ?? FRICTION_SLACK_DAYS.UNRATED
     return {
-      billId: bill.id, supplierName: bill.supplier?.name || 'Unknown', amount: Number(bill.totalAmount) || 0,
-      paymentTermsDays: termsDays, paymentFriction: friction, projectedPayDate: addDays(baseDueDate, slack),
+      billId: bill.id, supplierId: bill.supplierId, supplierName: bill.supplier?.name || 'Unknown', amount: Number(bill.totalAmount) || 0,
+      paymentTermsDays: termsDays, paymentFriction: friction, latePenaltyTerms: bill.supplier?.latePenaltyTerms || null,
+      dueDate: baseDueDate, projectedPayDate: addDays(baseDueDate, slack),
     }
   })
 }
