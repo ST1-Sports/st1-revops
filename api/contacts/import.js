@@ -17,6 +17,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { normalizeStateForStorage } from '../_lib/stateUtils.js'
+import { upsertAccountForContact } from '../_lib/accountUtils.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -64,6 +65,12 @@ export default async function handler(req, res) {
     return res.json({ added: 0, updated: 0, total: 0 })
   }
 
+  // Resolve/create the Account for each row's companyName up front — cheap
+  // even when many rows share one company, since the upsert is idempotent.
+  await Promise.all(data.map(async d => {
+    d.accountId = await upsertAccountForContact(d.companyName, { city: d.city, state: d.state })
+  }))
+
   try {
     // Find which emails already exist so we can report added vs updated
     const incomingEmails = data.map(d => d.email)
@@ -81,6 +88,7 @@ export default async function handler(req, res) {
           create: contact,
           update: {
             // Only overwrite a field if the new value is non-empty (|| undefined → Prisma skips it)
+            accountId:   contact.accountId   || undefined,
             firstName:   contact.firstName   || undefined,
             lastName:    contact.lastName    || undefined,
             title:       contact.title       || undefined,

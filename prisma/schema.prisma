@@ -248,10 +248,13 @@ model SalesContact {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
   activities   SalesActivity[]
+  accountId    String?
+  account      Account?        @relation(fields: [accountId], references: [id])
 
   @@index([state])
   @@index([sport])
   @@index([segment])
+  @@index([accountId])
 }
 
 model SalesDiscoverRun {
@@ -276,15 +279,25 @@ model SalesActivity {
   contact   SalesContact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 }
 
-model SalesCompany {
-  id        String   @id @default(cuid())
-  name      String
-  domain    String?
-  industry  String?
-  size      String?
-  metadata  Json     @default("{}")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// The account/company a contact belongs to — a school, most of the time.
+// normalizedName (trimmed/lowercased/whitespace-collapsed) is the dedup key:
+// contact companyName strings have no normalization of their own, so this is
+// how "Lincoln High School" and "lincoln  high school" resolve to one row.
+model Account {
+  id             String         @id @default(cuid())
+  name           String
+  normalizedName String         @unique
+  domain         String?
+  city           String?
+  state          String?
+  orgType        String         @default("school")
+  zohoAccountId  String?
+  metadata       Json           @default("{}")
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  contacts       SalesContact[]
+
+  @@index([state])
 }
 
 // ── CAMPAIGN SUPPORTING MODELS ────────────────────────────────────────────────

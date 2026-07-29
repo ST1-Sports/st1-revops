@@ -328,6 +328,44 @@ if(name.length>3&&ic===name) return true;
 return false;
 })||null;
 }
+// Canonical sports list for account coverage/gap detection. Deliberately
+// reuses ModCRM's COMMON_SPORTS values (kept in sync by hand) rather than the
+// shorter SPORTS_LIST used by the segment builder — coverage gaps should
+// consider anything a school could plausibly run, not just the sports
+// Prospecting actively targets.
+const ACCOUNT_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew"];
+const SPORT_TITLE_PATTERNS=[
+[/track|cross.?country|\bxc\b|t&f/i,"Track & Field"],
+[/football/i,"Football"],[/basketball/i,"Basketball"],[/baseball/i,"Baseball"],
+[/softball/i,"Softball"],[/soccer/i,"Soccer"],[/volleyball/i,"Volleyball"],
+[/wrestling/i,"Wrestling"],[/swim|diving/i,"Swimming & Diving"],[/tennis/i,"Tennis"],
+[/golf/i,"Golf"],[/hockey/i,"Hockey"],[/lacrosse/i,"Lacrosse"],[/gymnastics/i,"Gymnastics"],
+[/cheer/i,"Cheerleading"],[/dance/i,"Dance"],[/bowling/i,"Bowling"],[/badminton/i,"Badminton"],
+[/water polo/i,"Water Polo"],[/rowing|crew/i,"Rowing / Crew"],
+];
+function inferSportFromTitle(title) {
+const t=title||"";
+for(const [re,sport] of SPORT_TITLE_PATTERNS){ if(re.test(t)) return sport; }
+return null;
+}
+// Given all contacts at one account, work out who the AD is (if known) and
+// which sports have a coach on file vs. which are gaps — this is the data
+// that should get filled in once positive intent shows up at that school.
+function computeAccountCoverage(schoolContacts) {
+const adContact=schoolContacts.find(c=>/athletic director/i.test(c.title||""))||null;
+const covered=new Map();
+schoolContacts.forEach(c=>{
+let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
+if(sp&&ACCOUNT_SPORTS.includes(sp)&&!covered.has(sp)) covered.set(sp,c);
+});
+const gaps=ACCOUNT_SPORTS.filter(sp=>!covered.has(sp));
+return {adContact,covered,gaps};
+}
+// The "they replied" threshold from the SCORE_CONTACT point system
+// (replied:50, meeting:75, deal:100) — shared by the CRM-tab cold-contact
+// sweep and anything else that needs to ask "has this contact shown intent?"
+const CONTACT_INTENT_SCORE=50;
 function scoreTier(score) {
 const n=score||0;
 if(n>=100) return {label:"🔥 FIRE",color:"#C0392B",bg:"#FDECEA"};
@@ -646,7 +684,6 @@ await new Promise(r=>setTimeout(r,150));
 return all;
 };
 const dealStageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
-const CONTACT_INTENT_SCORE=50;
 // A synced Zoho contact/lead belongs in the CRM tab only once someone's
 // actually working it — an open deal, or a real reply/interest signal.
 // Everything else is cold and belongs in the prospecting pool instead.
@@ -3150,6 +3187,21 @@ setDrafting(true);setDraft("");
 const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, ${sel.title||""} at ${sel.school||""}. Deal: ${activeDeal.name}, Stage: ${activeDeal.stage}, Value: ${fmt$(activeDeal.value||0)}. Under 80 words. Include subject line. Brand voice: warm and direct, lead with the person not the product, athlete-aware. No "hope this finds you well", no generic inspiration, no efficiency-first hooks. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com`);
 setDraft(t||"");setDrafting(false);
 };
+const [findingStaff,setFindingStaff]=useState(false);
+const findMissingStaff=async(school,schoolCity,schoolState,gaps,needsAD)=>{
+setFindingStaff(true);
+const roles=[...(needsAD?["Athletic Director"]:[]),...gaps.map(sp=>`Head ${sp} Coach`)];
+try{
+const found=await aiCall(
+`Find real ${roles.join(", ")} contacts at ${school}${schoolCity?` in ${schoolCity}, ${schoolState||""}`:""}. Search their school athletics staff directory page and district website — look for /athletics/staff or /directory. Search: "${school} ${roles[0]} email contact". Email format is usually firstname.lastname@district.org or first@schoolname.edu. Return JSON array (ONLY verified real contacts — return empty array [] if you cannot confirm the person exists): [{"firstName":"","lastName":"","fullName":"","title":"","school":"${school}","orgType":"school","city":"${schoolCity||""}","state":"${schoolState||""}","email":"","phone":"","source":"scraped","confidence":"high|medium|low"}]`,
+{search:true,json:true,tokens:1600}
+);
+const valid=(Array.isArray(found)?found:[]).filter(c=>c.fullName||c.firstName).map(c=>({...c,id:mkId(),source:"scraped"}));
+if(valid.length){dispatch("ADD_CONTACTS",valid);toast(`Found ${valid.length} contact${valid.length!==1?"s":""} for ${school} — added to Prospecting for review`,"success");}
+else toast(`No verified contacts found for the missing roles at ${school}`,"info");
+}catch(e){toast(`Search error: ${e.message}`,"error");}
+setFindingStaff(false);
+};
 const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",label:"Quote"},{id:"order",label:"Order"}];
 const phaseIdx={lead:0,deal:1,quote:2,order:3};
 const [showBreakdown,setShowBreakdown]=useState(false);
@@ -3285,12 +3337,14 @@ const isActive=selSchool===school;
 const phases=g.contacts.map(c=>getCD(c).phase);
 const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
 const pc=g.invoiced?B.green:PCOL[topPhase];
+const cov=g.contacts.length>0?computeAccountCoverage(g.contacts):null;
 return(
 <button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{school}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
+{cov&&(!cov.adContact||cov.gaps.length>0)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{!cov.adContact?"no AD on file":""}{!cov.adContact&&cov.gaps.length>0?" · ":""}{cov.gaps.length>0?`${cov.gaps.length} sport${cov.gaps.length!==1?"s":""} not covered`:""}</div>}
 </div>
 <div style={{flexShrink:0,textAlign:"right"}}>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{g.invoiced?"customer":topPhase}</span>
@@ -3311,6 +3365,8 @@ linkedContact={ttContact}
 />
 ):leftMode==="accounts"&&selSchool?(()=>{
 const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
+const coverage=computeAccountCoverage(schoolContacts);
+const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
 const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
 const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
 const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
@@ -3432,6 +3488,30 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
 </div>
 ))}
+</div>
+{/* ── STAFF COVERAGE ── */}
+<SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
+<div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+<div style={{display:"flex",alignItems:"center",gap:8}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>ATHLETIC DIRECTOR</span>
+{coverage.adContact?
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:500}}>{cName(coverage.adContact)}</span>
+:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.border,padding:"2px 7px",borderRadius:3}}>NOT ON FILE</span>}
+</div>
+{coverage.gaps.length>0&&hasPositiveIntent&&(
+<OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(selSchool,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
+)}
+</div>
+<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+{ACCOUNT_SPORTS.map(sp=>{
+const c=coverage.covered.get(sp);
+return(
+<span key={sp} title={c?cName(c):"Not on file"} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.3,padding:"3px 8px",borderRadius:3,color:c?B.green:B.muted,background:c?`${B.green}15`:B.border}}>{sp}{c?" ✓":""}</span>
+);
+})}
+</div>
+{coverage.gaps.length>0&&!hasPositiveIntent&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8}}>{coverage.gaps.length} sport{coverage.gaps.length!==1?"s":""} with no coach on file — search unlocks once someone here shows positive intent.</div>}
 </div>
 {/* ── SPONSORSHIP ── */}
 {(sponsorshipMin||sponsorshipStatus)&&(
@@ -5271,6 +5351,8 @@ const [zohoPulling, setZohoPulling] = useState(false);
 const [zohoPullResult, setZohoPullResult] = useState(null);
 const [backfillRunning,setBackfillRunning] = useState(false);
 const [backfillResult,setBackfillResult]   = useState(null);
+const [linkingAccounts,setLinkingAccounts] = useState(false);
+const [linkAccountsResult,setLinkAccountsResult] = useState(null);
 const [importPhase,setImportPhase]     = useState("idle");
 const [importState,setImportState]     = useState("");
 const [importRows,setImportRows]       = useState([]);
@@ -6326,6 +6408,17 @@ else toast("No contacts updated — state data already populated or no email pat
 finally{setBackfillRunning(false);}
 }}>{backfillRunning?"FIXING…":"⚙ FIX STATE DATA"}</OBtn>
 {backfillResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{backfillResult.updated} fixed · {backfillResult.skipped} no match</span>}
+<OBtn sm color={B.purple} disabled={linkingAccounts} onClick={async()=>{
+setLinkingAccounts(true);setLinkAccountsResult(null);
+try{
+const r=await fetch('/api/contacts/backfill-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:false})});
+const d=await r.json();
+setLinkAccountsResult(d);
+toast(`${d.accountsCreated} account(s) linked to ${d.contactsLinked} contact(s)`,"success");
+}catch(e){toast("Account link error: "+e.message,"error");}
+finally{setLinkingAccounts(false);}
+}}>{linkingAccounts?"LINKING…":"⚙ LINK ACCOUNTS"}</OBtn>
+{linkAccountsResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{linkAccountsResult.accountsCreated} accounts · {linkAccountsResult.contactsLinked} contacts linked</span>}
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{totalContactsAll.toLocaleString()} contacts total <span style={{fontSize:9}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></span>
 </div>
 )}

@@ -26,6 +26,7 @@
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
+import { upsertAccountForContact } from '../_lib/accountUtils.js'
 
 const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
 
@@ -116,6 +117,12 @@ export default async function handler(req, res) {
   try {
     if (createAsContact) {
       const accountId = await findOrCreateAccount(contact, headers)
+      // Positive intent on this contact is exactly the trigger that should
+      // create/link the local Account (school) too — not just the Zoho side.
+      const localAccountId = await upsertAccountForContact(contact.companyName, { city: contact.city, state: contact.state })
+      if (localAccountId && accountId) {
+        await prisma.account.update({ where: { id: localAccountId }, data: { zohoAccountId: accountId } }).catch(() => {})
+      }
       const zohoId = await upsertZohoRecord({
         module: 'Contacts',
         payload: {
@@ -128,7 +135,7 @@ export default async function handler(req, res) {
           ...(accountId ? { Account_Name: { id: accountId } } : {}),
         },
         contact, headers,
-        extraContactUpdate: { zohoAccountId: accountId || undefined },
+        extraContactUpdate: { zohoAccountId: accountId || undefined, accountId: localAccountId || undefined },
       })
       return res.json({ ok: true, zohoId, zohoAccountId: accountId })
     }
