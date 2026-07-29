@@ -640,6 +640,40 @@ await new Promise(r=>setTimeout(r,150));
 return all;
 };
 const dealStageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
+const CONTACT_INTENT_SCORE=50;
+// A synced Zoho contact/lead belongs in the CRM tab only once someone's
+// actually working it — an open deal, or a real reply/interest signal.
+// Everything else is cold and belongs in the prospecting pool instead.
+const hasContactIntent=(c,dealList)=>{
+if((c.score||0)>=CONTACT_INTENT_SCORE) return true;
+if(["replied","interested"].includes(c.outreachStatus)) return true;
+const nm=(c.fullName||`${c.firstName||""} ${c.lastName||""}`).trim().toLowerCase();
+return dealList.some(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
+};
+const splitColdZohoContacts=(contactList,dealList)=>{
+const cold=[],keep=[];
+for(const c of contactList){
+if((c.source||"").startsWith("zoho")&&c.email&&!hasContactIntent(c,dealList)) cold.push(c);
+else keep.push(c);
+}
+return {cold,keep};
+};
+const pushColdContactsToProspecting=async(cold)=>{
+let moved=0;
+for(let i=0;i<cold.length;i+=500){
+const batch=cold.slice(i,i+500).map(c=>({
+email:c.email,firstName:c.firstName,lastName:c.lastName,title:c.title,school:c.school,
+phone:c.phone,sport:c.sport,state:c.state,city:c.city,score:c.score||0,
+source:c.id?.startsWith("zoho_l_")?"zoho-crm-lead":"zoho-crm",
+}));
+try{
+const r=await fetch("/api/contacts/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contacts:batch})});
+const d=await r.json();
+moved+=(d.added||0)+(d.updated||0);
+}catch{}
+}
+return moved;
+};
 const syncContacts=async(force=false)=>{
 if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
 try {
@@ -655,7 +689,6 @@ const existingIds=new Set((s.contacts||[]).map(c=>c.id));
 const allZoho=[...contacts,...leads];
 const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
 const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
-dispatch("MERGE_CONTACTS",{toAdd,toUpdate,lastSync:now});
 
 const existingDeals=s.deals||[];
 const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
@@ -672,7 +705,21 @@ dealsAdded++;
 }
 });
 
-if(force) toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated`, "success");
+// Merge as before, then split off any Zoho-synced contact (old or new) that
+// still has no deal and no reply/interest signal — those move to the
+// prospecting pool instead of cluttering the CRM tab. Runs every sync, so
+// this also sweeps the existing backlog, not just newly-fetched records.
+const updMap=new Map(toUpdate.map(c=>[c.id,c]));
+const mergedExisting=(s.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
+const fullContactSet=[...toAdd,...mergedExisting];
+const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
+const {cold,keep}=splitColdZohoContacts(fullContactSet,allDealsForPhase);
+dispatch("SET_CONTACTS",keep);
+dispatch("SET_CONTACTS_LAST_SYNC",now);
+let movedToProspecting=0;
+if(cold.length) movedToProspecting=await pushColdContactsToProspecting(cold);
+
+if(force) toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}`, "success");
 } catch(e){
 console.error("CRM sync failed:",e);
 if(force) toast(`CRM sync failed: ${e.message}`,"error");
