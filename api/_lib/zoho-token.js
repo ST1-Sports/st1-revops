@@ -1,7 +1,7 @@
 /**
  * Shared Zoho OAuth token helper.
  * In-memory cache survives within a warm serverless function instance.
- * Imported by api/zoho.js, api/zoho-campaigns.js, api/zoho-social.js.
+ * Imported by api/zoho.js, api/zoho-campaigns.js, and others.
  */
 
 let _cachedToken = null;

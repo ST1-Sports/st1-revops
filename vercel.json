@@ -9,7 +9,6 @@
     "api/agent.js":                               { "maxDuration": 120 },
     "api/zoho-quotes.js":                         { "maxDuration": 30 },
     "api/zoho-campaigns.js":                      { "maxDuration": 30 },
-    "api/zoho-social.js":                         { "maxDuration": 30 },
     "api/gmail.js":                               { "maxDuration": 30 },
     "api/zoho.js":                                { "maxDuration": 30 },
     "api/reddit/index.js":                         { "maxDuration": 30 },

@@ -139,15 +139,6 @@ export default function IntegrationsHub() {
   const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
   const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
 
-  // Zoho Social
-  const [socialPortals, setSocialPortals] = useState([]);
-  const [socialChannels, setSocialChannels] = useState([]);
-  const [selectedPortalId, setSelectedPortalId] = useState("");
-  const [socialLoading, setSocialLoading] = useState(false);
-  const [testPostMsg, setTestPostMsg] = useState("New athletic equipment now in stock at ST1 Sports! Check out our latest hurdles and track gear. 🏃‍♀️ Shop at st1sports.com");
-  const [testPostChannels, setTestPostChannels] = useState([]);
-  const [socialPosting, setSocialPosting] = useState(false);
-  const [socialPostResult, setSocialPostResult] = useState(null);
   const [gmailStatus, setGmailStatus] = useState(() => !!(loadStatus().gmail));
   const [emailMessages, setEmailMessages] = useState([]);
   const [emailOpps, setEmailOpps]   = useState([]);
@@ -331,71 +322,6 @@ export default function IntegrationsHub() {
       setColdLeadSyncResult({ error: e.message });
     }
     setColdLeadSyncing(false);
-  };
-
-  // ── ZOHO SOCIAL HELPERS ─────────────────────────────────────────────────────
-  const socialAPI = async (action, params={}) => {
-    const r = await fetch("/api/zoho-social", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, ...params }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || `Social API ${r.status}`);
-    return data;
-  };
-
-  const testSocial = async () => {
-    setTesting("social"); addLog("Testing Zoho Social connection...");
-    try {
-      const data = await socialAPI("list_portals");
-      setSocialPortals(data.portals || []);
-      if (data.portals?.length) {
-        setSelectedPortalId(data.portals[0].id);
-        setStatus(s=>({...s, social: true}));
-        addLog(`✓ Zoho Social connected — ${data.portals.length} portal(s)`, "success");
-        // Load channels for first portal
-        const chData = await socialAPI("list_channels", { portalId: data.portals[0].id });
-        setSocialChannels(chData.channels || []);
-      } else {
-        addLog("Zoho Social connected but no portals found — add social accounts in Zoho Social first", "warn");
-        setStatus(s=>({...s, social: true}));
-      }
-    } catch(e) {
-      addLog(`Social: ${e.message.slice(0,140)}`, "error");
-      setStatus(s=>({...s, social: false}));
-    }
-    setTesting(null);
-  };
-
-  const loadSocialChannels = async (portalId) => {
-    setSocialLoading(true);
-    try {
-      const data = await socialAPI("list_channels", { portalId });
-      setSocialChannels(data.channels || []);
-    } catch(e) { addLog(`Social channels: ${e.message.slice(0,100)}`, "error"); }
-    setSocialLoading(false);
-  };
-
-  const postToSocial = async () => {
-    if (!selectedPortalId || !testPostChannels.length || !testPostMsg.trim()) {
-      addLog("Select portal, channels, and enter a message first", "warn"); return;
-    }
-    setSocialPosting(true);
-    setSocialPostResult(null);
-    try {
-      const data = await socialAPI("create_post", {
-        portalId: selectedPortalId,
-        channelIds: testPostChannels,
-        message: testPostMsg,
-      });
-      setSocialPostResult({ ok: true, postId: data.postId });
-      addLog(`✓ Posted to ${testPostChannels.length} channel(s) — post ID: ${data.postId || "n/a"}`, "success");
-    } catch(e) {
-      setSocialPostResult({ ok: false, error: e.message });
-      addLog(`Social post: ${e.message.slice(0,140)}`, "error");
-    }
-    setSocialPosting(false);
   };
 
   const testWoo = async () => {
@@ -2186,6 +2112,40 @@ function AyrsharePanel({addLog}) {
     setLoadingProfiles(false);
   };
 
+  // ── Compose / publish ───────────────────────────────────────────────────
+  const [composeText, setComposeText] = useState("");
+  const [composePlatforms, setComposePlatforms] = useState([]);
+  const [composeSchedule, setComposeSchedule] = useState(""); // empty = post ASAP (backend defaults to ~2 min out)
+  const [composing, setComposing] = useState(false);
+  const [composeResult, setComposeResult] = useState(null);
+
+  const togglePlatform = (p) => setComposePlatforms(prev => prev.includes(p) ? prev.filter(x=>x!==p) : [...prev,p]);
+
+  const publishPost = async () => {
+    if (!composeText.trim()) { addLog("Enter post text first","warn"); return; }
+    if (!composePlatforms.length) { addLog("Select at least one platform","warn"); return; }
+    setComposing(true); setComposeResult(null);
+    try {
+      const data = await safePost({
+        post: composeText.trim(),
+        platforms: composePlatforms,
+        ...(composeSchedule ? { scheduleDate: new Date(composeSchedule).toISOString() } : {}),
+      });
+      if (data.postIds?.length || data.status === "scheduled") {
+        setComposeResult({ok:true, ...data});
+        addLog(`✓ Post ${composeSchedule?"scheduled":"queued"} — ${composePlatforms.join(", ")}`,"success");
+        setComposeText(""); setComposePlatforms([]); setComposeSchedule("");
+      } else {
+        setComposeResult({ok:false, error: data.error || data._missing || "Post failed"});
+        addLog(`Publish failed: ${data.error||data._missing}`,"error");
+      }
+    } catch(e) {
+      setComposeResult({ok:false, error:e.message});
+      addLog(`Publish failed: ${e.message}`,"error");
+    }
+    setComposing(false);
+  };
+
   const [debugResult, setDebugResult] = useState(null);
   const [debugging, setDebugging] = useState(false);
   const debugPost = async () => {
@@ -2236,6 +2196,45 @@ function AyrsharePanel({addLog}) {
           ✗ {testResult.error}
         </div>
       )}
+
+      <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",marginBottom:12}}>
+        <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:"#6B3FA0",letterSpacing:1.5,marginBottom:10}}>COMPOSE POST</div>
+        <textarea
+          value={composeText} onChange={e=>setComposeText(e.target.value)}
+          placeholder="What do you want to post?" rows={3}
+          style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,resize:"vertical",marginBottom:10,boxSizing:"border-box"}}
+        />
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+          {(profiles.length ? [...new Set(profiles.map(p=>p.service).filter(Boolean))] : Object.keys(NET_COLORS)).map(p=>(
+            <label key={p} style={{display:"flex",alignItems:"center",gap:5,background:composePlatforms.includes(p)?`${NET_COLORS[p]||"#888"}18`:B.surface,border:`1px solid ${composePlatforms.includes(p)?(NET_COLORS[p]||"#888"):B.border}`,borderRadius:5,padding:"5px 10px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>
+              <input type="checkbox" checked={composePlatforms.includes(p)} onChange={()=>togglePlatform(p)} style={{margin:0}}/>
+              {NET_ICONS[p]||"?"} {p.toUpperCase()}
+            </label>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          <div>
+            <label style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,display:"block",marginBottom:3}}>SCHEDULE (optional — blank posts ASAP)</label>
+            <input type="datetime-local" value={composeSchedule} onChange={e=>setComposeSchedule(e.target.value)}
+              style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 9px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}/>
+          </div>
+          <button onClick={publishPost} disabled={composing}
+            style={{background:composing?B.surface:"#6B3FA0",color:composing?B.muted:B.white,border:"none",borderRadius:5,padding:"8px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,cursor:"pointer",fontWeight:700,letterSpacing:.5,alignSelf:"flex-end"}}>
+            {composing?"PUBLISHING…":composeSchedule?"SCHEDULE POST":"PUBLISH NOW"}
+          </button>
+        </div>
+        {composeResult?.ok&&(
+          <div style={{background:B.greenBg,border:`1px solid ${B.green}40`,borderRadius:5,padding:"8px 11px",marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>
+            ✓ {composeResult.scheduled?`Scheduled for ${new Date(composeResult.scheduledAt).toLocaleString()}`:"Queued"}
+            {composeResult._warning&&<div style={{marginTop:3,color:B.yellow}}>{composeResult._warning}</div>}
+          </div>
+        )}
+        {composeResult?.ok===false&&(
+          <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:5,padding:"8px 11px",marginTop:10,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
+            ✗ {composeResult.error}
+          </div>
+        )}
+      </div>
 
       <div style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"14px 16px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
         <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1.5,marginBottom:12}}>SETUP</div>
