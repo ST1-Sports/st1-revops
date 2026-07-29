@@ -129,6 +129,13 @@ export default function IntegrationsHub() {
   const [booksExportProgress, setBooksExportProgress] = useState({}); // {key: {page, records}}
   const [booksExportResults, setBooksExportResults] = useState({}); // {key: [records]}
 
+  // "Who's been invoiced" report — read-only rollup used to decide who gets
+  // re-created as an Account in the freshly-wiped Zoho CRM. Never writes
+  // anything to Zoho; it's purely a review list.
+  const [invoicedReportLoading, setInvoicedReportLoading] = useState(false);
+  const [invoicedReportStatus, setInvoicedReportStatus] = useState("");
+  const [invoicedReport, setInvoicedReport] = useState(null);
+
   // Zoho Campaigns
   const [mailingLists, setMailingLists] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -766,6 +773,94 @@ export default function IntegrationsHub() {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `zoho_books_${key}_backup_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  };
+
+  // ── "WHO'S BEEN INVOICED" REPORT ──────────────────────────────────────────
+  // Read-only rollup of every distinct customer with at least one invoice in
+  // Zoho Books, used to decide who gets re-created as an Account in the
+  // freshly-wiped Zoho CRM. Only reads the invoice LIST (summary fields are
+  // enough for a $/count rollup — no need for the full line-item detail pass
+  // the Books backup export does), then looks up contact detail (email,
+  // phone, billing address) once per distinct customer.
+  const buildInvoicedReport = async () => {
+    if (!status.books) { addLog("Connect Zoho Books first", "warn"); return; }
+    setInvoicedReportLoading(true);
+    setInvoicedReportStatus("Pulling invoices...");
+    addLog("Building invoiced-customers report...");
+    try {
+      let allInvoices = [], page = 1;
+      while (page <= 200) { // safety cap ~40k invoices
+        const d = await zohoAPI("books", `/invoices?per_page=200&page=${page}`);
+        const batch = d.invoices;
+        if (!Array.isArray(batch)) throw new Error(d.message || d.error || `Zoho Books returned no invoice data (page ${page})`);
+        allInvoices = allInvoices.concat(batch);
+        setInvoicedReportStatus(`Invoices: page ${page} — ${allInvoices.length} so far`);
+        addLog(`Invoices: page ${page} — ${allInvoices.length} so far`);
+        const hasMore = d.page_context?.has_more_page && batch.length===200;
+        if (!hasMore) break;
+        page++;
+        await sleep(300);
+      }
+
+      const byCustomer = new Map();
+      for (const inv of allInvoices) {
+        const cid = inv.customer_id;
+        if (!cid) continue;
+        const cur = byCustomer.get(cid) || {
+          customerId: cid, customerName: inv.customer_name||"", invoiceCount:0,
+          totalInvoiced:0, totalBalance:0, firstInvoiceDate:null, lastInvoiceDate:null,
+          email:"", phone:"", city:"", state:"", zip:"", contactStatus:"",
+        };
+        cur.invoiceCount++;
+        cur.totalInvoiced += Number(inv.total)||0;
+        cur.totalBalance += Number(inv.balance)||0;
+        if (inv.date && (!cur.firstInvoiceDate || inv.date<cur.firstInvoiceDate)) cur.firstInvoiceDate = inv.date;
+        if (inv.date && (!cur.lastInvoiceDate || inv.date>cur.lastInvoiceDate)) cur.lastInvoiceDate = inv.date;
+        byCustomer.set(cid, cur);
+      }
+      const customers = Array.from(byCustomer.values());
+      addLog(`Found ${customers.length} distinct invoiced customer(s) across ${allInvoices.length} invoice(s) — fetching contact details...`);
+
+      for (let i=0;i<customers.length;i++) {
+        const c = customers[i];
+        setInvoicedReportStatus(`Contact detail ${i+1}/${customers.length}...`);
+        try {
+          const dd = await zohoAPI("books", `/contacts/${c.customerId}`);
+          const contact = dd.contact;
+          if (contact) {
+            c.email = contact.email || contact.contact_persons?.[0]?.email || "";
+            c.phone = contact.phone || contact.mobile || contact.contact_persons?.[0]?.phone || "";
+            c.city = contact.billing_address?.city || "";
+            c.state = contact.billing_address?.state || "";
+            c.zip = contact.billing_address?.zip || "";
+            c.contactStatus = contact.status || "";
+          }
+        } catch { /* keep the invoice-derived fields if contact detail fails */ }
+        if (i%10===9 || i===customers.length-1) addLog(`Contact detail ${i+1}/${customers.length}`);
+        await sleep(150);
+      }
+
+      customers.sort((a,b)=>b.totalInvoiced-a.totalInvoiced);
+      setInvoicedReport(customers);
+      addLog(`✓ Invoiced-customers report ready — ${customers.length} customer(s)`, "success");
+    } catch(e) {
+      addLog(`Invoiced report failed: ${e.message.slice(0,150)}`, "error");
+    }
+    setInvoicedReportLoading(false);
+    setInvoicedReportStatus("");
+  };
+
+  const downloadInvoicedReportCsv = () => {
+    if (!invoicedReport || !invoicedReport.length) return;
+    const headers = ["customerName","email","phone","city","state","zip","invoiceCount","totalInvoiced","totalBalance","firstInvoiceDate","lastInvoiceDate","contactStatus","customerId"];
+    const esc = v => `"${String(v==null?"":v).replace(/"/g,'""')}"`;
+    const rows = invoicedReport.map(c=>headers.map(h=>esc(c[h])).join(","));
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zoho_invoiced_customers_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   };
 
@@ -1520,6 +1615,47 @@ Channel: ${slackChannelName}`);
                   })}
                 </div>
                 {!status.books&&<div style={{marginTop:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>⚠ Connect Zoho Books first using the test connection button above</div>}
+              </div>
+
+              {/* "Who's been invoiced" — Account seed report for the fresh CRM */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`3px solid ${B.green}`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:2,marginBottom:12}}>WHO'S BEEN INVOICED — ACCOUNT SEED REPORT</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+                  Rolls up every distinct customer with at least one invoice in Zoho Books — total invoiced, balance due, invoice count, first/last invoice date, and contact info. Read-only, doesn't touch Zoho CRM. Review this list (or the CSV) and decide who should be re-created as an Account once the fresh CRM is ready.
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+                  <OBtn sm onClick={buildInvoicedReport} disabled={invoicedReportLoading||!status.books}>
+                    {invoicedReportLoading?"BUILDING...":invoicedReport?"↻ REBUILD REPORT":"⚙ BUILD REPORT"}
+                  </OBtn>
+                  {invoicedReport&&invoicedReport.length>0&&<OBtn sm onClick={downloadInvoicedReportCsv}>↓ DOWNLOAD CSV</OBtn>}
+                  {invoicedReportLoading&&invoicedReportStatus&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>{invoicedReportStatus}</span>}
+                </div>
+                {!status.books&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4,marginBottom:12}}>⚠ Connect Zoho Books first using the test connection button above</div>}
+                {invoicedReport&&(
+                  <div style={{overflowX:"auto"}}>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>✓ {invoicedReport.length} distinct invoiced customer(s){invoicedReport.length>100?" — showing top 100 by total invoiced, download the CSV for the full list":""}</div>
+                    <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                      <thead><tr style={{background:B.surface}}>
+                        {["Customer","Email","City/State","Invoices","Total Invoiced","Balance Due","Last Invoice"].map(h=>(
+                          <th key={h} style={{padding:"6px 9px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,borderBottom:`2px solid ${B.border}`,fontWeight:400}}>{h}</th>
+                        ))}
+                      </tr></thead>
+                      <tbody>
+                        {invoicedReport.slice(0,100).map(c=>(
+                          <tr key={c.customerId} style={{borderBottom:`1px solid ${B.border}`}}>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{c.customerName}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{c.email||"—"}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")||"—"}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{c.invoiceCount}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{fmt$(c.totalInvoiced)}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:c.totalBalance>0?B.red:B.muted}}>{fmt$(c.totalBalance)}</td>
+                            <td style={{padding:"6px 9px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{fmtD(c.lastInvoiceDate)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
               {/* Live invoices table */}
