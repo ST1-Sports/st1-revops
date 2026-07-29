@@ -85,11 +85,23 @@ async function crmGet(path) {
   return r.json()
 }
 
+// Short-lived, in-process cache — a single digest/insights run calls
+// fetchAllDeals() from multiple independent places (aggregateSnapshot,
+// computeCloseRates, aggregateQuotesByDimension) within milliseconds of each
+// other; without this they'd each re-paginate the full CRM deal list from
+// Zoho. Deal data doesn't change fast enough for a 60s staleness window to
+// matter, and a fresh serverless invocation just gets a cache miss (safe).
+let _dealsCache = null // { at: number, deals: [...] }
+const DEALS_CACHE_MS = 60_000
+
 // Fetches every deal regardless of stage — callers derive open vs. closed
 // won vs. closed lost from `.stage` themselves (needed for Edgar win/loss
 // matching below, which needs the closed buckets, not just open pipeline).
-// Exported — forecast.js reuses this for close-rate history + open pipeline.
+// Exported — forecast.js and insights.js reuse this for close-rate history,
+// open pipeline, and win-rate-by-dimension.
 export async function fetchAllDeals() {
+  if (_dealsCache && (Date.now() - _dealsCache.at) < DEALS_CACHE_MS) return _dealsCache.deals
+
   const fields = 'Deal_Name,Stage,Amount,Closing_Date,Account_Name'
   let all = [], page = 1
   while (page <= 10) { // hard cap — 2000 deals is plenty for a snapshot
@@ -100,13 +112,15 @@ export async function fetchAllDeals() {
     page++
   }
   const zn = v => (typeof v === 'string' ? v : v?.name || v?.display_value || '')
-  return all.map(d => ({
+  const deals = all.map(d => ({
     name:        zn(d.Deal_Name) || 'Untitled',
     stage:       zn(d.Stage) || 'Unknown',
     amount:      Number(d.Amount) || 0,
     closingDate: d.Closing_Date || null,
     account:     zn(d.Account_Name),
   }))
+  _dealsCache = { at: Date.now(), deals }
+  return deals
 }
 
 // ── Zoho Books reports ────────────────────────────────────────────────────────
@@ -201,19 +215,25 @@ function extractBalanceSheet(bs) {
 function extractARAging(ar) {
   if (!ar) return { arTotal: null, arOverdue: null }
   const arTotal = deepFindNumber(ar, ['total', 'grand_total', 'total_receivables', 'total_outstanding_receivable_amount'])
-  // Aging buckets vary by response shape — sum anything that isn't "current"
+  // Aging buckets vary by response shape — sum anything that isn't "current".
+  // Track whether a bucket list was actually found separately from whether its
+  // sum is truthy — a real $0 overdue must not be treated the same as "no
+  // bucket data found at all" (the latter is what should fall back to Ledger's
+  // local total; the former is a legitimate answer).
   let arOverdue = null
+  let foundBuckets = false
   const bucketKeys = ['aging_summary', 'age_wise_details', 'aging']
   for (const key of bucketKeys) {
     const buckets = ar[key]
     if (Array.isArray(buckets)) {
-      const overdueSum = buckets
+      foundBuckets = true
+      arOverdue = buckets
         .filter(b => !/current|not.?due/i.test(b.range || b.label || b.name || ''))
         .reduce((s, b) => s + (parseFloat(b.amount || b.total || 0) || 0), 0)
-      if (overdueSum > 0) { arOverdue = overdueSum; break }
+      break
     }
   }
-  return { arTotal, arOverdue }
+  return { arTotal, arOverdue: foundBuckets ? arOverdue : null }
 }
 
 function extractAPAging(ap) {
@@ -228,7 +248,7 @@ async function fetchLedgerLocals() {
   const [openInvoices, overdueInvoices, openBills, recentDeposits] = await Promise.all([
     prisma.dealInvoice.findMany({ where: { status: { in: ['SENT', 'PARTIAL', 'OVERDUE'] } } }).catch(() => []),
     prisma.dealInvoice.findMany({ where: { status: 'OVERDUE' } }).catch(() => []),
-    prisma.vendorBill.findMany({ where: { status: { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED'] } } }).catch(() => []),
+    prisma.vendorBill.findMany({ where: { status: { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED', 'NEEDS_REVIEW'] } } }).catch(() => []),
     prisma.deposit.findMany({ where: { status: 'APPROVED' }, orderBy: { txnDate: 'desc' }, take: 90 }).catch(() => []),
   ])
   const sum = (rows, field) => rows.reduce((s, r) => s + (r[field] != null ? Number(r[field]) : 0), 0)
@@ -312,13 +332,17 @@ export async function aggregateSnapshot({ periodType = 'WEEKLY', toDate, dryRun 
   const { fromDate, toDate: to } = periodType === 'MONTHLY' ? monthRange(toDate) : weekRange(toDate)
 
   const cached = force ? null : await findCachedSnapshot(periodType, to)
-  const useCache = !!(cached?.rawZohoPL || cached?.rawZohoBS)
+  // Tracked independently, not as one combined flag — a day where the P&L
+  // fetch succeeded but the balance sheet failed (or vice versa) must still
+  // retry the failed half rather than treating the whole cache as usable.
+  const useCachePL = !!cached?.rawZohoPL
+  const useCacheBS = !!cached?.rawZohoBS
 
   const [pl, bs, arAging, apAging, allDeals] = await Promise.all([
-    useCache ? Promise.resolve(cached.rawZohoPL) : fetchPL(fromDate, to),
-    useCache ? Promise.resolve(cached.rawZohoBS) : fetchBalanceSheet(to),
-    useCache ? Promise.resolve(null) : fetchARAging(to),   // aging reports aren't cached raw (only PL/BS per spec) — always fresh unless we add fields for them later
-    useCache ? Promise.resolve(null) : fetchAPAging(to),
+    useCachePL ? Promise.resolve(cached.rawZohoPL) : fetchPL(fromDate, to),
+    useCacheBS ? Promise.resolve(cached.rawZohoBS) : fetchBalanceSheet(to),
+    fetchARAging(to),   // aging reports aren't cached raw (only PL/BS per spec) — always fresh
+    fetchAPAging(to),
     fetchAllDeals().catch(() => []),
   ])
   const openDeals = allDeals.filter(d => !CLOSED_STAGES.includes(d.stage))
@@ -350,7 +374,7 @@ export async function aggregateSnapshot({ periodType = 'WEEKLY', toDate, dryRun 
 
   const context = {
     fromDate, toDate: to,
-    cacheUsed: useCache,
+    cacheUsed: { pl: useCachePL, bs: useCacheBS },
     openDealCount: openDeals.length,
     ledgerLocals: locals,
     edgarQuoteHistory: edgarHistory,

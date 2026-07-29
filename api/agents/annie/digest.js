@@ -44,6 +44,7 @@
 import { setCors }   from '../../_lib/cors.js'
 import { prisma }    from '../../_lib/prisma.js'
 import { postSlackMessage } from '../../_lib/slack.js'
+import { logInteraction }   from '../../_lib/memory.js'
 import { aggregateSnapshot }           from './aggregate.js'
 import { backfillActuals, monthKey, addDays } from './forecast.js'
 import { generateInsights, fetchArAging60Plus, AR_AGING_THRESHOLD_DAYS } from './insights.js'
@@ -53,7 +54,14 @@ import { generateInsights, fetchArAging60Plus, AR_AGING_THRESHOLD_DAYS } from '.
 const DEFAULT_DIGEST_CHANNEL = 'C09F64RK0MN'
 const DUPLICATE_SEND_LOOKBACK_HOURS = 20
 
-const fmtMoney = n => n == null ? 'n/a' : `$${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+// "-$500.00", not "$-500.00" — toLocaleString puts the minus sign before the
+// digits, not before the "$" we prepend, so pull it out front ourselves.
+const fmtMoney = n => {
+  if (n == null) return 'n/a'
+  const num = Number(n)
+  const sign = num < 0 ? '-' : ''
+  return `${sign}$${Math.abs(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
 const fmtPct   = n => n == null ? 'n/a' : `${Number(n).toFixed(1)}%`
 
 // ── Duplicate-send guard ──────────────────────────────────────────────────────
@@ -62,16 +70,36 @@ async function alreadySentRecently(digestType, lookbackHours) {
   const since = new Date(Date.now() - lookbackHours * 3_600_000)
   return prisma.digestLog.findFirst({
     where: { digestType, sentAt: { gt: since } }, orderBy: { sentAt: 'desc' },
-  }).catch(() => null)
+  }).catch(e => {
+    // Fail closed: if we can't even check whether a digest already went out,
+    // skip sending rather than risk a duplicate — this guard existing is the
+    // whole point, so a DB hiccup on it should block the send, not bypass it.
+    console.error('[annie/digest] duplicate-send guard query failed — failing closed:', e.message)
+    return { sentAt: new Date(), guardError: true }
+  })
+}
+
+// Slack's chat.postMessage returns {ok:true/false,...}; Gmail's "send" action
+// (api/gmail.js) has no `ok` field at all — success is {sent:true,...},
+// failure is {error:...}. Normalize both here so a failed send is never
+// mistaken for a successful one before DigestLog gets written.
+function deliverySucceeded(delivery) {
+  const r = delivery?.sendResult
+  if (!r || r.skipped) return false
+  return delivery.method === 'EMAIL' ? r.sent === true : r.ok === true
 }
 
 // ── WEEKLY ─────────────────────────────────────────────────────────────────
 
 async function buildWeeklyDigestContent({ dryRun = true } = {}) {
-  const [aggResult, insightsResult] = await Promise.all([
-    aggregateSnapshot({ periodType: 'WEEKLY', dryRun }),
-    generateInsights({ dryRun }),
-  ])
+  // Sequential, not Promise.all: generateInsights's cash-timing check reads
+  // the latest FinancialSnapshot from the DB independently, so it must run
+  // after aggregateSnapshot's write actually commits — otherwise it can read
+  // last week's cash position instead of the one this same digest just
+  // computed (the monthly path already gets this right; this brings weekly
+  // in line with it).
+  const aggResult      = await aggregateSnapshot({ periodType: 'WEEKLY', dryRun })
+  const insightsResult = await generateInsights({ dryRun })
 
   const lastDigest = await prisma.digestLog.findFirst({ where: { digestType: 'WEEKLY' }, orderBy: { sentAt: 'desc' } }).catch(() => null)
   const since = lastDigest?.sentAt || addDays(new Date(), -8) // no prior digest yet — default lookback ~1 week
@@ -134,9 +162,14 @@ export async function runWeeklyDigest({ dryRun = true, channelOverride } = {}) {
   const content  = await buildWeeklyDigestContent({ dryRun })
   const delivery = await deliverWeeklyDigest(content, { dryRun, channelOverride })
   const shownInsightIds = content.newRiskInsights.map(i => i.id)
+  // Only a real, successful send counts — a failed Slack post must not get
+  // DigestLog'd as sent (that would push the "since last digest" cutoff
+  // forward and permanently hide a risk insight that was never actually
+  // delivered) or have its insights stamped surfacedIn as if a human saw them.
+  const delivered = !dryRun && deliverySucceeded(delivery)
 
   let logRow = null
-  if (!dryRun) {
+  if (delivered) {
     if (shownInsightIds.length) {
       await prisma.insight.updateMany({ where: { id: { in: shownInsightIds } }, data: { surfacedIn: 'DIGEST_WEEKLY' } }).catch(() => {})
     }
@@ -145,7 +178,16 @@ export async function runWeeklyDigest({ dryRun = true, channelOverride } = {}) {
     }).catch(e => { console.error('[annie/digest] DigestLog write failed:', e.message); return null })
   }
 
-  return { ok: true, dryRun, content, delivery, digestLogId: logRow?.id || null }
+  if (!dryRun) {
+    logInteraction({
+      agentId: 'annie', action: 'digest', entity: null,
+      input:   { digestType: 'WEEKLY' },
+      output:  { channel: delivery.method, flaggedCount: shownInsightIds.length, cashPosition: content.cashPosition, delivered },
+      outcome: delivered ? 'sent' : 'failed',
+    }).catch(() => {})
+  }
+
+  return { ok: true, dryRun, delivered, content, delivery, digestLogId: logRow?.id || null }
 }
 
 // ── MONTHLY ────────────────────────────────────────────────────────────────
@@ -272,9 +314,10 @@ export async function runMonthlyDigest({ dryRun = true, host, recipientOverride 
   const content  = await buildMonthlyDigestContent({ dryRun })
   const delivery = await deliverMonthlyDigest(content, { dryRun, host, recipientOverride })
   const shownInsightIds = [...content.topOpportunities.map(i => i.id), ...content.topSpendCuts.map(i => i.id)]
+  const delivered = !dryRun && deliverySucceeded(delivery)
 
   let logRow = null
-  if (!dryRun) {
+  if (delivered) {
     if (shownInsightIds.length) {
       await prisma.insight.updateMany({ where: { id: { in: shownInsightIds } }, data: { surfacedIn: 'DIGEST_MONTHLY' } }).catch(() => {})
     }
@@ -283,7 +326,16 @@ export async function runMonthlyDigest({ dryRun = true, host, recipientOverride 
     }).catch(e => { console.error('[annie/digest] DigestLog write failed:', e.message); return null })
   }
 
-  return { ok: true, dryRun, content, delivery, digestLogId: logRow?.id || null }
+  if (!dryRun) {
+    logInteraction({
+      agentId: 'annie', action: 'digest', entity: null,
+      input:   { digestType: 'MONTHLY', monthLabel: content.monthLabel },
+      output:  { channel: delivery.method, opportunityCount: content.topOpportunities.length, spendCutCount: content.topSpendCuts.length, delivered },
+      outcome: delivered ? 'sent' : 'failed',
+    }).catch(() => {})
+  }
+
+  return { ok: true, dryRun, delivered, content, delivery, digestLogId: logRow?.id || null }
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────

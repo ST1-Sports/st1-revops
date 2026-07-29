@@ -48,6 +48,7 @@
     "api/agents/annie/aggregate.js":              { "maxDuration": 90 },
     "api/agents/annie/forecast.js":                { "maxDuration": 60 },
     "api/agents/annie/insights.js":                { "maxDuration": 90 },
+    "api/agents/annie/ask.js":                      { "maxDuration": 60 },
     "api/agents/annie/digest.js":                  { "maxDuration": 120 },
     "api/cron/annie-digest-weekly.js":             { "maxDuration": 120 },
     "api/cron/annie-digest-monthly.js":            { "maxDuration": 120 },

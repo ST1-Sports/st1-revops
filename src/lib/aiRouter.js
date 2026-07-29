@@ -17,6 +17,7 @@ const VALID_SLUGS = new Set([
   'research', 'web-search', 'competitor-intel', 'code-execution',
   'video-clips', 'database', 'workflow', 'general',
   'invoice', 'reconcile', 'vendor-bill',
+  'forecast', 'health', 'digest', 'ask',
 ])
 
 const TEXT_CAPABILITIES = new Set([
@@ -27,11 +28,20 @@ const CLASSIFIER_SYSTEM =
   'You are a task classifier. Given a user task description, return ' +
   'ONLY a single capability slug from this list: copy, quote, finance, email, ' +
   'social, image, research, web-search, competitor-intel, code-execution, ' +
-  'video-clips, database, workflow, general, invoice, reconcile, vendor-bill. ' +
+  'video-clips, database, workflow, general, invoice, reconcile, vendor-bill, ' +
+  'forecast, health, digest, ask. ' +
   'Return nothing else. ' +
   'Use "invoice" for creating invoices from won deals or CRM deal-won events. ' +
   'Use "reconcile" for matching bank deposits, /reconcile commands, or deposit review. ' +
-  'Use "vendor-bill" for processing vendor invoices, /bill commands, or mapping supplier bills.'
+  'Use "vendor-bill" for processing vendor invoices, /bill commands, or mapping supplier bills. ' +
+  'Use "forecast" for revenue/cash projections ("what will revenue look like next quarter"). ' +
+  'Use "digest" for weekly/monthly financial summary or rollup requests. ' +
+  'Use "health" for a broad "how is the business/financials doing overall" question. ' +
+  'Use "ask" for any other specific question about ST1\'s actual financial data — cash position, ' +
+  'AR/AP, margin, pipeline, customer payment reliability, vendor spend. Annie has live data for ' +
+  'forecast/health/digest/ask — prefer these over "finance" whenever the question is about our ' +
+  'real numbers. Reserve "finance" for generic financial writing not about our specific data ' +
+  '(e.g. drafting an explainer paragraph about financial concepts).'
 
 async function classify(task) {
   const headers = { 'Content-Type': 'application/json' }

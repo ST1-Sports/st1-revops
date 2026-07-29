@@ -74,6 +74,7 @@
 import { setCors }       from '../../_lib/cors.js'
 import { prisma }        from '../../_lib/prisma.js'
 import { booksGet }      from '../../_lib/zoho-books.js'
+import { logInteraction, remember } from '../../_lib/memory.js'
 import { fetchAllDeals, classifyQuote } from './aggregate.js'
 import {
   SEASONALITY,
@@ -138,9 +139,14 @@ async function buildCashTimeline({ horizonDays = STANDARD_LEAD_DAYS } = {}) {
 
 // A gap is timing, not a floor: it's the first AP_DUE event where cash-out
 // lands before enough cash-in has arrived to cover it (running balance goes
-// negative). AR events only ever add cash, so they can never trigger this —
-// only an AP_DUE event can, which is exactly the "AP before AR" case we want.
-function findFirstGap(timeline) {
+// negative). AR events only ever add cash, so among timeline events only an
+// AP_DUE event can trigger it — but the starting cash position itself can
+// already be negative before any event fires (we're underwater right now),
+// which the timeline scan alone would never catch. Check that first.
+function findFirstGap(timeline, startingCash = 0) {
+  if (startingCash < 0) {
+    return { type: 'STARTING_BALANCE', date: new Date(), runningBalance: Math.round(startingCash * 100) / 100, ref: null }
+  }
   return timeline.find(e => e.type === 'AP_DUE' && e.runningBalance < 0) || null
 }
 
@@ -209,19 +215,25 @@ async function generateCashRelatedInsights() {
 
   const insights = []
 
-  const gap = findFirstGap(timeline)
+  const gap = findFirstGap(timeline, startingCash)
   if (gap) {
     const plan = buildPaymentPlan(gap, billsWithFriction, invoicesWithReliability)
+    const alreadyUnderwater = gap.type === 'STARTING_BALANCE'
     insights.push({
       category: 'PAYMENT_PLAN',
-      title:    `Cash timing gap projected around ${plan.gapDate} — ~$${plan.gapAmount.toFixed(2)} short`,
+      dedupeKey: 'payment_plan:active',
+      title:    alreadyUnderwater
+        ? `Cash position is already negative — ~$${plan.gapAmount.toFixed(2)} short`
+        : `Cash timing gap projected around ${plan.gapDate} — ~$${plan.gapAmount.toFixed(2)} short`,
       detail:
-        `Projected cash goes negative around ${plan.gapDate}: AP due dates land before enough AR has ` +
-        `collected to cover them.${approachingHighSeason ? ' Flagged with extra lead time ahead of the upcoming spring/fall bid-season AP wave.' : ''} ` +
+        (alreadyUnderwater
+          ? `The latest cash position is already negative, before accounting for any upcoming AP/AR movement. `
+          : `Projected cash goes negative around ${plan.gapDate}: AP due dates land before enough AR has collected to cover them. `) +
+        `${approachingHighSeason ? 'Flagged with extra lead time ahead of the upcoming spring/fall bid-season AP wave. ' : ''}` +
         `Suggested plan: delay ${plan.delayCandidates.length} bill(s) totaling $${plan.coveredByDelay.toFixed(2)} ` +
         `(lowest-friction vendors first, never a HIGH-friction vendor), and/or chase ${plan.chaseCandidates.length} AR invoice(s) harder.` +
         `${plan.splitPaymentSuggestion ? ' ' + plan.splitPaymentSuggestion : ''}`,
-      supportingData: { ...plan, startingCash, leadDaysUsed: leadDays, approachingHighSeason },
+      supportingData: { ...plan, alreadyUnderwater, startingCash, leadDaysUsed: leadDays, approachingHighSeason },
     })
   }
 
@@ -229,6 +241,7 @@ async function generateCashRelatedInsights() {
   if (exposure.length) {
     insights.push({
       category: 'RISK',
+      dedupeKey: 'risk:late_penalty_exposure',
       title:    `${exposure.length} high-friction bill(s) at risk of a late penalty`,
       detail:
         `Cash isn't projected to be available by these bills' due dates. Each is with a HIGH-friction vendor ` +
@@ -291,13 +304,18 @@ async function applyFrictionUpdates(updates, dryRun) {
       continue
     }
 
+    let writeFailed = false
     if (!dryRun) {
       await prisma.supplier.update({
         where: { id: match.id },
         data:  { paymentFriction: u.paymentFriction, frictionNotes: u.note || match.frictionNotes },
-      }).catch(() => {})
+      }).catch(e => { writeFailed = true; console.error('[annie/insights] friction update failed:', e.message) })
     }
-    results.push({ supplierName: match.name, supplierId: match.id, paymentFriction: u.paymentFriction, matched: true, applied: !dryRun })
+    results.push({
+      supplierName: match.name, supplierId: match.id, paymentFriction: u.paymentFriction, matched: true,
+      applied: !dryRun && !writeFailed,
+      ...(writeFailed ? { reason: 'write failed' } : {}),
+    })
   }
   return results
 }
@@ -353,9 +371,24 @@ async function computeCustomerReliability({ dryRun = true } = {}) {
     if (!dryRun && count >= RELIABILITY_MIN_SAMPLES) {
       await prisma.customerReliability.upsert({
         where:  { zohoContactId: entry.customerId },
-        update: { customerName: entry.customerName, avgDaysLate, reliabilityFlag: flag },
-        create: { zohoContactId: entry.customerId, customerName: entry.customerName, avgDaysLate, reliabilityFlag: flag },
+        update: { customerName: entry.customerName, avgDaysLate: rounded, reliabilityFlag: flag },
+        create: { zohoContactId: entry.customerId, customerName: entry.customerName, avgDaysLate: rounded, reliabilityFlag: flag },
       }).catch(() => {})
+
+      // Surface this to Edgar — his memory recall at quote time is keyed on
+      // `customer:${name}` (the free-text customer name typed into the quote),
+      // so remembering it under the same entity key is what lets "flag this
+      // customer as chronically late" actually reach Edgar without a shared
+      // foreign key. Best-effort: only matches when the name typed at quote
+      // time matches this closely enough (same limitation as every other
+      // fuzzy customer-name link in this codebase).
+      if (entry.customerName) {
+        await remember({
+          scope: 'org', entity: `customer:${entry.customerName}`, key: 'payment_reliability',
+          value: `${flag}${rounded != null ? ` — avg ${rounded} days late` : ''} (${count} paid invoices, computed by Annie)`,
+          agentId: 'annie', confidence: Math.min(0.5 + count * 0.05, 0.95),
+        }).catch(() => {})
+      }
     }
   }
   return results
@@ -366,6 +399,7 @@ async function generateChronicLateInsight() {
   if (!chronic.length) return []
   return [{
     category: 'RISK',
+    dedupeKey: 'risk:chronic_late',
     title:    `${chronic.length} customer(s) chronically late on payment`,
     detail:
       `These customers show a sustained pattern (3+ paid invoices, rolling average) of paying well past ` +
@@ -391,6 +425,7 @@ async function generateAgingRiskInsight() {
 
   return [{
     category: 'RISK',
+    dedupeKey: 'risk:ar_aging_60plus',
     title:    `${overdueInvoices.length} invoice(s) 60+ days past due — $${totalOutstanding.toFixed(2)} outstanding`,
     detail:   `Flagging only invoices at least ${AR_AGING_THRESHOLD_DAYS} days past their due date (no 30/60/90 bucket breakdown by design).`,
     supportingData: {
@@ -454,6 +489,7 @@ function findOpportunitiesFromAggregate(entries, dimensionLabel) {
     if (e.winRate >= 70 && e.avgGmPct <= 20) {
       insights.push({
         category: 'OPPORTUNITY',
+        dedupeKey: `opportunity:raise_price:${dimensionLabel}:${label}`,
         title:    `${label}: high win rate, low margin — room to raise price`,
         detail:   `${e.winRate}% win rate across ${e.totalQuotes} closed quotes at only ${e.avgGmPct}% average margin (by ${dimensionLabel}). Winning this consistently at this margin suggests price has room to move up before it affects close rate.`,
         supportingData: { ...e, dimension: dimensionLabel },
@@ -461,6 +497,7 @@ function findOpportunitiesFromAggregate(entries, dimensionLabel) {
     } else if (e.winRate <= 30 && e.avgGmPct >= 35) {
       insights.push({
         category: 'OPPORTUNITY',
+        dedupeKey: `opportunity:pricing_objection:${dimensionLabel}:${label}`,
         title:    `${label}: low win rate, high margin — pricing objection worth investigating`,
         detail:   `Only ${e.winRate}% win rate across ${e.totalQuotes} closed quotes despite ${e.avgGmPct}% average margin (by ${dimensionLabel}). Losing this often at this margin points to a pricing objection worth investigating, not just competitive loss.`,
         supportingData: { ...e, dimension: dimensionLabel },
@@ -498,6 +535,7 @@ async function findMarginCompression() {
 
   return [{
     category: 'SPEND_CUT',
+    dedupeKey: 'spend_cut:margin_compression',
     title:    'COGS growing faster than revenue',
     detail:   `Over the last ${ordered.length} monthly snapshots, revenue grew ${revenueGrowthPct.toFixed(1)}% while COGS grew ${cogsGrowthPct.toFixed(1)}% — margin is compressing even as sales grow.`,
     supportingData: {
@@ -535,6 +573,7 @@ async function findStripeFeeDrag() {
 
     return [{
       category: 'SPEND_CUT',
+      dedupeKey: 'spend_cut:stripe_fee_drag',
       title:    `Stripe fees running ${feePct.toFixed(2)}% of processed revenue`,
       detail:   `Trailing 90 days: $${fees.toFixed(2)} in fees against $${gross.toFixed(2)} processed (${feePct.toFixed(2)}%) — above typical blended rates. Worth a rate review with Stripe, or checking for avoidable transaction types (international cards, disputes).`,
       supportingData: {
@@ -584,6 +623,7 @@ async function findCostCreep() {
 
   return findings.map(f => ({
     category: 'SPEND_CUT',
+    dedupeKey: `spend_cut:cost_creep:${f.supplierId}:${f.desc}`,
     title: f.paymentFriction === 'HIGH'
       ? `${f.supplierName}: cost creep + high friction — shop this category`
       : `${f.supplierName}: unit cost up ${f.changePct}% on "${f.desc}"`,
@@ -607,6 +647,38 @@ function countByCategory(insights) {
   return c
 }
 
+// Insight titles/details are inherently dynamic (embed current dollar amounts,
+// dates, counts), so they can't be used to detect "this is the same ongoing
+// condition as last run." Each generator instead tags its finding with a
+// stable dedupeKey (e.g. 'risk:chronic_late', 'spend_cut:cost_creep:<id>:<item>').
+// If a non-DISMISSED Insight already carries that key, refresh it in place
+// instead of inserting a new row — otherwise a persistent, unresolved
+// condition (an open cash gap, a chronic-late customer) would get a brand-new
+// row every single generation run (every weekly digest, every ad-hoc chat
+// call), both bloating the table and making the weekly digest's "new since
+// last time" section re-report the same thing as "new" forever.
+async function upsertInsightRow(insight) {
+  const supportingData = insight.dedupeKey ? { ...insight.supportingData, dedupeKey: insight.dedupeKey } : insight.supportingData
+
+  if (insight.dedupeKey) {
+    const candidates = await prisma.insight.findMany({
+      where: { category: insight.category, status: { not: 'DISMISSED' } },
+      orderBy: { createdAt: 'desc' }, take: 20,
+    }).catch(() => [])
+    const existing = candidates.find(i => i.supportingData?.dedupeKey === insight.dedupeKey)
+    if (existing) {
+      return prisma.insight.update({
+        where: { id: existing.id },
+        data:  { title: insight.title, detail: insight.detail, supportingData },
+      }).catch(e => { console.error('[annie/insights] update failed:', e.message); return null })
+    }
+  }
+
+  return prisma.insight.create({
+    data: { category: insight.category, title: insight.title, detail: insight.detail, supportingData, surfacedIn: 'CHAT' },
+  }).catch(e => { console.error('[annie/insights] write failed:', e.message); return null })
+}
+
 export async function generateInsights({ dryRun = true } = {}) {
   const [cashRelated, chronicLate, agingRisk, opportunities, spendCuts] = await Promise.all([
     generateCashRelatedInsights(),
@@ -620,9 +692,15 @@ export async function generateInsights({ dryRun = true } = {}) {
 
   let saved = []
   if (!dryRun && all.length) {
-    saved = await Promise.all(all.map(i => prisma.insight.create({
-      data: { category: i.category, title: i.title, detail: i.detail, supportingData: i.supportingData, surfacedIn: 'CHAT' },
-    }).catch(e => { console.error('[annie/insights] write failed:', e.message); return null })))
+    // Sequential, not Promise.all — each is a read-then-write keyed on
+    // dedupeKey, and this only ever runs a handful of insights per call.
+    for (const i of all) saved.push(await upsertInsightRow(i))
+
+    logInteraction({
+      agentId: 'annie', action: 'insights', entity: null,
+      input:   {}, output: { counts: { total: all.length, byCategory: countByCategory(all) } },
+      outcome: 'pending',
+    }).catch(() => {})
   }
 
   return {

@@ -74,7 +74,12 @@ export const FRICTION_SLACK_DAYS = { HIGH: 0, MEDIUM: 5, LOW: 15, UNRATED: 5 }
 
 export function monthKey(d)     { return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}` }
 export function addDays(date, days) { return new Date(date.getTime() + days * 86_400_000) }
-function addMonths(date, months) { const d = new Date(date); d.setUTCMonth(d.getUTCMonth() + months); return d }
+// Anchored to day 1 of the target month rather than adding via setUTCMonth on
+// the original day-of-month — setUTCMonth rolls a day-29/30/31 start into the
+// *next* month whenever the target month is shorter (e.g. Jul 29 + 7 months =
+// Feb 29 doesn't exist -> rolls to Mar 1), which produced a duplicate month
+// key and silently dropped the skipped month from buildMonthSeries below.
+function addMonths(date, months) { return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1)) }
 function monthBounds(key) {
   const [y, m] = key.split('-').map(Number)
   return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 0, 23, 59, 59)) }
@@ -99,8 +104,11 @@ function clampMonthKey(date, months) {
 
 // ── Revenue forecast ──────────────────────────────────────────────────────────
 
-// Exported — insights.js reuses close-rate history for opportunity-finding
-// (requirement #9 needs win-rate, this gives the aggregate baseline).
+// Exported for buildForecast's own use below. insights.js builds its own
+// separate per-category/brand/territory win-rate breakdown
+// (aggregateQuotesByDimension) rather than this org-wide aggregate — the two
+// answer different questions (overall close rate vs. win rate by product
+// line) so they intentionally don't share this function.
 export async function computeCloseRates() {
   const allDeals = await fetchAllDeals().catch(() => [])
   const won  = allDeals.filter(d => d.stage === 'Closed Won')
@@ -176,7 +184,7 @@ function forecastARCollections(invoices, months) {
 // vendor selection, and late-penalty exposure flagging (requirements #1, #3, #6).
 export async function fetchOpenBillsWithFriction() {
   const bills = await prisma.vendorBill.findMany({
-    where:   { status: { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED'] } },
+    where:   { status: { in: ['PENDING_REVIEW', 'MAPPED', 'CREATED', 'NEEDS_REVIEW'] } },
     include: { supplier: { select: { name: true, paymentFriction: true, paymentTerms: true, latePenaltyTerms: true } } },
   }).catch(() => [])
 
@@ -325,8 +333,10 @@ export async function backfillActuals() {
 
     if (Object.keys(resolved).length) {
       const merged = { ...(fc.actualVsForecast || {}), ...resolved }
-      await prisma.forecast.update({ where: { id: fc.id }, data: { actualVsForecast: merged } }).catch(() => {})
-      updated++
+      const wrote = await prisma.forecast.update({ where: { id: fc.id }, data: { actualVsForecast: merged } })
+        .then(() => true)
+        .catch(e => { console.error('[annie/forecast] backfill write failed:', e.message); return false })
+      if (wrote) updated++
     }
   }
 

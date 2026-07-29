@@ -16,10 +16,12 @@
  * a human acts (often by handing off to Ledger for the actual invoice/reconcile
  * work once Annie has flagged what needs doing).
  *
- * Client-side definition only. Real work runs server-side in api/agents/annie.js
- * (not yet built as of this registration — Annie Session 2 is registration only;
- * the server endpoint + FinancialSnapshot/Forecast/Insight data pipeline follow
- * in a later session).
+ * Client-side definition only. Real work runs server-side, one file per
+ * capability: api/agents/annie/forecast.js (forecast), api/agents/annie/ask.js
+ * (health + ask — same endpoint, distinguished by a "mode" field), and
+ * api/agents/annie/digest.js (digest). api/agents/annie/aggregate.js and
+ * insights.js do the underlying data-gathering/analysis those endpoints call
+ * into but aren't hit directly from chat.
  */
 export default {
   id:           'annie',
@@ -58,15 +60,48 @@ export default {
        /health|how('?s| is| are) (the |our )?(business|financials?|we)\b|financial health/i.test(task) ? 'health' :
        'ask')
 
-    const r = await fetch('/api/agents/annie', {
+    if (serverTask === 'forecast') {
+      const r = await fetch('/api/agents/annie/forecast', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ task: 'forecast', horizonMonths: input.horizonMonths || 3, dryRun: input.dryRun ?? true }),
+      })
+      if (!r.ok) throw new Error(`Annie ${r.status}: ${await r.text().catch(() => '')}`)
+      const d = await r.json()
+      const closeRatePct = Math.round((d.assumptions?.closeRate?.used ?? 0) * 100)
+      const output =
+        `${d.horizonMonths}-month forecast (close rate ${closeRatePct}%, gross margin ${d.assumptions?.grossMarginPct ?? 'n/a'}%). ` +
+        `Projected revenue by month: ${JSON.stringify(d.projectedRevenue)}. Projected cash by month: ${JSON.stringify(d.projectedCash)}.`
+      return { output, metadata: d }
+    }
+
+    if (serverTask === 'digest') {
+      const isMonthly = /month/i.test(task)
+      const r = await fetch('/api/agents/annie/digest', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          task: isMonthly ? 'monthly' : 'weekly', dryRun: input.dryRun ?? true,
+          channel: input.channel, recipient: input.recipient,
+        }),
+      })
+      if (!r.ok) throw new Error(`Annie ${r.status}: ${await r.text().catch(() => '')}`)
+      const d = await r.json()
+      const output = d.skipped ? d.reason : (d.content?.text || 'Digest generated.')
+      return { output, metadata: d }
+    }
+
+    // health + ask both answer via the same endpoint, distinguished by "mode" —
+    // there's no separate free-form-Q&A file, ask.js handles both.
+    const r = await fetch('/api/agents/annie/ask', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ task: serverTask, question: task, input }),
+      body:    JSON.stringify({ mode: serverTask === 'health' ? 'health' : 'ask', question: task, forceLive: input.forceLive }),
     })
     if (!r.ok) throw new Error(`Annie ${r.status}: ${await r.text().catch(() => '')}`)
     const d = await r.json()
-    // d.metadata.snapshot / .forecast / .insights hold the structured data behind
-    // the answer; d.metadata.source is 'cache' | 'live' — which path answered it.
+    // d.metadata.usedLivePull is true when the cache was stale/insufficient and
+    // Annie pulled a fresh number from Zoho instead of answering from cache.
     return { output: d.output, metadata: d.metadata || {} }
   },
 }
