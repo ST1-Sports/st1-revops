@@ -6,8 +6,11 @@
  * pointing at this URL. Verifies the request using HMAC-SHA256 over the
  * raw body, per Shopify's webhook verification docs.
  *
- * Required env var: SHOPIFY_WEBHOOK_SECRET (the webhook signing secret,
- * shown when the webhook subscription is created).
+ * Required env var: SHOPIFY_WEBHOOK_SECRET — for a webhook created via the
+ * Admin API this is returned in that response; for one created through
+ * Settings → Notifications → Webhooks in the admin UI it's your app's
+ * client secret instead. Without this set, all requests are rejected
+ * (fails closed, not open — see verifyHmac below).
  */
 import crypto from 'crypto';
 import { prisma } from '../../_lib/prisma.js';
@@ -29,9 +32,14 @@ async function getRawBody(req) {
 
 function verifyHmac(rawBody, hmacHeader) {
   const secret = process.env.SHOPIFY_WEBHOOK_SECRET;
+  // Fails closed, not open: an unsigned/unverifiable request must never be
+  // able to write into the Product table just because setup isn't finished
+  // yet. Nobody has a live Shopify webhook subscription pointed at this URL
+  // until SHOPIFY_WEBHOOK_SECRET is set anyway, so there's no legitimate
+  // traffic this could block.
   if (!secret) {
-    console.warn('[shopify webhook] SHOPIFY_WEBHOOK_SECRET not set — skipping verification');
-    return true;
+    console.warn('[shopify webhook] SHOPIFY_WEBHOOK_SECRET not set — rejecting all requests');
+    return false;
   }
   if (!hmacHeader) return false;
   const computed = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
@@ -50,8 +58,13 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Invalid webhook signature' });
   }
 
+  // Explicit allow-list, not a "products/" prefix match: a products/delete
+  // payload is just {"id": ...} with no title/variants/etc, and prefix-matching
+  // would let it fall through to the upsert below and null out a real
+  // product's data via the `update: data` branch. Only handled topics run;
+  // anything else (including a future delete subscription) is safely skipped.
   const topic = req.headers['x-shopify-topic'] || '';
-  if (!topic.startsWith('products/')) {
+  if (topic !== 'products/create' && topic !== 'products/update') {
     return res.status(200).json({ ok: true, skipped: true });
   }
 

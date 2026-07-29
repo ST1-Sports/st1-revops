@@ -123,7 +123,7 @@ Server-based OAuth app with refresh tokens — see [Zoho OAuth docs](https://www
 1. Shopify admin → Settings → **Apps and sales channels** → **Develop apps** → create an app
 2. Configure Admin API scopes: read/write access to Products and Orders → install the app
 3. Copy the **Admin API access token**
-4. Add to Vercel env vars: `SHOPIFY_STORE_DOMAIN` (e.g. `your-store.myshopify.com`) and `SHOPIFY_ACCESS_TOKEN`
+4. Add to Vercel env vars: `SHOPIFY_STORE_URL` (e.g. `your-store.myshopify.com`) and `SHOPIFY_ACCESS_TOKEN`
 5. In the app: **Integrations** → Shopify tab → **Test Connection** (credentials live in Vercel, never in the browser or app UI)
 
 ### Slack

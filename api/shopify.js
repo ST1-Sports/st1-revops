@@ -7,7 +7,7 @@
  * the consumer key/secret directly).
  *
  * Required env vars — see api/_lib/shopify.js for details:
- *   SHOPIFY_STORE_DOMAIN, SHOPIFY_ACCESS_TOKEN, SHOPIFY_STOREFRONT_DOMAIN (optional)
+ *   SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN, SHOPIFY_STOREFRONT_DOMAIN (optional)
  *
  * Request body: { endpoint: string, method?: string, body?: object }
  *   endpoint is a REST Admin API path, e.g. "/shop.json", "/products.json?limit=10"

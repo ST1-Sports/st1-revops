@@ -12377,7 +12377,7 @@ style={{background:socialPosting||!socialPlatforms.length||!socialCaption.trim()
 {prodLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11}}><Spin/>Loading…</div>}
 {!prodLoading&&products.length===0&&(
 <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
-No products in catalog. Sync from Shopify or add SHOPIFY_STORE_DOMAIN, SHOPIFY_ACCESS_TOKEN to your Vercel env vars.
+No products in catalog. Sync from Shopify or add SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN to your Vercel env vars.
 </div>
 )}
 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>

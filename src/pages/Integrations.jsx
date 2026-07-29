@@ -345,6 +345,34 @@ export default function IntegrationsHub() {
     setTesting(null);
   };
 
+  // status.shopify persists across reloads (via localStorage), but `products`
+  // always starts back at DEMO_PRODUCTS on every mount — without this, the
+  // panel would show "PRODUCTS — LIVE FROM SHOPIFY" over demo rows (fake
+  // SKUs, no variantId) until the user manually clicked Reconnect/Refresh.
+  useEffect(() => {
+    if (!status.shopify) return;
+    (async () => {
+      try {
+        const prodData = await shopifyAPI("/products.json?limit=10");
+        const prods = prodData.products || [];
+        setProducts(prods.map(p => ({
+          id: p.id, variantId: p.variants?.[0]?.id, sku: p.variants?.[0]?.sku || "", name: p.title,
+          categories: p.product_type ? [{name: p.product_type}] : [],
+          price: p.variants?.[0]?.price || "0.00",
+          stock_quantity: p.variants?.reduce((s,v)=>s+(v.inventory_quantity||0),0),
+          stock_status: p.variants?.some(v=>(v.inventory_quantity||0)>0) ? "instock" : "outofstock",
+        })));
+        const orderData = await shopifyAPI("/orders.json?limit=10&status=any");
+        setShopifyOrders(orderData.orders || []);
+      } catch {
+        // Connection may have lapsed (revoked token, etc.) since last visit —
+        // reflect that honestly rather than leaving a stale "LIVE" label up.
+        setStatus(s=>({...s,shopify:false}));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── SLACK: SEND REAL MESSAGE via bot token ──────────────────────────────────
   const sendSlackAlert = async (msg, isTest=false) => {
     addLog(`Sending to ${slackChannelName}...`);
@@ -888,7 +916,7 @@ Channel: ${slackChannelName}`);
                     <StatusBadge ok={status.shopify}/>
                   </div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:9}}>
-                    {status.shopify?"Products and orders loaded.":"Add SHOPIFY_STORE_DOMAIN and SHOPIFY_ACCESS_TOKEN to Vercel env vars, then test connection."}
+                    {status.shopify?"Products and orders loaded.":"Add SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN to Vercel env vars, then test connection."}
                   </div>
                   <OBtn sm onClick={()=>setTab("shopify")}>CONFIGURE →</OBtn>
                 </div>
@@ -1692,7 +1720,7 @@ Channel: ${slackChannelName}`);
 
               <ConnCard id="shopify" title="Shopify Admin API" sub="server-side proxy — credentials never touch the browser" color="#95BF47" icon="🛍️" connected={status.shopify}>
                 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10,lineHeight:1.6}}>
-                  Add to Vercel env vars: <code style={{background:"#f0f0f0",padding:"2px 6px",borderRadius:3,fontFamily:"monospace"}}>SHOPIFY_STORE_DOMAIN</code> (e.g. your-store.myshopify.com)
+                  Add to Vercel env vars: <code style={{background:"#f0f0f0",padding:"2px 6px",borderRadius:3,fontFamily:"monospace"}}>SHOPIFY_STORE_URL</code> (e.g. your-store.myshopify.com)
                   and <code style={{background:"#f0f0f0",padding:"2px 6px",borderRadius:3,fontFamily:"monospace"}}>SHOPIFY_ACCESS_TOKEN</code> (from
                   Shopify admin → Settings → Apps and sales channels → Develop apps → create an app → Admin API access token, with read/write access to Products and Orders).
                 </div>

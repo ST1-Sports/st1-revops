@@ -40,13 +40,28 @@ export default async function handler(req, res) {
     // header), not page-number based like WooCommerce — follow rel="next"
     // until it's absent.
     let endpoint = '/products.json?limit=250&status=active';
+    // Shopify's Admin REST API enforces a leaky-bucket rate limit (~2 req/sec
+    // sustained) — without backoff, any catalog beyond the initial burst
+    // allowance hits 429 mid-sync and the sync silently stops partway
+    // through with a misleadingly-normal {ok:true} response.
+    const REQUEST_DELAY_MS = 550;
+    const MAX_RATE_LIMIT_RETRIES = 5;
 
     while (endpoint) {
-      let r;
-      try {
-        r = await shopifyRequest(endpoint);
-      } catch (e) {
-        return res.json({ ok: false, synced, errors, shopifyError: e.message });
+      let r, attempt = 0;
+      while (true) {
+        try {
+          r = await shopifyRequest(endpoint);
+        } catch (e) {
+          return res.json({ ok: false, synced, errors, shopifyError: e.message });
+        }
+        if (r.status === 429 && attempt < MAX_RATE_LIMIT_RETRIES) {
+          const retryAfterSec = parseFloat(r.headers?.get?.('retry-after')) || 2;
+          await new Promise(resolve => setTimeout(resolve, retryAfterSec * 1000));
+          attempt++;
+          continue;
+        }
+        break;
       }
       if (!r.ok) {
         return res.json({ ok: false, synced, errors, shopifyError: `HTTP ${r.status}: ${JSON.stringify(r.data).slice(0,200)}` });
@@ -79,6 +94,7 @@ export default async function handler(req, res) {
         if (urlMatch) {
           const nextUrl = new URL(urlMatch[1]);
           endpoint = `/products.json?${nextUrl.searchParams.toString()}`;
+          await new Promise(resolve => setTimeout(resolve, REQUEST_DELAY_MS));
           continue;
         }
       }
