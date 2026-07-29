@@ -123,6 +123,12 @@ export default function IntegrationsHub() {
   const [exportProgress, setExportProgress] = useState({}); // {ModuleName: {page, records}}
   const [exportResults, setExportResults] = useState({}); // {ModuleName: [records]}
 
+  // Full Zoho Books backup export — same purpose as the CRM one above, but
+  // Books is not being wiped; this is purely a "just in case" safety net.
+  const [booksExportingModule, setBooksExportingModule] = useState(null);
+  const [booksExportProgress, setBooksExportProgress] = useState({}); // {key: {page, records}}
+  const [booksExportResults, setBooksExportResults] = useState({}); // {key: [records]}
+
   // Zoho Campaigns
   const [mailingLists, setMailingLists] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -634,6 +640,112 @@ export default function IntegrationsHub() {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `zoho_${module.toLowerCase()}_backup_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  };
+
+  // ── FULL ZOHO BOOKS BACKUP EXPORT ─────────────────────────────────────────
+  // Books' v3 API returns full objects by default on GET-by-id (no `fields`
+  // param like CRM needs), but its LIST endpoints for line-item documents
+  // (invoices/estimates/bills) return summary rows without line items — so
+  // those three modules get a detail GET per record; the flatter entities
+  // (contacts/items/customerpayments) are complete straight from the list.
+  // Bills sits outside the OAuth scopes requested in api/zoho-setup.js today
+  // (invoices/contacts/customerpayments/estimates/items only) — it's included
+  // here anyway since other code in this app already calls it successfully,
+  // but if the token truly lacks that scope it'll fail cleanly with Zoho's
+  // own error message, independent of the other 5 modules.
+  const BOOKS_MODULES = [
+    { key:"invoices",         label:"Invoices",         listField:"invoices",         idField:"invoice_id",  detailField:"invoice",  needsDetail:true },
+    { key:"estimates",        label:"Estimates",        listField:"estimates",        idField:"estimate_id", detailField:"estimate", needsDetail:true },
+    { key:"bills",            label:"Bills",            listField:"bills",            idField:"bill_id",     detailField:"bill",     needsDetail:true },
+    { key:"contacts",         label:"Customers/Vendors",listField:"contacts",         idField:"contact_id",  needsDetail:false },
+    { key:"items",            label:"Items",            listField:"items",            idField:"item_id",     needsDetail:false },
+    { key:"customerpayments", label:"Customer Payments",listField:"customerpayments", idField:"payment_id",  needsDetail:false },
+  ];
+
+  const exportBooksModule = async (mod) => {
+    if (!status.books) { addLog("Connect Zoho Books first", "warn"); return null; }
+    setBooksExportingModule(mod.key);
+    setBooksExportProgress(p=>({...p,[mod.key]:{page:0,records:0}}));
+    addLog(`${mod.label}: starting export...`);
+    try {
+      let all = [], page = 1;
+      while (page <= 200) { // safety cap ~40k records
+        const d = await zohoAPI("books", `/${mod.key}?per_page=200&page=${page}`);
+        const batch = d[mod.listField];
+        if (!Array.isArray(batch)) throw new Error(d.message || d.error || `Zoho Books returned no ${mod.label} data (page ${page})`);
+        all = all.concat(batch);
+        setBooksExportProgress(p=>({...p,[mod.key]:{page,records:all.length}}));
+        addLog(`${mod.label}: page ${page} — ${all.length} records so far`);
+        const hasMore = d.page_context?.has_more_page && batch.length===200;
+        if (!hasMore) break;
+        page++;
+        await sleep(300);
+      }
+
+      if (mod.needsDetail && all.length) {
+        addLog(`${mod.label}: fetching full line-item detail for ${all.length} record(s) — this can take a while...`);
+        const detailed = [];
+        let detailFailures = 0;
+        for (let i=0;i<all.length;i++) {
+          const rec = all[i];
+          const id = rec[mod.idField];
+          try {
+            const dd = await zohoAPI("books", `/${mod.key}/${id}`);
+            detailed.push(dd[mod.detailField] || rec);
+          } catch {
+            detailed.push(rec); // fall back to the summary row if one record's detail fetch fails
+            detailFailures++;
+          }
+          if (i%10===9 || i===all.length-1) {
+            setBooksExportProgress(p=>({...p,[mod.key]:{page:"detail",records:i+1}}));
+            addLog(`${mod.label}: detail ${i+1}/${all.length}`);
+          }
+          await sleep(150);
+        }
+        all = detailed;
+        if (detailFailures) addLog(`${mod.label}: ${detailFailures} record(s) kept summary-only — detail fetch failed`, "warn");
+      }
+
+      setBooksExportResults(p=>({...p,[mod.key]:all}));
+      addLog(`✓ ${mod.label}: exported ${all.length} record(s)`, "success");
+      return all;
+    } catch(e) {
+      addLog(`${mod.label} export failed: ${e.message.slice(0,150)}`, "error");
+      return null;
+    } finally {
+      setBooksExportingModule(null);
+    }
+  };
+
+  const exportAllBooksModules = async () => {
+    for (const mod of BOOKS_MODULES) {
+      // eslint-disable-next-line no-await-in-loop
+      await exportBooksModule(mod);
+    }
+    addLog("✓ Full Books backup export complete for all modules", "success");
+  };
+
+  const downloadBooksJson = (key) => {
+    const records = booksExportResults[key];
+    if (!records) return;
+    const blob = new Blob([JSON.stringify(records, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zoho_books_${key}_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+  };
+
+  const downloadBooksCsv = (key) => {
+    const records = booksExportResults[key];
+    if (!records || !records.length) return;
+    const keys = Array.from(records.reduce((s,r)=>{Object.keys(r).forEach(k=>s.add(k)); return s;}, new Set()));
+    const rows = records.map(r=>keys.map(k=>`"${flattenZohoValue(r[k]).replace(/"/g,'""')}"`).join(","));
+    const csv = [keys.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zoho_books_${key}_backup_${new Date().toISOString().slice(0,10)}.csv`;
     a.click();
   };
 
@@ -1351,6 +1463,43 @@ Channel: ${slackChannelName}`);
                   })}
                 </div>
                 {!status.crm&&<div style={{marginTop:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>⚠ Connect Zoho CRM first using the test connection button above</div>}
+              </div>
+
+              {/* Full Books backup export — just-in-case safety net, not tied to any planned wipe */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`3px solid ${B.red}`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:2,marginBottom:12}}>FULL BOOKS BACKUP EXPORT</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+                  Pulls every Invoice, Estimate, Bill, Customer/Vendor, Item, and Customer Payment out of Zoho Books — including full line-item detail on invoices/estimates/bills — and lets you download JSON + CSV backups. Read-only, doesn't change anything in Books. This is what you'd use to rebuild records here if anything in Books ever got deleted or corrupted.
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                  <OBtn sm onClick={exportAllBooksModules} disabled={!!booksExportingModule||!status.books}>
+                    {booksExportingModule?`EXPORTING ${BOOKS_MODULES.find(m=>m.key===booksExportingModule)?.label.toUpperCase()}...`:"⬇ EXPORT ALL 6 MODULES"}
+                  </OBtn>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  {BOOKS_MODULES.map(mod=>{
+                    const prog = booksExportProgress[mod.key];
+                    const records = booksExportResults[mod.key];
+                    const isRunning = booksExportingModule===mod.key;
+                    return (
+                      <div key={mod.key} style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>{mod.label}</div>
+                        {isRunning&&prog&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginBottom:8}}>{prog.page==="detail"?`Detail ${prog.records}/${records?.length||"?"}…`:`Page ${prog.page} — ${prog.records} records so far…`}</div>}
+                        {!isRunning&&records&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>✓ {records.length} records exported</div>}
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          <OBtn sm onClick={()=>exportBooksModule(mod)} disabled={!!booksExportingModule||!status.books} color={B.purple}>
+                            {isRunning?"...":records?"↻ RE-EXPORT":"↓ EXPORT"}
+                          </OBtn>
+                          {records&&records.length>0&&<>
+                            <OBtn sm onClick={()=>downloadBooksJson(mod.key)}>JSON</OBtn>
+                            <OBtn sm onClick={()=>downloadBooksCsv(mod.key)}>CSV</OBtn>
+                          </>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {!status.books&&<div style={{marginTop:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>⚠ Connect Zoho Books first using the test connection button above</div>}
               </div>
 
               {/* Live invoices table */}
