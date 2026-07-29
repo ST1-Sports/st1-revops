@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
 import ToolManagerComponent from '../components/ToolManager.jsx'
 import AdHubModule from '../components/AdHubModule.jsx'
@@ -930,6 +930,21 @@ function ResearchModule({ userRole }) {
     try { return JSON.parse(localStorage.getItem(INTEL_KEY) || '[]') } catch { return [] }
   })
 
+  // Hydrate instantly from localStorage (above), then reconcile with the
+  // database — this used to be the only copy anywhere, so a cleared
+  // browser or a different device lost every saved research entry.
+  useEffect(() => {
+    fetch('/api/intel')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (Array.isArray(d?.items)) {
+          setHistory(d.items)
+          try { localStorage.setItem(INTEL_KEY, JSON.stringify(d.items)) } catch {}
+        }
+      })
+      .catch(() => {}) // offline/error — keep whatever localStorage had
+  }, [])
+
   async function handleRun() {
     if (!query.trim()) return
     setLoading(true); setErr(''); setOutput(''); setSaved(false)
@@ -943,23 +958,51 @@ function ResearchModule({ userRole }) {
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     const entry = {
       id:        Date.now(),
       query:     query.trim(),
       output,
       savedAt:   new Date().toISOString(),
     }
+    // Optimistic local update first — the DB round-trip below reconciles
+    // afterward but shouldn't block the UI from feeling instant.
     const next = [entry, ...history].slice(0, 50)
     localStorage.setItem(INTEL_KEY, JSON.stringify(next))
     setHistory(next)
     setSaved(true)
+    try {
+      const r = await fetch('/api/intel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body:   JSON.stringify({ action: 'save', item: entry }),
+      })
+      if (r.ok) {
+        const d = await r.json()
+        if (Array.isArray(d?.items)) {
+          setHistory(d.items)
+          try { localStorage.setItem(INTEL_KEY, JSON.stringify(d.items)) } catch {}
+        }
+      }
+    } catch {} // stays saved locally even if the DB write fails
   }
 
-  function handleDelete(id) {
+  async function handleDelete(id) {
     const next = history.filter(e => e.id !== id)
     localStorage.setItem(INTEL_KEY, JSON.stringify(next))
     setHistory(next)
+    try {
+      const r = await fetch('/api/intel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body:   JSON.stringify({ action: 'delete', id }),
+      })
+      if (r.ok) {
+        const d = await r.json()
+        if (Array.isArray(d?.items)) {
+          setHistory(d.items)
+          try { localStorage.setItem(INTEL_KEY, JSON.stringify(d.items)) } catch {}
+        }
+      }
+    } catch {}
   }
 
   const paragraphs = output ? output.split(/\n{2,}/) : []

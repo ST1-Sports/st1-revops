@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { pushAppStateToServer, pullAndMergeAppState } from "../lib/appStateSync.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -212,6 +213,11 @@ function lsSaveRfp(record) {
     if(idx>=0) rfps[idx]={...rfps[idx],...record};
     else rfps.unshift(record);
     localStorage.setItem(REVOPS_STORE,JSON.stringify({...store,rfps}));
+    // RFPTool is a standalone route — without this, an RFP record only
+    // reached the database if the same browser later happened to load the
+    // main RevOps dashboard, whose own sync would pick up the localStorage
+    // change. Push it ourselves so it's durable immediately.
+    pushAppStateToServer();
   } catch(e) { console.warn("lsSaveRfp",e); }
 }
 function lsReadCatalog() {
@@ -266,6 +272,11 @@ export default function RFPAutomation() {
   const abortRef    = useRef(false);
 
   const addLog = (msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,149)]);
+
+  // Pull + merge server-side rfps on load — without this, a browser that
+  // only ever visits /rfp would never see records created/edited elsewhere
+  // (another device, or the main RevOps dashboard).
+  useEffect(() => { pullAndMergeAppState(["rfps"]); }, []);
 
   // ── RFP TRACKER HELPERS ───────────────────────────────────────────────────
   const changeStatus = (status, recordId=rfpRecordId) => {

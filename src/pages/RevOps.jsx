@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
+import { mergeById } from "../lib/appStateSync.js";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
@@ -117,13 +118,6 @@ crmNav: null,
 };
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
-function mergeById(local=[], server=[]) {
-const map = {};
-for (const item of (local||[])) if (item?.id) map[item.id] = item;
-for (const item of (server||[])) if (item?.id) map[item.id] = item;
-const noId = (local||[]).filter(x => !x?.id);
-return [...Object.values(map), ...noId];
-}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 return {
@@ -15003,7 +14997,7 @@ return(
 </div>
 <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
 <Lbl c={B.green} s={{marginBottom:11}}>Data Management</Lbl>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All data persists in your browser's localStorage across sessions. Export a backup before clearing.</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>Data syncs to the database automatically and is cached in your browser for instant loading. Export a backup before clearing.</div>
 <div style={{display:"flex",gap:7}}>
 <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
 <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>

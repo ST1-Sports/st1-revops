@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import ToolManager from "../components/ToolManager.jsx";
+import { pushItemsToAppState, pushAppStateToServer } from "../lib/appStateSync.js";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -156,19 +157,18 @@ export default function IntegrationsHub() {
   const addLog = useCallback((msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,99)]), []);
 
   // ── REVOPS STORE BRIDGE ─────────────────────────────────────────────────────
-  // Write contacts or deals directly into the RevOps localStorage store
-  const REVOPS_KEY = "st1_revops_v2";
+  // Write contacts or deals into the shared RevOps localStorage store, then
+  // push to /api/state ourselves — Integrations is a standalone route, so
+  // without this, pulled CRM data only reached the database if the same
+  // browser later happened to load the main RevOps dashboard. (Note:
+  // "contacts" itself is intentionally excluded from /api/state sync — see
+  // appStateSync.js — because Zoho CRM is contacts' actual source of truth;
+  // pullCRMContacts below separately persists contacts durably via
+  // /api/contacts/import into SalesContact.)
   function pushToRevOps(key, items) {
-    try {
-      const store = JSON.parse(localStorage.getItem(REVOPS_KEY)||"{}");
-      const existing = Array.isArray(store[key]) ? store[key] : [];
-      const existingIds = new Set(existing.map(x=>x.id));
-      const toAdd = items.filter(x => x.id && !existingIds.has(x.id));
-      if (!toAdd.length) return 0;
-      store[key] = [...toAdd, ...existing];
-      localStorage.setItem(REVOPS_KEY, JSON.stringify(store));
-      return toAdd.length;
-    } catch { return 0; }
+    const added = pushItemsToAppState(key, items);
+    if (added) pushAppStateToServer();
+    return added;
   }
 
   // Save creds to localStorage whenever they change
@@ -509,6 +509,31 @@ export default function IntegrationsHub() {
       const added = pushToRevOps("contacts", all);
       setCrmSyncResult(prev=>({...(prev||{}), contacts:all.length, contactsAdded:added}));
       addLog(`✓ Pulled ${contacts.length} contacts + ${leads.length} leads — ${added} new added to RevOps`,"success");
+
+      // The RevOps localStorage copy above is just a fast local cache for
+      // this session's UI (contacts are deliberately excluded from
+      // /api/state sync — Zoho CRM is their real source of truth, not this
+      // blob). Persist them durably into SalesContact via the same import
+      // pipeline the cold-prospect-pool CSV upload uses, so a pull from
+      // this route actually leaves the browser.
+      try {
+        const importRes = await fetch("/api/contacts/import", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ contacts: all.map(c => ({
+            email: c.email, firstName: c.firstName, lastName: c.lastName,
+            title: c.title, school: c.school, phone: c.phone,
+            city: c.city, state: c.state, source: c.source,
+          })) }),
+        });
+        const importData = await importRes.json();
+        if (importRes.ok) {
+          addLog(`✓ ${importData.added} contact(s) saved to database (${importData.skipped} already existed)`,"success");
+        } else {
+          addLog(`Contacts DB import: ${importData.error||"failed"}`,"warn");
+        }
+      } catch(e) {
+        addLog(`Contacts DB import failed: ${e.message?.slice(0,100)}`,"warn");
+      }
     } catch(e) {
       addLog(`CRM pull failed: ${e.message.slice(0,100)}`,"error");
     }
