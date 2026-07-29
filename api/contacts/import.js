@@ -3,14 +3,16 @@
  *
  * Bulk-upsert contacts into SalesContact (the cold prospect pool).
  * Accepts up to 500 records per call; client batches large files.
- * Deduplicates by email — existing records are skipped (not overwritten).
+ * Deduplicates by email — an existing record is enriched (any blank field
+ * filled in from the new data) rather than wholesale-overwritten; a
+ * non-empty existing field is never clobbered by an incoming one.
  *
  * Body: { contacts: [{ email, firstName, lastName, title, school,
  *                      phone, linkedIn, sport, state, city,
  *                      score, segment, notes, source }] }
- * Returns: { added, updated, total } — "updated" here means "already existed,
- * left as-is" (see the dedup note above — nothing already present is actually
- * overwritten despite the field name).
+ * Returns: { added, updated, total } — "updated" counts records that already
+ * existed by email (whether or not any of their blank fields actually got
+ * filled in by this call).
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
