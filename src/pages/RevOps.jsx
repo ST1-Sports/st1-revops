@@ -366,6 +366,7 @@ case "SET_REORDERS":      return {...prev, reorders:payload};
 case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
 case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
 case "SET_CONTACTS":      return {...prev, contacts:payload};
+case "SET_DEALS":         return {...prev, deals:payload};
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
 case "MERGE_CONTACTS": {
@@ -3723,11 +3724,10 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
 {[
-["Type", sel.orgType==="school"?"School / District":sel.orgType==="org"?"Organization / Club":"—"],
+["Type", sel.orgType==="school"?"School / District":sel.orgType==="college"?"College / University":sel.orgType?"Organization / Club":"—"],
 ["School Class", sel.schoolClass||"—"],
 ["# Athletes", sel.numAthletes||"—"],
 ["# Sports", sel.numSports||"—"],
-["Servicing", sel.sportsMode==="all"?"All sports":sel.sportsMode==="some"?"Selected sports":sel.sportsMode==="single"?"Single sport":sel.sportsMode==="multi"?"Multi-sport":"—"],
 ].map(([l,v])=>(
 <div key={l}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:2}}>{l}</div>
@@ -3735,16 +3735,6 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 </div>
 ))}
 </div>
-{Array.isArray(sel.selectedSports)&&sel.selectedSports.length>0&&(
-<div style={{marginTop:10}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Sports</div>
-<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-{sel.selectedSports.map(sp=>(
-<span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:`${B.blue}12`,border:`1px solid ${B.blue}25`,borderRadius:4,padding:"2px 8px"}}>{sp}</span>
-))}
-</div>
-</div>
-)}
 </div>
 {/* Confirmed pain points */}
 {Array.isArray(sel.ttPains)&&sel.ttPains.length>0&&(
@@ -15025,7 +15015,17 @@ return(
 <div style={{display:"flex",gap:7}}>
 <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
 <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>
+<button onClick={()=>{
+const staleContacts=(s.contacts||[]).filter(c=>/^zoho_[cl]_/.test(c.id));
+const staleDeals=(s.deals||[]).filter(d=>/^zoho_d_/.test(d.id));
+if(!staleContacts.length&&!staleDeals.length){toast("No Zoho-synced contacts/deals cached here","info");return;}
+if(!window.confirm(`Remove ${staleContacts.length} Zoho-synced contact(s) and ${staleDeals.length} Zoho-synced deal(s) cached in RevOps? This only clears this app's local cache — nothing in Zoho itself is touched. Use this after wiping/reseeding Zoho CRM so old records don't linger alongside the fresh ones.`))return;
+dispatch("SET_CONTACTS",(s.contacts||[]).filter(c=>!/^zoho_[cl]_/.test(c.id)));
+dispatch("SET_DEALS",(s.deals||[]).filter(d=>!/^zoho_d_/.test(d.id)));
+toast(`Cleared ${staleContacts.length} contact(s), ${staleDeals.length} deal(s) — use SYNC ZOHO CRM in Prospecting → Contact DB to pull the fresh data`,"success");
+}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>CLEAR ZOHO CACHE</button>
 </div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8,lineHeight:1.5}}>CLEAR ZOHO CACHE removes only records synced from Zoho CRM (contacts/leads/deals) — anything created manually in RevOps stays untouched. Since syncing only adds/updates and never removes, this is the way to drop old records after a Zoho-side wipe and reseed.</div>
 </div>
 {/* AI Tools → Integrations tab */}
 <div className="card" style={{padding:16,marginTop:13,borderTop:`3px solid ${B.muted}`}}>
