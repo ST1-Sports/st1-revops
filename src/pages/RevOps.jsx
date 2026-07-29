@@ -958,6 +958,10 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
   .rv-int-status{display:none!important}
   .rv-sync-btn{display:none!important}
   .rv-sep{display:none!important}
+  .rv-crm-split{flex-direction:column!important}
+  .rv-crm-left{width:100%!important;max-height:220px!important;border-right:none!important;border-bottom:1px solid ${B.border}!important;flex-shrink:0!important}
+  .rv-kpi-grid{grid-template-columns:repeat(2,1fr)!important}
+  .rv-info-grid{grid-template-columns:repeat(2,1fr)!important}
 }
 `}</style>
 {/* SIDEBAR */}
@@ -3226,9 +3230,9 @@ buckets[key]=(buckets[key]||0)+1;
 return {rows:Object.entries(buckets).sort(([,a],[,b])=>b-a),dead,zohoSynced,total:contacts.length};
 },[contacts]);
 return(
-<div style={{display:"flex",height:"100%",overflow:"hidden"}}>
+<div className="rv-crm-split" style={{display:"flex",height:"100%",overflow:"hidden"}}>
 {/* LEFT LIST */}
-<div style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
+<div className="rv-crm-left" style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
 <div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
 <div style={{display:"flex",gap:3}}>
@@ -3429,7 +3433,7 @@ return(
 <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
 {/* Header */}
 <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{schoolCleanName}</div>
@@ -3472,7 +3476,7 @@ return(
 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
 </div>
 {/* ── KPI STRIP ── */}
-<div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
+<div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
 <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
 <KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
 <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
@@ -3481,7 +3485,7 @@ return(
 </div>
 {/* ── ACCOUNT INFO ── */}
 <SectionHdr>ACCOUNT INFO</SectionHdr>
-<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
 {[
 ["School Class",schoolClass||"—"],
 ["Location",[city,state].filter(Boolean).join(", ")||"—"],
@@ -3502,8 +3506,8 @@ return(
 {/* ── STAFF COVERAGE ── */}
 <SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
 <div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{display:"flex",alignItems:"center",gap:8}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>ATHLETIC DIRECTOR</span>
 {coverage.adContact?
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:500}}>{cName(coverage.adContact)}</span>
@@ -5365,6 +5369,9 @@ const [linkingAccounts,setLinkingAccounts] = useState(false);
 const [linkAccountsResult,setLinkAccountsResult] = useState(null);
 const [aligningZoho,setAligningZoho] = useState(false);
 const [alignZohoResult,setAlignZohoResult] = useState(null);
+const [syncingBooks,setSyncingBooks] = useState(false);
+const [syncBooksResult,setSyncBooksResult] = useState(null);
+const [showNoContactAccounts,setShowNoContactAccounts] = useState(false);
 const [importPhase,setImportPhase]     = useState("idle");
 const [importState,setImportState]     = useState("");
 const [importRows,setImportRows]       = useState([]);
@@ -6403,6 +6410,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 </div>
 {/* Idle: just the buttons */}
 {importPhase==="idle"&&(
+<>
 <div style={{display:"flex",gap:10,alignItems:"center",paddingTop:10}}>
 <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
 <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
@@ -6462,8 +6470,34 @@ toast(`Zoho align: ${totals.accountsProcessed} account(s) · ${totals.contactsPu
 finally{setAligningZoho(false);}
 }}>{aligningZoho?"ALIGNING…":"⚡ ALIGN TO ZOHO"}</OBtn>
 {alignZohoResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{alignZohoResult.accountsProcessed} accts · {alignZohoResult.contactsPushed} new · {alignZohoResult.contactsUpdated} updated{alignZohoResult.errors.length?` · ${alignZohoResult.errors.length} errors`:""}</span>}
+<OBtn sm color={B.blue} disabled={syncingBooks} onClick={async()=>{
+setSyncingBooks(true);setSyncBooksResult(null);
+try{
+const r=await fetch('/api/contacts/sync-books-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:false})});
+const d=await r.json();
+if(d.error){toast("Books sync error: "+d.error,"error");return;}
+setSyncBooksResult(d);
+const noContactNote=d.accountsWithNoContacts?.length?` · ${d.accountsWithNoContacts.length} account(s) have NO contacts on file (see panel)`:"";
+toast(`${d.accountsFromBooks} Books customer(s) → ${d.accountsCreated} account(s) created, ${d.accountsUpdated} matched · ${d.contactsLinked} contact(s) linked${noContactNote}`,d.accountsWithNoContacts?.length?"info":"success");
+}catch(e){toast("Books sync error: "+e.message,"error");}
+finally{setSyncingBooks(false);}
+}}>{syncingBooks?"SYNCING…":"📇 SYNC BOOKS ACCOUNTS"}</OBtn>
+{syncBooksResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{syncBooksResult.accountsCreated} new · {syncBooksResult.accountsUpdated} matched · {syncBooksResult.contactsLinked} contacts linked{syncBooksResult.accountsWithNoContacts?.length?` · ${syncBooksResult.accountsWithNoContacts.length} with no contacts`:""}</span>}
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{totalContactsAll.toLocaleString()} contacts total <span style={{fontSize:9}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></span>
 </div>
+{syncBooksResult?.accountsWithNoContacts?.length>0&&(
+<div style={{marginTop:8}}>
+<button onClick={()=>setShowNoContactAccounts(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{showNoContactAccounts?"hide":"show"} the {syncBooksResult.accountsWithNoContacts.length} invoiced account(s) with zero contacts on file</button>
+{showNoContactAccounts&&(
+<div style={{marginTop:6,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",maxHeight:180,overflowY:"auto"}}>
+{syncBooksResult.accountsWithNoContacts.map((a,i)=>(
+<div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"2px 0"}}>{a.name}{a.state?` — ${a.state}`:""}</div>
+))}
+</div>
+)}
+</div>
+)}
+</>
 )}
 {/* Setup: name, sport, notes, file attached */}
 {(importPhase==="setup"||importPhase==="parsing")&&(
