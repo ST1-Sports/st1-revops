@@ -616,6 +616,12 @@ const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncin
 useEffect(()=>{
 if(!s.currentUserId) return;
 const SIX_H=6*60*60*1000;
+// Contacts sync more often than invoices: this is the path that surfaces a
+// Brad-driven Zoho Account/Contact promotion (fully server-side — cron/
+// webhook, no rep in the loop) into the CRM tab. Waiting a full 6h for that
+// to show up is too slow to feel like "shows positive intent → appears in
+// CRM," so contacts get their own faster cadence.
+const CONTACT_SYNC_INTERVAL=15*60*1000;
 const STAT_MAP={sent:"sent",viewed:"sent",overdue:"overdue",paid:"paid",partially_paid:"partial",draft:"draft",void:"void"};
 const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
 const syncInvoices=async()=>{
@@ -644,19 +650,29 @@ const CONTACT_INTENT_SCORE=50;
 // A synced Zoho contact/lead belongs in the CRM tab only once someone's
 // actually working it — an open deal, or a real reply/interest signal.
 // Everything else is cold and belongs in the prospecting pool instead.
-const hasContactIntent=(c,dealList)=>{
+const hasContactIntent=(c,dealList,invoiceList)=>{
 if((c.score||0)>=CONTACT_INTENT_SCORE) return true;
 if(["replied","interested"].includes(c.outreachStatus)) return true;
+if(findCustomerInvoice(c,invoiceList)) return true;
 const nm=(c.fullName||`${c.firstName||""} ${c.lastName||""}`).trim().toLowerCase();
 return dealList.some(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
 };
-const splitColdContacts=(contactList,dealList)=>{
+const splitColdContacts=(contactList,dealList,invoiceList)=>{
 const cold=[],keep=[],discard=[];
 for(const c of contactList){
 // "manual" = a rep typed this in by hand — trust that judgment call same
 // as any other deliberate single-record action.
 if(c.source==="manual"){keep.push(c);continue;}
 const isZoho=(c.source||"").startsWith("zoho");
+// A real Zoho Contact (as opposed to a Lead) is already a qualified
+// relationship by Zoho's own definition — either a pre-existing customer,
+// or exactly what Brad's positive-intent promotion creates
+// (createAsContact in api/contacts/promote.js). Don't re-run the
+// deal/intent check on these: a freshly-promoted contact has no local
+// score/outreachStatus/deal yet on its very first sync, and re-checking
+// would immediately sweep it right back out — undoing the promotion.
+const isZohoContact=(c.id||"").startsWith("zoho_c_");
+if(isZohoContact){keep.push(c);continue;}
 if(!c.email){
 // No email = can't be migrated to Prospecting (keyed by email) and can't
 // be worked via Brad/Edgar's email outreach either — not CRM-worthy and
@@ -665,12 +681,12 @@ if(!c.email){
 if(isZoho) keep.push(c); else discard.push(c);
 continue;
 }
-// Zoho-synced records still get the deal/intent check — a real CRM
-// record might already represent an active relationship. Anything else
+// Zoho Leads still get the deal/intent check — a raw Lead really can be
+// an unqualified, unengaged prospect. Anything non-Zoho
 // (bulk import, list-import, scraped, website/directory finds) was never
 // CRM data to begin with — it belongs in Prospecting unconditionally,
 // deal or no deal.
-if(isZoho&&hasContactIntent(c,dealList)){keep.push(c);continue;}
+if(isZoho&&hasContactIntent(c,dealList,invoiceList)){keep.push(c);continue;}
 cold.push(c);
 }
 return {cold,keep,discard};
@@ -692,7 +708,7 @@ moved+=(d.added||0)+(d.updated||0);
 return moved;
 };
 const syncContacts=async(force=false)=>{
-if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
+if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<CONTACT_SYNC_INTERVAL) return;
 const now=Date.now();
 const existingDeals=s.deals||[];
 let toAdd=[],toUpdate=[],dealRows=[],dealsAdded=0,dealsUpdated=0,fetchFailed=false,fetchErrMsg="";
@@ -738,7 +754,7 @@ const updMap=new Map(toUpdate.map(c=>[c.id,c]));
 const mergedExisting=(s.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
-const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase);
+const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase,s.invoices||[]);
 dispatch("SET_CONTACTS",keep);
 if(!fetchFailed) dispatch("SET_CONTACTS_LAST_SYNC",now);
 let movedToProspecting=0;
@@ -752,8 +768,9 @@ else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated
 };
 crmSyncRef.current = syncContacts;
 const initTimer=setTimeout(()=>{syncInvoices();syncContacts();},8000);
-const iv=setInterval(()=>{syncInvoices();syncContacts();},SIX_H);
-return()=>{clearTimeout(initTimer);clearInterval(iv);};
+const invIv=setInterval(syncInvoices,SIX_H);
+const contactIv=setInterval(syncContacts,CONTACT_SYNC_INTERVAL);
+return()=>{clearTimeout(initTimer);clearInterval(invIv);clearInterval(contactIv);};
 },[s.currentUserId]);
 useEffect(()=>{ setMobileNavOpen(false); },[mod]);
 useEffect(()=>{
@@ -3032,7 +3049,7 @@ const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
-const [leftMode,setLeftMode]=useState("contacts");
+const [leftMode,setLeftMode]=useState("accounts");
 const [selSchool,setSelSchool]=useState(null);
 const [profileForm,setProfileForm]=useState({});
 const [profileDirty,setProfileDirty]=useState(false);
@@ -3239,22 +3256,35 @@ return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.w
 </>)}
 {leftMode==="accounts"&&(()=>{
 const sq=search.toLowerCase();
+const invoices=s.invoices||[];
+const fuzzyMatch=(a,b)=>{a=(a||"").toLowerCase();b=(b||"").toLowerCase();return a.length>4&&b.length>4&&(a.includes(b)||b.includes(a));};
+const isInvoiced=(school)=>invoices.some(inv=>fuzzyMatch(school,inv.customer));
 const groups={};
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
 const school=(typeof c.school==="string"?c.school:c.school?.name||"")||"(No School)";
 if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
-if(!groups[school]) groups[school]={contacts:[],deals:[],value:0};
+if(!groups[school]) groups[school]={contacts:[],deals:[],value:0,invoiced:isInvoiced(school)};
 groups[school].contacts.push(c);
 const cd=getCD(c);
 cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[school].deals.push(d);groups[school].value+=(d.value||0);}});
 });
-const schoolList=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));
+// A customer we've actually invoiced belongs on this list at the account
+// level even if we don't have a synced contact for them yet — surface a
+// zero-contact row so the account itself isn't invisible.
+invoices.forEach(inv=>{
+const custName=(inv.customer||"").trim();
+if(!custName) return;
+if(sq&&!custName.toLowerCase().includes(sq)) return;
+if(Object.keys(groups).some(sch=>fuzzyMatch(sch,custName))) return;
+groups[custName]={contacts:[],deals:[],value:0,invoiced:true};
+});
+const schoolList=Object.entries(groups).sort(([a,ga],[b,gb])=>(gb.invoiced-ga.invoiced)||a.localeCompare(b));
 if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
 return schoolList.map(([school,g])=>{
 const isActive=selSchool===school;
 const phases=g.contacts.map(c=>getCD(c).phase);
 const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
-const pc=PCOL[topPhase];
+const pc=g.invoiced?B.green:PCOL[topPhase];
 return(
 <button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
@@ -3263,7 +3293,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
 </div>
 <div style={{flexShrink:0,textAlign:"right"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{topPhase}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3,textTransform:"uppercase"}}>{g.invoiced?"customer":topPhase}</span>
 {g.value>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,marginTop:2}}>{fmt$K(g.value)}</div>}
 </div>
 </div>
