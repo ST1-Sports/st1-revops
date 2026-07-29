@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import ToolManager from "../components/ToolManager.jsx";
-import { pushItemsToAppState, pushAppStateToServer } from "../lib/appStateSync.js";
+import { pushItemsToAppState, pushAppStateToServer, readAppState } from "../lib/appStateSync.js";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -291,7 +291,7 @@ export default function IntegrationsHub() {
     setColdLeadSyncResult(null);
     try {
       // Read contacts from RevOps localStorage, filter cold ones
-      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
+      const store = readAppState();
       const contacts = Array.isArray(store.contacts) ? store.contacts : [];
       const now = Date.now();
       const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
@@ -527,7 +527,7 @@ export default function IntegrationsHub() {
         });
         const importData = await importRes.json();
         if (importRes.ok) {
-          addLog(`✓ ${importData.added} contact(s) saved to database (${importData.skipped} already existed)`,"success");
+          addLog(`✓ ${importData.added} contact(s) saved to database (${importData.updated} already existed)`,"success");
         } else {
           addLog(`Contacts DB import: ${importData.error||"failed"}`,"warn");
         }
@@ -1281,7 +1281,7 @@ Channel: ${slackChannelName}`);
                   </div>
                   {(()=>{
                     try {
-                      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
+                      const store = readAppState();
                       const contacts = Array.isArray(store.contacts) ? store.contacts : [];
                       const now = Date.now();
                       const cold = contacts.filter(c => {

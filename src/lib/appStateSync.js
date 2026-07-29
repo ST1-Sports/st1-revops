@@ -62,11 +62,21 @@ export function pushAppStateToServer() {
 }
 
 /**
- * Pull server state, merge the given array fields into the local blob by id
- * (server records win on id conflicts, matching RevOps.jsx's own merge),
- * write the result back to localStorage, and push it back up so this
- * route's data and any other route's data converge to the same DB row.
- * Returns the merged state (or the untouched local state on failure).
+ * Pull server state and merge ONLY the given array fields into the local
+ * blob by id (server records win on id conflicts, matching RevOps.jsx's own
+ * merge). Every other field is left exactly as the local copy had it.
+ *
+ * Deliberately does NOT wholesale-adopt the rest of the server's state, and
+ * does NOT push the result back to /api/state. Earlier versions of this
+ * function did both, which caused real data loss: a route that only cares
+ * about (say) rfps would spread the ENTIRE server snapshot over local state
+ * first, silently overwriting other fields (e.g. deals) with whatever the
+ * server happened to have at that GET — which could be staler than an edit
+ * still sitting in another tab's debounce window — and then push that
+ * corrupted blob back up, potentially clobbering the other tab's correct,
+ * not-yet-synced write on the server too. A route should only ever be
+ * authoritative for the fields it actually owns and writes to; pulling here
+ * is purely "give me an up-to-date copy of the field(s) I asked for."
  */
 export async function pullAndMergeAppState(mergeFields = []) {
   const local = readAppState()
@@ -80,13 +90,11 @@ export async function pullAndMergeAppState(mergeFields = []) {
   }
   if (!serverState || typeof serverState !== 'object') return local
 
-  const { contacts: _c, agentHistory: _ah, ...serverClean } = serverState
-  const merged = { ...local, ...serverClean, currentUserId: local.currentUserId }
+  const merged = { ...local }
   for (const field of mergeFields) {
-    merged[field] = mergeById(local[field], serverClean[field])
+    merged[field] = mergeById(local[field], serverState[field])
   }
   writeAppState(merged)
-  pushAppStateToServer()
   return merged
 }
 

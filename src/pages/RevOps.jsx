@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
-import { mergeById } from "../lib/appStateSync.js";
+import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
@@ -63,7 +63,7 @@ blue:"#1A5FA8", blueBg:"#E8F0FA",
 purple:"#6B3FA0", purpleBg:"#F3EEFB",
 teal:"#0C7B6A", tealBg:"#E6F5F2",
 };
-const STORE = "st1_revops_v2";
+const STORE = APP_STATE_KEY;
 const mkId   = () => Math.random().toString(36).slice(2,9);
 const today  = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const fmtCountdown=(ms)=>{if(ms<=0)return"now";const s=Math.floor(ms/1000);const h=Math.floor(s/3600);const m=Math.floor((s%3600)/60);return h>0?`${h}h ${m}m`:`${m}m`;};

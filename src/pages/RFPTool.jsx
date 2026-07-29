@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
-import { pushAppStateToServer, pullAndMergeAppState } from "../lib/appStateSync.js";
+import { pushAppStateToServer, pullAndMergeAppState, APP_STATE_KEY } from "../lib/appStateSync.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -198,7 +198,7 @@ function buildOutputCSV(originalCsvText, items) {
 }
 
 // ── RevOps store helpers (RFPTool is a standalone route — read/write localStorage directly) ──
-const REVOPS_STORE = "st1_revops_v2";
+const REVOPS_STORE = APP_STATE_KEY;
 
 function lsReadRfps() {
   try { const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}"); return Array.isArray(p.rfps)?p.rfps:[]; }

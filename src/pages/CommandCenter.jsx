@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
 import ToolManagerComponent from '../components/ToolManager.jsx'
 import AdHubModule from '../components/AdHubModule.jsx'
@@ -933,10 +933,16 @@ function ResearchModule({ userRole }) {
   // Hydrate instantly from localStorage (above), then reconcile with the
   // database — this used to be the only copy anywhere, so a cleared
   // browser or a different device lost every saved research entry.
+  //
+  // mutatedSinceLoad guards against this GET resolving AFTER a save/delete
+  // already happened (very plausible — a quick save can beat a cold-start
+  // GET) and clobbering the newer result with what was fetched before it.
+  const mutatedSinceLoad = useRef(false)
   useEffect(() => {
     fetch('/api/intel')
       .then(r => r.ok ? r.json() : null)
       .then(d => {
+        if (mutatedSinceLoad.current) return
         if (Array.isArray(d?.items)) {
           setHistory(d.items)
           try { localStorage.setItem(INTEL_KEY, JSON.stringify(d.items)) } catch {}
@@ -959,6 +965,7 @@ function ResearchModule({ userRole }) {
   }
 
   async function handleSave() {
+    mutatedSinceLoad.current = true
     const entry = {
       id:        Date.now(),
       query:     query.trim(),
@@ -987,6 +994,7 @@ function ResearchModule({ userRole }) {
   }
 
   async function handleDelete(id) {
+    mutatedSinceLoad.current = true
     const next = history.filter(e => e.id !== id)
     localStorage.setItem(INTEL_KEY, JSON.stringify(next))
     setHistory(next)

@@ -13,6 +13,7 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
+import { updateSettingSafely } from './_lib/settingSync.js';
 
 const KEY = 'intel_library';
 const MAX_ITEMS = 50;
@@ -33,28 +34,20 @@ export default async function handler(req, res) {
 
   if (req.method === 'POST') {
     const { action, item, id } = req.body || {};
-    try {
-      const setting = await prisma.setting.findUnique({ where: { key: KEY } });
-      let items = Array.isArray(setting?.value) ? setting.value : [];
+    if (action === 'delete' && id == null) return res.status(400).json({ error: 'id required' });
+    if (action !== 'delete' && (!item || typeof item !== 'object')) return res.status(400).json({ error: 'item required' });
 
-      if (action === 'delete') {
-        if (id == null) return res.status(400).json({ error: 'id required' });
-        items = items.filter(i => i.id !== id);
-      } else {
-        if (!item || typeof item !== 'object') return res.status(400).json({ error: 'item required' });
+    try {
+      const items = await updateSettingSafely(KEY, currentValue => {
+        const items = Array.isArray(currentValue) ? currentValue : [];
+        if (action === 'delete') return items.filter(i => i.id !== id);
         const entry = {
           id:      item.id ?? Date.now(),
           query:   String(item.query || '').slice(0, 2000),
           output:  String(item.output || '').slice(0, 20000),
           savedAt: item.savedAt || new Date().toISOString(),
         };
-        items = [entry, ...items.filter(i => i.id !== entry.id)].slice(0, MAX_ITEMS);
-      }
-
-      await prisma.setting.upsert({
-        where:  { key: KEY },
-        update: { value: items },
-        create: { key: KEY, value: items },
+        return [entry, ...items.filter(i => i.id !== entry.id)].slice(0, MAX_ITEMS);
       });
       return res.json({ ok: true, items });
     } catch (e) {

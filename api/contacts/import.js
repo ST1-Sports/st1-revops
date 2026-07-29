@@ -8,7 +8,9 @@
  * Body: { contacts: [{ email, firstName, lastName, title, school,
  *                      phone, linkedIn, sport, state, city,
  *                      score, segment, notes, source }] }
- * Returns: { added, skipped, total }
+ * Returns: { added, updated, total } — "updated" here means "already existed,
+ * left as-is" (see the dedup note above — nothing already present is actually
+ * overwritten despite the field name).
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
