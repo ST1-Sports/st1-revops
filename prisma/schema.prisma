@@ -736,6 +736,11 @@ model Supplier {
   items        PriceItem[]
   vendorBills  VendorBill[]
 
+  paymentFriction   String?  @default("UNRATED")  // LOW | MEDIUM | HIGH | UNRATED
+  paymentTerms      String?                        // net 30 | net 60 | net 90
+  latePenaltyTerms  String?
+  frictionNotes     String?  @db.Text
+
   @@index([name])
   @@index([active])
 }
@@ -898,4 +903,72 @@ model VendorBillLineItem {
   needsReview        Boolean    @default(false)
 
   @@index([vendorBillId])
+}
+
+// ── ANNIE — financial analyst ─────────────────────────────────────────────────
+
+model FinancialSnapshot {
+  id              String   @id @default(cuid())
+  snapshotDate     DateTime
+  periodType       String                        // WEEKLY | MONTHLY
+  revenueTotal     Decimal? @db.Decimal(12, 2)
+  cogsTotal        Decimal? @db.Decimal(12, 2)
+  grossMargin      Decimal? @db.Decimal(5, 2)
+  cashPosition     Decimal? @db.Decimal(12, 2)
+  arTotal          Decimal? @db.Decimal(12, 2)
+  arOverdue        Decimal? @db.Decimal(12, 2)
+  apTotal          Decimal? @db.Decimal(12, 2)
+  pipelineValue    Decimal? @db.Decimal(12, 2)
+  rawZohoPL        Json?
+  rawZohoBS        Json?
+  createdAt        DateTime @default(now())
+  @@index([snapshotDate])
+  @@index([periodType])
+}
+
+model Forecast {
+  id               String   @id @default(cuid())
+  forecastDate     DateTime @default(now())
+  horizonMonths    Int
+  method           String
+  projectedRevenue Json
+  projectedCash    Json
+  assumptions      Json
+  actualVsForecast Json?
+  createdAt        DateTime @default(now())
+  @@index([forecastDate])
+}
+
+model Insight {
+  id             String   @id @default(cuid())
+  category       String                          // OPPORTUNITY | SPEND_CUT | RISK | HEALTH_FLAG | PAYMENT_PLAN
+  title          String
+  detail         String   @db.Text
+  supportingData Json?
+  status         String   @default("NEW")         // NEW | REVIEWED | ACTED_ON | DISMISSED
+  surfacedIn     String?                           // DIGEST_WEEKLY | DIGEST_MONTHLY | CHAT
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  @@index([category])
+  @@index([status])
+}
+
+model DigestLog {
+  id           String   @id @default(cuid())
+  digestType   String                            // WEEKLY | MONTHLY
+  sentAt       DateTime @default(now())
+  channel      String                            // SLACK | EMAIL
+  insightIds   Json
+  snapshotId   String?
+}
+
+model CustomerReliability {
+  id              String   @id @default(cuid())
+  zohoContactId   String   @unique
+  customerName    String
+  reliabilityFlag String   @default("UNRATED")    // RELIABLE | INCONSISTENT | CHRONIC_LATE | UNRATED
+  avgDaysLate     Float?                           // computed from paid-invoice history, not manual
+  notes           String?  @db.Text
+  updatedAt       DateTime @updatedAt
+  @@index([reliabilityFlag])
 }
