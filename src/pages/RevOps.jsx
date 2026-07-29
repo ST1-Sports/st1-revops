@@ -3124,7 +3124,7 @@ return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.w
 const sq=search.toLowerCase();
 const groups={};
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
-const school=c.school||"(No School)";
+const school=(typeof c.school==="string"?c.school:c.school?.name||"")||"(No School)";
 if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
 if(!groups[school]) groups[school]={contacts:[],deals:[],value:0};
 groups[school].contacts.push(c);
@@ -3507,7 +3507,7 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>{cName(sel)}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{sel.title}{sel.title&&sel.school?" · ":""}{sel.school}{sel.state?` · ${sel.state}`:""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{(()=>{const t=typeof sel.title==="string"?sel.title:sel.title?.name||"";const sc=typeof sel.school==="string"?sel.school:sel.school?.name||"";return(<>{t}{t&&sc?" · ":""}{sc}{sel.state?` · ${sel.state}`:""}</>);})()}</div>
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {sel.email&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>✉ {sel.email}</span>}
 {sel.phone&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>☎ {sel.phone}</span>}
@@ -3809,7 +3809,7 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <>
 <div className="card" style={{padding:14,marginBottom:12,borderTop:`3px solid ${DSC[activeDeal.stage]||B.orange}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
-<div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{activeDeal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{activeDeal.school}</div></div>
+<div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{activeDeal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{typeof activeDeal.school==="string"?activeDeal.school:activeDeal.school?.name||""}</div></div>
 <div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><div style={{display:"flex",gap:4,alignItems:"center"}}><input type="number" value={dealValueInput} onChange={e=>{setDealValueInput(e.target.value);setDealValueSaved(false);}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>{dealValueSaved?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green}}>✓</span>:<OBtn sm onClick={()=>{const v=Number(dealValueInput||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});setDealValueSaved(true);setTimeout(()=>setDealValueSaved(false),2000);toast("Deal value updated","success");}}>SAVE</OBtn>}</div></div>
 </div>
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
@@ -4463,7 +4463,7 @@ return (
 <div style={{display:"flex",justifyContent:"space-between",marginBottom:9,alignItems:"flex-start"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>{sel_d.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{sel_d.contact} · {sel_d.school}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{typeof sel_d.contact==="string"?sel_d.contact:sel_d.contact?.name||""} · {typeof sel_d.school==="string"?sel_d.school:sel_d.school?.name||""}</div>
 </div>
 <div style={{flexShrink:0,marginLeft:9,textAlign:"right"}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>VALUE ($)</div>
