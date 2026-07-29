@@ -89,7 +89,12 @@ function parseAtomFeed(xml, subreddit) {
     const author = extractTag(entry, 'name').replace(/^\/u\//, '');
     const published = extractTag(entry, 'published') || extractTag(entry, 'updated');
 
-    // Pull score and comment count from the HTML content block
+    // Pull score and comment count from the HTML content block. Reddit's
+    // public RSS/Atom feeds don't reliably include an upvote count in this
+    // "N points" format — when it's absent, scoreKnown stays false so
+    // downstream guardrails know not to reject the thread for a metric we
+    // couldn't actually measure (previously this defaulted to 0, which then
+    // failed the minimum-score guardrail for essentially every candidate).
     const content = extractTag(entry, 'content') || '';
     const scoreM  = content.match(/(\d+)\s+point/i);
     const commM   = content.match(/(\d+)\s+comment/i);
@@ -106,6 +111,7 @@ function parseAtomFeed(xml, subreddit) {
       author:       author || '[deleted]',
       subreddit:    subreddit,
       score:        scoreM ? parseInt(scoreM[1], 10) : 0,
+      scoreKnown:   !!scoreM,
       commentCount: commM  ? parseInt(commM[1],  10) : 0,
       body:         '',  // RSS doesn't include body text
       publishedAt:  published,

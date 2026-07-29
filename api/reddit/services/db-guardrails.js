@@ -31,7 +31,10 @@ async function checkGuardrails(thread, flags) {
   const db = getPrisma();
   const minScore = flags.minThreadScore ?? 5;
 
-  if (thread.score < minScore) {
+  // RSS-sourced threads often can't have a real score parsed at all (Reddit's
+  // public feed doesn't reliably expose an upvote count) — scoreKnown===false
+  // means "couldn't measure," not "measured as 0", so don't reject on it.
+  if (thread.scoreKnown !== false && thread.score < minScore) {
     failures.push(`Thread score ${thread.score} is below minimum ${minScore}`);
   }
 

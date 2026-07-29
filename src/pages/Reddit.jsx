@@ -100,6 +100,10 @@ export default function Reddit() {
   const [filter,    setFilter]    = useState('review') // review | all | posted | rejected
   const [marking,   setMarking]   = useState(null) // threadId being marked
   const [actErr,    setActErr]    = useState(null)
+  const [status,           setStatus]           = useState(null)
+  const [showSearchPanel,  setShowSearchPanel]  = useState(false)
+  const [customSubreddits, setCustomSubreddits] = useState('')
+  const [customKeywords,   setCustomKeywords]   = useState('')
 
   // ── load threads from DB ────────────────────────────────────────────────────
   const loadThreads = useCallback(async () => {
@@ -133,20 +137,47 @@ export default function Reddit() {
     }
   }, [threads]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── feature-flag / config status — lets a user see WHY a scan found
+  // nothing (automation disabled, no Claude key, etc.) instead of guessing ──
+  const loadStatus = useCallback(async () => {
+    try {
+      const r = await fetch('/api/reddit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'status' }),
+      })
+      setStatus(await r.json())
+    } catch {}
+  }, [])
+
+  useEffect(() => { loadStatus() }, [loadStatus])
+
   // ── run pipeline ────────────────────────────────────────────────────────────
   const runPipeline = async () => {
     setScanning(true)
     setScanMsg('Claude is searching Reddit and evaluating opportunities…')
     try {
+      const subs = customSubreddits.split(',').map(s => s.trim()).filter(Boolean)
+      const kws  = customKeywords.split(',').map(k => k.trim()).filter(Boolean)
+      const overrides = (subs.length || kws.length) ? { subreddits: subs, keywords: kws } : undefined
+
       const r = await fetch('/api/reddit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'pipeline' }),
+        body: JSON.stringify({ action: 'pipeline', ...(overrides ? { overrides } : {}) }),
       })
       const d = await r.json()
-      const msg = d.ok
-        ? `Found ${d.ingested} new threads · Evaluated ${d.evaluated} · ${d.generated} ready to review`
-        : (d.error || 'Pipeline ran with errors')
+      let msg
+      if (!d.ok) {
+        msg = d.error || 'Pipeline ran with errors'
+      } else {
+        msg = `Found ${d.ingested} new threads · Evaluated ${d.evaluated} · ${d.generated} ready to review`
+        if (d.ingested === 0 && d.skipped > 0) {
+          const reasons = Object.entries(d.skipReasons || {}).sort((a,b) => b[1]-a[1]).slice(0,3)
+            .map(([reason, count]) => `${count}× ${reason}`).join(' · ')
+          msg = `${d.skipped} thread(s) found but none passed guardrails${reasons ? ` — ${reasons}` : ''}`
+        }
+      }
       setScanMsg(msg)
       await loadThreads()
     } catch (e) {
@@ -223,6 +254,11 @@ export default function Reddit() {
                 {lastScanTime ? `Last scan: ${fmtDate(lastScanTime)}` : 'No scans yet'}
               </div>
             </div>
+            <button onClick={() => setShowSearchPanel(v => !v)} title="Search settings"
+              style={{ background: 'transparent', color: C.muted, border: `1px solid ${C.border}`,
+                borderRadius: 5, padding: '6px 9px', fontSize: 11, cursor: 'pointer' }}>
+              ⚙
+            </button>
             <button onClick={runPipeline} disabled={scanning}
               style={{ background: scanning ? C.muted : C.orange, color: '#fff', border: 'none',
                 borderRadius: 5, padding: '6px 12px', fontSize: 9, fontWeight: 700, cursor: scanning ? 'not-allowed' : 'pointer',
@@ -230,6 +266,41 @@ export default function Reddit() {
               {scanning ? '⟳ Scanning…' : '⟳ Scan Now'}
             </button>
           </div>
+
+          {status && !status.flags?.enabled && (
+            <div style={{ fontSize: 10, color: C.red, background: '#fef2f2', borderRadius: 4,
+              padding: '5px 9px', marginBottom: 8 }}>
+              ⚠ Reddit automation is disabled — set <code>REDDIT_AUTOMATION_ENABLED=true</code> in Vercel to enable scanning.
+            </div>
+          )}
+
+          {showSearchPanel && (
+            <div style={{ background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6,
+              padding: 10, marginBottom: 8, fontSize: 10 }}>
+              <div style={{ fontWeight: 700, color: C.dark, marginBottom: 6 }}>Search parameters</div>
+              {status && (
+                <div style={{ color: C.muted, marginBottom: 8, lineHeight: 1.6 }}>
+                  With both fields below blank, Scan Now asks Claude to generate ~18 targeted subreddit/search pairs (buying-intent + competitor mentions).
+                  {status.env?.hasAnthropicKey ? '' : ' No ANTHROPIC_KEY is set, so it currently falls back to a fixed built-in list of ~11 pairs instead of AI-generated ones.'}
+                </div>
+              )}
+              <div style={{ marginBottom: 6 }}>
+                <label style={{ display: 'block', color: C.mid, marginBottom: 3 }}>Custom subreddits (comma-separated, no r/ prefix)</label>
+                <input value={customSubreddits} onChange={e => setCustomSubreddits(e.target.value)}
+                  placeholder="e.g. trackandfield, Coaching" style={{ width: '100%', boxSizing: 'border-box',
+                  border: `1px solid ${C.border}`, borderRadius: 4, padding: '5px 8px', fontSize: 10 }}/>
+              </div>
+              <div>
+                <label style={{ display: 'block', color: C.mid, marginBottom: 3 }}>Custom keywords (comma-separated)</label>
+                <input value={customKeywords} onChange={e => setCustomKeywords(e.target.value)}
+                  placeholder="e.g. hurdles, pole vault poles" style={{ width: '100%', boxSizing: 'border-box',
+                  border: `1px solid ${C.border}`, borderRadius: 4, padding: '5px 8px', fontSize: 10 }}/>
+              </div>
+              <div style={{ color: C.muted, marginTop: 6, fontSize: 9, lineHeight: 1.5 }}>
+                Leave both blank to let Claude pick queries automatically. Fill either in and the next "Scan Now" searches exactly those subreddit × keyword combinations instead.
+              </div>
+            </div>
+          )}
 
           {scanMsg && (
             <div style={{ fontSize: 10, color: C.blue, background: C.blueBg, borderRadius: 4,

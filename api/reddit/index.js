@@ -73,6 +73,7 @@ export default async function handler(req, res) {
         hasClientSecret: Boolean(process.env.REDDIT_CLIENT_SECRET),
         hasRefreshToken: Boolean(process.env.REDDIT_REFRESH_TOKEN),
         hasSlackChannel: Boolean(process.env.SLACK_REDDIT_REVIEW_CHANNEL),
+        hasAnthropicKey: Boolean(process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY),
         targetSubreddits: (process.env.REDDIT_TARGET_SUBREDDITS || '').split(',').filter(Boolean),
         brandKeywords:    (process.env.REDDIT_BRAND_KEYWORDS    || '').split(',').filter(Boolean),
       },
@@ -148,17 +149,36 @@ export default async function handler(req, res) {
 
       // pipeline: ingest + evaluate + generate for pending threads (manual trigger from UI)
       case 'pipeline': {
-        const pResults = { ingested: 0, evaluated: 0, generated: 0, errors: [] };
+        const pResults = { ingested: 0, skipped: 0, skipReasons: {}, evaluated: 0, generated: 0, errors: [] };
 
-        // Generate smart queries and ingest new threads
+        // A caller-supplied { subreddits, keywords } search runs as-is,
+        // bypassing Claude query generation entirely — this is what lets the
+        // UI's "Custom Search" fields actually control what gets searched,
+        // rather than every scan silently using AI-picked queries.
         try {
-          const queries = await generateSearchQueries();
-          const overrides = queries.length ? {
-            subreddits: [...new Set(queries.map(q => q.subreddit))],
-            keywords:   [...new Set(queries.map(q => q.query))],
-          } : {};
+          const manualOverrides = body.overrides?.subreddits?.length || body.overrides?.keywords?.length
+            ? body.overrides
+            : null;
+          let overrides = manualOverrides;
+          if (!overrides) {
+            const queries = await generateSearchQueries();
+            overrides = queries.length ? {
+              subreddits: [...new Set(queries.map(q => q.subreddit))],
+              keywords:   [...new Set(queries.map(q => q.query))],
+            } : {};
+          }
           const ig = await ingestThreads(flags, overrides);
           pResults.ingested = ig.ingested;
+          pResults.skipped  = ig.skipped;
+          // Aggregate skip reasons so the UI can show WHY nothing landed,
+          // instead of just a bare "0 found".
+          for (const c of ig.threads) {
+            if (c.status !== 'skipped') continue;
+            for (const reason of c.reasons || []) {
+              const key = reason.replace(/\d+/g, 'N'); // collapse per-thread numbers together
+              pResults.skipReasons[key] = (pResults.skipReasons[key] || 0) + 1;
+            }
+          }
         } catch (e) {
           pResults.errors.push({ step: 'ingest', error: e.message });
         }
