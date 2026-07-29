@@ -651,21 +651,29 @@ const nm=(c.fullName||`${c.firstName||""} ${c.lastName||""}`).trim().toLowerCase
 return dealList.some(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
 };
 const splitColdContacts=(contactList,dealList)=>{
-const cold=[],keep=[];
+const cold=[],keep=[],discard=[];
 for(const c of contactList){
-if(!c.email||c.source==="manual"){keep.push(c);continue;}
-// "manual" (above) = a rep typed this in by hand — trust that judgment
-// call same as any other deliberate single-record action.
+// "manual" = a rep typed this in by hand — trust that judgment call same
+// as any other deliberate single-record action.
+if(c.source==="manual"){keep.push(c);continue;}
+const isZoho=(c.source||"").startsWith("zoho");
+if(!c.email){
+// No email = can't be migrated to Prospecting (keyed by email) and can't
+// be worked via Brad/Edgar's email outreach either — not CRM-worthy and
+// not prospecting-worthy. Keep it only if it's a real Zoho CRM record
+// (rare to lack an email); everything else is unworkable junk, drop it.
+if(isZoho) keep.push(c); else discard.push(c);
+continue;
+}
 // Zoho-synced records still get the deal/intent check — a real CRM
 // record might already represent an active relationship. Anything else
 // (bulk import, list-import, scraped, website/directory finds) was never
 // CRM data to begin with — it belongs in Prospecting unconditionally,
 // deal or no deal.
-const isZoho=(c.source||"").startsWith("zoho");
 if(isZoho&&hasContactIntent(c,dealList)){keep.push(c);continue;}
 cold.push(c);
 }
-return {cold,keep};
+return {cold,keep,discard};
 };
 const pushColdContactsToProspecting=async(cold)=>{
 let moved=0;
@@ -730,15 +738,16 @@ const updMap=new Map(toUpdate.map(c=>[c.id,c]));
 const mergedExisting=(s.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
-const {cold,keep}=splitColdContacts(fullContactSet,allDealsForPhase);
+const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase);
 dispatch("SET_CONTACTS",keep);
 if(!fetchFailed) dispatch("SET_CONTACTS_LAST_SYNC",now);
 let movedToProspecting=0;
 if(cold.length) movedToProspecting=await pushColdContactsToProspecting(cold);
 
 if(force){
-if(fetchFailed) toast(`Zoho fetch failed (${fetchErrMsg}) — cleaned up local cache anyway: ${movedToProspecting} cold contact(s) moved to Prospecting DB`,cold.length?"info":"error");
-else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}`, "success");
+const discardNote=discard.length?` · ${discard.length} discarded (no email, unworkable)`:"";
+if(fetchFailed) toast(`Zoho fetch failed (${fetchErrMsg}) — cleaned up local cache anyway: ${movedToProspecting} cold contact(s) moved to Prospecting DB${discardNote}`,cold.length?"info":"error");
+else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}${discardNote}`, "success");
 }
 };
 crmSyncRef.current = syncContacts;
