@@ -3,14 +3,22 @@
  *
  * Push a RevOps cold-pool contact into Zoho CRM.
  *
- * Default: creates/updates a Lead (bulk/manual "Promote to Zoho" button from
- * Prospecting — cheap, unqualified, fine in volume).
+ * Rule (as of the Zoho CRM cleanup): nothing moves to Zoho until a contact
+ * has shown real intent — a reply, a meeting, an actual deal touch — not
+ * just because they were scraped/imported. score>=50 is the "they replied"
+ * threshold from the SCORE_CONTACT point system (replied:50, meeting:75,
+ * deal:100), so it doubles as the intent gate here.
  *
- * With { createAsContact: true } — used when Brad detects positive intent and
- * hands a reply to a rep, and when Edgar ties a quote to an unpushed prospect —
- * finds-or-creates a real Account (company) and creates/updates a Contact
- * linked to it instead. This is what actually shows up as a real customer in
- * Zoho CRM rather than an unqualified marketing lead.
+ * Default: creates/updates a Lead. Requires score>=50 — the old "cheap,
+ * unqualified, fine in volume" bulk-promote path is no longer allowed.
+ *
+ * With { createAsContact: true } — used when Brad detects positive intent
+ * (already gated upstream by classifyEmailIntent on the actual reply text)
+ * and hands a reply to a rep, and when Edgar ties a quote to an
+ * already-intent-qualified prospect — finds-or-creates a real Account
+ * (company) and creates/updates a Contact linked to it instead. This is
+ * what actually shows up as a real customer in Zoho CRM rather than an
+ * unqualified marketing lead.
  *
  * Body: { contactId, createAsContact? }
  * Returns: { ok, zohoId, zohoAccountId? }
@@ -87,6 +95,14 @@ export default async function handler(req, res) {
 
   const contact = await prisma.salesContact.findUnique({ where: { id: contactId } }).catch(() => null)
   if (!contact) return res.status(404).json({ error: 'Contact not found' })
+
+  // Lead-push path has no upstream intent check of its own — enforce it here.
+  // (The createAsContact path is only ever called after intent is already
+  // established: Brad's reply-intent classifier, or a rep-approved Edgar
+  // quote for an already-qualified prospect.)
+  if (!createAsContact && (contact.score || 0) < 50 && !contact.pushedToZoho) {
+    return res.status(403).json({ error: 'Contact has not shown intent yet (no reply on record) — not pushing to Zoho.' })
+  }
 
   let token
   try {

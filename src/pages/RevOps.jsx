@@ -5155,8 +5155,6 @@ const [progress,setProgress] = useState(savedTask?.progress||0);
 const [schools,setSchools] = useState(savedTask?.orgs||[]);
 const [contacts,setContacts] = useState(savedTask?.contacts||[]);
 const [log,setLog]         = useState(savedTask?.log||[]);
-const [zohoPushing, setZohoPushing] = useState(false);
-const [zohoPushed,  setZohoPushed]  = useState(0);
 const [zohoPulling, setZohoPulling] = useState(false);
 const [zohoPullResult, setZohoPullResult] = useState(null);
 const [backfillRunning,setBackfillRunning] = useState(false);
@@ -5511,42 +5509,6 @@ addLog(`Error: ${err.message}`,"error");
 bgTasks.failTask(SCRAPE_TASK_ID, err.message);
 setPhase("idle");
 }
-};
-const pushToZohoLeads = async (contactList) => {
-if(!contactList.length){ toast("No contacts to push","warn"); return; }
-setZohoPushing(true); setZohoPushed(0);
-addLog(`Pushing ${contactList.length} contacts to Zoho CRM Leads...`);
-let pushed=0;
-for(let i=0;i<contactList.length;i+=10){
-const batch=contactList.slice(i,i+10);
-try {
-await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:
-batch.map(c=>({
-First_Name: c.firstName||(c.fullName||"").split(" ")[0]||"",
-Last_Name:  c.lastName ||(c.fullName||"").split(" ").slice(1).join(" ")||c.fullName||"Unknown",
-Email:      c.email||"",
-Phone:      c.phone||"",
-Title:      c.title||"",
-Company:    c.school||"",
-City:       c.city||"",
-State:      c.state||"",
-Lead_Source:"ST1 RevOps Prospecting",
-Lead_Status:"Not Contacted",
-Description:`Sport: ${c.sport||""}. Source: ${c.source||"prospecting"}. Confidence: ${c.confidence||"medium"}.`,
-}))
-}})
-});
-pushed+=batch.length;
-setZohoPushed(pushed);
-} catch(e) {
-addLog(`Zoho batch error: ${e.message.slice(0,60)}`,"warn");
-}
-await new Promise(r=>setTimeout(r,400));
-}
-addLog(`✓ ${pushed}/${contactList.length} contacts pushed to Zoho CRM Leads`,"success");
-toast(`${pushed} leads added to Zoho CRM`,"success");
-setZohoPushing(false);
 };
 const zohoFetchSince = async (module, fields, sinceMs, onProgress) => {
 const fList = [...new Set(["id","Modified_Time",...fields])].join(",");
@@ -5955,8 +5917,11 @@ return(
 <div style={{display:"flex",gap:6,flexShrink:0}}>
 <button onClick={()=>{setOneOffName(name);setOneOffEmail(c.email);setOneOffContext(c.companyName||"");setView("brad");setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),200);}}
 style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ DRAFT</button>
-{!inZoho&&<button onClick={()=>promoteToZoho(c.id)} disabled={promoting}
+{/* Only push to Zoho once there's a real signal (a reply — score>=50) —
+    no CRM promotion off a cold, unengaged contact. */}
+{!inZoho&&(c.score||0)>=50&&<button onClick={()=>promoteToZoho(c.id)} disabled={promoting}
 style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,border:"none",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,padding:"3px 10px",borderRadius:3,cursor:promoting?"default":"pointer",letterSpacing:.3}}>{promoting?"…":"↑ ZOHO"}</button>}
+{!inZoho&&(c.score||0)<50&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontStyle:"italic"}}>no reply yet</span>}
 </div>
 </div>
 );
@@ -6904,7 +6869,9 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 <div style={{display:"flex",gap:7}}>
 {(phase==="finding"||phase==="scraping")&&<GBtn onClick={()=>abortRef.current=true} style={{fontSize:10,padding:"4px 8px",color:B.red}}>⏹ STOP</GBtn>}
 {contacts.length>0&&<OBtn sm onClick={exportCsv}>↓ EXPORT CSV</OBtn>}
-{contacts.length>0&&<OBtn sm color={B.purple} onClick={()=>pushToZohoLeads(contacts)} disabled={zohoPushing}>{zohoPushing?`PUSHING ${zohoPushed}/${contacts.length}...`:`↑ PUSH TO ZOHO (${contacts.length})`}</OBtn>}
+{/* No bulk "push to Zoho" here on purpose — scraped contacts stay local until
+    Brad/Edgar surface real intent (a reply or an interested status), per the
+    no-CRM-without-intent rule. */}
 </div>
 </div>
 {contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
@@ -8005,12 +7972,11 @@ if(!firstErr) firstErr=`${failEmail}: ${res.reason}`;
 }
 }
 dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
-dealsToCreate.forEach(deal=>{
-dispatch("ADD_DEAL",deal);
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:deal.name,Amount:0,Stage:"Quoted",Closing_Date:deal.followUpDate,Description:deal.notes||""}]}})})
-.then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:_zid});}).catch(()=>{});
-});
-if(dealsToCreate.length>0) toast(`${dealsToCreate.length} deal${dealsToCreate.length!==1?"s":""} created in RevOps + pushed to Zoho`,"success");
+// Quote-touch sends no longer auto-push a Deal into Zoho CRM — a send isn't
+// intent. The deal stays local-only until the contact actually replies
+// (Brad's classifyEmailIntent flow) or a rep manually promotes them.
+dealsToCreate.forEach(deal=>{ dispatch("ADD_DEAL",deal); });
+if(dealsToCreate.length>0) toast(`${dealsToCreate.length} deal${dealsToCreate.length!==1?"s":""} created in RevOps (not pushed to Zoho — no intent yet)`,"info");
 setSending(false);
 const totalSent=sentSoFar+sent, totalFailed=failedSoFar+failed;
 if(remaining.length>0){
@@ -14409,11 +14375,17 @@ const newestUpload=ownLists.reduce((mx,pl)=>Math.max(mx,pl.uploadedAt||0),0);
 const staleDays=newestUpload?Math.floor((Date.now()-newestUpload)/86400000):null;
 const createInZoho=async()=>{
 setSendingZoho("edgar_main");
-if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho){
+// Only auto-promote a Brad's-List prospect into Zoho CRM once they've shown
+// real intent (score>=50, i.e. a reply) — building a quote for them isn't
+// itself a CRM-worthy signal. The quote still gets built either way.
+const hasIntent=(matchedContact?.score||0)>=50;
+if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho&&hasIntent){
 try{
 await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id,createAsContact:true})});
 toast(`Linked ${matchedContact.name} into Zoho CRM`,"success");
 }catch{}
+}else if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho){
+toast(`Quote built — ${matchedContact.name} stays local (no reply yet, not pushed to Zoho)`,"info");
 }
 const linkNote=matchedContact?`Linked to existing contact: ${matchedContact.name}${matchedContact.email?` (${matchedContact.email})`:""} — ${matchedContact.source==="brad"?"from Brad's prospect list":"already in CRM"}`:"";
 return sharedCreateQuoteNow({
