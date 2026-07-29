@@ -88,7 +88,8 @@ async function crmGet(path) {
 // Fetches every deal regardless of stage — callers derive open vs. closed
 // won vs. closed lost from `.stage` themselves (needed for Edgar win/loss
 // matching below, which needs the closed buckets, not just open pipeline).
-async function fetchAllDeals() {
+// Exported — forecast.js reuses this for close-rate history + open pipeline.
+export async function fetchAllDeals() {
   const fields = 'Deal_Name,Stage,Amount,Closing_Date,Account_Name'
   let all = [], page = 1
   while (page <= 10) { // hard cap — 2000 deals is plenty for a snapshot
