@@ -555,12 +555,32 @@ export default function IntegrationsHub() {
   const FIELD_CHUNK_SIZE = 40;
   const chunk = (arr, size) => { const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; };
 
+  // Reading /settings/fields needs its own OAuth scope (ZohoCRM.settings.fields.READ)
+  // that older refresh tokens issued before this export tool existed won't have —
+  // api/zoho-setup.js now requests it, but that only takes effect after a fresh
+  // re-authorization. Until then, fall back to Zoho's documented standard field
+  // set per module so the export still works today; custom fields just won't be
+  // captured until the token is re-authorized.
+  const CRM_FALLBACK_FIELDS = {
+    Leads: ["Salutation","First_Name","Last_Name","Full_Name","Email","Phone","Mobile","Fax","Title","Company","Lead_Source","Lead_Status","Industry","Annual_Revenue","No_of_Employees","Rating","Secondary_Email","Twitter","Skype_ID","Street","City","State","Zip_Code","Country","Description","Website","Designation","Owner","Created_Time","Modified_Time","Converted"],
+    Contacts: ["Salutation","First_Name","Last_Name","Full_Name","Email","Phone","Mobile","Fax","Title","Department","Account_Name","Lead_Source","Mailing_Street","Mailing_City","Mailing_State","Mailing_Zip","Mailing_Country","Other_Street","Other_City","Other_State","Other_Zip","Other_Country","Description","Secondary_Email","Twitter","Skype_ID","Reporting_To","Email_Opt_Out","Owner","Created_Time","Modified_Time"],
+    Deals: ["Deal_Name","Account_Name","Amount","Stage","Probability","Closing_Date","Type","Next_Step","Lead_Source","Contact_Name","Description","Campaign_Source","Expected_Revenue","Overall_Sales_Duration","Sales_Cycle_Duration","Owner","Created_Time","Modified_Time"],
+    Accounts: ["Account_Name","Account_Number","Account_Type","Industry","Annual_Revenue","Phone","Fax","Website","Ownership","Employees","Rating","SIC_Code","Billing_Street","Billing_City","Billing_State","Billing_Code","Billing_Country","Shipping_Street","Shipping_City","Shipping_State","Shipping_Code","Shipping_Country","Description","Parent_Account","Owner","Created_Time","Modified_Time"],
+  };
+
   const zohoModuleFields = async (module) => {
-    const d = await zohoAPI("crm", `/settings/fields?module=${module}`);
-    if (d.status === "error" || d.code) throw new Error(d.message || `Could not read ${module} field list`);
-    const fields = (d.fields||[]).map(f=>f.api_name).filter(Boolean);
-    if (!fields.length) throw new Error(`Zoho returned no fields for "${module}" — check the module name`);
-    return fields;
+    try {
+      const d = await zohoAPI("crm", `/settings/fields?module=${module}`);
+      if (d.status === "error" || d.code) throw new Error(d.message || `Could not read ${module} field list`);
+      const fields = (d.fields||[]).map(f=>f.api_name).filter(Boolean);
+      if (!fields.length) throw new Error(`Zoho returned no fields for "${module}" — check the module name`);
+      return fields;
+    } catch(e) {
+      const fallback = CRM_FALLBACK_FIELDS[module];
+      if (!fallback) throw e;
+      addLog(`${module}: field metadata unavailable (${e.message.slice(0,90)}) — using Zoho's standard fields only. Custom fields need the OAuth token re-authorized (see setup guide above) to be captured.`, "warn");
+      return fallback;
+    }
   };
 
   const exportZohoModule = async (module) => {
