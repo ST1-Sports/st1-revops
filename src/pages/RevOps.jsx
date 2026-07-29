@@ -3056,6 +3056,19 @@ setDraft(t||"");setDrafting(false);
 };
 const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",label:"Quote"},{id:"order",label:"Order"}];
 const phaseIdx={lead:0,deal:1,quote:2,order:3};
+const [showBreakdown,setShowBreakdown]=useState(false);
+const sourceBreakdown=useMemo(()=>{
+const buckets={};
+let dead=0,zohoSynced=0;
+for(const c of contacts){
+if(c.deadStatus) dead++;
+if(c.zohoId||(c.id||"").startsWith("zoho_")) zohoSynced++;
+const src=c.source||"(none)";
+const key=src.startsWith("zoho")?"zoho-crm / zoho-crm-lead (real Zoho CRM sync)":src;
+buckets[key]=(buckets[key]||0)+1;
+}
+return {rows:Object.entries(buckets).sort(([,a],[,b])=>b-a),dead,zohoSynced,total:contacts.length};
+},[contacts]);
 return(
 <div style={{display:"flex",height:"100%",overflow:"hidden"}}>
 {/* LEFT LIST */}
@@ -3068,6 +3081,17 @@ return(
 ))}
 </div>
 <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
+</div>
+<div style={{marginBottom:7}}>
+<button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
+{showBreakdown&&(
+<div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
+{sourceBreakdown.rows.map(([src,n])=>(
+<div key={src} style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"1px 0"}}><span>{src}</span><span style={{color:B.muted}}>{n.toLocaleString()}</span></div>
+))}
+{sourceBreakdown.dead>0&&<div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"1px 0",marginTop:3,borderTop:`1px solid ${B.border}`}}><span>marked dead (hidden from list)</span><span>{sourceBreakdown.dead.toLocaleString()}</span></div>}
+</div>
+)}
 </div>
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="contacts"&&(
