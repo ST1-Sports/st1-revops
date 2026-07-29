@@ -353,7 +353,12 @@ export default async function handler(req, res) {
       action:  'quote',
       entity:  accountCtx.entityKey || (customer ? `customer:${customer}` : null),
       input:   { task },
-      output:  { itemCount: guarded.lineItems?.length ?? 0, totalRevenue: guarded.totalRevenue },
+      output:  {
+        itemCount:    guarded.lineItems?.length ?? 0,
+        totalRevenue: guarded.totalRevenue,
+        totalCost:    guarded.totalCost,
+        overallGmPct: guarded.overallGmPct,
+      },
       outcome: 'pending',
     }).catch(() => {})
 
