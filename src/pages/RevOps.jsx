@@ -2977,7 +2977,14 @@ onClose();
 );
 }
 function ModCRM() {
-const {s,dispatch,toast,cu,setMod}=useApp();
+const {s,dispatch,toast,cu,setMod,crmSyncRef}=useApp();
+const [crmSyncing,setCrmSyncing]=useState(false);
+const runCrmSync=async()=>{
+if(!crmSyncRef?.current){toast("Sync not ready — reload the page","error");return;}
+setCrmSyncing(true);
+await crmSyncRef.current(true);
+setCrmSyncing(false);
+};
 const [search,setSearch]=useState("");
 const [filter,setFilter]=useState("all");
 const [selId,setSelId]=useState(null);
@@ -3130,7 +3137,10 @@ return(
 <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
 </div>
 <div style={{marginBottom:7}}>
+<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
+<button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
+</div>
 {showBreakdown&&(
 <div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
 {sourceBreakdown.rows.map(([src,n])=>(
