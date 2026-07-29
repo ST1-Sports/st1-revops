@@ -117,6 +117,12 @@ export default function IntegrationsHub() {
   const [crmSyncResult, setCrmSyncResult] = useState(null); // { contacts, deals }
   const [crmPulling, setCrmPulling] = useState(null); // "contacts"|"deals"|null
 
+  // Full CRM backup export (all fields, all records) — a safety net before
+  // using Zoho's own mass-delete tools to wipe the CRM clean.
+  const [exportingModule, setExportingModule] = useState(null); // module name currently exporting, or null
+  const [exportProgress, setExportProgress] = useState({}); // {ModuleName: {page, records}}
+  const [exportResults, setExportResults] = useState({}); // {ModuleName: [records]}
+
   // Zoho Campaigns
   const [mailingLists, setMailingLists] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
@@ -531,6 +537,105 @@ export default function IntegrationsHub() {
     const m = {"Qualification":"Quoted","Value Proposition":"Quoted","Needs Analysis":"Follow-Up 1","Proposal/Price Quote":"Follow-Up 2","Id. Decision Makers":"Negotiating","Perception Analysis":"Negotiating","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
     return m[s]||"Quoted";
   }
+
+  // ── FULL CRM BACKUP EXPORT ─────────────────────────────────────────────────
+  // Zoho's v3 API requires an explicit `fields` list for every module read —
+  // there's no "all fields" wildcard — so this reads the module's real field
+  // list from Zoho's own metadata first, then paginates through every record
+  // requesting all of them. Orgs with >40 custom fields on one module get
+  // batched into multiple field requests per page and merged by record id,
+  // since a single overlong `fields` query string can get rejected.
+  const EXPORT_MODULES = ["Leads", "Contacts", "Deals", "Accounts"];
+  const FIELD_CHUNK_SIZE = 40;
+  const chunk = (arr, size) => { const out=[]; for(let i=0;i<arr.length;i+=size) out.push(arr.slice(i,i+size)); return out; };
+
+  const zohoModuleFields = async (module) => {
+    const d = await zohoAPI("crm", `/settings/fields?module=${module}`);
+    if (d.status === "error" || d.code) throw new Error(d.message || `Could not read ${module} field list`);
+    const fields = (d.fields||[]).map(f=>f.api_name).filter(Boolean);
+    if (!fields.length) throw new Error(`Zoho returned no fields for "${module}" — check the module name`);
+    return fields;
+  };
+
+  const exportZohoModule = async (module) => {
+    if (!status.crm) { addLog("Connect Zoho CRM first", "warn"); return null; }
+    setExportingModule(module);
+    setExportProgress(p=>({...p,[module]:{page:0,records:0}}));
+    addLog(`${module}: reading field list...`);
+    try {
+      const fieldChunks = chunk(await zohoModuleFields(module), FIELD_CHUNK_SIZE);
+      const recordsById = new Map();
+      let page = 1, more = true;
+      while (more) {
+        const first = await zohoAPI("crm", `/${module}?fields=${fieldChunks[0].join(",")}&page=${page}&per_page=200`);
+        if (first._http_status === 204) break; // no records at all on this page — done
+        if (first.status === "error" || first.code) throw new Error(first.message || `Zoho error on ${module} page ${page}`);
+        for (const rec of (Array.isArray(first.data)?first.data:[])) recordsById.set(rec.id, {...(recordsById.get(rec.id)||{}), ...rec});
+
+        for (let i=1;i<fieldChunks.length;i++) {
+          await sleep(200);
+          const d = await zohoAPI("crm", `/${module}?fields=${fieldChunks[i].join(",")}&page=${page}&per_page=200`);
+          if (d._http_status === 204) continue;
+          if (d.status === "error" || d.code) throw new Error(d.message || `Zoho error on ${module} page ${page} (fields batch ${i+1})`);
+          for (const rec of (Array.isArray(d.data)?d.data:[])) recordsById.set(rec.id, {...(recordsById.get(rec.id)||{}), ...rec});
+        }
+
+        setExportProgress(p=>({...p,[module]:{page,records:recordsById.size}}));
+        addLog(`${module}: page ${page} — ${recordsById.size} records so far`);
+        more = first.info?.more_records ?? false;
+        page++;
+        if (page > 500) { addLog(`${module}: hit safety cap of 500 pages (~100k records) — stopping`, "warn"); break; }
+        if (more) await sleep(300);
+      }
+      const records = Array.from(recordsById.values());
+      setExportResults(p=>({...p,[module]:records}));
+      addLog(`✓ ${module}: exported ${records.length} record(s)`, "success");
+      return records;
+    } catch(e) {
+      addLog(`${module} export failed: ${e.message.slice(0,150)}`, "error");
+      return null;
+    } finally {
+      setExportingModule(null);
+    }
+  };
+
+  const exportAllZohoModules = async () => {
+    for (const module of EXPORT_MODULES) {
+      // eslint-disable-next-line no-await-in-loop
+      await exportZohoModule(module);
+    }
+    addLog("✓ Full backup export complete for all modules", "success");
+  };
+
+  const flattenZohoValue = (v) => {
+    if (v == null) return "";
+    if (Array.isArray(v)) return v.map(flattenZohoValue).join("; ");
+    if (typeof v === "object") return v.name || v.id || JSON.stringify(v);
+    return String(v);
+  };
+
+  const downloadExportJson = (module) => {
+    const records = exportResults[module];
+    if (!records) return;
+    const blob = new Blob([JSON.stringify(records, null, 2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zoho_${module.toLowerCase()}_backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+  };
+
+  const downloadExportCsv = (module) => {
+    const records = exportResults[module];
+    if (!records || !records.length) return;
+    const keys = Array.from(records.reduce((s,r)=>{Object.keys(r).forEach(k=>s.add(k)); return s;}, new Set()));
+    const rows = records.map(r=>keys.map(k=>`"${flattenZohoValue(r[k]).replace(/"/g,'""')}"`).join(","));
+    const csv = [keys.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], {type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `zoho_${module.toLowerCase()}_backup_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+  };
 
   // ── PUSH REVOPS DEAL → ZOHO CRM ───────────────────────────────────────────
   const pushDealToCRM = async (deal) => {
@@ -1209,6 +1314,43 @@ Channel: ${slackChannelName}`);
                     Go to RevOps → Prospecting → Contact DB to see imported contacts, or RevOps → Deals to see imported deals.
                   </div>
                 )}
+              </div>
+
+              {/* Full CRM backup export — safety net before a Zoho-side wipe */}
+              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:`3px solid ${B.red}`}}>
+                <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.red,letterSpacing:2,marginBottom:12}}>FULL BACKUP EXPORT — BEFORE WIPING ZOHO CRM</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:14,lineHeight:1.6}}>
+                  Pulls every field of every Lead, Contact, Deal, and Account out of Zoho CRM and lets you download a full JSON + CSV backup. This only reads and downloads — it doesn't delete or change anything in Zoho. Download and verify these files before using Zoho CRM's own Setup → Data Administration mass-delete/import tools to actually wipe the data.
+                </div>
+                <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                  <OBtn sm onClick={exportAllZohoModules} disabled={!!exportingModule||!status.crm}>
+                    {exportingModule?`EXPORTING ${exportingModule.toUpperCase()}...`:"⬇ EXPORT ALL 4 MODULES"}
+                  </OBtn>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                  {EXPORT_MODULES.map(module=>{
+                    const prog = exportProgress[module];
+                    const records = exportResults[module];
+                    const isRunning = exportingModule===module;
+                    return (
+                      <div key={module} style={{background:B.surface,borderRadius:6,padding:12,border:`1px solid ${B.border}`}}>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:6}}>{module}</div>
+                        {isRunning&&prog&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginBottom:8}}>Page {prog.page} — {prog.records} records so far…</div>}
+                        {!isRunning&&records&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginBottom:8}}>✓ {records.length} records exported</div>}
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          <OBtn sm onClick={()=>exportZohoModule(module)} disabled={!!exportingModule||!status.crm} color={B.purple}>
+                            {isRunning?"...":records?"↻ RE-EXPORT":"↓ EXPORT"}
+                          </OBtn>
+                          {records&&records.length>0&&<>
+                            <OBtn sm onClick={()=>downloadExportJson(module)}>JSON</OBtn>
+                            <OBtn sm onClick={()=>downloadExportCsv(module)}>CSV</OBtn>
+                          </>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                {!status.crm&&<div style={{marginTop:12,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.yellow,background:B.yellowBg,padding:"8px 12px",borderRadius:4}}>⚠ Connect Zoho CRM first using the test connection button above</div>}
               </div>
 
               {/* Live invoices table */}
