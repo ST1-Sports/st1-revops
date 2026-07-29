@@ -85,7 +85,7 @@ import {
 const API_KEY = process.env.ANTHROPIC_KEY
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY
 
-const AR_AGING_THRESHOLD_DAYS   = 60
+export const AR_AGING_THRESHOLD_DAYS = 60
 const STANDARD_LEAD_DAYS        = 30
 const BID_SEASON_LEAD_DAYS      = 60
 const HIGH_SEASON_FACTOR        = 1.15
@@ -374,14 +374,21 @@ async function generateChronicLateInsight() {
   }]
 }
 
-async function generateAgingRiskInsight() {
+// Exported — digest.js reuses this exact query for the weekly digest's AR
+// 60+ line rather than re-deriving it from generated Insight rows.
+export async function fetchArAging60Plus() {
   const cutoff = addDays(new Date(), -AR_AGING_THRESHOLD_DAYS)
   const overdueInvoices = await prisma.dealInvoice.findMany({
     where: { status: { in: ['SENT', 'PARTIAL', 'OVERDUE'] }, dueDate: { lte: cutoff } },
   }).catch(() => [])
+  const totalOutstanding = overdueInvoices.reduce((s, i) => s + ((Number(i.amountTotal) || 0) - (Number(i.amountPaid) || 0)), 0)
+  return { invoices: overdueInvoices, totalOutstanding: Math.round(totalOutstanding * 100) / 100 }
+}
+
+async function generateAgingRiskInsight() {
+  const { invoices: overdueInvoices, totalOutstanding } = await fetchArAging60Plus()
   if (!overdueInvoices.length) return []
 
-  const totalOutstanding = overdueInvoices.reduce((s, i) => s + ((Number(i.amountTotal) || 0) - (Number(i.amountPaid) || 0)), 0)
   return [{
     category: 'RISK',
     title:    `${overdueInvoices.length} invoice(s) 60+ days past due — $${totalOutstanding.toFixed(2)} outstanding`,

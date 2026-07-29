@@ -48,6 +48,9 @@
     "api/agents/annie/aggregate.js":              { "maxDuration": 90 },
     "api/agents/annie/forecast.js":                { "maxDuration": 60 },
     "api/agents/annie/insights.js":                { "maxDuration": 90 },
+    "api/agents/annie/digest.js":                  { "maxDuration": 120 },
+    "api/cron/annie-digest-weekly.js":             { "maxDuration": 120 },
+    "api/cron/annie-digest-monthly.js":            { "maxDuration": 120 },
     "api/cron/ledger-payments.js":               { "maxDuration": 60 },
     "api/cron/ledger-reconcile.js":               { "maxDuration": 60 },
     "api/webhooks/zoho.js":                        { "maxDuration": 30 },
@@ -58,7 +61,9 @@
     { "path": "/api/cron/reddit-daily",       "schedule": "0 14 * * 1-5" },
     { "path": "/api/cron/ledger-reconcile",   "schedule": "0 8 * * 1-5" },
     { "path": "/api/cron/ledger-payments",    "schedule": "0 14 * * 1-5" },
-    { "path": "/api/cron/brad-inbox",         "schedule": "*/10 * * * *" }
+    { "path": "/api/cron/brad-inbox",         "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/annie-digest-weekly",  "schedule": "0 12 * * 1" },
+    { "path": "/api/cron/annie-digest-monthly", "schedule": "0 13 1 * *" }
   ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }
