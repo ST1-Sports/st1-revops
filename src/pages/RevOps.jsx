@@ -10944,6 +10944,11 @@ return(
 </div>
 );
 }
+// Must match api/social-post.js's platformMap keys — those are the only
+// platforms Publer can actually receive a post for.
+const SOCIAL_PLATFORMS = ["facebook","instagram","linkedin","twitter","tiktok"];
+const PLATFORM_COLORS = { facebook:"#1877F2", instagram:"#E4405F", linkedin:"#0A66C2", twitter:"#1DA1F2", tiktok:"#000000" };
+const PLATFORM_LIMITS = { facebook:63206, instagram:2200, linkedin:3000, twitter:280, tiktok:2200 };
 function ModSocial() {
 const {s,dispatch,toast}=useApp();
 const [tab,setTab]=useState("posts");
