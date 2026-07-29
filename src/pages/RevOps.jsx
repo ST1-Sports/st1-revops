@@ -650,10 +650,14 @@ if(["replied","interested"].includes(c.outreachStatus)) return true;
 const nm=(c.fullName||`${c.firstName||""} ${c.lastName||""}`).trim().toLowerCase();
 return dealList.some(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
 };
-const splitColdZohoContacts=(contactList,dealList)=>{
+const splitColdContacts=(contactList,dealList)=>{
 const cold=[],keep=[];
 for(const c of contactList){
-if((c.source||"").startsWith("zoho")&&c.email&&!hasContactIntent(c,dealList)) cold.push(c);
+// "manual" = a rep typed this in by hand one at a time — trust that judgment
+// call same as any other deliberate single-record action. Everything else
+// (bulk import, list-import, scraped, website/directory finds, Zoho sync)
+// is passive/bulk data and gets the full lead/deal/intent check.
+if(c.email&&c.source!=="manual"&&!hasContactIntent(c,dealList)) cold.push(c);
 else keep.push(c);
 }
 return {cold,keep};
@@ -664,7 +668,7 @@ for(let i=0;i<cold.length;i+=500){
 const batch=cold.slice(i,i+500).map(c=>({
 email:c.email,firstName:c.firstName,lastName:c.lastName,title:c.title,school:c.school,
 phone:c.phone,sport:c.sport,state:c.state,city:c.city,score:c.score||0,
-source:c.id?.startsWith("zoho_l_")?"zoho-crm-lead":"zoho-crm",
+source:c.source||"revops-crm",
 }));
 try{
 const r=await fetch("/api/contacts/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contacts:batch})});
@@ -676,23 +680,24 @@ return moved;
 };
 const syncContacts=async(force=false)=>{
 if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<SIX_H) return;
+const now=Date.now();
+const existingDeals=s.deals||[];
+let toAdd=[],toUpdate=[],dealRows=[],dealsAdded=0,dealsUpdated=0,fetchFailed=false,fetchErrMsg="";
 try {
-const [contactRows,leadRows,dealRows]=await Promise.all([
+const [contactRows,leadRows,_dealRows]=await Promise.all([
 fetchAllPages("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source"),
 fetchAllPages("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time"),
 fetchAllPages("/Deals?fields=Deal_Name,Amount,Stage,Closing_Date,Account_Name,Contact_Name,Description,Modified_Time,Created_Time"),
 ]);
-const now=Date.now();
+dealRows=_dealRows;
 const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
 const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
 const existingIds=new Set((s.contacts||[]).map(c=>c.id));
 const allZoho=[...contacts,...leads];
-const toAdd=allZoho.filter(c=>!existingIds.has(c.id));
-const toUpdate=allZoho.filter(c=>existingIds.has(c.id));
+toAdd=allZoho.filter(c=>!existingIds.has(c.id));
+toUpdate=allZoho.filter(c=>existingIds.has(c.id));
 
-const existingDeals=s.deals||[];
 const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
-let dealsAdded=0,dealsUpdated=0;
 dealRows.forEach(zd=>{
 const zStage=zs(zd.Stage)||"Quoted";
 const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quoted");
@@ -704,25 +709,31 @@ dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Unt
 dealsAdded++;
 }
 });
+} catch(e){
+fetchFailed=true; fetchErrMsg=e.message;
+console.error("CRM sync (Zoho fetch) failed:",e);
+}
 
-// Merge as before, then split off any Zoho-synced contact (old or new) that
-// still has no deal and no reply/interest signal — those move to the
-// prospecting pool instead of cluttering the CRM tab. Runs every sync, so
-// this also sweeps the existing backlog, not just newly-fetched records.
+// Local cold-contact sweep — runs whether or not the Zoho fetch above
+// succeeded, since it only needs what's already cached locally: merge in
+// anything freshly fetched, then split off any contact (any source, except
+// a rep's own manual one-by-one adds) with no deal/quote/order and no
+// reply/interest signal. Those move to the Prospecting pool instead of
+// cluttering the CRM tab. Runs every sync, so this also sweeps the existing
+// backlog, not just newly-fetched records.
 const updMap=new Map(toUpdate.map(c=>[c.id,c]));
 const mergedExisting=(s.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
-const {cold,keep}=splitColdZohoContacts(fullContactSet,allDealsForPhase);
+const {cold,keep}=splitColdContacts(fullContactSet,allDealsForPhase);
 dispatch("SET_CONTACTS",keep);
-dispatch("SET_CONTACTS_LAST_SYNC",now);
+if(!fetchFailed) dispatch("SET_CONTACTS_LAST_SYNC",now);
 let movedToProspecting=0;
 if(cold.length) movedToProspecting=await pushColdContactsToProspecting(cold);
 
-if(force) toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}`, "success");
-} catch(e){
-console.error("CRM sync failed:",e);
-if(force) toast(`CRM sync failed: ${e.message}`,"error");
+if(force){
+if(fetchFailed) toast(`Zoho fetch failed (${fetchErrMsg}) — cleaned up local cache anyway: ${movedToProspecting} cold contact(s) moved to Prospecting DB`,cold.length?"info":"error");
+else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}`, "success");
 }
 };
 crmSyncRef.current = syncContacts;
