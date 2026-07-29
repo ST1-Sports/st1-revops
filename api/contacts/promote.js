@@ -35,9 +35,11 @@ async function findOrCreateAccount(contact, headers) {
   if (!name) return null
 
   // Reuse an account already resolved for another prospect at the same
-  // school before hitting Zoho again — many prospects share a school.
+  // school + state before hitting Zoho again — many prospects share a
+  // school, but two same-named schools in different states are two
+  // different real Accounts and must never share a zohoAccountId.
   const sibling = await prisma.salesContact.findFirst({
-    where:  { companyName: contact.companyName, zohoAccountId: { not: null } },
+    where:  { companyName: contact.companyName, state: contact.state, zohoAccountId: { not: null } },
     select: { zohoAccountId: true },
   }).catch(() => null)
   if (sibling?.zohoAccountId) return sibling.zohoAccountId
@@ -47,14 +49,23 @@ async function findOrCreateAccount(contact, headers) {
     const searchRes = await fetch(`${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
     if (searchRes.ok) {
       const searchData = await searchRes.json().catch(() => null)
-      const existing = searchData?.data?.[0]
+      const matches = searchData?.data || []
+      // Name matches alone aren't enough — pick the one in the right state
+      // when we know it and there's more than one same-named Account.
+      const existing = contact.state && matches.length > 1
+        ? (matches.find(m => (m.Billing_State || '').toLowerCase() === contact.state.toLowerCase()) || matches[0])
+        : matches[0]
       if (existing?.id) return existing.id
     }
   } catch {}
 
   const createRes = await fetch(`${CRM_BASE}/Accounts`, {
     method: 'POST', headers,
-    body: JSON.stringify({ data: [{ Account_Name: name }] }),
+    body: JSON.stringify({ data: [{
+      Account_Name: name,
+      Billing_City:  contact.city  || undefined,
+      Billing_State: contact.state || undefined,
+    }] }),
   })
   const createData = await createRes.json().catch(() => null)
   const rec = createData?.data?.[0]

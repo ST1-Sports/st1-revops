@@ -3095,6 +3095,14 @@ const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
 const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+// Two same-named schools in different states are different accounts —
+// group/select by name+state, not name alone, so they don't collide.
+const schoolKeyOf=(c)=>{
+const sch=(typeof c.school==="string"?c.school:c.school?.name||"")||"(No School)";
+const st=(c.state||"").trim();
+return st?`${sch} — ${st}`:sch;
+};
+const cleanSchoolName=(key)=>(key||"").replace(/ — [^—]*$/,"");
 const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const cdMap=useMemo(()=>{
@@ -3313,12 +3321,13 @@ const fuzzyMatch=(a,b)=>{a=(a||"").toLowerCase();b=(b||"").toLowerCase();return 
 const isInvoiced=(school)=>invoices.some(inv=>fuzzyMatch(school,inv.customer));
 const groups={};
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
-const school=(typeof c.school==="string"?c.school:c.school?.name||"")||"(No School)";
-if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
-if(!groups[school]) groups[school]={contacts:[],deals:[],value:0,invoiced:isInvoiced(school)};
-groups[school].contacts.push(c);
+const key=schoolKeyOf(c);
+const displayName=cleanSchoolName(key);
+if(sq&&!key.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
+if(!groups[key]) groups[key]={name:displayName,contacts:[],deals:[],value:0,invoiced:isInvoiced(displayName)};
+groups[key].contacts.push(c);
 const cd=getCD(c);
-cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[school].deals.push(d);groups[school].value+=(d.value||0);}});
+cd.cd.forEach(d=>{if(!["Closed Won","Closed Lost"].includes(d.stage)){groups[key].deals.push(d);groups[key].value+=(d.value||0);}});
 });
 // A customer we've actually invoiced belongs on this list at the account
 // level even if we don't have a synced contact for them yet — surface a
@@ -3328,21 +3337,21 @@ const custName=(inv.customer||"").trim();
 if(!custName) return;
 if(sq&&!custName.toLowerCase().includes(sq)) return;
 if(Object.keys(groups).some(sch=>fuzzyMatch(sch,custName))) return;
-groups[custName]={contacts:[],deals:[],value:0,invoiced:true};
+groups[custName]={name:custName,contacts:[],deals:[],value:0,invoiced:true};
 });
 const schoolList=Object.entries(groups).sort(([a,ga],[b,gb])=>(gb.invoiced-ga.invoiced)||a.localeCompare(b));
 if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
-return schoolList.map(([school,g])=>{
-const isActive=selSchool===school;
+return schoolList.map(([key,g])=>{
+const isActive=selSchool===key;
 const phases=g.contacts.map(c=>getCD(c).phase);
 const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
 const pc=g.invoiced?B.green:PCOL[topPhase];
 const cov=g.contacts.length>0?computeAccountCoverage(g.contacts):null;
 return(
-<button key={school} onClick={()=>{setSelSchool(school);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
+<button key={key} onClick={()=>{setSelSchool(key);setSelId(null);}} style={{width:"100%",textAlign:"left",background:isActive?`${B.orange}08`:"transparent",border:"none",borderLeft:`3px solid ${isActive?B.orange:"transparent"}`,borderBottom:`1px solid ${B.border}`,padding:"9px 12px",cursor:"pointer"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
 <div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{school}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{g.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{g.contacts.length} contact{g.contacts.length!==1?"s":""}{g.deals.length>0?` · ${g.deals.length} deal${g.deals.length!==1?"s":""}`:""}</div>
 {cov&&(!cov.adContact||cov.gaps.length>0)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:1}}>{!cov.adContact?"no AD on file":""}{!cov.adContact&&cov.gaps.length>0?" · ":""}{cov.gaps.length>0?`${cov.gaps.length} sport${cov.gaps.length!==1?"s":""} not covered`:""}</div>}
 </div>
@@ -3364,7 +3373,7 @@ onClose={()=>{setTtView(false);setTtContact(null);}}
 linkedContact={ttContact}
 />
 ):leftMode==="accounts"&&selSchool?(()=>{
-const schoolContacts=contacts.filter(c=>!c.deadStatus&&(c.school||"(No School)")===selSchool);
+const schoolContacts=contacts.filter(c=>!c.deadStatus&&schoolKeyOf(c)===selSchool);
 const coverage=computeAccountCoverage(schoolContacts);
 const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
 const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
@@ -3374,6 +3383,7 @@ const allDeals=schoolDeals;
 const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
+const schoolCleanName=primaryC?.school||cleanSchoolName(selSchool);
 const schoolOrgType=primaryC?.orgType||"";
 const schoolClass=primaryC?.schoolClass||"";
 const numAthletes=primaryC?.numAthletes||"";
@@ -3389,7 +3399,7 @@ const hasOnlineStore=primaryC?.hasOnlineStore||false;
 const hasBoosterClub=primaryC?.hasBoosterClub||false;
 const schoolInvoices=(s.invoices||[]).filter(inv=>{
 const cust=(inv.customer||"").toLowerCase();
-const school=(selSchool||"").toLowerCase();
+const school=schoolCleanName.toLowerCase();
 return cust.includes(school.slice(0,6))||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
 });
 const totalInvoiced=schoolInvoices.reduce((a,i)=>a+(i.total||0),0);
@@ -3399,7 +3409,7 @@ const allItems=schoolInvoices.flatMap(inv=>(inv.items||[]).map(it=>({...it,invoi
 const itemMap={};
 allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
 const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
-const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===(selSchool||"").toLowerCase());
+const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===schoolCleanName.toLowerCase());
 const expandOps=[];
 if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
 if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
@@ -3422,7 +3432,7 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{selSchool}</div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{schoolCleanName}</div>
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
@@ -3459,7 +3469,7 @@ return(
 {/* Action bar */}
 <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
-<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:selSchool}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
 </div>
 {/* ── KPI STRIP ── */}
 <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
@@ -3500,7 +3510,7 @@ return(
 :<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.border,padding:"2px 7px",borderRadius:3}}>NOT ON FILE</span>}
 </div>
 {coverage.gaps.length>0&&hasPositiveIntent&&(
-<OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(selSchool,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
+<OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(schoolCleanName,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
 )}
 </div>
 <div style={{display:"flex",flexWrap:"wrap",gap:6}}>

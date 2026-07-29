@@ -11,7 +11,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
-import { normalizeAccountName } from '../_lib/accountUtils.js'
+import { accountDedupKey } from '../_lib/accountUtils.js'
 
 export default async function handler(req, res) {
   setCors(res)
@@ -25,16 +25,15 @@ export default async function handler(req, res) {
     select: { id: true, companyName: true, city: true, state: true },
   })
 
-  const groups = new Map() // normalizedName -> { name, city, state, contactIds: [] }
+  const groups = new Map() // dedupKey (name+state) -> { name, city, state, contactIds: [] }
   for (const c of contacts) {
-    const normalizedName = normalizeAccountName(c.companyName)
-    if (!normalizedName) continue
-    if (!groups.has(normalizedName)) {
-      groups.set(normalizedName, { name: c.companyName.trim(), city: c.city, state: c.state, contactIds: [] })
+    const dedupKey = accountDedupKey(c.companyName, c.state)
+    if (!dedupKey) continue
+    if (!groups.has(dedupKey)) {
+      groups.set(dedupKey, { name: c.companyName.trim(), city: c.city, state: c.state, contactIds: [] })
     }
-    const g = groups.get(normalizedName)
+    const g = groups.get(dedupKey)
     if (!g.city && c.city) g.city = c.city
-    if (!g.state && c.state) g.state = c.state
     g.contactIds.push(c.id)
   }
 
@@ -43,10 +42,10 @@ export default async function handler(req, res) {
   }
 
   let accountsCreated = 0, contactsLinked = 0
-  for (const [normalizedName, g] of groups) {
+  for (const [dedupKey, g] of groups) {
     const account = await prisma.account.upsert({
-      where: { normalizedName },
-      create: { name: g.name, normalizedName, city: g.city || null, state: g.state || null },
+      where: { normalizedName: dedupKey },
+      create: { name: g.name, normalizedName: dedupKey, city: g.city || null, state: g.state || null },
       update: {},
     })
     accountsCreated++
