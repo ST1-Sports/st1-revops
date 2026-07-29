@@ -2210,7 +2210,7 @@ return(
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.blue,fontWeight:600}}>Reconcile — {totals.polled??0} polled</span>
 {dryMode&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,borderRadius:2,padding:"1px 5px",letterSpacing:.3}}>DRY RUN</span>}
 </div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{totals.matchedStore??0} store · {totals.matchedInvoice??0} invoice · {totals.needsReview??0} need review{(totals.duplicates||0)>0?` · ${totals.duplicates} dup`:""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{totals.withSuggestion??0} coded · {totals.pending??0} pending review{(totals.duplicates||0)>0?` · ${totals.duplicates} dup`:""}</div>
 </div>
 </div>
 {txns.length>0&&<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>}
@@ -2227,7 +2227,7 @@ return(
 </tr></thead>
 <tbody>
 {txns.map((t,ti)=>{
-const sc={MATCHED_STORE:B.green,MATCHED_INVOICE:B.teal,NEEDS_REVIEW:B.yellow,DUPLICATE:B.muted,REVERSED:B.red}[t.status]||B.muted;
+const sc={APPROVED:B.green,PENDING_REVIEW:t.suggestedLabel?B.teal:B.yellow,DUPLICATE:B.muted,REVERSED:B.red}[t.status]||B.muted;
 return(
 <tr key={ti} style={{borderBottom:`1px solid ${B.border}20`}}>
 <td style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"5px 0",whiteSpace:"nowrap"}}>{t.date||"—"}</td>
@@ -12929,6 +12929,11 @@ const [invoices,setInvoices]=useState(null);
 const [invLoading,setInvLoading]=useState(true);
 const [reconcileResult,setReconcileResult]=useState(null);
 const [reconciling,setReconciling]=useState(false);
+const [pendingQueue,setPendingQueue]=useState([]);
+const [pendingLoading,setPendingLoading]=useState(true);
+const [chartAccounts,setChartAccounts]=useState([]);
+const [approvingId,setApprovingId]=useState(null);
+const [rowOverrides,setRowOverrides]=useState({});
 const [billResult,setBillResult]=useState(null);
 const [billLoading,setBillLoading]=useState(false);
 const [billPreview,setBillPreview]=useState(null);
@@ -12944,6 +12949,15 @@ const [invoicePreview,setInvoicePreview]=useState(null);
 const [invoiceCreated,setInvoiceCreated]=useState(null);
 const [invoiceWorking,setInvoiceWorking]=useState(false);
 const fileRef=useRef();
+const loadPending=async()=>{
+setPendingLoading(true);
+try{
+const r=await fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:'list-pending'})});
+const d=await r.json();
+setPendingQueue(d.pending||[]);
+}catch{}
+setPendingLoading(false);
+};
 useEffect(()=>{
 fetch('/api/agents/ledger/payments',{method:'POST',headers:{'Content-Type':'application/json'},
 body:JSON.stringify({dryRun:true,lookAheadDays:7,limit:200})})
@@ -12951,16 +12965,40 @@ body:JSON.stringify({dryRun:true,lookAheadDays:7,limit:200})})
 setInvoices(d);
 if(d?.totals?.backfilled) toast(`Pulled in ${d.totals.backfilled} invoice${d.totals.backfilled!==1?"s":""} from Zoho Books`,"info");
 }).catch(()=>{}).finally(()=>setInvLoading(false));
+loadPending();
+fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:'accounts-list'})})
+.then(r=>r.json()).then(d=>setChartAccounts(d.accounts||[])).catch(()=>{});
 },[]);
 const runReconcile=async()=>{
 setReconciling(true);setReconcileResult(null);
 try{
 const r=await fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({task:'reconcile',dryRun:true,limit:50})});
+body:JSON.stringify({task:'reconcile',dryRun:false,limit:50})});
 const d=await r.json();
 setReconcileResult(d);
+loadPending();
 }catch(e){toast('Reconcile error: '+e.message,'error');}
 setReconciling(false);
+};
+const approveRow=async(dep)=>{
+const override=rowOverrides[dep.id];
+const accountId=override?.accountId||dep.suggestedAccountId;
+if(!accountId){toast("Pick a category first","error");return;}
+const label=override?.label||chartAccounts.find(a=>a.id===accountId)?.name||dep.suggestedLabel;
+setApprovingId(dep.id);
+try{
+const r=await fetch('/api/agents/ledger/reconcile',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({task:'approve',depositId:dep.id,accountId,label})});
+const d=await r.json();
+if(!d.ok) throw new Error(d.error||"Approve failed");
+toast(`Categorized as ${label} in Zoho Books`,"success");
+setPendingQueue(q=>q.filter(x=>x.id!==dep.id));
+}catch(e){toast('Approve error: '+e.message,'error');}
+setApprovingId(null);
+};
+const setRowOverride=(depId,accountId)=>{
+const label=chartAccounts.find(a=>a.id===accountId)?.name||"";
+setRowOverrides(o=>({...o,[depId]:{accountId,label}}));
 };
 const openDealsForInvoice=useMemo(()=>(s.deals||[]).filter(d=>d.stage!=="Closed Lost").sort((a,b)=>(a.name||"").localeCompare(b.name||"")),[s.deals]);
 const selectedDeal=dealPick?openDealsForInvoice.find(d=>d.id===dealPick):null;
@@ -13198,11 +13236,9 @@ const d=await r.json();setInvoices(d);toast(`Payment check done — ${d.totals?.
 {/* Reconcile result */}
 {reconcileResult&&(
 <div className="card" style={{padding:16,marginTop:16}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:.5,marginBottom:10}}>
-RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLeft:8}}>DRY RUN</span>}
-</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.blue,letterSpacing:.5,marginBottom:10}}>LAST PULL</div>
 <div style={{display:"flex",gap:12,marginBottom:12,flexWrap:"wrap"}}>
-{[["Polled",reconcileResult.totals?.polled,B.blue],["Store Match",reconcileResult.totals?.matchedStore,B.green],["Invoice Match",reconcileResult.totals?.matchedInvoice,B.teal],["Bill Match",reconcileResult.totals?.matchedBill,B.purple],["Needs Review",reconcileResult.totals?.needsReview,B.red]].map(([l,v,c])=>(
+{[["Polled",reconcileResult.totals?.polled,B.blue],["With Suggestion",reconcileResult.totals?.withSuggestion,B.green],["Pending Review",reconcileResult.totals?.pending,B.orange],["Duplicates",reconcileResult.totals?.duplicates,B.muted],["Reversals",reconcileResult.totals?.reversals,B.red]].map(([l,v,c])=>(
 <div key={l} style={{textAlign:"center",padding:"8px 14px",background:B.surface,borderRadius:6,borderTop:`2px solid ${c}`}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c}}>{v??0}</div>
 <Lbl>{l}</Lbl>
@@ -13213,27 +13249,50 @@ RECONCILE RESULT {reconcileResult.dryRun&&<span style={{color:B.orange,marginLef
 <div style={{padding:"8px 12px",background:B.yellowBg,border:`1px solid ${B.yellow}40`,borderRadius:5,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:12}}>ℹ {reconcileResult.message}</div>
 )}
 {reconcileResult.accountsPolled&&(
-<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
 {reconcileResult.accountsPolled.map((a,i)=>(
 <span key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:a.notConfigured?B.muted:B.textMid,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 8px"}}>{a.label}: {a.notConfigured?"not configured":`${a.found} found`}</span>
 ))}
 </div>
 )}
-{(reconcileResult.transactions||[]).filter(t=>t.status==='NEEDS_REVIEW').map((t,i)=>(
-<div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-<span style={{color:B.text}}>{t.description||t.extractedName||'Unknown'}</span>
-<span style={{color:B.red,fontWeight:500}}>{fmt$(t.amount)}</span>
 </div>
-))}
-<div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${B.border}`}}>
+)}
+{/* Credit card account config */}
+<div className="card" style={{padding:16,marginTop:16}}>
 <Lbl s={{marginBottom:6}}>CREDIT CARD ACCOUNT (for charge categorization)</Lbl>
 <div style={{display:"flex",gap:8}}>
 <input value={cardAccountId} onChange={e=>setCardAccountId(e.target.value)} placeholder="Zoho Books account ID" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 9px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif"}}/>
 <OBtn sm onClick={saveCardAccount} disabled={cardConfigSaving}>{cardConfigSaving?"SAVING…":"SAVE"}</OBtn>
 </div>
 </div>
+{/* Persistent review queue — ledger's coding suggestions, awaiting approval */}
+<div className="card" style={{padding:16,marginTop:16}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+<Lbl c={B.orange}>REVIEW QUEUE ({pendingQueue.length})</Lbl>
 </div>
-)}
+{pendingLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Loading…</div>}
+{!pendingLoading&&pendingQueue.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Nothing pending — run RECONCILE DEPOSITS to pull in uncategorized transactions.</div>}
+{pendingQueue.map(dep=>{
+const override=rowOverrides[dep.id];
+const accountId=override?.accountId||dep.suggestedAccountId||"";
+const sourceBadge={memory:["REMEMBERED",B.purple],rule:["ZOHO RULE",B.blue],teamstore:["TEAM STORE",B.green],invoice:["INVOICE",B.teal],vendorbill:["VENDOR BILL",B.orange],manual:["MANUAL",B.muted]}[dep.suggestionSource]||["NO SUGGESTION",B.red];
+return(
+<div key={dep.id} style={{padding:"10px 0",borderBottom:`1px solid ${B.border}`,display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+<div style={{flex:1,minWidth:180}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{dep.orgNameRaw||"Unknown"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{new Date(dep.txnDate).toLocaleDateString('en-US',{month:'short',day:'numeric'})} · {dep.source}</div>
+</div>
+<span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text,minWidth:80,textAlign:"right"}}>{fmt$(dep.amount)}</span>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sourceBadge[1],background:`${sourceBadge[1]}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.3,flexShrink:0}}>{sourceBadge[0]}</span>
+<select value={accountId} onChange={e=>setRowOverride(dep.id,e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",fontSize:10,color:B.text,fontFamily:"'Lexend',sans-serif",minWidth:160}}>
+<option value="">— choose category —</option>
+{chartAccounts.map(a=>(<option key={a.id} value={a.id}>{a.name}</option>))}
+</select>
+<OBtn sm onClick={()=>approveRow(dep)} disabled={approvingId===dep.id||!accountId}>{approvingId===dep.id?"…":"✓ APPROVE"}</OBtn>
+</div>
+);
+})}
+</div>
 {/* Vendor bill preview */}
 {billPreview&&(
 <div className="card" style={{padding:16,marginTop:16}}>

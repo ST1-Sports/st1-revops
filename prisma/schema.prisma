@@ -854,8 +854,13 @@ model Deposit {
   teamStore           TeamStore? @relation(fields: [matchedTeamStoreId], references: [id])
   matchedVendorBillId String?                       // AP-side match — credit card charge → VendorBill
   matchConfidence     Float?
-  status              String    @default("NEEDS_REVIEW") // AUTO_MATCHED | TEAM_STORE | MATCHED_BILL | NEEDS_REVIEW | DUPLICATE_FLAGGED | REVERSED
-  categorizedAs       String?
+  status              String    @default("PENDING_REVIEW") // PENDING_REVIEW | APPROVED | DUPLICATE | REVERSED
+  categorizedAs       String?                       // final label, set on approve
+  suggestedAccountId  String?                       // ledger's proposed Zoho Books GL account
+  suggestedLabel      String?                       // human-readable proposal, e.g. "Team Store Sales" / "Bank Rule: Shipping"
+  suggestionSource    String?                       // memory | teamstore | invoice | vendorbill | rule | none
+  approvedAccountId   String?                       // account actually pushed to Zoho (may differ if edited)
+  approvedAt          DateTime?
   createdAt           DateTime  @default(now())
 
   @@index([status])

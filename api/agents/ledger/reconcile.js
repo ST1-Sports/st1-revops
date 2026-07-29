@@ -1,28 +1,38 @@
 /**
  * POST /api/agents/ledger/reconcile
- * { task?: "setup"|"seed-stores"|"configure-card"|"reconcile", dryRun?: boolean, limit?: number }
+ * { task?, dryRun?: boolean, limit?: number }
  *
  * Ledger reconciliation agent.
  *
- * STEP 0 (idempotent): create/verify three Zoho Books chart-of-accounts entries and
- *   persist their IDs to the Setting table.
+ * task values:
+ *   "setup"            — idempotently create/verify Zoho Books chart-of-accounts entries
+ *   "seed-stores"       — auto-populate TeamStore from Stripe charge history
+ *   "configure-card"    — { accountId } — persist which Zoho Books account to poll for
+ *                          credit card charges (no fixed ID exists — every org differs)
+ *   "reconcile" (default) — pull uncategorized transactions from every configured
+ *                          account (deposits: Operating/Stripe/Shopify; expenses:
+ *                          Credit Card if configured), propose a coding for each
+ *                          (remembered correction → matched invoice/bill/team-store →
+ *                          Zoho Books bank rule → nothing), and write them to the
+ *                          Deposit table as PENDING_REVIEW. Nothing is pushed to Zoho
+ *                          Books at this stage — reconcile only proposes.
+ *   "list-pending"      — return all PENDING_REVIEW Deposit rows for the review queue
+ *   "accounts-list"     — return the Zoho Books chart of accounts (for a category picker)
+ *   "approve"           — { depositId, accountId?, label? } — pushes the (possibly
+ *                          edited) categorization into Zoho Books via the bank
+ *                          transaction categorize API, marks the Deposit APPROVED,
+ *                          and remembers the decision for next time.
+ *   "update-suggestion" — { depositId, accountId, label } — edits the proposed
+ *                          category without pushing to Zoho yet.
  *
- * STEP 1+: poll uncategorized deposits from ST1 Operating Account, Stripe Clearing,
- *   and Shopify Clearing (AR side — classify against TeamStore → open DealInvoice →
- *   NEEDS_REVIEW), plus uncategorized expense transactions from the configured
- *   Credit Card account if one is set (AP side — classify against open VendorBill
- *   → NEEDS_REVIEW). Writes Deposit rows either way; Slack-notifies review items.
- *
- * task: "configure-card" — { accountId } — persists the Zoho Books account ID to
- *   poll for credit card charges (no fixed ID exists for this — every org's card
- *   account is different, so it must be set once from the Finance tab).
- *
- * Safe defaults: task="reconcile", dryRun=true, limit=10.
- * Nothing is written to Zoho Books or the Deposit table in dry-run mode.
+ * Safe defaults: task="reconcile", dryRun=false, limit=10. dryRun=true previews
+ * without writing to the Deposit table. Nothing ever reaches Zoho Books itself
+ * except via an explicit "approve" call.
  */
 
 import { setCors }                              from '../../_lib/cors.js'
 import { prisma }                              from '../../_lib/prisma.js'
+import { recall, remember }                    from '../../_lib/memory.js'
 import { booksGet, booksPost,
          isPrismaTableMissing }                from '../../_lib/zoho-books.js'
 
@@ -36,6 +46,7 @@ const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN
 const FIXED = {
   operating:      '7255504000000180097',  // ST1 Operating Account
   ar:             '7255504000000000364',  // Accounts Receivable
+  ap:             '7255504000000000373',  // Accounts Payable
   bankFees:       '7255504000000000409',  // Bank Fees and Charges
   stripeClearing: '7255504000000551015',  // Stripe Clearing
 }
@@ -64,6 +75,9 @@ const ACCT_DEFS = [
 
 // Confidence → Float for Deposit.matchConfidence
 const CONF_MAP = { exact: 1.0, high: 0.8, low: 0.4, none: null }
+
+const MEMORY_SCOPE = 'org'
+const memoryEntity = (name) => `depositrule:${(name || '').trim().toLowerCase()}`
 
 // ── STEP 0 — Chart of accounts setup (idempotent) ────────────────────────────
 
@@ -103,6 +117,17 @@ async function setupAccounts() {
   return results
 }
 
+async function listChartOfAccounts() {
+  try {
+    const data = await booksGet('/chartofaccounts?per_page=200')
+    const list = data.chartofaccounts || data.chart_of_accounts || []
+    return list.map(a => ({ id: a.account_id, name: a.account_name, type: a.account_type }))
+  } catch (e) {
+    console.warn('[ledger] listChartOfAccounts:', e.message)
+    return []
+  }
+}
+
 // ── STEP 1 — Load dynamic account IDs from Settings ──────────────────────────
 
 async function loadAccountIds() {
@@ -132,6 +157,85 @@ async function fetchUncategorized(accountId, limit, transactionType = 'deposit')
     console.warn(`[ledger] fetchUncategorized(${accountId}, ${transactionType}):`, e.message)
     return []
   }
+}
+
+// ── Zoho Books' own Bank Rules — read, don't reinvent ────────────────────────
+//
+// Best-effort against Zoho's documented bank-rules shape. Rule field names can
+// vary by account setup; this defensively checks a few likely shapes rather
+// than assuming one. If nothing matches the response shape, it just yields no
+// rule suggestions instead of throwing.
+
+let _ruleCache = null // { accountId -> rules[] }, per-request cache (module survives warm invocations only)
+
+async function fetchBankRules(accountId) {
+  if (_ruleCache?.[accountId]) return _ruleCache[accountId]
+  try {
+    const data  = await booksGet(`/bankrules?account_id=${accountId}`)
+    const rules = data.bankrules || data.bank_rules || data.rules || []
+    _ruleCache = { ..._ruleCache, [accountId]: rules }
+    return rules
+  } catch (e) {
+    console.warn(`[ledger] fetchBankRules(${accountId}):`, e.message)
+    return []
+  }
+}
+
+function ruleConditions(rule) {
+  return rule.criteria || rule.conditions || rule.rule_criteria || []
+}
+
+function ruleTargetAccount(rule) {
+  return rule.account_id
+    || rule.applied_values?.account_id
+    || rule.applied_account_id
+    || null
+}
+
+function matchBankRule(txn, rules) {
+  const haystack = `${txn.description || ''} ${txn.payee || ''} ${txn.reference_number || ''}`.toLowerCase()
+  for (const rule of rules) {
+    const conditions = ruleConditions(rule)
+    const accountId  = ruleTargetAccount(rule)
+    if (!accountId) continue
+
+    // No parseable conditions — skip rather than guess a false match
+    if (!Array.isArray(conditions) || !conditions.length) continue
+
+    const matched = conditions.some(c => {
+      const field = (c.field || c.criteria_field || '').toLowerCase()
+      const value = (c.value || c.criteria_value || '').toLowerCase()
+      if (!value) return false
+      if (field && !field.includes('desc') && !field.includes('payee') && !field.includes('narration')) return false
+      return haystack.includes(value)
+    })
+
+    if (matched) {
+      return { accountId, label: `Bank Rule: ${rule.rule_name || rule.name || 'Matched'}` }
+    }
+  }
+  return null
+}
+
+// ── Memory — remembered corrections from prior approvals ─────────────────────
+
+async function recallCategorization(name) {
+  if (!name) return null
+  try {
+    const facts = await recall({ entity: memoryEntity(name), scope: MEMORY_SCOPE, key: 'category' })
+    if (!facts.length) return null
+    const value = typeof facts[0].value === 'string' ? JSON.parse(facts[0].value) : facts[0].value
+    if (!value?.accountId) return null
+    return { accountId: value.accountId, label: value.label || 'Remembered' }
+  } catch { return null }
+}
+
+async function rememberCategorization(name, accountId, label) {
+  if (!name || !accountId) return
+  await remember({
+    scope: MEMORY_SCOPE, entity: memoryEntity(name), key: 'category',
+    value: { accountId, label }, agentId: 'ledger', confidence: 1,
+  }).catch(() => {})
 }
 
 // ── Stripe name extraction ────────────────────────────────────────────────────
@@ -278,35 +382,6 @@ async function matchVendorBill(amount) {
   }
 }
 
-// ── STEP 4b — Classify one credit card charge (AP side) ─────────────────────
-
-async function classifyExpenseTxn(txn) {
-  const amount = Math.abs(parseFloat(txn.amount) || 0)
-
-  const existing = await findExistingDeposit(txn.transaction_id)
-  if (existing && existing.status !== 'NEEDS_REVIEW') {
-    return { txn, source: 'creditcard', skip: true, status: 'ALREADY_RECONCILED', existingId: existing.id }
-  }
-
-  const bill = await matchVendorBill(amount)
-  if (bill) {
-    return {
-      txn, source: 'creditcard', amount,
-      status:              'MATCHED_BILL',
-      confidence:          'high',
-      matchedVendorBillId: bill.id,
-      matchedBillName:     bill.vendorInvoiceNo || bill.id,
-    }
-  }
-
-  return {
-    txn, source: 'creditcard', amount,
-    status:     'NEEDS_REVIEW',
-    confidence: 'none',
-    notes:      `${txn.description || txn.payee || 'Charge'} — no matching vendor bill found (upload it to link)`,
-  }
-}
-
 async function findExistingDeposit(zohoBankTxnId) {
   try {
     return await prisma.deposit.findUnique({ where: { zohoBankTxnId } })
@@ -326,7 +401,7 @@ async function findDuplicate(amount, dateMs, source) {
           lte: new Date(dateMs + 86_400_000),
         },
         source,
-        status: { not: 'NEEDS_REVIEW' },
+        status: { not: 'PENDING_REVIEW' },
       },
     })
   } catch (e) {
@@ -341,7 +416,7 @@ async function findOriginalForReversal(absAmount, source) {
       where: {
         amount: { gte: absAmount - 0.01, lte: absAmount + 0.01 },
         source,
-        status: { notIn: ['NEEDS_REVIEW', 'REVERSED'] },
+        status: { notIn: ['PENDING_REVIEW', 'REVERSED'] },
       },
       orderBy: { txnDate: 'desc' },
     })
@@ -351,22 +426,20 @@ async function findOriginalForReversal(absAmount, source) {
   }
 }
 
-
-// ── STEP 4 — Classify one transaction ────────────────────────────────────────
+// ── STEP 4 — Classify one deposit (AR side) — always returns a proposal ──────
 
 async function classifyTxn(txn, source, accountIds) {
   const amount = parseFloat(txn.amount) || 0
   const dateMs = new Date(txn.date).getTime()
 
-  // Idempotency — skip if already reconciled with a terminal status
   const existing = await findExistingDeposit(txn.transaction_id)
-  if (existing && existing.status !== 'NEEDS_REVIEW') {
+  if (existing && existing.status !== 'PENDING_REVIEW') {
     return { txn, source, skip: true, status: 'ALREADY_RECONCILED', existingId: existing.id }
   }
 
   // Refund / chargeback — negative deposit amount
   if (amount < 0) {
-    const absAmt  = Math.abs(amount)
+    const absAmt   = Math.abs(amount)
     const original = await findOriginalForReversal(absAmt, source)
     return {
       txn, source, amount,
@@ -399,69 +472,104 @@ async function classifyTxn(txn, source, accountIds) {
   } else if (source === 'shopify') {
     extractedName = await extractStoreNameFromShopify(txn)
   }
-  // Fallback: parse " / Name" pattern from description
   if (!extractedName) {
     const desc  = txn.description || txn.payee || ''
     const match = desc.match(/\/\s*(.+)$/)
     if (match) extractedName = match[1].trim()
   }
 
-  // Team store exact match
-  const teamStore = await matchTeamStore(extractedName)
-  if (teamStore) {
-    return {
-      txn, source, amount, extractedName,
-      status:               'MATCHED_STORE',
-      confidence:           'exact',
-      categorizedAs:        'Team Store Sales',
-      cogsAccountId:        accountIds.teamStoreCogs,
-      targetAccountId:      accountIds.teamStoreSales,
-      matchedTeamStoreId:   teamStore.id,
-      matchedTeamStoreName: teamStore.name,
-    }
+  const base = { txn, source, amount, extractedName, status: 'PENDING_REVIEW' }
+
+  // 1. Remembered correction for this exact payer/description wins outright
+  const remembered = await recallCategorization(extractedName)
+  if (remembered) {
+    return { ...base, confidence: 'exact', suggestionSource: 'memory',
+      suggestedAccountId: remembered.accountId, suggestedLabel: remembered.label,
+      notes: `Remembered: previously coded to ${remembered.label}` }
   }
 
-  // Invoice match — amount ± $0.01, date ± 60 days, optional reference boost
+  // 2. Team store exact match
+  const teamStore = await matchTeamStore(extractedName)
+  if (teamStore) {
+    return { ...base, confidence: 'exact', suggestionSource: 'teamstore',
+      suggestedAccountId: accountIds.teamStoreSales, suggestedLabel: 'Team Store Sales',
+      matchedTeamStoreId: teamStore.id, matchedTeamStoreName: teamStore.name,
+      notes: `Matches team store "${teamStore.name}"` }
+  }
+
+  // 3. Open invoice match — amount ± $0.01, date ± 60 days, optional reference boost
   const invoiceMatch = await matchInvoice(amount, txn.date, txn.reference_number)
   if (invoiceMatch) {
     const { invoice, confidence } = invoiceMatch
-    // Only auto-categorize on 'exact' (reference matched) — 'high' goes to review
-    if (confidence === 'exact') {
-      return {
-        txn, source, amount, extractedName,
-        status:             'MATCHED_INVOICE',
-        confidence:         'exact',
-        categorizedAs:      'Accounts Receivable',
-        matchedInvoiceId:   invoice.id,
-        matchedInvoiceName: invoice.crmDealName || null,
-      }
-    }
-    // high confidence but not exact — surface for review with the candidate attached
-    return {
-      txn, source, amount, extractedName,
-      status:     'NEEDS_REVIEW',
-      confidence: 'high',
-      notes:      `Possible invoice match: ${invoice.crmDealName || invoice.id} — verify and confirm`,
-      matchedInvoiceId:   invoice.id,
-      matchedInvoiceName: invoice.crmDealName || null,
-    }
+    return { ...base, confidence, suggestionSource: 'invoice',
+      suggestedAccountId: FIXED.ar, suggestedLabel: 'Accounts Receivable',
+      matchedInvoiceId: invoice.id, matchedInvoiceName: invoice.crmDealName || null,
+      notes: confidence === 'exact'
+        ? `Matches invoice ${invoice.crmDealName || invoice.id} (PO confirmed)`
+        : `Possible invoice match: ${invoice.crmDealName || invoice.id} — verify before approving` }
   }
 
-  // No match — surface for manual review
-  return {
-    txn, source, amount, extractedName,
-    status:     'NEEDS_REVIEW',
-    confidence: 'none',
-    notes:      extractedName
-      ? `"${extractedName}" not found in TeamStore table or open invoices`
-      : 'No store name found — manual review required',
+  // 4. Zoho Books' own bank rules
+  const rules = await fetchBankRules(txn.account_id || '')
+  const ruleHit = rules.length ? matchBankRule(txn, rules) : null
+  if (ruleHit) {
+    return { ...base, confidence: 'high', suggestionSource: 'rule',
+      suggestedAccountId: ruleHit.accountId, suggestedLabel: ruleHit.label,
+      notes: `Matched Zoho Books rule: ${ruleHit.label}` }
   }
+
+  // No signal at all
+  return { ...base, confidence: 'none', suggestionSource: 'none',
+    suggestedAccountId: null, suggestedLabel: null,
+    notes: extractedName
+      ? `"${extractedName}" — no matching team store, invoice, or bank rule`
+      : 'No payer name found — needs manual coding' }
 }
 
-// ── STEP 5 — Persist to Deposit table ────────────────────────────────────────
+// ── STEP 4b — Classify one credit card charge (AP side) — same shape ────────
 
-async function writeDeposit(result, dryRun) {
-  if (dryRun) return null
+async function classifyExpenseTxn(txn) {
+  const amount = Math.abs(parseFloat(txn.amount) || 0)
+
+  const existing = await findExistingDeposit(txn.transaction_id)
+  if (existing && existing.status !== 'PENDING_REVIEW') {
+    return { txn, source: 'creditcard', skip: true, status: 'ALREADY_RECONCILED', existingId: existing.id }
+  }
+
+  const extractedName = (txn.description || txn.payee || '').trim() || null
+  const base = { txn, source: 'creditcard', amount, extractedName, status: 'PENDING_REVIEW' }
+
+  const remembered = await recallCategorization(extractedName)
+  if (remembered) {
+    return { ...base, confidence: 'exact', suggestionSource: 'memory',
+      suggestedAccountId: remembered.accountId, suggestedLabel: remembered.label,
+      notes: `Remembered: previously coded to ${remembered.label}` }
+  }
+
+  const bill = await matchVendorBill(amount)
+  if (bill) {
+    return { ...base, confidence: 'high', suggestionSource: 'vendorbill',
+      suggestedAccountId: FIXED.ap, suggestedLabel: 'Accounts Payable',
+      matchedVendorBillId: bill.id, matchedBillName: bill.vendorInvoiceNo || bill.id,
+      notes: `Matches vendor bill ${bill.vendorInvoiceNo || bill.id}` }
+  }
+
+  const rules = await fetchBankRules(txn.account_id || '')
+  const ruleHit = rules.length ? matchBankRule(txn, rules) : null
+  if (ruleHit) {
+    return { ...base, confidence: 'high', suggestionSource: 'rule',
+      suggestedAccountId: ruleHit.accountId, suggestedLabel: ruleHit.label,
+      notes: `Matched Zoho Books rule: ${ruleHit.label}` }
+  }
+
+  return { ...base, confidence: 'none', suggestionSource: 'none',
+    suggestedAccountId: null, suggestedLabel: null,
+    notes: `${extractedName || 'Charge'} — no matching vendor bill or bank rule (upload the bill to link)` }
+}
+
+// ── STEP 5 — Persist proposal to Deposit table (always — this is the queue) ──
+
+async function writeDeposit(result) {
   const { txn, source } = result
 
   const createData = {
@@ -471,10 +579,12 @@ async function writeDeposit(result, dryRun) {
     txnDate:             new Date(txn.date),
     orgNameRaw:          result.extractedName || txn.description || txn.payee || null,
     status:              result.status,
-    categorizedAs:       result.categorizedAs      || null,
-    matchedTeamStoreId:  result.matchedTeamStoreId || null,
-    matchedInvoiceId:    result.matchedInvoiceId   || null,
-    matchedVendorBillId: result.matchedVendorBillId || null,
+    matchedTeamStoreId:  result.matchedTeamStoreId  || null,
+    matchedInvoiceId:    result.matchedInvoiceId     || null,
+    matchedVendorBillId: result.matchedVendorBillId  || null,
+    suggestedAccountId:  result.suggestedAccountId    || null,
+    suggestedLabel:      result.suggestedLabel        || null,
+    suggestionSource:    result.suggestionSource       || null,
     matchConfidence:     CONF_MAP[result.confidence] ?? null,
   }
 
@@ -484,10 +594,12 @@ async function writeDeposit(result, dryRun) {
         where:  { zohoBankTxnId: txn.transaction_id },
         update: {
           status:              createData.status,
-          categorizedAs:       createData.categorizedAs,
           matchedTeamStoreId:  createData.matchedTeamStoreId,
           matchedInvoiceId:    createData.matchedInvoiceId,
           matchedVendorBillId: createData.matchedVendorBillId,
+          suggestedAccountId:  createData.suggestedAccountId,
+          suggestedLabel:      createData.suggestedLabel,
+          suggestionSource:    createData.suggestionSource,
           matchConfidence:     createData.matchConfidence,
         },
         create: createData,
@@ -505,8 +617,8 @@ async function writeDeposit(result, dryRun) {
 
 // ── STEP 6 — Reverse a prior Deposit on chargeback ───────────────────────────
 
-async function reverseDeposit(reversalOfId, dryRun) {
-  if (dryRun || !reversalOfId) return
+async function reverseDeposit(reversalOfId) {
+  if (!reversalOfId) return
   try {
     await prisma.deposit.update({
       where: { id: reversalOfId },
@@ -572,18 +684,19 @@ async function seedTeamStores() {
   return { seeded, discovered: names.size }
 }
 
-// ── STEP 7 — Slack notification for NEEDS_REVIEW items ───────────────────────
+// ── Slack notification for new pending items ─────────────────────────────────
 
-async function notifySlack(needsReview) {
+async function notifySlack(pending) {
   const token   = process.env.SLACK_BOT_TOKEN
   const channel = process.env.SLACK_LEDGER_REVIEW_CHANNEL
                   || process.env.SLACK_REDDIT_REVIEW_CHANNEL
-  if (!token || !channel || !needsReview.length) return
+  if (!token || !channel || !pending.length) return
 
-  const lines = needsReview.map(r => {
+  const lines = pending.map(r => {
     const amt  = `$${Math.abs(r.amount || 0).toFixed(2)}`
     const name = r.extractedName ? `"${r.extractedName}"` : '(no name found)'
-    return `• ${r.txn.date} | ${amt} | ${r.source} | ${name} — ${r.notes || r.status}`
+    const coded = r.suggestedLabel ? ` → suggested: ${r.suggestedLabel}` : ''
+    return `• ${r.txn.date} | ${amt} | ${r.source} | ${name}${coded}`
   })
 
   await fetch('https://slack.com/api/chat.postMessage', {
@@ -591,9 +704,41 @@ async function notifySlack(needsReview) {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       channel,
-      text: `*Ledger: ${needsReview.length} deposit${needsReview.length !== 1 ? 's' : ''} need review*\n${lines.join('\n')}`,
+      text: `*Ledger: ${pending.length} transaction${pending.length !== 1 ? 's' : ''} ready for review*\n${lines.join('\n')}`,
     }),
   }).catch(() => {})
+}
+
+// ── Approve — push the (possibly edited) coding into Zoho Books ─────────────
+
+async function approveDeposit({ depositId, accountId, label }) {
+  const deposit = await prisma.deposit.findUnique({ where: { id: depositId } })
+  if (!deposit) throw new Error(`Deposit ${depositId} not found`)
+  if (deposit.status === 'APPROVED') return { ok: true, already: true, deposit }
+
+  const finalAccountId = accountId || deposit.suggestedAccountId
+  if (!finalAccountId) throw new Error('No account chosen — pick a category before approving')
+  const finalLabel = label || deposit.suggestedLabel || 'Categorized'
+
+  // Push the categorization into Zoho Books so the transaction actually
+  // leaves "Uncategorized" there too, not just in our local mirror.
+  await booksPost(`/banktransactions/${deposit.zohoBankTxnId}/categorize`, {
+    account_id: finalAccountId,
+  })
+
+  const updated = await prisma.deposit.update({
+    where: { id: depositId },
+    data: {
+      status:            'APPROVED',
+      categorizedAs:     finalLabel,
+      approvedAccountId: finalAccountId,
+      approvedAt:        new Date(),
+    },
+  })
+
+  rememberCategorization(deposit.orgNameRaw, finalAccountId, finalLabel).catch(() => {})
+
+  return { ok: true, deposit: updated }
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -605,11 +750,58 @@ export default async function handler(req, res) {
 
   const {
     task   = 'reconcile',
-    dryRun = true,
+    dryRun = false,
     limit  = 10,
   } = req.body || {}
 
   try {
+    if (task === 'configure-card') {
+      const { accountId } = req.body || {}
+      if (!accountId) return res.status(400).json({ error: 'accountId required' })
+      await prisma.setting.upsert({
+        where:  { key: 'ledger_acct_credit_card' },
+        update: { value: { accountId } },
+        create: { key: 'ledger_acct_credit_card', value: { accountId } },
+      })
+      return res.json({ ok: true, accountId })
+    }
+
+    if (task === 'accounts-list') {
+      const accounts = await listChartOfAccounts()
+      return res.json({ ok: true, accounts })
+    }
+
+    if (task === 'list-pending') {
+      try {
+        const pending = await prisma.deposit.findMany({
+          where:   { status: 'PENDING_REVIEW' },
+          orderBy: { txnDate: 'desc' },
+          take:    200,
+        })
+        return res.json({ ok: true, pending })
+      } catch (e) {
+        if (isPrismaTableMissing(e)) return res.json({ ok: true, pending: [] })
+        throw e
+      }
+    }
+
+    if (task === 'update-suggestion') {
+      const { depositId, accountId, label } = req.body || {}
+      if (!depositId) return res.status(400).json({ error: 'depositId required' })
+      const updated = await prisma.deposit.update({
+        where: { id: depositId },
+        data:  { suggestedAccountId: accountId || undefined, suggestedLabel: label || undefined, suggestionSource: 'manual' },
+      })
+      return res.json({ ok: true, deposit: updated })
+    }
+
+    if (task === 'approve') {
+      const { depositId, accountId, label } = req.body || {}
+      if (!depositId) return res.status(400).json({ error: 'depositId required' })
+      const result = await approveDeposit({ depositId, accountId, label })
+      return res.json(result)
+    }
+
     // STEP 0 — idempotently create / verify Zoho Books accounts
     const accountSetup = await setupAccounts()
 
@@ -620,17 +812,6 @@ export default async function handler(req, res) {
     if (task === 'seed-stores') {
       const result = await seedTeamStores()
       return res.json({ ok: true, accounts: accountSetup, seedStores: result })
-    }
-
-    if (task === 'configure-card') {
-      const { accountId } = req.body || {}
-      if (!accountId) return res.status(400).json({ error: 'accountId required' })
-      await prisma.setting.upsert({
-        where:  { key: 'ledger_acct_credit_card' },
-        update: { value: { accountId } },
-        create: { key: 'ledger_acct_credit_card', value: { accountId } },
-      })
-      return res.json({ ok: true, accountId })
     }
 
     // STEP 1 — load dynamic account IDs and build poll list
@@ -661,7 +842,7 @@ export default async function handler(req, res) {
     for (const acct of pollAccounts) {
       const txns = await fetchUncategorized(acct.id, limit, acct.txnType)
       accountsPolled.push({ label: acct.label, source: acct.source, found: txns.length })
-      for (const t of txns) allTxns.push({ ...t, _source: acct.source, _label: acct.label, _txnType: acct.txnType })
+      for (const t of txns) allTxns.push({ ...t, account_id: acct.id, _source: acct.source, _label: acct.label, _txnType: acct.txnType })
     }
     if (!accountIds.creditCard) {
       accountsPolled.push({ label: 'Credit Card', source: 'creditcard', found: null, notConfigured: true })
@@ -675,7 +856,7 @@ export default async function handler(req, res) {
       return true
     })
 
-    // STEP 3 — classify, guard, write
+    // STEP 3 — classify (propose a coding), guard, write to the review queue
     const results = []
 
     for (const txn of uniq) {
@@ -684,44 +865,45 @@ export default async function handler(req, res) {
           ? await classifyExpenseTxn(txn)
           : await classifyTxn(txn, txn._source, accountIds)
 
-        if (result.skip) continue  // already reconciled with terminal status
+        if (result.skip) continue  // already approved/settled
 
-        if (result.isReversal && result.reversalOfId) {
-          await reverseDeposit(result.reversalOfId, dryRun)
+        if (result.isReversal && result.reversalOfId && !dryRun) {
+          await reverseDeposit(result.reversalOfId)
         }
 
-        await writeDeposit(result, dryRun)
+        if (!dryRun) await writeDeposit(result)
         results.push(result)
       } catch (e) {
         console.error('[ledger] classify error:', txn.transaction_id, e.message)
         results.push({
           txn,
           source:     txn._source,
-          status:     'NEEDS_REVIEW',
+          status:     'PENDING_REVIEW',
           confidence: 'none',
           notes:      `Classification error: ${e.message}`,
         })
       }
     }
 
-    // STEP 4 — Slack notification (live mode only)
-    const needsReview = results.filter(r => r.status === 'NEEDS_REVIEW')
-    if (!dryRun) notifySlack(needsReview).catch(() => {})
+    // STEP 4 — Slack notification for genuinely new pending items (skip live-mode-only gate — this never touches Zoho)
+    const pendingNew = results.filter(r => r.status === 'PENDING_REVIEW')
+    if (!dryRun) notifySlack(pendingNew).catch(() => {})
 
     // STEP 5 — return report
     const transactions = results.map(r => ({
-      date:          r.txn?.date || null,
-      amount:        r.txn?.amount || r.amount || 0,
-      source:        r.source,
-      account:       r.txn?._label || null,
-      description:   r.txn?.description || r.txn?.payee || null,
-      extractedName: r.extractedName || null,
-      status:        r.status,
-      confidence:    r.confidence || null,
-      categorizedAs: r.categorizedAs || null,
-      cogsAccountId: r.cogsAccountId || null,
-      match:         r.matchedTeamStoreName || r.matchedInvoiceName || r.matchedBillName || null,
-      notes:         r.notes || null,
+      date:             r.txn?.date || null,
+      amount:           r.txn?.amount || r.amount || 0,
+      source:           r.source,
+      account:          r.txn?._label || null,
+      description:      r.txn?.description || r.txn?.payee || null,
+      extractedName:    r.extractedName || null,
+      status:           r.status,
+      confidence:       r.confidence || null,
+      suggestedAccountId: r.suggestedAccountId || null,
+      suggestedLabel:     r.suggestedLabel || null,
+      suggestionSource:   r.suggestionSource || null,
+      match:            r.matchedTeamStoreName || r.matchedInvoiceName || r.matchedBillName || null,
+      notes:            r.notes || null,
     }))
 
     const zeroPolledHint = uniq.length === 0
@@ -735,13 +917,11 @@ export default async function handler(req, res) {
       accountsPolled,
       message: zeroPolledHint,
       totals: {
-        polled:         uniq.length,
-        matchedStore:   results.filter(r => r.status === 'MATCHED_STORE').length,
-        matchedInvoice: results.filter(r => r.status === 'MATCHED_INVOICE').length,
-        matchedBill:    results.filter(r => r.status === 'MATCHED_BILL').length,
-        needsReview:    needsReview.length,
-        duplicates:     results.filter(r => r.status === 'DUPLICATE').length,
-        reversals:      results.filter(r => r.status === 'REVERSED').length,
+        polled:     uniq.length,
+        pending:    pendingNew.length,
+        withSuggestion: pendingNew.filter(r => r.suggestedAccountId).length,
+        duplicates: results.filter(r => r.status === 'DUPLICATE').length,
+        reversals:  results.filter(r => r.status === 'REVERSED').length,
       },
       transactions,
     })

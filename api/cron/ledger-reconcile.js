@@ -2,8 +2,12 @@
  * GET /api/cron/ledger-reconcile
  * Vercel cron — weekdays at 08:00 UTC.
  *
- * Polls uncategorized Zoho Books deposits, auto-categorizes matched team-store
- * and invoice deposits, and Slack-notifies anything that needs manual review.
+ * Polls uncategorized Zoho Books transactions (deposits + credit card charges,
+ * if configured), proposes a coding for each (remembered correction → matched
+ * invoice/bill/team-store → Zoho Books bank rule), and writes them to the
+ * Deposit review queue as PENDING_REVIEW. Nothing is pushed to Zoho Books here
+ * — that only happens when a human approves from the Finance tab. Slack-notifies
+ * on new pending items.
  *
  * On the very first run (TeamStore empty) the reconcile handler auto-seeds
  * store names from the last 90 days of Stripe charge history before classifying.
