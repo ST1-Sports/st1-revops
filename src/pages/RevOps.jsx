@@ -653,12 +653,17 @@ return dealList.some(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
 const splitColdContacts=(contactList,dealList)=>{
 const cold=[],keep=[];
 for(const c of contactList){
-// "manual" = a rep typed this in by hand one at a time — trust that judgment
-// call same as any other deliberate single-record action. Everything else
-// (bulk import, list-import, scraped, website/directory finds, Zoho sync)
-// is passive/bulk data and gets the full lead/deal/intent check.
-if(c.email&&c.source!=="manual"&&!hasContactIntent(c,dealList)) cold.push(c);
-else keep.push(c);
+if(!c.email||c.source==="manual"){keep.push(c);continue;}
+// "manual" (above) = a rep typed this in by hand — trust that judgment
+// call same as any other deliberate single-record action.
+// Zoho-synced records still get the deal/intent check — a real CRM
+// record might already represent an active relationship. Anything else
+// (bulk import, list-import, scraped, website/directory finds) was never
+// CRM data to begin with — it belongs in Prospecting unconditionally,
+// deal or no deal.
+const isZoho=(c.source||"").startsWith("zoho");
+if(isZoho&&hasContactIntent(c,dealList)){keep.push(c);continue;}
+cold.push(c);
 }
 return {cold,keep};
 };
