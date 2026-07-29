@@ -5363,6 +5363,8 @@ const [backfillRunning,setBackfillRunning] = useState(false);
 const [backfillResult,setBackfillResult]   = useState(null);
 const [linkingAccounts,setLinkingAccounts] = useState(false);
 const [linkAccountsResult,setLinkAccountsResult] = useState(null);
+const [aligningZoho,setAligningZoho] = useState(false);
+const [alignZohoResult,setAlignZohoResult] = useState(null);
 const [importPhase,setImportPhase]     = useState("idle");
 const [importState,setImportState]     = useState("");
 const [importRows,setImportRows]       = useState([]);
@@ -6429,6 +6431,37 @@ toast(`${d.accountsCreated} account(s) linked to ${d.contactsLinked} contact(s)`
 finally{setLinkingAccounts(false);}
 }}>{linkingAccounts?"LINKING…":"⚙ LINK ACCOUNTS"}</OBtn>
 {linkAccountsResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{linkAccountsResult.accountsCreated} accounts · {linkAccountsResult.contactsLinked} contacts linked</span>}
+<OBtn sm color={B.teal} disabled={aligningZoho} onClick={async()=>{
+try{
+const preview=await fetch('/api/contacts/zoho-align-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:true})}).then(r=>r.json());
+if(preview.error){toast("Zoho align error: "+preview.error,"error");return;}
+if(!preview.accountsQualifying){toast("No qualifying accounts (invoiced or positive-intent) with contacts to push right now","info");return;}
+if(!window.confirm(`This will push contacts for ${preview.accountsQualifying} qualifying account(s) into Zoho CRM as linked Contacts (tagged Sport + Coach Role), and may create custom fields in your Zoho Contacts module if they don't exist. Cold/unqualified accounts are untouched. Continue?`))return;
+}catch(e){toast("Zoho align preview error: "+e.message,"error");return;}
+setAligningZoho(true);setAlignZohoResult(null);
+const totals={fieldsEnsured:[],accountsProcessed:0,contactsPushed:0,contactsUpdated:0,contactsSkipped:0,errors:[]};
+try{
+let remaining=1,guard=0;
+while(remaining>0&&guard<200){
+guard++;
+const r=await fetch('/api/contacts/zoho-align-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dryRun:false,limit:25})});
+const d=await r.json();
+if(d.error) throw new Error(d.error);
+if(d.fieldsEnsured?.length) totals.fieldsEnsured=d.fieldsEnsured;
+totals.accountsProcessed+=d.accountsProcessed||0;
+totals.contactsPushed+=d.contactsPushed||0;
+totals.contactsUpdated+=d.contactsUpdated||0;
+totals.contactsSkipped+=d.contactsSkipped||0;
+totals.errors=[...totals.errors,...(d.errors||[])];
+remaining=d.accountsRemaining||0;
+setAlignZohoResult({...totals,accountsRemaining:remaining});
+if(!d.accountsProcessed&&remaining>0) break;
+}
+toast(`Zoho align: ${totals.accountsProcessed} account(s) · ${totals.contactsPushed} contact(s) created · ${totals.contactsUpdated} updated${totals.errors.length?` · ${totals.errors.length} error(s) — see panel`:""}`,totals.errors.length?"info":"success");
+}catch(e){toast("Zoho align error: "+e.message,"error");}
+finally{setAligningZoho(false);}
+}}>{aligningZoho?"ALIGNING…":"⚡ ALIGN TO ZOHO"}</OBtn>
+{alignZohoResult&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{alignZohoResult.accountsProcessed} accts · {alignZohoResult.contactsPushed} new · {alignZohoResult.contactsUpdated} updated{alignZohoResult.errors.length?` · ${alignZohoResult.errors.length} errors`:""}</span>}
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{totalContactsAll.toLocaleString()} contacts total <span style={{fontSize:9}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></span>
 </div>
 )}
