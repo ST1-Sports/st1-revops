@@ -11437,8 +11437,6 @@ return(
 )}
 </div>
 )}
-<SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
-onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
 </div>
 {/* Link */}
 <div style={{marginBottom:14}}>
