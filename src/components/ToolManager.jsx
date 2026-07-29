@@ -111,9 +111,24 @@ export default function ToolManager() {
     loadCustomTools().then(() => reload())
   }, [])
 
-  function handleToggle(plugin) {
-    setPluginEnabled(plugin.id, plugin.enabled === false)
+  async function handleToggle(plugin) {
+    const nextEnabled = plugin.enabled === false
+    setPluginEnabled(plugin.id, nextEnabled)
     reload()
+    if (!plugin.custom) return // built-in plugins aren't stored in /api/admin/tools
+    try {
+      await fetch('/api/admin/tools', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          id: plugin.id, name: plugin.name, capabilities: plugin.capabilities,
+          type: plugin.type, config: plugin.config, roles: plugin.roles,
+          custom: true, enabled: nextEnabled,
+        }),
+      })
+    } catch (e) {
+      setFlash(`error:Toggle saved locally but failed to sync: ${e.message}`)
+    }
   }
 
   async function handleDelete(plugin) {
@@ -230,8 +245,6 @@ export default function ToolManager() {
               <select style={{ ...inp, cursor: 'pointer' }} value={form.type} onChange={e => setForm(f => ({ ...f, type: e.target.value }))}>
                 <option value="webhook">Webhook</option>
                 <option value="api">API</option>
-                <option value="embed">Embed</option>
-                <option value="iframe">iFrame</option>
               </select>
             </div>
           </div>

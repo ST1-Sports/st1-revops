@@ -565,6 +565,7 @@ const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev);
 const [toasts, setToasts] = useState([]);
 const [showSearch, setShowSearch] = useState(false);
 const [searchQuery, setSearchQuery] = useState("");
+const [showAlerts, setShowAlerts] = useState(false);
 const dispatch = useCallback((action, payload) => {
 set(prev => {
 const next = reducer(prev, action, payload);
@@ -958,7 +959,27 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"1px 4px"}}>/</span>
 </button>
 <div style={{width:1,height:14,background:B.border}}/>
-{(()=>{const unread=(s.alerts||[]).filter(a=>!a.sent).length;return(<button onClick={()=>setMod("alerts")} style={{background:"none",border:"none",color:unread?B.orange:B.muted,fontSize:13,position:"relative",padding:2}}>◎{unread>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{unread}</span>}</button>);})()}
+{(()=>{const alerts=s.alerts||[];const unread=alerts.filter(a=>!a.sent).length;return(
+<div style={{position:"relative"}}>
+<button onClick={()=>setShowAlerts(v=>!v)} style={{background:"none",border:"none",color:unread?B.orange:B.muted,fontSize:13,position:"relative",padding:2,cursor:"pointer"}}>◎{unread>0&&<span style={{position:"absolute",top:-3,right:-3,background:B.orange,color:B.white,borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{unread}</span>}</button>
+{showAlerts&&(
+<div style={{position:"absolute",top:"calc(100% + 6px)",right:0,width:280,maxHeight:340,overflowY:"auto",background:B.white,border:`1px solid ${B.border}`,borderRadius:8,boxShadow:"0 4px 16px rgba(0,0,0,.12)",zIndex:50}}>
+<div style={{padding:"8px 12px",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5}}>ALERTS</div>
+{alerts.length===0?(
+<div style={{padding:16,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No alerts</div>
+):alerts.map(a=>(
+<div key={a.id} style={{padding:"9px 12px",borderBottom:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",gap:8,alignItems:"flex-start",opacity:a.sent?0.55:1}}>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{a.msg}</div>
+{a.action&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{a.action}</div>}
+</div>
+{!a.sent&&<button onClick={()=>dispatch("DISMISS_ALERT",a.id)} title="Dismiss" style={{background:"none",border:"none",color:B.muted,fontSize:12,cursor:"pointer",padding:0,flexShrink:0}}>×</button>}
+</div>
+))}
+</div>
+)}
+</div>
+);})()}
 </div>
 </header>
 <main style={{flex:1,overflowY:"auto",background:B.pageBg,display:"flex",flexDirection:"column"}}>
@@ -2670,7 +2691,7 @@ return(
 );
 }
 function TalkTrack({onClose,linkedContact}){
-const {s,cu,toast}=useApp();
+const {s,cu,toast,dispatch}=useApp();
 const [sessionId,setSessionId]=useState(null);
 const [questions,setQuestions]=useState([]);
 const [phaseIdx,setPhaseIdx]=useState(0);
@@ -3058,7 +3079,7 @@ return(
 <OBtn sm onClick={()=>{
 if(!addForm.lastName) return;
 const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
-dispatch("ADD_CONTACT",c);
+dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
 setShowAddContact(false);
 setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
@@ -7288,7 +7309,7 @@ const CAMP_TEMPLATES = [
 {id:"blank", name:"Start Blank", product:"", goal:"", channels:[], metrics:[], tone:"friendly", ctx:"", assetTypes:[]},
 ];
 function ModMarketing() {
-const {s,dispatch,toast}=useApp();
+const {s,dispatch,toast,setMod}=useApp();
 const [tab,setTab]=useState("plans");
 const [selPlanId,setSelPlanId]=useState(null);
 const [showNewPlanForm,setShowNewPlanForm]=useState(false);
@@ -8115,7 +8136,7 @@ return (
 <div className="card" style={{padding:40,textAlign:"center"}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No reps yet</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Add your sales team in Settings to track their campaigns and pipeline.</div>
-<OBtn sm onClick={()=>dispatch("SET_MOD","settings")}>GO TO SETTINGS →</OBtn>
+<OBtn sm onClick={()=>setMod("settings")}>GO TO SETTINGS →</OBtn>
 </div>
 ):(
 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
@@ -8763,7 +8784,7 @@ style={{background:on?`${B.orange}12`:B.surface,color:on?B.orange:B.text,border:
 <Lbl s={{marginBottom:4}}>ASSIGNED REP</Lbl>
 {(s.reps||[]).length===0?(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"8px 10px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,lineHeight:1.5}}>
-No reps yet — <button onClick={()=>dispatch("SET_MOD","settings")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",padding:0}}>add them in Settings →</button>
+No reps yet — <button onClick={()=>setMod("settings")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer",padding:0}}>add them in Settings →</button>
 </div>
 ):(
 <div style={{display:"flex",flexDirection:"column",gap:5}}>
@@ -14982,7 +15003,7 @@ return(
 {a.type&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>{a.type}</span>}
 <div style={{display:"flex",gap:4,marginTop:6,flexWrap:"wrap"}}>
 <button onClick={()=>navigator.clipboard?.writeText(a.url).then(()=>toast("URL copied!","success")).catch(()=>toast("Copy failed","error"))} style={{background:B.blueBg,color:B.blue,border:"none",borderRadius:3,padding:"3px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>COPY URL</button>
-<button onClick={()=>{dispatch("SET_MOD","social");}} style={{background:B.purpleBg,color:B.purple,border:"none",borderRadius:3,padding:"3px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>USE IN POST →</button>
+<button onClick={()=>{setMod("social");}} style={{background:B.purpleBg,color:B.purple,border:"none",borderRadius:3,padding:"3px 6px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>USE IN POST →</button>
 <button onClick={()=>{if(window.confirm(`Delete "${a.name}"?`))dispatch("DELETE_BRAND_ASSET",a.id);}} style={{background:"none",border:"none",color:B.red,fontSize:10,cursor:"pointer",padding:"2px 3px",marginLeft:"auto"}}>✕</button>
 </div>
 </div>

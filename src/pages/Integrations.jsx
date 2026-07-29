@@ -409,9 +409,8 @@ export default function IntegrationsHub() {
       setStatus(s=>({...s,woo:true}));
       addLog(`✓ WooCommerce connected — ${prods.length} products, ${orders?.length||0} recent orders`,"success");
     } catch(e) {
-      addLog(`WooCommerce: ${e.message.slice(0,80)}`,"warn");
-      setStatus(s=>({...s,woo:true}));
-      addLog("WooCommerce connected (demo mode)","warn");
+      addLog(`WooCommerce: ${e.message.slice(0,80)}`,"error");
+      setStatus(s=>({...s,woo:false}));
     }
     setTesting(null);
   };
@@ -703,19 +702,40 @@ Under 70 words. Sign: Matt Stone | ST1 Sports | matt@st1sports.com | 719-256-027
   };
 
   // ── SEND REMINDER + SLACK NOTIFY ───────────────────────────────────────────
+  // Previously this only posted a Slack message CLAIMING the reminder email
+  // was sent — no email was ever actually dispatched. Now it actually sends
+  // via Gmail first, and only reports success / notifies Slack if that send
+  // genuinely succeeded.
   const sendReminderAndNotify = async (inv) => {
+    if (!inv.email) { addLog(`No email on file for ${inv.customer_name} — can't send reminder`,"warn"); return; }
     const k = inv.id+"gentle";
     const msgBody = drafts[k] || `Hi, this is a reminder about invoice ${inv.number} for ${fmt$(inv.balance)} which is now past due. Please process at your earliest convenience. — Matt Stone, ST1 Sports`;
 
-    // Send to Slack as notification
-    const slackMsg = `🔔 *Invoice Reminder Sent*
+    try {
+      const r = await fetch("/api/gmail", {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          action:    "send",
+          to_email:  inv.email,
+          to_name:   inv.customer_name,
+          subject:   `Invoice ${inv.number} — Payment Reminder`,
+          body:      msgBody,
+          from_name: "Matt Stone",
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || `Gmail send failed (${r.status})`);
+
+      const slackMsg = `🔔 *Invoice Reminder Sent*
 Customer: *${inv.customer_name}*
 Invoice: ${inv.number} · ${fmt$(inv.balance)} overdue
 Action: Reminder email sent to ${inv.email}
 → Follow up if no response in 3 business days`;
-
-    await sendSlackAlert(slackMsg);
-    addLog(`Reminder sent for ${inv.number}`,"success");
+      await sendSlackAlert(slackMsg);
+      addLog(`✓ Reminder emailed to ${inv.email} for ${inv.number}`,"success");
+    } catch(e) {
+      addLog(`Reminder email failed: ${e.message.slice(0,120)}`,"error");
+    }
   };
 
   // ── WOOCOMMERCE: UPDATE PRODUCT PRICE ──────────────────────────────────────
@@ -727,8 +747,7 @@ Action: Reminder email sent to ${inv.email}
       setProducts(prev=>prev.map(p=>p.id===productId?{...p,price:String(newPrice)}:p));
       addLog(`✓ WooCommerce price updated`,"success");
     } catch(e) {
-      addLog(`WooCommerce update (demo): ${e.message.slice(0,50)}`,"warn");
-      setProducts(prev=>prev.map(p=>p.id===productId?{...p,price:String(newPrice)}:p));
+      addLog(`WooCommerce price update failed: ${e.message.slice(0,80)}`,"error");
     }
   };
 
@@ -2172,7 +2191,7 @@ function AyrsharePanel({addLog}) {
   const debugPost = async () => {
     setDebugging(true); setDebugResult(null);
     try {
-      const r = await fetch("/api/social-post", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug_post"})});
+      const r = await fetch("/api/social-post", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug-post"})});
       const d = await r.json();
       setDebugResult(d);
       addLog(`Debug post: HTTP ${d.httpStatus} — ${d.rawResponse?.slice(0,120)}`,"info");

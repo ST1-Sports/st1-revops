@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { readAppState, writeAppState, pushAppStateToServer, pullAndMergeAppState } from "../lib/appStateSync.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -337,7 +338,53 @@ Return JSON:
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function ExpansionPlaybook({ s={}, dispatch=()=>{}, toast=()=>{} }) {
+export default function ExpansionPlaybook(props) {
+  // The standalone /expansion route (App.jsx) renders this with NO props at
+  // all — previously every dispatch() call silently no-op'd (defaulted to
+  // `()=>{}`), so a generated playbook (a real, costly AI + web-search run)
+  // was never stored anywhere and the screen got permanently stuck. When
+  // embedded as a RevOps tab, real s/dispatch/toast ARE passed and this
+  // fallback never engages.
+  const standalone = props.dispatch === undefined;
+  const [localStrategies, setLocalStrategies] = useState(() => readAppState().strategies || []);
+  const [localDeals, setLocalDeals] = useState(() => readAppState().deals || []);
+  const [standaloneToast, setStandaloneToast] = useState(null);
+
+  useEffect(() => {
+    if (!standalone) return;
+    pullAndMergeAppState(["strategies", "deals"]).then(merged => {
+      setLocalStrategies(merged.strategies || []);
+      setLocalDeals(merged.deals || []);
+    });
+  }, [standalone]);
+
+  const s = standalone ? { strategies: localStrategies, deals: localDeals, contacts: [] } : props.s;
+
+  const dispatch = standalone ? (action, payload) => {
+    if (action === "ADD_STRATEGY") {
+      setLocalStrategies(prev => {
+        const next = [payload, ...prev];
+        writeAppState({ ...readAppState(), strategies: next });
+        pushAppStateToServer();
+        return next;
+      });
+    } else if (action === "UPDATE_STRATEGY") {
+      setLocalStrategies(prev => {
+        const next = prev.map(x => x.id === payload.id ? { ...x, ...payload } : x);
+        writeAppState({ ...readAppState(), strategies: next });
+        pushAppStateToServer();
+        return next;
+      });
+    }
+    // LOG and anything else: the activity feed lives in the main dashboard,
+    // not reachable standalone — no-op is fine, nothing depends on it here.
+  } : props.dispatch;
+
+  const toast = standalone ? (msg, type) => {
+    setStandaloneToast({ msg, type });
+    setTimeout(() => setStandaloneToast(null), 4000);
+  } : props.toast;
+
   const [selectedState, setSelectedState] = useState("WI");
   const [config, setConfig] = useState({
     state:"WI", sports:["Track & Field"], priority:PRIORITIES[0],
@@ -554,6 +601,11 @@ export default function ExpansionPlaybook({ s={}, dispatch=()=>{}, toast=()=>{} 
   // ════════════════════════════════════════════════════════════════════════════
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
+      {standalone && standaloneToast && (
+        <div style={{position:"fixed",top:16,right:16,zIndex:999,background:standaloneToast.type==="error"?B.red:standaloneToast.type==="success"?B.green:B.black,color:B.white,borderRadius:6,padding:"10px 16px",fontSize:12,fontFamily:"'Lexend',sans-serif",boxShadow:"0 4px 16px rgba(0,0,0,.2)",maxWidth:360}}>
+          {standaloneToast.msg}
+        </div>
+      )}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}

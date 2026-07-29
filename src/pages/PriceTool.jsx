@@ -267,22 +267,25 @@ export default function PriceListManager({ onMakeQuote } = {}) {
       .catch(() => setDbLoaded(true)); // network error — show seed data + save button
   }, []);
 
+  // Both return their fetch promise (rejecting on a non-OK response, not just
+  // a network failure) so callers can actually tell whether the write landed
+  // instead of assuming success.
   const persistSupplier = (sup) => {
-    fetch('/api/pricelists/supplier', {
+    return fetch('/api/pricelists/supplier', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: sup.id, name: sup.name, category: sup.category,
         rep: sup.rep, repEmail: sup.repEmail, repPhone: sup.repPhone,
         notes: sup.notes, lastUpdated: sup.lastUpdated,
       }),
-    }).catch(() => {});
+    }).then(r => { if (!r.ok) throw new Error(`Supplier save failed (HTTP ${r.status})`) });
   };
 
   const persistItems = (supplierId, products) => {
-    fetch('/api/pricelists/items', {
+    return fetch('/api/pricelists/items', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ supplierId, products }),
-    }).catch(() => {});
+    }).then(r => { if (!r.ok) throw new Error(`Item save failed (HTTP ${r.status})`) });
   };
 
   const saveAllToDB = async () => {
@@ -331,7 +334,13 @@ export default function PriceListManager({ onMakeQuote } = {}) {
       })};
     }));
     setEditingPrice(null);
-    if(updated) persistItems(supplierId, [updated]);
+    // Gated on dbSaved: /api/pricelists/items updates an existing row, and
+    // nothing has been saved yet if the user hasn't clicked "Save to DB"
+    // even once — attempting it earlier used to 500 silently (the supplier/
+    // item row doesn't exist server-side yet). Until then, the edit just
+    // stays in local state, matching what the "not saved to database" banner
+    // already tells the user.
+    if(updated && dbSaved) persistItems(supplierId, [updated]).catch(e => setSaveMsg(`Price update failed to save: ${e.message}`));
   };
 
   const updateOurPrice = (supplierId, productId, newPrice) => {
@@ -345,7 +354,7 @@ export default function PriceListManager({ onMakeQuote } = {}) {
       })};
     }));
     setEditingPrice(null);
-    if(updated) persistItems(supplierId, [updated]);
+    if(updated && dbSaved) persistItems(supplierId, [updated]).catch(e => setSaveMsg(`Price update failed to save: ${e.message}`));
   };
 
   // Accept suggested price into deal
@@ -494,7 +503,7 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
   };
 
   // Commit import preview into catalog and persist to DB.
-  const commitImport = () => {
+  const commitImport = async () => {
     if(!importPreview) return;
     const {supplierName, supplierCategory, repName, repEmail, products, targetSupplierId} = importPreview;
     const today = new Date().toISOString().slice(0,10);
@@ -562,11 +571,18 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
       }
     });
 
-    // Persist to DB (fire-and-forget — local state is already updated)
+    // Persist to DB — sequential and checked, not fire-and-forget: items.js
+    // requires the supplier row to already exist, so the item write can't
+    // start until the supplier write actually lands, and dbSaved should
+    // only flip to true once both really succeeded.
     if(finalSup) {
-      persistSupplier(finalSup);
-      persistItems(finalSup.id, finalProds);
-      setDbSaved(true);
+      try {
+        await persistSupplier(finalSup);
+        await persistItems(finalSup.id, finalProds);
+        setDbSaved(true);
+      } catch(e) {
+        addLog(`Save to database failed: ${e.message} — import is applied locally only, click "SAVE TO DB" to retry`, "error");
+      }
     }
 
     setImportPreview(null);
@@ -712,13 +728,16 @@ Provide strategic pricing advice. Return JSON:
         }
         setScanResults(prev=>({...prev,...upd}));
         setScanSelected(new Set());
-        // Persist market intel to DB (fire-and-forget)
+        // Persist market intel to DB — /api/pricelists/market updates
+        // existing rows, so this can only succeed once the item actually
+        // exists server-side (i.e. after at least one "SAVE TO DB").
         const mktUpdates = Object.entries(upd).map(([id,r]) => ({ id, ...r }));
-        if(mktUpdates.length > 0) {
+        if(mktUpdates.length > 0 && dbSaved) {
           fetch('/api/pricelists/market', {
             method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ updates: mktUpdates }),
-          }).catch(()=>{});
+          }).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`) })
+            .catch(e => setScanError(`Scan results saved locally but failed to persist: ${e.message}`));
         }
       } else { setScanError("Could not parse response — try scanning fewer products"); }
     } catch(e){ setScanError(e.message); }
