@@ -3,8 +3,9 @@
  *
  * One-time backfill: every existing SalesContact with a companyName but no
  * accountId gets linked to (or creates) an Account row, grouped by
- * normalizeAccountName so casing/whitespace variants of the same school
- * collapse into one Account instead of staying as loose duplicate strings.
+ * accountDedupKey (name+state) so casing/whitespace variants of the same
+ * school collapse into one Account instead of staying as loose duplicate
+ * strings — while two same-named schools in different states stay separate.
  *
  * Body: { dryRun?: boolean } — default false (actually writes)
  * Returns: { accountsCreated, contactsLinked, dryRun }

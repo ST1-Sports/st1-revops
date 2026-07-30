@@ -47,3 +47,44 @@ export async function upsertAccountForContact(companyName, { city, state, orgTyp
   })
   return account.id
 }
+
+const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
+
+/**
+ * Find-or-create the Zoho CRM Account for {name, city, state} and return its
+ * Zoho id. Shared by every caller that needs a real Zoho Account behind a
+ * local Account/contact — a search by Account_Name alone can return more
+ * than one same-named school, so when we know the state and there's more
+ * than one match, the one whose Billing_State agrees wins. Creation always
+ * sends Billing_City/Billing_State so the Zoho record carries location too.
+ */
+export async function findOrCreateZohoAccount({ name, city, state }, headers) {
+  const trimmedName = (name || '').trim()
+  if (!trimmedName) return null
+
+  try {
+    const criteria = `(Account_Name:equals:${trimmedName})`
+    const searchRes = await fetch(`${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
+    if (searchRes.ok) {
+      const searchData = await searchRes.json().catch(() => null)
+      const matches = searchData?.data || []
+      const existing = state && matches.length > 1
+        ? (matches.find(m => (m.Billing_State || '').toLowerCase() === state.toLowerCase()) || matches[0])
+        : matches[0]
+      if (existing?.id) return existing.id
+    }
+  } catch {}
+
+  const createRes = await fetch(`${CRM_BASE}/Accounts`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ data: [{
+      Account_Name: trimmedName,
+      Billing_City:  city  || undefined,
+      Billing_State: state || undefined,
+    }] }),
+  })
+  const createData = await createRes.json().catch(() => null)
+  const rec = createData?.data?.[0]
+  if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
+  return rec?.details?.id || null
+}

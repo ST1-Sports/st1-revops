@@ -328,12 +328,14 @@ if(name.length>3&&ic===name) return true;
 return false;
 })||null;
 }
-// Canonical sports list for account coverage/gap detection. Deliberately
-// reuses ModCRM's COMMON_SPORTS values (kept in sync by hand) rather than the
-// shorter SPORTS_LIST used by the segment builder — coverage gaps should
-// consider anything a school could plausibly run, not just the sports
-// Prospecting actively targets.
-const ACCOUNT_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew"];
+// Canonical sports list — used by the CRM contact-profile dropdown and by
+// account coverage/gap detection. Deliberately not the shorter SPORTS_LIST
+// used by the segment builder — coverage gaps should consider anything a
+// school could plausibly run, not just the sports Prospecting actively
+// targets. ACCOUNT_SPORTS drops the two catch-all entries, which aren't
+// real "sports" a coverage gap could ever be filled for.
+const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
+const ACCOUNT_SPORTS=COMMON_SPORTS.filter(sp=>!["Multiple Sports","All Sports / General"].includes(sp));
 const SPORT_TITLE_PATTERNS=[
 [/track|cross.?country|\bxc\b|t&f/i,"Track & Field"],
 [/football/i,"Football"],[/basketball/i,"Basketball"],[/baseball/i,"Baseball"],
@@ -418,11 +420,6 @@ case "SET_CONTACTS":      return {...prev, contacts:payload};
 case "SET_DEALS":         return {...prev, deals:payload};
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
-case "MERGE_CONTACTS": {
-const updMap=new Map((payload.toUpdate||[]).map(c=>[c.id,c]));
-const merged=(prev.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
-return {...prev,contacts:[...(payload.toAdd||[]),...merged],contactsLastSync:payload.lastSync||Date.now()};
-}
 case "SCORE_CONTACT": {
 const {contactId,type,note,campaignId} = payload;
 const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
@@ -3107,7 +3104,6 @@ const st=(c.state||"").trim();
 return st?`${sch} — ${st}`:sch;
 };
 const cleanSchoolName=(key)=>(key||"").replace(/ — [^—]*$/,"");
-const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const cdMap=useMemo(()=>{
 const m=new Map();

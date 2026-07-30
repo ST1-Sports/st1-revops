@@ -26,7 +26,7 @@
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
-import { upsertAccountForContact } from '../_lib/accountUtils.js'
+import { upsertAccountForContact, findOrCreateZohoAccount } from '../_lib/accountUtils.js'
 
 const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
 
@@ -37,40 +37,17 @@ async function findOrCreateAccount(contact, headers) {
   // Reuse an account already resolved for another prospect at the same
   // school + state before hitting Zoho again — many prospects share a
   // school, but two same-named schools in different states are two
-  // different real Accounts and must never share a zohoAccountId.
+  // different real Accounts and must never share a zohoAccountId. (This
+  // sibling lookup is specific to this endpoint — it may run before any
+  // local Account row exists at all, unlike zoho-align-accounts.js which
+  // always has a real Account.zohoAccountId to check directly.)
   const sibling = await prisma.salesContact.findFirst({
     where:  { companyName: contact.companyName, state: contact.state, zohoAccountId: { not: null } },
     select: { zohoAccountId: true },
   }).catch(() => null)
   if (sibling?.zohoAccountId) return sibling.zohoAccountId
 
-  try {
-    const criteria = `(Account_Name:equals:${name})`
-    const searchRes = await fetch(`${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
-    if (searchRes.ok) {
-      const searchData = await searchRes.json().catch(() => null)
-      const matches = searchData?.data || []
-      // Name matches alone aren't enough — pick the one in the right state
-      // when we know it and there's more than one same-named Account.
-      const existing = contact.state && matches.length > 1
-        ? (matches.find(m => (m.Billing_State || '').toLowerCase() === contact.state.toLowerCase()) || matches[0])
-        : matches[0]
-      if (existing?.id) return existing.id
-    }
-  } catch {}
-
-  const createRes = await fetch(`${CRM_BASE}/Accounts`, {
-    method: 'POST', headers,
-    body: JSON.stringify({ data: [{
-      Account_Name: name,
-      Billing_City:  contact.city  || undefined,
-      Billing_State: contact.state || undefined,
-    }] }),
-  })
-  const createData = await createRes.json().catch(() => null)
-  const rec = createData?.data?.[0]
-  if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
-  return rec?.details?.id || null
+  return findOrCreateZohoAccount({ name, city: contact.city, state: contact.state }, headers)
 }
 
 /** POST-or-PUT a record into a Zoho module, then mirror the result onto SalesContact. */

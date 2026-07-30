@@ -32,6 +32,7 @@ import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { ACCOUNT_SPORTS, COACH_ROLES, resolveSport, inferRoleFromTitle } from '../_lib/roleUtils.js'
+import { findOrCreateZohoAccount } from '../_lib/accountUtils.js'
 
 const CRM_BASE   = 'https://www.zohoapis.com/crm/v3'
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
@@ -64,34 +65,6 @@ async function ensureField(fieldLabel, pickListValues, headers) {
   return { created: true, api_name: rec.details?.api_name || null }
 }
 
-async function findOrCreateZohoAccount(account, headers) {
-  if (account.zohoAccountId) return account.zohoAccountId
-  try {
-    const criteria = `(Account_Name:equals:${account.name})`
-    const searchRes = await fetch(`${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
-    if (searchRes.ok) {
-      const searchData = await searchRes.json().catch(() => null)
-      const matches = searchData?.data || []
-      const existing = account.state && matches.length > 1
-        ? (matches.find(m => (m.Billing_State || '').toLowerCase() === account.state.toLowerCase()) || matches[0])
-        : matches[0]
-      if (existing?.id) return existing.id
-    }
-  } catch {}
-
-  const createRes = await fetch(`${CRM_BASE}/Accounts`, {
-    method: 'POST', headers,
-    body: JSON.stringify({ data: [{
-      Account_Name: account.name,
-      Billing_City:  account.city  || undefined,
-      Billing_State: account.state || undefined,
-    }] }),
-  })
-  const createData = await createRes.json().catch(() => null)
-  const rec = createData?.data?.[0]
-  if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
-  return rec?.details?.id || null
-}
 
 export default async function handler(req, res) {
   setCors(res)
@@ -161,7 +134,8 @@ export default async function handler(req, res) {
 
   for (const account of toProcess) {
     try {
-      const zohoAccountId = await findOrCreateZohoAccount(account, headers)
+      const zohoAccountId = account.zohoAccountId
+        || await findOrCreateZohoAccount({ name: account.name, city: account.city, state: account.state }, headers)
       if (zohoAccountId && zohoAccountId !== account.zohoAccountId) {
         await prisma.account.update({ where: { id: account.id }, data: { zohoAccountId } })
       }
