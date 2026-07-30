@@ -3192,12 +3192,23 @@ const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
-let backendLinked=0,backendPushed=0;
+let backendLinked=0,backendPushed=0,noContactAccounts=0;
 try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
 backendLinked=syncRes?.contactsLinked||0;
-const alignRes=await fetch("/api/contacts/zoho-align-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:50})}).then(r=>r.json());
-backendPushed=alignRes?.contactsPushed||0;
+noContactAccounts=(syncRes?.accountsWithNoContacts||[]).length;
+// zoho-align-accounts only processes `limit` qualifying accounts per call
+// (so any single run stays fast) — keep re-triggering it until it reports
+// nothing left, instead of silently leaving most qualifying accounts at
+// "0 contacts" after a single pass.
+let remaining=1,guard=0;
+while(remaining>0&&guard<10){
+const alignRes=await fetch("/api/contacts/zoho-align-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:100})}).then(r=>r.json());
+backendPushed+=alignRes?.contactsPushed||0;
+remaining=alignRes?.accountsRemaining||0;
+guard++;
+if(!alignRes?.accountsProcessed)break;
+}
 if(crmSyncRef?.current)await crmSyncRef.current(true);
 }catch(e){toast(`Books/Zoho sync error: ${e.message}`,"error");}
 const byDomain=new Map();
@@ -3227,7 +3238,8 @@ const bestMatch=named.find(c=>c.school===bestSchool);
 blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,city:bestMatch.city}));
 }
 if(!toFix.length){
-toast(backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet","info");
+const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere in our system — those need a real person added manually, not matched`:"";
+toast((backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
 setBackfillingOrgs(false);return;
 }
 for(const {contact,school,state,city}of toFix){
@@ -3244,7 +3256,8 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 }
-toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`,"success");
+const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere — need a real person added manually`:"";
+toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`+gapNote,"success");
 setBackfillingOrgs(false);
 };
 const loadBooksContacts=async(customerId)=>{
