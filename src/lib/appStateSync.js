@@ -112,3 +112,18 @@ export function pushItemsToAppState(key, items) {
   writeAppState(state)
   return toAdd.length
 }
+
+let pushTimer = null
+
+/**
+ * Overwrite one field of the shared blob and sync it up, for standalone
+ * routes doing simple CRUD on a single array (add/update/delete one item).
+ * The local write is immediate so the UI reflects it right away; the
+ * server push is debounced so a burst of edits (e.g. deleting several
+ * items back to back) collapses into one request instead of one per edit.
+ */
+export function setAppStateField(field, value) {
+  writeAppState({ ...readAppState(), [field]: value })
+  clearTimeout(pushTimer)
+  pushTimer = setTimeout(pushAppStateToServer, 1500)
+}

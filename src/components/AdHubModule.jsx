@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
-import { readAppState, writeAppState, pushAppStateToServer } from '../lib/appStateSync.js'
+import { readAppState, setAppStateField } from '../lib/appStateSync.js'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -2037,6 +2037,7 @@ function AssetGallery({ toast }) {
 }
 
 const CREATOR_SUBTABS = [['build', 'Build'], ['saved', 'Saved Ads'], ['calendar', 'Social Calendar'], ['assets', 'Assets']]
+const EMPTY_CREATOR_LOCAL = { brandAssets: [], savedAds: [], socialPosts: [] }
 
 function AdCreatorTab({ s, dispatch, toast: toastProp }) {
   const embedded = !!dispatch
@@ -2044,20 +2045,31 @@ function AdCreatorTab({ s, dispatch, toast: toastProp }) {
   const [subTab, setSubTab] = useState('build')
 
   // ── shared data: real dispatch when embedded in RevOps, direct localStorage otherwise ──
-  const [localBrandAssets, setLocalBrandAssets] = useState(() => embedded ? [] : (Array.isArray(readAppState().brandAssets) ? readAppState().brandAssets : []))
-  const [localSavedAds, setLocalSavedAds] = useState(() => embedded ? [] : (Array.isArray(readAppState().savedAds) ? readAppState().savedAds : []))
-  const [localSocialPosts, setLocalSocialPosts] = useState(() => embedded ? [] : (Array.isArray(readAppState().socialPosts) ? readAppState().socialPosts : []))
-  const brandAssets = embedded ? (s?.brandAssets || []) : localBrandAssets
-  const savedAds    = embedded ? (s?.savedAds || [])    : localSavedAds
-  const socialPosts = embedded ? (s?.socialPosts || []) : localSocialPosts
-  const writeField = (field, arr) => { const store = readAppState(); writeAppState({ ...store, [field]: arr }); pushAppStateToServer() }
-  const addBrandAsset = (asset) => { if (embedded) dispatch('ADD_BRAND_ASSET', asset); else { const next = [...brandAssets, asset]; setLocalBrandAssets(next); writeField('brandAssets', next) } }
-  const deleteBrandAsset = (id) => { if (embedded) dispatch('DELETE_BRAND_ASSET', id); else { const next = brandAssets.filter(a => a.id !== id); setLocalBrandAssets(next); writeField('brandAssets', next) } }
-  const addSavedAd = (ad) => { if (embedded) dispatch('ADD_SAVED_AD', ad); else { const next = [ad, ...savedAds]; setLocalSavedAds(next); writeField('savedAds', next) } }
-  const deleteSavedAd = (id) => { if (embedded) dispatch('DELETE_SAVED_AD', id); else { const next = savedAds.filter(a => a.id !== id); setLocalSavedAds(next); writeField('savedAds', next) } }
-  const addSocialPost = (post) => { if (embedded) dispatch('ADD_SOCIAL_POST', post); else { const next = [...socialPosts, post]; setLocalSocialPosts(next); writeField('socialPosts', next) } }
-  const updateSocialPost = (post) => { if (embedded) dispatch('UPDATE_SOCIAL_POST', post); else { const next = socialPosts.map(p => p.id === post.id ? { ...p, ...post } : p); setLocalSocialPosts(next); writeField('socialPosts', next) } }
-  const deleteSocialPost = (id) => { if (embedded) dispatch('DELETE_SOCIAL_POST', id); else { const next = socialPosts.filter(p => p.id !== id); setLocalSocialPosts(next); writeField('socialPosts', next) } }
+  const [local, setLocal] = useState(() => {
+    if (embedded) return EMPTY_CREATOR_LOCAL
+    const store = readAppState()
+    return {
+      brandAssets: Array.isArray(store.brandAssets) ? store.brandAssets : [],
+      savedAds: Array.isArray(store.savedAds) ? store.savedAds : [],
+      socialPosts: Array.isArray(store.socialPosts) ? store.socialPosts : [],
+    }
+  })
+  const brandAssets = embedded ? (s?.brandAssets || []) : local.brandAssets
+  const savedAds    = embedded ? (s?.savedAds || [])    : local.savedAds
+  const socialPosts = embedded ? (s?.socialPosts || []) : local.socialPosts
+  // one mutator for every field: dispatch when embedded, else write the
+  // already-computed next value to local state + the shared localStorage blob
+  const mutate = (field, dispatchType, dispatchArg, nextValue) => {
+    if (embedded) dispatch(dispatchType, dispatchArg)
+    else { setLocal(l => ({ ...l, [field]: nextValue })); setAppStateField(field, nextValue) }
+  }
+  const addBrandAsset = (asset) => mutate('brandAssets', 'ADD_BRAND_ASSET', asset, [...brandAssets, asset])
+  const deleteBrandAsset = (id) => mutate('brandAssets', 'DELETE_BRAND_ASSET', id, brandAssets.filter(a => a.id !== id))
+  const addSavedAd = (ad) => mutate('savedAds', 'ADD_SAVED_AD', ad, [ad, ...savedAds])
+  const deleteSavedAd = (id) => mutate('savedAds', 'DELETE_SAVED_AD', id, savedAds.filter(a => a.id !== id))
+  const addSocialPost = (post) => mutate('socialPosts', 'ADD_SOCIAL_POST', post, [...socialPosts, post])
+  const updateSocialPost = (post) => mutate('socialPosts', 'UPDATE_SOCIAL_POST', post, socialPosts.map(p => p.id === post.id ? { ...p, ...post } : p))
+  const deleteSocialPost = (id) => mutate('socialPosts', 'DELETE_SOCIAL_POST', id, socialPosts.filter(p => p.id !== id))
 
   // ── ad creator state ──
   const [adTpl, setAdTpl] = useState('bold')

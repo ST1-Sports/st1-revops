@@ -113,7 +113,6 @@ alerts: [],
 orders: [],
 templates: [],
 reps: [],
-strategies: [],
 activity: [],
 integrations: {zohoToken:"",zohoCrmToken:"",zohoOrgId:"",slackChannel:"C0AQ7CMB01X"},
 company: {name:"ST1 Sports",ownerName:"Matt Stone",email:"matt@st1sports.com",phone:"719-256-0275",address:"Ames, Iowa",website:"st1sports.com"},
@@ -146,7 +145,6 @@ deals:        mergeById(base.deals,        server.deals),
 rfps:         mergeById(base.rfps,         server.rfps),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
-strategies:   mergeById(base.strategies,   server.strategies),
 brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
 socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
 savedAds:     mergeById(base.savedAds,     server.savedAds),
@@ -189,7 +187,6 @@ savedAds:     Array.isArray(p.savedAds)     ? p.savedAds     : [],
 socialPosts:  Array.isArray(p.socialPosts)  ? p.socialPosts  : [],
 campaigns:    Array.isArray(p.campaigns)    ? p.campaigns    : [],
 reps:         Array.isArray(p.reps)         ? p.reps         : [],
-strategies:   Array.isArray(p.strategies)   ? p.strategies   : [],
 invoiceLastSync: p.invoiceLastSync||null,
 contactsLastSync: p.contactsLastSync||null,
 lastBriefDate: p.lastBriefDate||null,
@@ -487,9 +484,6 @@ return {...c,touches};
 })};
 }
 case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
-case "ADD_STRATEGY":    return {...prev, strategies:[payload,...(prev.strategies||[])]};
-case "UPDATE_STRATEGY": return {...prev, strategies:(prev.strategies||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
-case "DEL_STRATEGY":    return {...prev, strategies:(prev.strategies||[]).filter(s=>s.id!==payload)};
 case "ADD_PRICE_LIST":  return {...prev, priceLists:[payload,...(prev.priceLists||[])]};
 case "UPDATE_PRICE_LIST": return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id===payload.id?{...pl,...payload}:pl)};
 case "DEL_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).filter(pl=>pl.id!==payload)};
@@ -497,7 +491,7 @@ case "UPDATE_PRICE_LIST_ITEM": {
 const {listId, itemId, updates} = payload;
 return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id!==listId?pl:{...pl,items:(pl.items||[]).map(it=>it.id===itemId?{...it,...updates}:it)})};
 }
-case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], strategies:prev.strategies||[], reps:prev.reps||[]};
+case "RESET":               return {...SEED, currentUserId:prev.currentUserId, integrations:prev.integrations, company:prev.company, brandAssets:prev.brandAssets||[], savedAds:prev.savedAds||[], appUsers:prev.appUsers||[], contactLists:prev.contactLists||[], campaigns:prev.campaigns||[], reps:prev.reps||[]};
 default:                  return prev;
 }
 }
@@ -7613,30 +7607,14 @@ const CHANNELS = [
 {id:"newsletter",icon:"📧",label:"Newsletter"},
 ];
 const METRICS = ["Opens","Clicks","Replies","Meetings Booked","Quotes Sent","Orders","Revenue","Impressions","Engagement Rate","Cost Per Lead"];
-const startNewCampaign = (fromPlan=null) => {
+const startNewCampaign = () => {
 setSelCampId(null);
 setSegResult(null);
 setSelectedContacts(new Set());
 setMatchingContacts(null);
-if(fromPlan){
-const planIcp = fromPlan?.icp || {sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:"",notes:""};
-setCampDraft({
-name:"",product:"Track & Field Equipment",audience:"Athletic Director",tone:"friendly",ctx:"",
-touches:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",
-startDate:today(),endDate:"",goal:"",channels:fromPlan?.channels||[],
-metrics:["Opens","Replies","Quotes Sent"],repId:"",
-planId:fromPlan?.id||"",
-icp:{...planIcp},
-assetTypes:[],
-});
-setCampStep(1);
-setShowNewCampForm(true);
-setShowTemplateSelect(false);
-} else {
 setShowTemplateSelect(true);
 setShowNewCampForm(false);
 setCampDraft(null);
-}
 };
 const applyTemplate = (tpl) => {
 setCampDraft({
@@ -7650,7 +7628,7 @@ startDate:today(),endDate:"",
 goal:tpl.goal||"",
 channels:tpl.channels||[],
 metrics:tpl.metrics||["Opens","Replies","Quotes Sent"],
-repId:"",planId:"",
+repId:"",
 icp:{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:"",notes:""},
 assetTypes:tpl.assetTypes||[],
 });
