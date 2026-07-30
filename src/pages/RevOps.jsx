@@ -5336,6 +5336,7 @@ setView(s.prospectingNav);
 dispatch("SET_PROSPECTING_NAV",null);
 },[s.prospectingNav]);
 const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
+const [segView,setSegView]=useState("segments");
 const [editing,setEditing]=useState(null);
 const [areaCounts,setAreaCounts]=useState({});
 useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
@@ -6346,10 +6347,18 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 </div>
 )}
 {!buildingSegment&&!areaContactsAreaId&&<>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Define target audiences and browse matching contacts</div>
-<OBtn sm onClick={()=>{setBuildingSegment({id:mkId(),name:"",states:[],sports:[],roles:[],maxSchools:10,active:true});setBuildingSegmentIsNew(true);setBuildingSegmentCount(null);}}>+ NEW SEGMENT</OBtn>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+<div style={{display:"flex",gap:5}}>
+{[["segments",`✦ SEGMENTS (${areas.length})`],["lists",`☰ LISTS (${(s.contactLists||[]).length})`]].map(([id,l])=>(
+<button key={id} onClick={()=>setSegView(id)} style={{background:segView===id?B.orange:B.white,color:segView===id?B.white:B.muted,border:`1px solid ${segView===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
+))}
 </div>
+{segView==="segments"&&<OBtn sm onClick={()=>{setBuildingSegment({id:mkId(),name:"",states:[],sports:[],roles:[],maxSchools:10,active:true});setBuildingSegmentIsNew(true);setBuildingSegmentCount(null);}}>+ NEW SEGMENT</OBtn>}
+</div>
+{segView==="segments"&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>Define target audiences and browse matching contacts — what you've built</div>
+)}
+{segView==="segments"&&(
 <div className="rv-segment-cards" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
 {areas.map(area=>(
 <div key={area.id} className="card" style={{padding:14,borderTop:`3px solid ${B.orange}`}}>
@@ -6381,6 +6390,72 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 </div>
 ))}
 </div>
+)}
+{segView==="lists"&&(
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:14}}>Contact lists uploaded or built from segments — what you've imported</div>
+{(s.contactLists||[]).length===0?(
+<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No lists yet — create one from a segment (browse contacts → select → create list) or import a CSV.</div>
+):(
+<div style={{display:"flex",flexDirection:"column",gap:12}}>
+{(s.contactLists||[]).map(list=>{
+const isOpen=expandedListId===list.id;
+const isRenaming=renamingListId===list.id;
+const listContacts=(list.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean);
+const preview=listContacts.slice(0,3);
+const companyOf=c=>(typeof c.school==="string"?c.school:c.school?.name||"")||c.companyName||"";
+return(
+<div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",flexWrap:"wrap"}}>
+{isRenaming?(
+<input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
+onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
+style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
+):(
+<div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{list.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{(list.contactIds||[]).length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""} {isOpen?"· click to collapse":"· click to preview"}</div>
+{!isOpen&&preview.length>0&&(
+<div style={{marginTop:5,display:"flex",flexDirection:"column",gap:2}}>
+{preview.map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
+<div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+<span style={{color:B.text,fontWeight:500}}>{name}</span>{c.email?` · ${c.email}`:""}{company?` · ${company}`:""}
+</div>
+);})}
+{listContacts.length>preview.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>+{listContacts.length-preview.length} more — click to view full list</div>}
+</div>
+)}
+</div>
+)}
+<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
+{isRenaming?(<><OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn><button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
+<button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
+<OBtn sm col={B.teal} onClick={()=>setView("campaigns")}>USE IN CAMPAIGN →</OBtn>
+<button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
+<span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span></>)}
+</div>
+</div>
+{isOpen&&listContacts.length>0&&(
+<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:360,overflowY:"auto"}}>
+<div style={{display:"flex",flexDirection:"column",gap:4}}>
+{listContacts.slice(0,300).map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
+<div key={c.id} style={{display:"flex",gap:8,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+<span style={{fontWeight:600,minWidth:150}}>{name}</span>
+<span style={{color:B.muted,fontSize:10}}>{c.email||"no email"}</span>
+{company&&<span style={{color:B.blue,fontSize:9,background:B.blueBg,padding:"1px 6px",borderRadius:3}}>{company}</span>}
+</div>
+);})}
+{listContacts.length>300&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {listContacts.length-300} more</div>}
+</div>
+</div>
+)}
+</div>
+);
+})}
+</div>
+)}
+</div>
+)}
 </>}
 </div>
 )}
