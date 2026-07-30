@@ -959,6 +959,11 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
   .rv-crm-left{width:100%!important;max-height:220px!important;border-right:none!important;border-bottom:1px solid ${B.border}!important;flex-shrink:0!important}
   .rv-kpi-grid{grid-template-columns:repeat(2,1fr)!important}
   .rv-info-grid{grid-template-columns:repeat(2,1fr)!important}
+  .rv-2col-grid{grid-template-columns:1fr!important}
+  .rv-3col-grid{grid-template-columns:1fr!important}
+  .rv-results-split{grid-template-columns:1fr!important}
+  .rv-results-split .rv-sticky-log{position:static!important}
+  .rv-segment-cards{grid-template-columns:1fr!important}
 }
 `}</style>
 {/* SIDEBAR */}
@@ -1287,7 +1292,7 @@ ADMIN ACCESS →
 </div>
 );
 }
-const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
+const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end",flexWrap:"wrap",gap:12}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
@@ -6089,7 +6094,7 @@ const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${totalContactsAll>0?to
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
-action={<div style={{display:"flex",gap:6,alignItems:"center"}}><button onClick={()=>setView("import")} style={{background:"none",color:view==="import"?B.orange:B.muted,border:`1px solid ${view==="import"?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:view==="import"?700:400,letterSpacing:.3,cursor:"pointer"}}>↑ IMPORT</button><div style={{width:1,height:18,background:B.border,margin:"0 2px",flexShrink:0}}/>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
+action={<div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}><button onClick={()=>setView("import")} style={{background:"none",color:view==="import"?B.orange:B.muted,border:`1px solid ${view==="import"?B.orange:B.border}`,borderRadius:4,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:view==="import"?700:400,letterSpacing:.3,cursor:"pointer"}}>↑ IMPORT</button><div style={{width:1,height:18,background:B.border,margin:"0 2px",flexShrink:0}}/>{PVIEWS.map(([v,l])=><button key={v} onClick={()=>setView(v)} style={{background:view===v?B.orange:B.white,color:view===v?B.white:B.muted,border:`1px solid ${view===v?B.orange:B.border}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>)}</div>}/>
 {view==="contacts"&&(
 <div>
 {/* Search + stats bar */}
@@ -6123,7 +6128,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.companyName,c.email].filter(Boolean).join(" · ")}</div>
 {(c.sport||c.state||c.city)&&<div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:3}}>{c.sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c.sport}</span>}{(c.city||c.state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{[c.city,c.state].filter(Boolean).join(", ")}</span>}</div>}
 </div>
-<div style={{display:"flex",gap:6,flexShrink:0}}>
+<div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 <button onClick={()=>{setOneOffName(name);setOneOffEmail(c.email);setOneOffContext(c.companyName||"");setView("brad");setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),200);}}
 style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ DRAFT</button>
 {/* Only push to Zoho once there's a real signal (a reply — score>=50) —
@@ -6190,7 +6195,7 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{areaContactsLoading?"Loading…":`${areaContactsTotal.toLocaleString()} contacts match`}</div>
 </div>
 </div>
-<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
 <button onClick={()=>setAreaContactsSel(s=>{const all=new Set(areaContactsList.map(c=>c.id));return areaContactsList.every(c=>s.has(c.id))&&s.size>0?new Set():all;})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer"}}>{areaContactsList.length>0&&areaContactsList.every(c=>areaContactsSel.has(c.id))?"DESELECT":"SELECT PAGE"}</button>
 {areaContactsTotal>areaContactsList.length&&<button onClick={()=>selectAllAreaContacts(browseArea,areaContactsStateF,areaContactsSportF)} disabled={areaContactsAllLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:areaContactsAllLoading?B.muted:B.text,cursor:areaContactsAllLoading?"default":"pointer"}}>{areaContactsAllLoading?`SELECTING…`:`SELECT ALL ${areaContactsTotal.toLocaleString()}`}</button>}
 {areaContactsSel.size>0&&<OBtn sm onClick={()=>{const nm=`${browseArea.name} – ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;const nl={id:mkId(),name:nm,contactIds:[...areaContactsSel],createdAt:Date.now(),source:"area-browse"};dispatch("ADD_CONTACT_LIST",nl);toast(`List "${nm}" created with ${areaContactsSel.size} contacts`,"success");setAreaContactsSel(new Set());}}>✓ CREATE LIST ({areaContactsSel.size})</OBtn>}
@@ -6220,7 +6225,7 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 {buildingSegment&&!areaContactsAreaId&&(
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:22,maxWidth:720}}>
 {/* Header */}
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20,flexWrap:"wrap",gap:8}}>
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2,marginBottom:4}}>{buildingSegmentIsNew?"NEW SEGMENT":"EDIT SEGMENT"}</div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>Segment Builder</div>
@@ -6235,7 +6240,7 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 {/* Org Type */}
 <div style={{marginBottom:20}}>
 <Lbl s={{marginBottom:6}}>ORG TYPE</Lbl>
-<div style={{display:"flex",gap:6}}>
+<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
 {[["schools","🏫 Schools"],["clubs","⚽ Youth Clubs"],["both","Both"]].map(([v,l])=>(
 <button key={v} onClick={()=>setBuildingSegment(s=>({...s,orgType:v}))} style={{background:buildingSegment.orgType===v?B.orange:B.white,color:buildingSegment.orgType===v?B.white:B.muted,border:`1px solid ${buildingSegment.orgType===v?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:buildingSegment.orgType===v?600:400}}>{l}</button>
 ))}
@@ -6346,11 +6351,11 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Define target audiences and browse matching contacts</div>
 <OBtn sm onClick={()=>{setBuildingSegment({id:mkId(),name:"",states:[],sports:[],roles:[],maxSchools:10,active:true});setBuildingSegmentIsNew(true);setBuildingSegmentCount(null);}}>+ NEW SEGMENT</OBtn>
 </div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
+<div className="rv-segment-cards" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:12}}>
 {areas.map(area=>(
 <div key={area.id} className="card" style={{padding:14,borderTop:`3px solid ${B.orange}`}}>
 <div>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:7,flexWrap:"wrap",gap:6}}>
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>{area.name}</div>
 {areaCounts[area.id]!=null&&(
@@ -6407,7 +6412,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 {/* Idle: just the buttons */}
 {importPhase==="idle"&&(
 <>
-<div style={{display:"flex",gap:10,alignItems:"center",paddingTop:10}}>
+<div style={{display:"flex",gap:10,alignItems:"center",paddingTop:10,flexWrap:"wrap"}}>
 <input ref={importFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleListUpload} style={{display:"none"}}/>
 <input ref={apolloFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleApolloUpload} style={{display:"none"}}/>
 <OBtn sm onClick={()=>importFileRef.current?.click()}>↑ UPLOAD CSV / EXCEL</OBtn>
@@ -6517,7 +6522,7 @@ finally{setSyncingBooks(false);}
 )}
 </div>
 {/* Form fields */}
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+<div className="rv-2col-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:4}}>LIST NAME <span style={{color:B.orange}}>*</span></div>
 <input value={importListName} onChange={e=>{setImportListName(e.target.value);detectImportMeta(e.target.value);}}
@@ -7012,139 +7017,13 @@ setEnrollingContact(null);
 </div>
 </div>
 )}
-{view==="lists"&&(
-<div>
-{(s.contactLists||[]).length===0?(
-<div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-No lists yet — upload a CSV in the CONTACT DB tab to create your first list
-</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:12}}>
-{(s.contactLists||[]).map(list=>{
-const listContacts=(list.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean);
-const isOpen=expandedListId===list.id;
-const isRenaming=renamingListId===list.id;
-const isAdding=addingToListId===list.id;
-const listIds=new Set(list.contactIds||[]);
-const addableSq=(listContactSearch||"").toLowerCase();
-const addable=(s.contacts||[]).filter(c=>!listIds.has(c.id)&&(
-!addableSq||[c.fullName,c.firstName,c.lastName,c.email,c.school,c.title,c.sport,c.state].some(v=>v&&v.toLowerCase().includes(addableSq))
-)).slice(0,50);
-return (
-<div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
-{/* Header */}
-<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px"}}>
-{isRenaming?(
-<input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
-onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
-style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
-):(
-<div style={{flex:1,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>
-{listContacts.length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}
-{isOpen?" · click to collapse":""}
-</div>
-</div>
-)}
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-{isRenaming?(
-<>
-<OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn>
-<button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button>
-</>
-):(
-<>
-<button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
-<button onClick={()=>{setAddingToListId(isAdding?null:list.id);setListContactSearch("");setExpandedListId(list.id);}} style={{background:isAdding?B.orange:"none",border:`1px solid ${isAdding?B.orange:B.border}`,color:isAdding?B.white:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>+ ADD CONTACTS</button>
-<OBtn sm onClick={()=>setMod("campaigns")} style={{background:B.orange,borderColor:B.orange}}>USE IN CAMPAIGN →</OBtn>
-<button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?\nContacts stay in the database.`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}} title="Delete list">×</button>
-<span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span>
-</>
-)}
-</div>
-</div>
-{/* Add contacts panel */}
-{isAdding&&(
-<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",background:`${B.orange}08`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>ADD FROM CONTACT DATABASE</div>
-<input value={listContactSearch} onChange={e=>setListContactSearch(e.target.value)}
-placeholder="Search by name, email, school, sport, state…"
-style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",marginBottom:8}}/>
-{addable.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No matching contacts found outside this list.</div>}
-<div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:4}}>
-{addable.map(c=>(
-<div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 8px",background:B.white,borderRadius:4,border:`1px solid ${B.border}`}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[c.title,c.school,c.email].filter(Boolean).join(" · ")}</div>
-</div>
-<button onClick={()=>dispatch("UPDATE_CONTACT_LIST",{id:list.id,contactIds:[...(list.contactIds||[]),c.id]})}
-style={{background:B.orange,border:"none",color:B.white,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:4,cursor:"pointer",flexShrink:0}}>+ ADD</button>
-</div>
-))}
-</div>
-</div>
-)}
-{/* Contact table */}
-{isOpen&&(
-<div style={{borderTop:`1px solid ${B.border}`}}>
-{listContacts.length===0?(
-<div style={{padding:"20px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts in this list yet. Use + ADD CONTACTS above.</div>
-):(
-<div style={{overflowX:"auto",maxHeight:360,overflowY:"auto"}}>
-<table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-<thead style={{position:"sticky",top:0,background:B.white,zIndex:1}}>
-<tr style={{borderBottom:`1px solid ${B.border}`}}>
-{["Name","Title / Org","Email","Sport","State","Priority",""].map(h=>(
-<th key={h} style={{padding:"7px 12px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
-))}
-</tr>
-</thead>
-<tbody>
-{listContacts.map(c=>(
-<tr key={c.id} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"6px 12px",whiteSpace:"nowrap"}}>
-<div style={{color:B.text,fontWeight:500}}>{c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"—"}</div>
-</td>
-<td style={{padding:"6px 12px"}}>
-<div style={{color:B.text}}>{c.title||"—"}</div>
-<div style={{color:B.muted,fontSize:10}}>{c.school||""}</div>
-</td>
-<td style={{padding:"6px 12px",color:B.muted}}>{c.email||"—"}</td>
-<td style={{padding:"6px 12px",color:B.muted}}>{c.sport||"—"}</td>
-<td style={{padding:"6px 12px",color:B.muted}}>{c.state||"—"}</td>
-<td style={{padding:"6px 12px"}}>
-<span style={{background:c.priority==="high"?`${B.green}20`:c.priority==="medium"?`${B.orange}20`:`${B.border}`,color:c.priority==="high"?B.green:c.priority==="medium"?B.orange:B.muted,borderRadius:3,padding:"2px 6px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif"}}>
-{(c.priority||"low").toUpperCase()}
-</span>
-</td>
-<td style={{padding:"6px 8px"}}>
-<button onClick={()=>dispatch("UPDATE_CONTACT_LIST",{id:list.id,contactIds:(list.contactIds||[]).filter(id=>id!==c.id)})}
-title="Remove from list" style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13,padding:"0 4px"}}>×</button>
-</td>
-</tr>
-))}
-</tbody>
-</table>
-</div>
-)}
-</div>
-)}
-</div>
-);
-})}
-</div>
-)}
-</div>
-)}
 {view==="results"&&(
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+<div className="rv-results-split" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
 <div>
 {phase!=="idle"&&<div style={{height:4,background:B.border,borderRadius:2,marginBottom:12}}><div style={{height:"100%",width:`${progress}%`,background:B.orange,borderRadius:2,transition:"width .4s"}}/></div>}
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:phase==="done"?B.green:B.orange,letterSpacing:1.5}}>{phase==="finding"?"FINDING SCHOOLS...":phase==="scraping"?"SCRAPING CONTACTS...":phase==="done"?"COMPLETE":"READY"}</div>
-<div style={{display:"flex",gap:7}}>
+<div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
 {(phase==="finding"||phase==="scraping")&&<GBtn onClick={()=>abortRef.current=true} style={{fontSize:10,padding:"4px 8px",color:B.red}}>⏹ STOP</GBtn>}
 {contacts.length>0&&<OBtn sm onClick={exportCsv}>↓ EXPORT CSV</OBtn>}
 {/* No bulk "push to Zoho" here on purpose — scraped contacts stay local until
@@ -7152,7 +7031,7 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
     no-CRM-without-intent rule. */}
 </div>
 </div>
-{contacts.length>0&&<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+{contacts.length>0&&<div className="rv-3col-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
 {[[contacts.length,"Contacts",B.orange],[contacts.filter(c=>c.email).length,"With Email",B.green],[contacts.filter(c=>c.orgType==="club").length,"Clubs",B.blue]].map(([v,l,c])=>(
 <div key={l} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 10px",borderTop:`2px solid ${c}`,textAlign:"center"}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:c}}>{v}</div>
@@ -7181,7 +7060,7 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 {contacts.length===0&&phase!=="idle"&&phase!=="done"&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Searching...</div>}
 </div>
 </div>
-<div className="card" style={{padding:13,alignSelf:"start",position:"sticky",top:0}}>
+<div className="card rv-sticky-log" style={{padding:13,alignSelf:"start",position:"sticky",top:0}}>
 <Lbl s={{marginBottom:8}}>Activity Log</Lbl>
 <div style={{maxHeight:500,overflowY:"auto"}}>
 {log.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Log appears here during scrape...</div>}
@@ -7197,7 +7076,7 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 {view==="brad"&&(
 <div style={{maxWidth:900}}>
 {/* Brad sub-tab bar */}
-<div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`,paddingBottom:12}}>
+<div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`,paddingBottom:12,flexWrap:"wrap"}}>
 {[["prospect","✉ PROSPECT"],["campaigns",`CAMPAIGNS (${(s.campaigns||[]).length})`],["lists",`MY LISTS (${(s.contactLists||[]).length})`]].map(([t,l])=>(
 <button key={t} onClick={()=>setBradTab(t)} style={{background:bradTab===t?B.orange:B.white,color:bradTab===t?B.white:B.muted,border:`1px solid ${bradTab===t?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
 ))}
@@ -7206,7 +7085,7 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 {/* Positive reply queue */}
 {bradReplies.length>0&&(
 <div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
 <button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
 </div>
@@ -7214,7 +7093,7 @@ title="Remove from list" style={{background:"none",border:"none",color:B.muted,c
 {bradReplies.map(rep=>{
 const inp=rep.input||{};const out=rep.output||{};
 return(
-<div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`}}>
+<div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`,flexWrap:"wrap"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:3}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{inp.contactName||inp.fromEmail}</span>
@@ -7224,7 +7103,7 @@ return(
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginBottom:3}}>{inp.subject}</div>
 {inp.snippet&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.5,fontStyle:"italic"}}>"{inp.snippet.slice(0,160)}{inp.snippet.length>160?"…":""}"</div>}
 </div>
-<div style={{display:"flex",gap:6,flexShrink:0}}>
+<div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 <button onClick={()=>{setOneOffName(inp.contactName||"");setOneOffEmail(inp.fromEmail||"");setOneOffMode("self");setTimeout(()=>document.getElementById("oneoff-subject")?.focus(),100);}}
 style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ REPLY</button>
 <button onClick={()=>markReplyHandled(rep.id)}
@@ -7251,7 +7130,7 @@ style={{background:B.green,color:B.white,border:"none",fontSize:9,fontFamily:"'L
 {(area.sports||[]).map(sp=>{const s2=typeof sp==="string"?sp:sp?.name||"";return s2?<span key={s2} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:2}}>{s2}</span>:null;})}
 </div>
 </div>
-<div style={{display:"flex",gap:6,flexShrink:0}}>
+<div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 {(areaCounts[area.id]||0)>0&&<GBtn onClick={()=>{setView("areas");setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{fontSize:9,padding:"4px 10px"}}>BROWSE</GBtn>}
 {(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={async()=>{
 setAreaContactsAllLoading(true);
@@ -7294,7 +7173,7 @@ const key=`brad_${i}`;const sending=bradSending===key;
 const score=(s.contacts||[]).find(c=>c.email===draft.contactEmail)?.score||null;
 return(
 <div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,overflow:"hidden"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"12px 16px",background:B.surface,borderBottom:`1px solid ${B.border}`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"12px 16px",background:B.surface,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap",gap:8}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:2}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:13,fontWeight:600,color:B.text}}>{draft.contactName}</span>
@@ -7303,7 +7182,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{[draft.contactSchool,draft.contactEmail].filter(Boolean).join(" · ")}</div>
 {draft.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:6,fontStyle:"italic",lineHeight:1.55}}>💡 {draft.notes}</div>}
 </div>
-<div style={{display:"flex",gap:6,marginLeft:14,flexShrink:0}}>
+<div style={{display:"flex",gap:6,marginLeft:14,flexShrink:0,flexWrap:"wrap"}}>
 <GBtn onClick={()=>navigator.clipboard?.writeText(`Subject: ${draft.subject}\n\n${draft.body}`).then(()=>toast("Copied","info"))} style={{fontSize:9,padding:"4px 9px"}}>📋 COPY</GBtn>
 {draft.contactEmail&&<button onClick={()=>sendDraftEmail(draft,key)} disabled={sending} style={{background:sending?B.muted:B.green,border:"none",color:B.white,borderRadius:4,padding:"4px 14px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:sending?"default":"pointer",opacity:sending?.7:1}}>{sending?"SENDING…":"✉ SEND"}</button>}
 </div>
@@ -7346,7 +7225,7 @@ return(
 </div>
 </div>
 {/* Shared: name + email row */}
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+<div className="rv-2col-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
 <input value={oneOffName} onChange={e=>setOneOffName(e.target.value)} placeholder="Name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 <input value={oneOffEmail} onChange={e=>setOneOffEmail(e.target.value)} placeholder="Email *" type="email" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"8px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
 </div>
@@ -7469,18 +7348,18 @@ const isOpen=expandedListId===list.id;
 const isRenaming=renamingListId===list.id;
 return(
 <div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
-<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px"}}>
+<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",flexWrap:"wrap"}}>
 {isRenaming?(
 <input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
 onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
 style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
 ):(
-<div style={{flex:1,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{list.name}</div>
+<div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{list.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{(list.contactIds||[]).length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}  {isOpen?"· click to collapse":""}</div>
 </div>
 )}
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
 {isRenaming?(<><OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn><button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
 <button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
 <OBtn sm col={B.teal} onClick={()=>setBradTab("campaigns")}>USE IN CAMPAIGN →</OBtn>
