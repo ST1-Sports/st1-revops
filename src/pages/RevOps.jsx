@@ -3162,6 +3162,10 @@ const [editingAccountName,setEditingAccountName]=useState(false);
 const [accountNameInput,setAccountNameInput]=useState("");
 const [savingAccountName,setSavingAccountName]=useState(false);
 const [backfillingOrgs,setBackfillingOrgs]=useState(false);
+const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
+const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
+const [enrichingWebsite,setEnrichingWebsite]=useState(false);
+const [accountWebsites,setAccountWebsites]=useState({});
 const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
@@ -3174,10 +3178,29 @@ const st=(c.state||"").trim();
 return st?`${sch} — ${st}`:sch;
 };
 const cleanSchoolName=(key)=>(key||"").replace(/ — [^—]*$/,"");
+// Matches the server-side normalizeAccountName (api/_lib/accountUtils.js) so a
+// Books customer name and a CRM Account/school name line up on more than an
+// exact string match — case/whitespace/trailing-punctuation only, no suffix
+// stripping, so it doesn't risk merging two genuinely different orgs.
+const normalizeOrgName=(raw)=>(raw||"").trim().replace(/\s+/g," ").replace(/[.,]+$/g,"").toLowerCase();
+const orgNamesMatch=(a,b)=>{
+const na=normalizeOrgName(a),nb=normalizeOrgName(b);
+if(!na||!nb)return false;
+if(na===nb)return true;
+return na.length>4&&nb.length>4&&(na.includes(nb)||nb.includes(na));
+};
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const fillMissingOrgs=async()=>{
 setBackfillingOrgs(true);
+let backendLinked=0,backendPushed=0;
+try{
+const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
+backendLinked=syncRes?.contactsLinked||0;
+const alignRes=await fetch("/api/contacts/zoho-align-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:50})}).then(r=>r.json());
+backendPushed=alignRes?.contactsPushed||0;
+if(crmSyncRef?.current)await crmSyncRef.current(true);
+}catch(e){toast(`Books/Zoho sync error: ${e.message}`,"error");}
 const byDomain=new Map();
 contacts.filter(c=>!c.deadStatus&&c.email?.includes("@")).forEach(c=>{
 const domain=c.email.split("@")[1].toLowerCase();
@@ -3196,7 +3219,10 @@ const bestSchool=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0][0];
 const bestMatch=named.find(c=>c.school===bestSchool);
 blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,city:bestMatch.city}));
 }
-if(!toFix.length){toast("No blank orgs could be matched via email domain","info");setBackfillingOrgs(false);return;}
+if(!toFix.length){
+toast(backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no additional email-domain matches`:"No matches — no Books/CRM links found and no shared email domains with a known org","info");
+setBackfillingOrgs(false);return;
+}
 for(const {contact,school,state,city}of toFix){
 dispatch("UPDATE_CONTACT",{id:contact.id,school,...(state?{state}:{}),...(city?{city}:{})});
 if(contact.zohoId){
@@ -3211,8 +3237,20 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 }
-toast(`Filled ${toFix.length} contact${toFix.length!==1?"s":""} across ${byDomain.size} domain${byDomain.size!==1?"s":""} matched`,"success");
+toast(`Filled ${toFix.length} contact${toFix.length!==1?"s":""} across ${byDomain.size} domain${byDomain.size!==1?"s":""} matched — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`,"success");
 setBackfillingOrgs(false);
+};
+const loadBooksContacts=async(customerId)=>{
+if(!customerId||booksContactsByCustomer[customerId])return;
+setLoadingBooksContacts(customerId);
+try{
+const r=await fetch(`/api/crm/books-contacts?customerId=${encodeURIComponent(customerId)}`);
+const d=await r.json();
+setBooksContactsByCustomer(prev=>({...prev,[customerId]:d.ok?d.contacts:[]}));
+}catch{
+setBooksContactsByCustomer(prev=>({...prev,[customerId]:[]}));
+}
+setLoadingBooksContacts(null);
 };
 const cdMap=useMemo(()=>{
 const m=new Map();
@@ -3429,7 +3467,7 @@ return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.w
 {leftMode==="accounts"&&(()=>{
 const sq=search.toLowerCase();
 const invoices=s.invoices||[];
-const fuzzyMatch=(a,b)=>{a=(a||"").toLowerCase();b=(b||"").toLowerCase();return a.length>4&&b.length>4&&(a.includes(b)||b.includes(a));};
+const fuzzyMatch=orgNamesMatch;
 const isInvoiced=(school)=>invoices.some(inv=>fuzzyMatch(school,inv.customer));
 const groups={};
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
@@ -3523,6 +3561,19 @@ toast(`Renamed to ${newName}${d.accountCreated?" (new Zoho Account created)":""}
 }catch(e){toast(`Rename error: ${e.message}`,"error");}
 setSavingAccountName(false);
 };
+const enrichWebsite=async()=>{
+setEnrichingWebsite(true);
+try{
+const r=await fetch("/api/contacts/enrich-website",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state})});
+const d=await r.json();
+if(!d.ok){toast(d.error||"Website search failed","error");setEnrichingWebsite(false);return;}
+if(!d.website){toast("Couldn't confidently find an official website","info");setEnrichingWebsite(false);return;}
+setAccountWebsites(prev=>({...prev,[selSchool]:d.website}));
+try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
+toast(`Found ${d.website} — saved to Zoho`,"success");
+}catch(e){toast(`Enrich error: ${e.message}`,"error");}
+setEnrichingWebsite(false);
+};
 const sponsorshipMin=primaryC?.sponsorshipMin||null;
 const sponsorshipMax=primaryC?.sponsorshipMax||null;
 const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
@@ -3532,8 +3583,7 @@ const hasOnlineStore=primaryC?.hasOnlineStore||false;
 const hasBoosterClub=primaryC?.hasBoosterClub||false;
 const schoolInvoices=(s.invoices||[]).filter(inv=>{
 const cust=(inv.customer||"").toLowerCase();
-const school=schoolCleanName.toLowerCase();
-return cust.includes(school.slice(0,6))||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
+return orgNamesMatch(inv.customer,schoolCleanName)||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
 });
 const totalInvoiced=schoolInvoices.reduce((a,i)=>a+(i.total||0),0);
 const totalPaid=schoolInvoices.filter(i=>i.status==="paid").reduce((a,i)=>a+(i.total||0),0);
@@ -3575,9 +3625,11 @@ return(
 <div style={{display:"flex",alignItems:"center",gap:8}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{schoolCleanName}</div>
 <button onClick={()=>{setAccountNameInput(schoolCleanName==="(No School)"?"":schoolCleanName);setEditingAccountName(true);}} title="Rename account" style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,padding:2}}>✎</button>
+{!accountWebsites[selSchool]&&<button onClick={enrichWebsite} disabled={enrichingWebsite} title="Search for this org's official website and save it to Zoho" style={{background:"none",border:`1px solid ${B.border}`,color:enrichingWebsite?B.muted:B.blue,borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:enrichingWebsite?"default":"pointer",letterSpacing:.3,whiteSpace:"nowrap"}}>{enrichingWebsite?"SEARCHING…":"🔍 ENRICH"}</button>}
 </div>
 )}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
+{accountWebsites[selSchool]&&<a href={accountWebsites[selSchool]} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{accountWebsites[selSchool].replace(/^https?:\/\//,"")}</a>}
 {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
 {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
@@ -3751,6 +3803,28 @@ return(
 ))}
 </div>
 </>)}
+{/* ── CONTACTS FROM BOOKS ── */}
+{schoolInvoices.length>0&&schoolInvoices[0].customerId&&(()=>{
+const booksCustomerId=schoolInvoices[0].customerId;
+const bContacts=booksContactsByCustomer[booksCustomerId];
+return(<>
+<SectionHdr sub={bContacts?`${bContacts.length} contact${bContacts.length!==1?"s":""}`:undefined}>CONTACTS (FROM BOOKS)</SectionHdr>
+{!bContacts?(
+<button onClick={()=>loadBooksContacts(booksCustomerId)} disabled={loadingBooksContacts===booksCustomerId} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>{loadingBooksContacts===booksCustomerId?"LOADING…":"LOAD CONTACTS FROM BOOKS"}</button>
+):bContacts.length===0?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contact persons on file in Books for this customer.</div>
+):(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+{bContacts.map((c,i)=>(
+<div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.name}{c.isPrimary&&<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange}}>PRIMARY</span>}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{c.email}{c.phone?` · ${c.phone}`:""}</div>
+</div>
+))}
+</div>
+)}
+</>);
+})()}
 {/* ── ITEMS PURCHASED ── */}
 {purchasedItems.length>0&&(<>
 <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
