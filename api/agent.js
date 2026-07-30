@@ -158,11 +158,13 @@ const TOOLS = [
   },
   {
     name: "propose_create_quote",
-    description: "Build and create a Zoho Books estimate/quote for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin.",
+    description: "Build and create a real Zoho CRM Quote (linked to the Account) for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin. Use call_edgar instead whenever possible — Edgar reads live dealer costs and enforces GM floor + MAP.",
     input_schema: {
       type: "object",
       properties: {
         customer_name:  { type: "string", description: "Customer or school name" },
+        account_city:   { type: "string", description: "City of the customer's Account, to disambiguate same-named schools" },
+        account_state:  { type: "string", description: "State of the customer's Account, to disambiguate same-named schools" },
         contact_person: { type: "string", description: "Contact person's name" },
         email:          { type: "string", description: "Email to send the quote to" },
         line_items: {
@@ -175,10 +177,12 @@ const TOOLS = [
               description: { type: "string" },
               quantity:    { type: "number" },
               rate:        { type: "number", description: "Price per unit after margin" },
+              cost:        { type: "number", description: "Dealer cost per unit, for internal margin tracking" },
             },
-            required: ["name", "quantity", "rate"],
+            required: ["name", "quantity", "rate", "cost"],
           },
         },
+        shipping_cost: { type: "number", description: "Total shipping cost, for internal margin tracking" },
         notes:      { type: "string", description: "Notes visible on the quote" },
         send_email: { type: "boolean", description: "Whether to email the quote to the customer" },
       },
@@ -608,7 +612,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 5. propose_flag_deal — mark a deal as hot/warm priority
 6. propose_add_to_nurture — add cold leads to email nurture campaign
 7. propose_log_note — log notes on a deal
-8. propose_create_quote — Zoho Books estimate fallback (use call_edgar instead when possible)
+8. propose_create_quote — build and create a real Zoho CRM Quote (linked to the Account) for a customer; fallback for when call_edgar can't price the items
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
 11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)

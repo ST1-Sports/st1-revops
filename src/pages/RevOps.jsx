@@ -289,6 +289,7 @@ body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Da
 const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
 const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
 const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
+const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
 // invoice with the ledger agent so it's waiting for review in Finance the moment a deal closes.
 const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast)=>{
@@ -853,24 +854,67 @@ return(
 </div>
 );
 }
+const [approvedQuotes,setApprovedQuotes]=useState({});
+const [quoteEmailDrafts,setQuoteEmailDrafts]=useState({});
+const [sendingQuoteEmail,setSendingQuoteEmail]=useState(null);
+const downloadQuotePdf=(key)=>{
+const q=approvedQuotes[key];
+if(!q?.pdfBase64)return;
+const bytes=Uint8Array.from(atob(q.pdfBase64),c=>c.charCodeAt(0));
+const blob=new Blob([bytes],{type:"application/pdf"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");
+a.href=url;a.download=`Quote-${q.quoteNumber}.pdf`;a.click();
+URL.revokeObjectURL(url);
+};
+const sendQuoteEmail=async(key)=>{
+const draft=quoteEmailDrafts[key];
+const q=approvedQuotes[key];
+if(!draft?.to||!q?.pdfBase64)return;
+setSendingQuoteEmail(key);
+try{
+const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+action:"send",
+...(cu?.gmailEnvKey?{repEnvKey:cu.gmailEnvKey}:{}),
+to_email:draft.to,subject:draft.subject,body:draft.body,
+...(cu?.email?{reply_to:cu.email,from_name:cu.name||""}:{}),
+attachments:[{filename:`Quote-${q.quoteNumber}.pdf`,mimeType:"application/pdf",contentBase64:q.pdfBase64}],
+})});
+const d=await r.json();
+if(d.sent||d.ok){
+setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],sent:true}}));
+toast(`Quote emailed to ${draft.to}`,"success");
+dispatch("LOG",{msg:`Quote ${q.quoteNumber} emailed to ${draft.to}`});
+}else toast(d.error||"Send failed","error");
+}catch(e){toast(`Send error: ${e.message}`,"error");}
+setSendingQuoteEmail(null);
+};
 const sharedCreateQuoteNow=async(action,key,setSQ)=>{
 setSQ(key);
 try{
-const r=await fetch("/api/zoho-quotes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-action:"create_quote",
-customer_name:action.customer_name,
-contact_person:action.contact_person||"",
+const r=await fetch("/api/crm/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+customerName:action.customer_name,
+accountCity:action.account_city||"",
+accountState:action.account_state||"",
+contactPerson:action.contact_person||"",
 email:action.email||"",
-line_items:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0})),
+lineItems:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0,cost:Number(li.cost)||0})),
+shippingCost:Number(action.shipping_cost)||0,
 notes:action.notes||"",
-send_email:!!(action.send_email&&action.email),
 })});
 const d=await r.json();
-if(d.quote_id||d.estimate_number){
-toast(`Quote created: ${d.estimate_number||d.quote_id}${d.emailed?" · emailed":""}!`,"success");
-dispatch("LOG",{msg:`Quote ${d.estimate_number} created for ${action.customer_name}`});
+if(d.ok){
+toast(`Quote created: ${d.quoteNumber}!`,"success");
+dispatch("LOG",{msg:`Quote ${d.quoteNumber} created for ${action.customer_name}`});
 const matchDeal=(s.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
-if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.estimate_number} created`});
+if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`});
+setApprovedQuotes(prev=>({...prev,[key]:d}));
+setQuoteEmailDrafts(prev=>({...prev,[key]:{
+to:action.email||"",
+subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
+body:`Hi ${action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${cu?.name||"Matt Stone"}\n${cu?.email||""}\n${cu?.phone||""}`,
+sent:false,
+}}));
 }else{toast(d.error||"Quote creation failed","error");}
 }catch(e){toast(`Quote error: ${e.message}`,"error");}
 setSQ(null);
@@ -879,7 +923,7 @@ const sharedCreateEdgarQuoteInZoho=(action,key,setSQ)=>{
 const q=action.quote||{};
 return sharedCreateQuoteNow({
 customer_name:q.customer||action.customer||"Customer",
-line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0})),
+line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:(q.warnings||[]).join("\n"),
 },key,setSQ);
 };
@@ -1745,7 +1789,7 @@ if(action.type==="draft_email"){const key=`${msgIdx}_${actionIdx}`;setExpandedEm
 if(action.type==="create_deal"){
 const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
 dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
-crmCreate("Deals",{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}).then(r=>r?.json()).then(dd=>{const zid=dd?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:zid});toast("✓ Created in Zoho CRM","success");}).catch(()=>{});
+pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:d.school}).then(dd=>{if(dd.dealId){dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});toast("✓ Created in Zoho CRM","success");}});
 return;
 }
 if(action.type==="flag_deal"){
@@ -2026,6 +2070,8 @@ if(a.type==="create_quote"){
 const key=`${msgIdx}_${ai}`;const expanded=expandedQuote===key;
 const lineItems=a.line_items||[];
 const total=lineItems.reduce((sum,li)=>sum+(Number(li.rate)||0)*(Number(li.quantity)||1),0);
+const approved=approvedQuotes[key];
+const draft=quoteEmailDrafts[key];
 return(
 <div key={ai} style={{background:B.white,border:`1px solid ${B.blue}50`,borderRadius:6,overflow:"hidden"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.blueBg,borderBottom:expanded?`1px solid ${B.blue}20`:"none"}}>
@@ -2036,8 +2082,10 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{lineItems.length} item{lineItems.length!==1?"s":""} · ${total.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
 </div>
 </div>
-<div style={{display:"flex",gap:5,flexShrink:0}}>
-<button onClick={()=>createQuoteNow(a,key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"CREATING...":"▤ CREATE IN ZOHO"}</button>
+<div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
+{approved
+?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,background:B.greenBg,padding:"3px 9px",borderRadius:4,letterSpacing:.3}}>✓ APPROVED — {approved.quoteNumber}</span>
+:<button onClick={()=>createQuoteNow(a,key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"APPROVING...":"✓ APPROVE"}</button>}
 <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
 </div>
 </div>
@@ -2072,6 +2120,25 @@ return(
 </table>
 {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>{a.notes}</div>}
 {a.send_email&&a.email&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,marginTop:4,letterSpacing:.3}}>✉ Quote will be emailed to {a.email}</div>}
+{!approved&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6,fontStyle:"italic"}}>Ask Edgar to adjust anything — quantities, pricing, items — then click Approve when it's ready.</div>}
+</div>
+)}
+{approved&&(
+<div style={{padding:"10px 12px",borderTop:`1px solid ${B.blue}20`}}>
+<div style={{display:"flex",gap:6,marginBottom:draft?.sent?0:8}}>
+<button onClick={()=>downloadQuotePdf(key)} style={{background:"none",border:`1px solid ${B.blue}50`,color:B.blue,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>⬇ DOWNLOAD PDF</button>
+{approved.reviewUrl&&<a href={approved.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.blue}50`,color:B.blue,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",letterSpacing:.3}}>OPEN IN ZOHO →</a>}
+</div>
+{draft?.sent
+?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Emailed to {draft.to}</div>
+:draft&&(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+<input value={draft.to} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],to:e.target.value}}))} placeholder="To" style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text}}/>
+<input value={draft.subject} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],subject:e.target.value}}))} placeholder="Subject" style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text}}/>
+<textarea rows={4} value={draft.body} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],body:e.target.value}}))} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text,resize:"vertical"}}/>
+<button onClick={()=>sendQuoteEmail(key)} disabled={sendingQuoteEmail===key||!draft.to} style={{alignSelf:"flex-start",background:B.green,border:"none",color:B.white,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuoteEmail===key?.6:1}}>{sendingQuoteEmail===key?"SENDING...":"📧 SEND EMAIL"}</button>
+</div>
+)}
 </div>
 )}
 </div>
@@ -4034,7 +4101,7 @@ Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{mo
 if(!dealForm.name) return;
 const d={id:mkId(),name:dealForm.name,contact:cName(sel),contactId:sel.id,school:sel.school||"",state:sel.state||"",value:Number(dealForm.value||0),stage:dealForm.stage,product:dealForm.product,priority:"warm",createdAt:today(),followUpDate:"",notes:"",touchHistory:[],notes_list:[]};
 dispatch("ADD_DEAL",d);
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:d.name,Amount:d.value,Stage:d.stage,Account_Name:d.school}]}})}).then(r=>r.json()).then(dd=>{const zid=dd?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:zid});}).catch(()=>{});
+pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:d.school,accountState:d.state}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
 setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});toast("Deal created","success");
 }}>SAVE DEAL</OBtn>
 <GBtn onClick={()=>setShowNewDeal(false)}>Cancel</GBtn>
@@ -4563,8 +4630,8 @@ const dealName=(q.subject||"").replace(/^(re:|fwd?:)\s*/gi,"").trim()||`${cname}
 const followUp=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
 const deal={id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:followUp,notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`};
 dispatch("ADD_DEAL",deal);
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:deal.name,Amount:0,Stage:"Quoted",Closing_Date:followUp,Description:deal.notes}]}})})
-.then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:_zid});}).catch(()=>{});
+pushDealToZoho({dealName:deal.name,stage:"Quoted",closingDate:followUp,description:deal.notes,accountName:school})
+.then(dd=>{if(dd.dealId) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:dd.dealId});});
 ids.push(q.id);
 created++;
 }
@@ -4597,8 +4664,8 @@ if(!form.name) return;
 const d={...form,id:mkId(),value:Number(form.value||0),lastTouch:Date.now(),priority:"warm",touchHistory:[{id:mkId(),type:"quote",date:form.quoteDate||today(),note:"Quote sent",author:form.assignee}],competitor:null,zoho_synced:false};
 dispatch("ADD_DEAL",d);dispatch("LOG",{msg:`${cu?.name} added deal: ${d.name}`});
 toast("Deal added","success");setAdding(false);
-const _dealZohoData={Deal_Name:d.name||d.contact,Amount:d.value||0,Stage:d.stage||"Quoted",Closing_Date:d.followUpDate||new Date(Date.now()+30*86400000).toISOString().slice(0,10),Description:d.notes||""};
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[_dealZohoData]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:d.id,zohoId:_zid});}).catch(()=>{});
+const _dealZohoData={dealName:d.name||d.contact,amount:d.value||0,stage:d.stage||"Quoted",closingDate:d.followUpDate||new Date(Date.now()+30*86400000).toISOString().slice(0,10),description:d.notes||"",accountName:d.school,accountState:d.state};
+pushDealToZoho(_dealZohoData).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
 };
 const logTouch=()=>{
 if(!note.trim()||!sel_d) return;
@@ -5023,29 +5090,6 @@ No orders yet. Scan your email for purchase requests or create manually.
 </div>
 );
 }
-const ST1_PRODUCTS=[
-{name:"110m Hurdles (Set of 10)",rate:1450,description:"Aluminum competition hurdles, adjustable height"},
-{name:"400m Hurdles (Set of 10)",rate:1650,description:"Heavy-duty competition 400m hurdles"},
-{name:"Starting Blocks (Pair)",rate:380,description:"Competition starting blocks, aluminum"},
-{name:"Shot Put 12lb",rate:45,description:"Competition shot put, 12lb"},
-{name:"Shot Put 16lb",rate:52,description:"Competition shot put, 16lb"},
-{name:"Discus 1kg",rate:65,description:"Rubber competition discus"},
-{name:"Discus 1.75kg",rate:78,description:"Rubber competition discus, men's"},
-{name:"Hammer 7.26kg",rate:85,description:"Competition hammer"},
-{name:"Hammer 4kg",rate:72,description:"Women's competition hammer"},
-{name:"Javelin Men's 800g",rate:125,description:"Carbon fiber competition javelin"},
-{name:"Javelin Women's 600g",rate:115,description:"Carbon fiber competition javelin"},
-{name:"High Jump Standards",rate:895,description:"Aluminum high jump standards with crossbar"},
-{name:"Pole Vault Standards",rate:2200,description:"Competition pole vault standards"},
-{name:"Long Jump Rake + Drag Mat",rate:185,description:"Aluminum rake, 6ft drag mat"},
-{name:"Hurdle Storage Cart",rate:245,description:"Holds 10 hurdles, with wheels"},
-{name:"Relay Batons Set (4)",rate:35,description:"Aluminum relay batons"},
-{name:"Training Hurdles Set (6)",rate:285,description:"Adjustable practice hurdles"},
-{name:"Throwing Cage",rate:3200,description:"Competition throwing cage, portable"},
-{name:"Shot Put Toe Board",rate:95,description:"Aluminum competition toe board"},
-{name:"Measuring Tape 50m",rate:55,description:"Officials fiberglass measuring tape"},
-{name:"Equipment Shipping & Handling",rate:150,description:""},
-];
 function ModReorder() {
 const {s,dispatch,toast}=useApp();
 const [drafts,setDrafts]=useState({});
@@ -9282,7 +9326,7 @@ return(
 const dealId=mkId();
 const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
 dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today()});
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:_dn,Stage:"Qualified Lead",Account_Name:school||name,Description:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:dealId,zohoId:_zid});}).catch(()=>{});
+pushDealToZoho({dealName:_dn,stage:"Qualified Lead",accountName:school||name,description:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:dealId,zohoId:dd.dealId});});
 toast(`New deal created for ${name}`,"success");
 }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
 ↺ RE-OPEN DEAL
@@ -9293,7 +9337,7 @@ toast(`New deal created for ${name}`,"success");
 const dealId=mkId();
 const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
 dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today()});
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Deals",method:"POST",body:{data:[{Deal_Name:_dn,Stage:"Qualified Lead",Account_Name:school||name,Description:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`}]}})}).then(r=>r.json()).then(dd=>{const _zid=dd?.data?.[0]?.details?.id;if(_zid)dispatch("UPDATE_DEAL",{id:dealId,zohoId:_zid});}).catch(()=>{});
+pushDealToZoho({dealName:_dn,stage:"Qualified Lead",accountName:school||name,description:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:dealId,zohoId:dd.dealId});});
 toast(`Deal created for ${name}`,"success");
 }} style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>
 + CREATE DEAL
@@ -12828,7 +12872,7 @@ return sharedCreateQuoteNow({
 customer_name:q.customer||customer||"Customer",
 contact_person:matchedContact?.name||"",
 email:matchedContact?.email||"",
-line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0})),
+line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:[...(q.warnings||[]),linkNote].filter(Boolean).join("\n"),
 send_email:false,
 },"edgar_main",setSendingZoho);
@@ -12923,11 +12967,35 @@ return(
 {q.warnings.map((w,i)=><div key={i} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.55}}>⚠ {w}</div>)}
 </div>
 )}
-<div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap"}}>
-<button onClick={createInZoho} disabled={sendingZoho} style={{background:sendingZoho?B.surface:B.teal,color:sendingZoho?B.muted:B.white,border:"none",borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:sendingZoho?"not-allowed":"pointer",fontWeight:700}}>{sendingZoho?"CREATING…":"▤ CREATE IN ZOHO"}</button>
+{(()=>{const approved=approvedQuotes.edgar_main;const draft=quoteEmailDrafts.edgar_main;return(
+<>
+<div style={{marginTop:14,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+{approved
+?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,color:B.green,background:B.greenBg,padding:"6px 14px",borderRadius:4,letterSpacing:.3}}>✓ APPROVED — {approved.quoteNumber}</span>
+:<button onClick={createInZoho} disabled={sendingZoho} style={{background:sendingZoho?B.surface:B.teal,color:sendingZoho?B.muted:B.white,border:"none",borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:sendingZoho?"not-allowed":"pointer",fontWeight:700}}>{sendingZoho?"APPROVING…":"✓ APPROVE"}</button>}
 <button onClick={()=>setMod("deals")} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.textMid,borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>→ DEALS</button>
 <button onClick={()=>{setResult(null);setSummary("");setTask("");setCustomer("");setSendingZoho(false);setMatchedContact(null);setMatches([]);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"7px 16px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,cursor:"pointer"}}>CLEAR</button>
 </div>
+{approved&&(
+<div style={{marginTop:10,padding:"10px 13px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
+<div style={{display:"flex",gap:8,marginBottom:draft?.sent?0:8}}>
+<button onClick={()=>downloadQuotePdf("edgar_main")} style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>⬇ DOWNLOAD PDF</button>
+{approved.reviewUrl&&<a href={approved.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",letterSpacing:.3}}>OPEN IN ZOHO →</a>}
+</div>
+{draft?.sent
+?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green}}>✓ Emailed to {draft.to}</div>
+:draft&&(
+<div style={{display:"flex",flexDirection:"column",gap:6}}>
+<input value={draft.to} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,edgar_main:{...prev.edgar_main,to:e.target.value}}))} placeholder="To" style={{fontFamily:"'Lexend',sans-serif",fontSize:12,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 9px",color:B.text}}/>
+<input value={draft.subject} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,edgar_main:{...prev.edgar_main,subject:e.target.value}}))} placeholder="Subject" style={{fontFamily:"'Lexend',sans-serif",fontSize:12,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 9px",color:B.text}}/>
+<textarea rows={4} value={draft.body} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,edgar_main:{...prev.edgar_main,body:e.target.value}}))} style={{fontFamily:"'Lexend',sans-serif",fontSize:12,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 9px",color:B.text,resize:"vertical"}}/>
+<button onClick={()=>sendQuoteEmail("edgar_main")} disabled={sendingQuoteEmail==="edgar_main"||!draft.to} style={{alignSelf:"flex-start",background:B.green,border:"none",color:B.white,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuoteEmail==="edgar_main"?.6:1}}>{sendingQuoteEmail==="edgar_main"?"SENDING...":"📧 SEND EMAIL"}</button>
+</div>
+)}
+</div>
+)}
+</>
+);})()}
 </div>
 )}
 </div>

@@ -103,7 +103,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, repEnvKey } = req.body || {};
+  const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, repEnvKey, attachments } = req.body || {};
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 
@@ -214,18 +214,47 @@ export default async function handler(req, res) {
       const replyToHeader = reply_to
         ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
         : null;
-      const lines = [
-        ...(fromHeader ? [`From: ${fromHeader}`] : []),
-        `To: ${toHeader}`,
-        ...(cc  ? [`Cc: ${cc}`]   : []),
-        ...(bcc ? [`Bcc: ${bcc}`] : []),
-        ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
-        `Subject: ${subject}`,
-        `MIME-Version: 1.0`,
-        `Content-Type: ${contentType}`,
-        ``,
-        htmlBody || emailBody,
-      ];
+      const validAttachments = (attachments || []).filter(a => a?.contentBase64 && a?.filename);
+      const wrap = (b64) => b64.replace(/(.{76})/g, "$1\r\n");
+      const boundary = `st1_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+      const lines = validAttachments.length
+        ? [
+            ...(fromHeader ? [`From: ${fromHeader}`] : []),
+            `To: ${toHeader}`,
+            ...(cc  ? [`Cc: ${cc}`]   : []),
+            ...(bcc ? [`Bcc: ${bcc}`] : []),
+            ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
+            `Subject: ${subject}`,
+            `MIME-Version: 1.0`,
+            `Content-Type: multipart/mixed; boundary="${boundary}"`,
+            ``,
+            `--${boundary}`,
+            `Content-Type: ${contentType}`,
+            ``,
+            htmlBody || emailBody,
+            ...validAttachments.flatMap(att => [
+              `--${boundary}`,
+              `Content-Type: ${att.mimeType || "application/octet-stream"}; name="${att.filename}"`,
+              `Content-Disposition: attachment; filename="${att.filename}"`,
+              `Content-Transfer-Encoding: base64`,
+              ``,
+              wrap(att.contentBase64),
+            ]),
+            `--${boundary}--`,
+          ]
+        : [
+            ...(fromHeader ? [`From: ${fromHeader}`] : []),
+            `To: ${toHeader}`,
+            ...(cc  ? [`Cc: ${cc}`]   : []),
+            ...(bcc ? [`Bcc: ${bcc}`] : []),
+            ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
+            `Subject: ${subject}`,
+            `MIME-Version: 1.0`,
+            `Content-Type: ${contentType}`,
+            ``,
+            htmlBody || emailBody,
+          ];
 
       // If replying to an existing thread, fetch the thread ID + references
       let threadId;
