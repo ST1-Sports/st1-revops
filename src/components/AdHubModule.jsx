@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
+import { readAppState, writeAppState, pushAppStateToServer } from '../lib/appStateSync.js'
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -17,6 +18,9 @@ const B = {
   red:      '#C0392B',
   redBg:    '#FDECEA',
   pageBg:   '#F2F2F0',
+  blue:     '#1A5FA8',
+  blueBg:   '#E8F0FA',
+  purple:   '#6B3FA0',
 }
 
 // ─── PLATFORM CONFIG ──────────────────────────────────────────────────────────
@@ -83,6 +87,7 @@ function ConnectionStatus({ connected, label }) {
 // ─── TAB BAR ─────────────────────────────────────────────────────────────────
 const TABS = [
   { id: 'dashboard',   label: 'Dashboard'       },
+  { id: 'creator',     label: 'Ad Creator'      },
   { id: 'campaigns',   label: 'Campaigns'       },
   { id: 'create',      label: 'Create Campaign' },
   { id: 'attribution', label: 'Attribution'     },
@@ -1783,8 +1788,679 @@ function ConnectionPanel({ onClose }) {
   )
 }
 
+// ─── AD CREATOR (ported from the legacy Ad Engine) ────────────────────────────
+// AdHubModule can run two ways: embedded inside RevOps (s/dispatch/toast are
+// passed in and go through RevOps' normal reducer + /api/state sync), or
+// standalone at /command-center (those props are undefined, so brandAssets/
+// savedAds/socialPosts are read and written directly against the shared
+// st1_revops_v2 localStorage blob, same pattern as RFPTool.jsx/Expansion.jsx).
+const mkId  = () => Math.random().toString(36).slice(2, 9)
+const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
+
+function Lbl({ c, s: st = {}, children }) {
+  return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 2.5, textTransform: 'uppercase', ...st }}>{children}</div>
+}
+function OBtn({ children, onClick, disabled, sm, col, style = {} }) {
+  const c = col || B.orange
+  return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : c, color: disabled ? B.muted : B.white, border: 'none', borderRadius: 5, padding: sm ? '5px 11px' : '8px 16px', fontSize: sm ? 10 : 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? 'not-allowed' : 'pointer', ...style }}>{children}</button>
+}
+function Spin() {
+  return <div style={{ width: 18, height: 18, border: `2px solid ${B.border}`, borderTop: `2px solid ${B.orange}`, borderRadius: '50%', animation: 'spin 1s linear infinite', flexShrink: 0 }} />
+}
+
+const AD_PV_SIZES = { square: { w: 1080, h: 1080 }, landscape: { w: 1200, h: 628 }, story: { w: 1080, h: 1920 } }
+function AdPreview({ tpl, sz, headline, sub, cta, badge, img, bg, tc, ac, logo, logoUrl, maxH = 460 }) {
+  const { w, h } = AD_PV_SIZES[sz] || AD_PV_SIZES.square
+  const scale = Math.min(maxH / h, 520 / w, 1)
+  const props = { headline, sub, cta, badge, img, bg, tc, ac, w, h, logo, logoUrl }
+  const inner = tpl === 'clean' ? <_AdClean {...props} /> : tpl === 'split' ? <_AdSplit {...props} /> : tpl === 'overlay' ? <_AdOverlay {...props} /> : <_AdBold {...props} />
+  return (
+    <div style={{ width: Math.round(w * scale), height: Math.round(h * scale), overflow: 'hidden', borderRadius: 6, flexShrink: 0, position: 'relative' }}>
+      <div style={{ width: w, height: h, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'absolute', top: 0, left: 0 }}>
+        {inner}
+      </div>
+    </div>
+  )
+}
+function _AdLogo({ ac, logo, logoUrl }) { if (!logo) return null; if (logoUrl) return <img src={logoUrl} style={{ maxHeight: 36, maxWidth: 140, objectFit: 'contain' }} alt="Logo" />; return <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><div style={{ width: 5, height: 26, background: ac, borderRadius: 2 }} /><div style={{ fontSize: 17, fontWeight: 900, color: ac, letterSpacing: 3, fontFamily: 'system-ui' }}>ST1 SPORTS</div></div> }
+function _AdBold({ headline, sub, cta, badge, img, bg, tc, ac, w, h, logo, logoUrl }) { const p = Math.round(h * .055); return (<div style={{ display: 'flex', flexDirection: 'column', background: bg, width: '100%', height: '100%', padding: p, fontFamily: 'system-ui', boxSizing: 'border-box' }}><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: Math.round(h * .042) }}><_AdLogo ac={ac} logo={logo} logoUrl={logoUrl} />{badge && <div style={{ background: ac, color: '#fff', padding: '7px 18px', borderRadius: 4, fontSize: 16, fontWeight: 800, letterSpacing: 1 }}>{badge.toUpperCase()}</div>}</div><div style={{ display: 'flex', flex: 1, alignItems: 'center', gap: Math.round(w * .05) }}><div style={{ display: 'flex', flexDirection: 'column', flex: img ? 1.1 : 1, gap: 20 }}><div style={{ fontSize: Math.round(h * .076), fontWeight: 900, color: tc, lineHeight: 1.05, letterSpacing: -1 }}>{headline}</div>{sub && <div style={{ fontSize: Math.round(h * .028), color: tc + 'BB', lineHeight: 1.5 }}>{sub}</div>}{cta && <div style={{ display: 'inline-block', background: ac, color: '#fff', padding: `${Math.round(h * .021)}px ${Math.round(h * .042)}px`, borderRadius: 7, fontSize: Math.round(h * .028), fontWeight: 800, marginTop: 10 }}>{cta}</div>}</div>{img && <div style={{ flex: .9, display: 'flex', justifyContent: 'center', alignItems: 'center' }}><img src={img} style={{ width: Math.round(w * .38), height: Math.round(h * .57), objectFit: 'contain', borderRadius: 16 }} /></div>}</div></div>) }
+function _AdClean({ headline, sub, cta, badge, img, bg, tc, ac, w, h, logo, logoUrl }) { const p = Math.round(h * .06); return (<div style={{ display: 'flex', flexDirection: 'column', background: bg, width: '100%', height: '100%', padding: p, fontFamily: 'system-ui', boxSizing: 'border-box', alignItems: 'center', justifyContent: 'center' }}>{logo && (logoUrl ? <img src={logoUrl} style={{ maxHeight: 40, maxWidth: 160, objectFit: 'contain', marginBottom: Math.round(h * .035) }} alt="Logo" /> : <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: Math.round(h * .035) }}><div style={{ width: 5, height: 24, background: ac, borderRadius: 2 }} /><div style={{ fontSize: 16, fontWeight: 900, color: ac, letterSpacing: 3 }}>ST1 SPORTS</div></div>)}{img && <img src={img} style={{ width: Math.round(w * .52), height: Math.round(h * .44), objectFit: 'contain', borderRadius: 14, marginBottom: Math.round(h * .038) }} />}{badge && <div style={{ background: ac, color: '#fff', padding: '6px 16px', borderRadius: 4, fontSize: 14, fontWeight: 800, marginBottom: 16 }}>{badge.toUpperCase()}</div>}<div style={{ fontSize: Math.round(h * .066), fontWeight: 900, color: tc, lineHeight: 1.08, letterSpacing: -.5, textAlign: 'center', marginBottom: 16 }}>{headline}</div>{sub && <div style={{ fontSize: Math.round(h * .025), color: tc + '99', lineHeight: 1.55, textAlign: 'center', maxWidth: Math.round(w * .76), marginBottom: 22 }}>{sub}</div>}{cta && <div style={{ background: ac, color: '#fff', padding: `${Math.round(h * .021)}px ${Math.round(h * .052)}px`, borderRadius: 7, fontSize: Math.round(h * .026), fontWeight: 800 }}>{cta}</div>}<div style={{ fontSize: 12, color: tc + '44', letterSpacing: 3, marginTop: Math.round(h * .045) }}>ST1SPORTS.COM</div></div>) }
+function _AdSplit({ headline, sub, cta, badge, img, bg, tc, ac, w, h, logo, logoUrl }) { const p = Math.round(h * .06); return (<div style={{ display: 'flex', background: bg, width: '100%', height: '100%', fontFamily: 'system-ui' }}><div style={{ display: 'flex', flexDirection: 'column', flex: 1, padding: p, justifyContent: 'center', gap: 18 }}>{logo && (logoUrl ? <img src={logoUrl} style={{ maxHeight: 34, maxWidth: 130, objectFit: 'contain', marginBottom: 6 }} alt="Logo" /> : <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}><div style={{ width: 5, height: 22, background: ac, borderRadius: 2 }} /><div style={{ fontSize: 15, fontWeight: 900, color: ac, letterSpacing: 3 }}>ST1 SPORTS</div></div>)}{badge && <div style={{ display: 'inline-block', background: ac, color: '#fff', padding: '6px 14px', borderRadius: 4, fontSize: 13, fontWeight: 800 }}>{badge.toUpperCase()}</div>}<div style={{ fontSize: Math.round(h * .074), fontWeight: 900, color: tc, lineHeight: 1.06, letterSpacing: -1 }}>{headline}</div>{sub && <div style={{ fontSize: Math.round(h * .026), color: tc + 'AA', lineHeight: 1.5 }}>{sub}</div>}{cta && <div style={{ display: 'inline-block', background: ac, color: '#fff', padding: `${Math.round(h * .021)}px ${Math.round(h * .04)}px`, borderRadius: 7, fontSize: Math.round(h * .026), fontWeight: 800, marginTop: 8 }}>{cta}</div>}<div style={{ fontSize: 12, color: tc + '44', letterSpacing: 3, marginTop: 'auto' }}>ST1SPORTS.COM</div></div><div style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', background: `${ac}0F`, borderLeft: `4px solid ${ac}` }}>{img ? <img src={img} style={{ width: Math.round(w * .41), height: Math.round(h * .66), objectFit: 'contain', borderRadius: 10 }} /> : <div style={{ fontSize: 18, color: tc + '33', fontWeight: 700, letterSpacing: 2 }}>PRODUCT IMAGE</div>}</div></div>) }
+function _AdOverlay({ headline, sub, cta, badge, img, bg, tc, ac, w, h, logo, logoUrl }) { const px = Math.round(w * .05), py = Math.round(h * .045); return (<div style={{ position: 'relative', background: bg, width: '100%', height: '100%', fontFamily: 'system-ui', overflow: 'hidden' }}>{img && <img src={img} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', objectFit: 'cover' }} />}<div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '58%', background: 'linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)' }} />{logo && (logoUrl ? <img src={logoUrl} style={{ position: 'absolute', top: py, left: px, maxHeight: 32, maxWidth: 120, objectFit: 'contain' }} alt="Logo" /> : <div style={{ position: 'absolute', top: py, left: px, display: 'flex', alignItems: 'center', gap: 8 }}><div style={{ width: 5, height: 22, background: ac, borderRadius: 2 }} /><div style={{ fontSize: 15, fontWeight: 900, color: '#fff', letterSpacing: 3 }}>ST1 SPORTS</div></div>)}{badge && <div style={{ position: 'absolute', top: py, right: px, background: ac, color: '#fff', padding: '7px 17px', borderRadius: 4, fontSize: 14, fontWeight: 800 }}>{badge.toUpperCase()}</div>}<div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: `${Math.round(h * .05)}px ${px}px`, display: 'flex', flexDirection: 'column', gap: 12 }}><div style={{ fontSize: Math.round(h * .072), fontWeight: 900, color: '#fff', lineHeight: 1.05, letterSpacing: -1 }}>{headline}</div>{sub && <div style={{ fontSize: Math.round(h * .024), color: '#FFFFFFCC', lineHeight: 1.45 }}>{sub}</div>}<div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>{cta ? <div style={{ display: 'inline-block', background: ac, color: '#fff', padding: `${Math.round(h * .019)}px ${Math.round(h * .037)}px`, borderRadius: 7, fontSize: Math.round(h * .025), fontWeight: 800 }}>{cta}</div> : <div />}<div style={{ fontSize: 12, color: '#FFFFFF66', letterSpacing: 3 }}>ST1SPORTS.COM</div></div></div></div>) }
+
+function CaptionEditor({ caption, onCaption, onGenerate, generating, generatedCopies, toast }) {
+  const NETS = [{ id: 'twitter', label: '𝕏', color: '#000' }, { id: 'linkedin', label: 'in', color: '#0A66C2' }, { id: 'instagram', label: 'IG', color: '#E1306C' }, { id: 'facebook', label: 'f', color: '#1877F2' }]
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <Lbl>CAPTION</Lbl>
+        <button onClick={onGenerate} disabled={generating} style={{ background: generating ? B.surface : B.orange, color: generating ? B.muted : B.white, border: 'none', borderRadius: 4, padding: '4px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, fontWeight: 700, cursor: generating ? 'default' : 'pointer', letterSpacing: .5 }}>
+          {generating ? 'GENERATING…' : '✦ AI COPY'}
+        </button>
+      </div>
+      <textarea value={caption} onChange={e => onCaption(e.target.value)} rows={3}
+        style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '7px 9px', fontSize: 12, fontFamily: "'Lexend',sans-serif", resize: 'vertical', boxSizing: 'border-box' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted }}>{caption.length} chars</div>
+        <button onClick={() => { navigator.clipboard.writeText(caption); toast('Copied!', 'success') }} style={{ background: 'none', border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '3px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, cursor: 'pointer' }}>⎘ COPY</button>
+      </div>
+      {generatedCopies && (
+        <div style={{ marginTop: 10, background: B.surface, borderRadius: 6, padding: 10, border: `1px solid ${B.border}` }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 1, marginBottom: 8 }}>AI GENERATED — click to use</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {NETS.map(({ id, label, color }) => generatedCopies[id] && (
+              <div key={id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '7px 9px', background: B.white, borderRadius: 5, border: `1px solid ${B.border}`, cursor: 'pointer' }}
+                onClick={() => { onCaption(generatedCopies[id]); toast(`${label} copy loaded`, 'success') }}>
+                <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color, minWidth: 18, fontWeight: 700 }}>{label}</span>
+                <div style={{ flex: 1, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, lineHeight: 1.4 }}>{generatedCopies[id].slice(0, 180)}{generatedCopies[id].length > 180 ? '…' : ''}</div>
+                <button onClick={e => { e.stopPropagation(); navigator.clipboard.writeText(generatedCopies[id]); toast('Copied!', 'success') }} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 10, cursor: 'pointer', flexShrink: 0, padding: 0 }}>⎘</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SavedAdsPanel({ savedAds, onLoad, onDelete }) {
+  if (!savedAds.length) return (
+    <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 24, textAlign: 'center', color: B.muted, fontFamily: "'Lexend',sans-serif", fontSize: 11 }}>
+      No saved ads yet — design an ad in the Build tab and click <strong>✦ SAVE AD</strong> to save it here.
+    </div>
+  )
+  const SZ_LABELS = { square: '1080×1080', landscape: '1200×628', story: '1080×1920' }
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 12 }}>
+      {savedAds.map(ad => (
+        <div key={ad.id} style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: 'hidden' }}>
+          <div style={{ height: 120, background: ad.bg || '#0A0A0A', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12, position: 'relative' }}>
+            <div style={{ fontFamily: 'system-ui', fontWeight: 900, color: ad.tc || '#fff', fontSize: 18, lineHeight: 1.1, textAlign: 'center', maxWidth: '90%', overflow: 'hidden' }}>{(ad.headline || '').slice(0, 40)}</div>
+            {ad.badge && <div style={{ position: 'absolute', top: 8, right: 8, background: ad.ac || '#F37321', color: '#fff', fontSize: 9, fontWeight: 800, padding: '3px 7px', borderRadius: 3 }}>{ad.badge}</div>}
+          </div>
+          <div style={{ padding: '10px 12px' }}>
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, fontWeight: 500, marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ad.name}</div>
+            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: .5, marginBottom: 8 }}>{(ad.tpl || 'bold').toUpperCase()} · {SZ_LABELS[ad.sz] || ad.sz} · {ad.createdAt}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => onLoad(ad)} style={{ flex: 1, background: B.orange, color: B.white, border: 'none', borderRadius: 4, padding: '6px 0', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, fontWeight: 700, cursor: 'pointer', letterSpacing: .5 }}>LOAD</button>
+              <button onClick={() => { if (window.confirm('Delete this saved ad?')) onDelete(ad.id) }} style={{ background: B.redBg, color: B.red, border: `1px solid ${B.red}40`, borderRadius: 4, padding: '6px 10px', fontSize: 10, cursor: 'pointer' }}>✕</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SocialCalendar({ posts, onAdd, onUpdate, onDelete, toast }) {
+  const today2 = new Date()
+  const [viewYear, setViewYear] = useState(today2.getFullYear())
+  const [viewMonth, setViewMonth] = useState(today2.getMonth())
+  const [showForm, setShowForm] = useState(false)
+  const [editing, setEditing] = useState(null)
+  const [form, setForm] = useState({ date: '', time: '09:00', platforms: [], caption: '', imageUrl: '', status: 'draft' })
+  const NET_COLORS = { twitter: '#000', linkedin: '#0A66C2', instagram: '#E1306C', facebook: '#1877F2' }
+  const NET_LABELS = { twitter: '𝕏', linkedin: 'in', instagram: 'IG', facebook: 'f' }
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate()
+  const firstDay = new Date(viewYear, viewMonth, 1).getDay()
+  const todayStr = today2.toISOString().slice(0, 10)
+  const openNew = (dateStr) => { setEditing(null); setForm({ date: dateStr || '', time: '09:00', platforms: [], caption: '', imageUrl: '', status: 'draft' }); setShowForm(true) }
+  const openEdit = (post) => { setEditing(post.id); setForm({ date: post.date || '', time: post.time || '09:00', platforms: post.platforms || [], caption: post.caption || '', imageUrl: post.imageUrl || '', status: post.status || 'draft' }); setShowForm(true) }
+  const save = () => { if (!form.date || !form.caption.trim()) { toast('Date and caption required', 'error'); return } if (editing) onUpdate({ id: editing, ...form }); else onAdd(form); setShowForm(false) }
+  const toggleNet = (n) => setForm(f => ({ ...f, platforms: f.platforms.includes(n) ? f.platforms.filter(x => x !== n) : [...f.platforms, n] }))
+  const monthName = new Date(viewYear, viewMonth).toLocaleString('en-US', { month: 'long', year: 'numeric' })
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button onClick={() => { let m = viewMonth - 1, y = viewYear; if (m < 0) { m = 11; y-- } setViewMonth(m); setViewYear(y) }} style={{ background: 'none', border: `1px solid ${B.border}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>‹</button>
+          <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 15, color: B.black, minWidth: 160, textAlign: 'center' }}>{monthName.toUpperCase()}</div>
+          <button onClick={() => { let m = viewMonth + 1, y = viewYear; if (m > 11) { m = 0; y++ } setViewMonth(m); setViewYear(y) }} style={{ background: 'none', border: `1px solid ${B.border}`, borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}>›</button>
+        </div>
+        <OBtn sm onClick={() => openNew(todayStr)}>+ NEW POST</OBtn>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 1, background: B.border, borderRadius: 8, overflow: 'hidden', marginBottom: 16 }}>
+        {['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].map(d => (
+          <div key={d} style={{ background: B.surface, padding: '6px 0', textAlign: 'center', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: 1 }}>{d}</div>
+        ))}
+        {Array.from({ length: firstDay }).map((_, i) => (
+          <div key={`e${i}`} style={{ background: B.surface, minHeight: 80 }} />
+        ))}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const d = i + 1
+          const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+          const dayPosts = posts.filter(p => p.date === dateStr)
+          const isToday = dateStr === todayStr
+          return (
+            <div key={d} onClick={() => openNew(dateStr)} style={{ background: B.white, minHeight: 80, padding: 6, cursor: 'pointer', position: 'relative' }}
+              onMouseEnter={e => e.currentTarget.style.background = B.surface} onMouseLeave={e => e.currentTarget.style.background = B.white}>
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: isToday ? B.orange : B.text, fontWeight: isToday ? 700 : 400, marginBottom: 4, display: 'inline-block', ...(isToday ? { background: B.orange, color: B.white, borderRadius: '50%', width: 20, height: 20, lineHeight: '20px', textAlign: 'center', fontSize: 10 } : {}) }}>{d}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {dayPosts.map(p => (
+                  <div key={p.id} onClick={e => { e.stopPropagation(); openEdit(p) }}
+                    style={{ background: p.status === 'published' ? B.greenBg : p.status === 'scheduled' ? B.blueBg : B.orangeBg, borderRadius: 3, padding: '2px 5px', fontSize: 9, fontFamily: "'Lexend',sans-serif", color: p.status === 'published' ? B.green : p.status === 'scheduled' ? B.blue : B.orange, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {(p.platforms || []).map(n => <span key={n} style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: NET_COLORS[n], marginRight: 2 }}>{NET_LABELS[n]}</span>)}
+                    {p.caption.slice(0, 25)}{p.caption.length > 25 ? '…' : ''}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      {showForm && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.4)', zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setShowForm(false)}>
+          <div style={{ background: B.white, borderRadius: 10, padding: 22, width: 480, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black }}>{editing ? 'EDIT POST' : 'NEW POST'}</div>
+              <button onClick={() => setShowForm(false)} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: B.muted }}>✕</button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+              <div><Lbl s={{ marginBottom: 3 }}>DATE</Lbl><input type="date" value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 12 }} /></div>
+              <div><Lbl s={{ marginBottom: 3 }}>TIME</Lbl><input type="time" value={form.time} onChange={e => setForm(f => ({ ...f, time: e.target.value }))} style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 12 }} /></div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <Lbl s={{ marginBottom: 6 }}>PLATFORMS</Lbl>
+              <div style={{ display: 'flex', gap: 7 }}>
+                {Object.entries(NET_LABELS).map(([id, label]) => {
+                  const sel = form.platforms.includes(id)
+                  const c = NET_COLORS[id]
+                  return <button key={id} onClick={() => toggleNet(id)} style={{ background: sel ? `${c}14` : B.surface, color: sel ? c : B.muted, border: `1px solid ${sel ? c : B.border}`, borderRadius: 5, padding: '6px 14px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>{label}</button>
+                })}
+              </div>
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <Lbl s={{ marginBottom: 3 }}>CAPTION</Lbl>
+              <textarea value={form.caption} onChange={e => setForm(f => ({ ...f, caption: e.target.value }))} rows={4} style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '7px 9px', fontSize: 12, fontFamily: "'Lexend',sans-serif", resize: 'vertical', boxSizing: 'border-box' }} />
+            </div>
+            <div style={{ marginBottom: 14 }}>
+              <Lbl s={{ marginBottom: 3 }}>STATUS</Lbl>
+              <div style={{ display: 'flex', gap: 7 }}>
+                {[['draft', 'Draft', B.orange], ['scheduled', 'Scheduled', B.blue], ['published', 'Published', B.green]].map(([v, l, c]) => (
+                  <button key={v} onClick={() => setForm(f => ({ ...f, status: v }))} style={{ flex: 1, background: form.status === v ? `${c}14` : B.surface, color: form.status === v ? c : B.muted, border: `1px solid ${form.status === v ? c : B.border}`, borderRadius: 4, padding: '6px 0', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, fontWeight: 700, cursor: 'pointer' }}>{l.toUpperCase()}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <OBtn onClick={save} style={{ flex: 1 }}>{editing ? 'SAVE CHANGES' : 'CREATE POST'}</OBtn>
+              {editing && <button onClick={() => { if (window.confirm('Delete this post?')) onDelete(editing); setShowForm(false) }} style={{ background: B.redBg, color: B.red, border: `1px solid ${B.red}40`, borderRadius: 5, padding: '8px 14px', fontSize: 11, cursor: 'pointer' }}>Delete</button>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AssetGallery({ toast }) {
+  const [assets, setAssets] = useState([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    fetch('/api/adengine/assets?limit=100')
+      .then(r => r.json())
+      .then(d => setAssets(d.assets || []))
+      .catch(() => toast('Failed to load assets', 'error'))
+      .finally(() => setLoading(false))
+  }, [])
+  const del = async (id) => {
+    if (!confirm('Delete this asset?')) return
+    await fetch(`/api/adengine/assets?id=${id}`, { method: 'DELETE' })
+    setAssets(a => a.filter(x => x.id !== id))
+    toast('Asset deleted', 'success')
+  }
+  if (loading) return <div style={{ display: 'flex', gap: 7, alignItems: 'center', color: B.muted, fontSize: 12, padding: 20 }}><Spin />Loading assets…</div>
+  if (!assets.length) return <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 20, textAlign: 'center', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>No generated assets yet. Use the AI image generator in the Build tab.</div>
+  return (
+    <div>
+      <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted, marginBottom: 12 }}>{assets.length} assets</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(200px,1fr))', gap: 12 }}>
+        {assets.map(a => {
+          const url = a.displayUrl
+          return (
+            <div key={a.id} style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 10 }}>
+              {url
+                ? <img src={url} alt="" style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 4, marginBottom: 8 }} />
+                : <div style={{ width: '100%', aspectRatio: '1', background: B.surface, borderRadius: 4, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>Stored on S3</div>
+              }
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, marginBottom: 3 }}>{a.product?.name || '—'}</div>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: B.muted, letterSpacing: .5, marginBottom: 6 }}>{a.width}×{a.height} · {a.platform} · {a.variant}</div>
+              <div style={{ display: 'flex', gap: 5 }}>
+                {url && <a href={url} download={`asset-${a.id}.png`} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.blue, textDecoration: 'none' }}>⬇</a>}
+                <button onClick={() => del(a.id)} style={{ background: 'none', border: 'none', color: B.red, fontSize: 10, cursor: 'pointer', fontFamily: "'Lexend',sans-serif" }}>✕ Delete</button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+const CREATOR_SUBTABS = [['build', 'Build'], ['saved', 'Saved Ads'], ['calendar', 'Social Calendar'], ['assets', 'Assets']]
+
+function AdCreatorTab({ s, dispatch, toast: toastProp }) {
+  const embedded = !!dispatch
+  const toast = toastProp || (() => {})
+  const [subTab, setSubTab] = useState('build')
+
+  // ── shared data: real dispatch when embedded in RevOps, direct localStorage otherwise ──
+  const [localBrandAssets, setLocalBrandAssets] = useState(() => embedded ? [] : (Array.isArray(readAppState().brandAssets) ? readAppState().brandAssets : []))
+  const [localSavedAds, setLocalSavedAds] = useState(() => embedded ? [] : (Array.isArray(readAppState().savedAds) ? readAppState().savedAds : []))
+  const [localSocialPosts, setLocalSocialPosts] = useState(() => embedded ? [] : (Array.isArray(readAppState().socialPosts) ? readAppState().socialPosts : []))
+  const brandAssets = embedded ? (s?.brandAssets || []) : localBrandAssets
+  const savedAds    = embedded ? (s?.savedAds || [])    : localSavedAds
+  const socialPosts = embedded ? (s?.socialPosts || []) : localSocialPosts
+  const writeField = (field, arr) => { const store = readAppState(); writeAppState({ ...store, [field]: arr }); pushAppStateToServer() }
+  const addBrandAsset = (asset) => { if (embedded) dispatch('ADD_BRAND_ASSET', asset); else { const next = [...brandAssets, asset]; setLocalBrandAssets(next); writeField('brandAssets', next) } }
+  const deleteBrandAsset = (id) => { if (embedded) dispatch('DELETE_BRAND_ASSET', id); else { const next = brandAssets.filter(a => a.id !== id); setLocalBrandAssets(next); writeField('brandAssets', next) } }
+  const addSavedAd = (ad) => { if (embedded) dispatch('ADD_SAVED_AD', ad); else { const next = [ad, ...savedAds]; setLocalSavedAds(next); writeField('savedAds', next) } }
+  const deleteSavedAd = (id) => { if (embedded) dispatch('DELETE_SAVED_AD', id); else { const next = savedAds.filter(a => a.id !== id); setLocalSavedAds(next); writeField('savedAds', next) } }
+  const addSocialPost = (post) => { if (embedded) dispatch('ADD_SOCIAL_POST', post); else { const next = [...socialPosts, post]; setLocalSocialPosts(next); writeField('socialPosts', next) } }
+  const updateSocialPost = (post) => { if (embedded) dispatch('UPDATE_SOCIAL_POST', post); else { const next = socialPosts.map(p => p.id === post.id ? { ...p, ...post } : p); setLocalSocialPosts(next); writeField('socialPosts', next) } }
+  const deleteSocialPost = (id) => { if (embedded) dispatch('DELETE_SOCIAL_POST', id); else { const next = socialPosts.filter(p => p.id !== id); setLocalSocialPosts(next); writeField('socialPosts', next) } }
+
+  // ── ad creator state ──
+  const [adTpl, setAdTpl] = useState('bold')
+  const [adSz, setAdSz] = useState('square')
+  const [adHeadline, setAdHeadline] = useState('TRAIN HARDER. WIN MORE.')
+  const [adSub, setAdSub] = useState('')
+  const [adCta, setAdCta] = useState('SHOP NOW')
+  const [adBadge, setAdBadge] = useState('')
+  const [adBg, setAdBg] = useState('#0A0A0A')
+  const [adTc, setAdTc] = useState('#FFFFFF')
+  const [adAc, setAdAc] = useState('#F37321')
+  const [adLogo, setAdLogo] = useState(true)
+  const [adLogoUrl, setAdLogoUrl] = useState('')
+  const [adImg, setAdImg] = useState('')
+  const [adUrl, setAdUrl] = useState('')
+  const [previewUrl, setPreviewUrl] = useState('/api/adengine/render-ad?tpl=bold&sz=square&headline=TRAIN+HARDER.+WIN+MORE.&cta=SHOP+NOW&bg=%230A0A0A&tc=%23FFFFFF&ac=%23F37321')
+  const previewTimerRef = useRef(null)
+  const brandAssetRef = useRef()
+  const [ideoPrompt, setIdeoPrompt] = useState('')
+  const [ideoStyle, setIdeoStyle] = useState('REALISTIC')
+  const [ideoRunning, setIdeoRunning] = useState(false)
+  const [ideoResult, setIdeoResult] = useState(null)
+  const [downloadRunning, setDownloadRunning] = useState(false)
+  const [showSocialPanel, setShowSocialPanel] = useState(false)
+  const [socialCaption, setSocialCaption] = useState('')
+  const [socialPlatforms, setSocialPlatforms] = useState(['twitter', 'linkedin', 'instagram', 'facebook'])
+  const [socialPostType, setSocialPostType] = useState('post')
+  const [socialScheduleAt, setSocialScheduleAt] = useState('')
+  const [socialPosting, setSocialPosting] = useState(false)
+  const [socialResult, setSocialResult] = useState(null)
+  const [copyGenRunning, setCopyGenRunning] = useState(false)
+  const [generatedCopies, setGeneratedCopies] = useState(null)
+
+  useEffect(() => {
+    if (previewTimerRef.current) clearTimeout(previewTimerRef.current)
+    previewTimerRef.current = setTimeout(() => {
+      const p = new URLSearchParams()
+      p.set('tpl', adTpl); p.set('sz', adSz); p.set('headline', adHeadline || 'YOUR HEADLINE')
+      if (adSub) p.set('sub', adSub); if (adCta) p.set('cta', adCta); if (adBadge) p.set('badge', adBadge)
+      p.set('bg', adBg); p.set('tc', adTc); p.set('ac', adAc); p.set('logo', adLogo ? 'true' : 'false')
+      if (adImg) p.set('img', adImg)
+      setPreviewUrl(`/api/adengine/render-ad?${p.toString()}`)
+    }, 600)
+    return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current) }
+  }, [adTpl, adSz, adHeadline, adSub, adCta, adBadge, adBg, adTc, adAc, adLogo, adImg])
+
+  const generateIdeogramImage = async () => {
+    if (!ideoPrompt.trim()) { toast('Enter a product description first', 'error'); return }
+    setIdeoRunning(true); setIdeoResult(null)
+    try {
+      const r = await fetch('/api/adengine/generate-product-image', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: ideoPrompt, style: ideoStyle, sizeKey: adSz }) })
+      const data = await r.json()
+      if (data.imageUrl) { setIdeoResult({ imageUrl: data.imageUrl, assetId: data.asset?.id }); toast('Image generated!', 'success') }
+      else { toast(data.error || 'Image gen failed', 'error') }
+    } catch { toast('Image gen failed', 'error') }
+    setIdeoRunning(false)
+  }
+  const downloadAd = async () => {
+    if (!previewUrl) return
+    setDownloadRunning(true)
+    try {
+      const res = await fetch(previewUrl)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url; a.download = `st1-ad-${adTpl}-${adSz}-${Date.now()}.png`; a.click()
+      URL.revokeObjectURL(url)
+    } catch { toast('Download failed', 'error') }
+    setDownloadRunning(false)
+  }
+  const generatePlatformCopy = async () => {
+    setCopyGenRunning(true); setGeneratedCopies(null)
+    try {
+      const context = [adHeadline && `Headline: ${adHeadline}`, adSub && `Subheadline: ${adSub}`, adCta && `CTA: ${adCta}`, adBadge && `Badge: ${adBadge}`].filter(Boolean).join('\n')
+      const r = await fetch('/api/claude', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001', max_tokens: 600,
+          messages: [{ role: 'user', content: `Generate social media captions for this ad from ST1 Sports (athletic equipment company):\n\n${context}\n\nRespond ONLY with valid JSON:\n{"twitter":"<280 chars, punchy, 1-2 hashtags>","linkedin":"<professional, 2-3 sentences, no hashtags>","instagram":"<engaging, 3-4 sentences, 6-8 hashtags>","facebook":"<conversational, 2-3 sentences, 1-2 hashtags>"}` }],
+        }),
+      })
+      const d = await r.json()
+      const text = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
+      const match = text.match(/\{[\s\S]*\}/)
+      if (match) setGeneratedCopies(JSON.parse(match[0]))
+    } catch { toast('Copy generation failed', 'error') }
+    setCopyGenRunning(false)
+  }
+  const openSocialPanel = () => {
+    setShowSocialPanel(true); setSocialResult(null)
+    const parts = [adHeadline, adSub, adCta ? `👉 ${adCta}` : '', '#ST1Sports #Athletics #TrackAndField'].filter(Boolean)
+    setSocialCaption(parts.join('\n\n'))
+  }
+  const submitSocialPost = async () => {
+    if (!socialPlatforms.length) { toast('Select at least one platform', 'error'); return }
+    if (!socialCaption.trim()) { toast('Caption is required', 'error'); return }
+    setSocialPosting(true); setSocialResult(null)
+    try {
+      const r = await fetch('/api/social-post', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post: socialCaption, platforms: socialPlatforms, mediaUrls: adImg ? [adImg] : undefined, scheduleDate: socialScheduleAt || undefined, isStory: socialPostType === 'story', link: adUrl || undefined }),
+      })
+      const data = await r.json()
+      const platformErrors = Array.isArray(data.errors) ? data.errors : []
+      const isSuccess = (data.status === 'success' || data.status === 'scheduled') && !data.error
+      if (isSuccess) {
+        const failedNets = platformErrors.map(e => e.network || e.platform).filter(Boolean)
+        const okCount = socialPlatforms.length - failedNets.length
+        setSocialResult({ ok: true, platformErrors, failedNets, warning: data._warning })
+        if (failedNets.length === 0) toast(socialScheduleAt ? `Scheduled for ${new Date(socialScheduleAt).toLocaleString()}!` : `Posted to ${okCount} platform(s)!`, 'success')
+        else toast(`Posted to ${okCount} platform(s). Failed: ${failedNets.join(', ')}`, 'warn')
+        addSocialPost({
+          id: mkId(), createdAt: today(),
+          date: socialScheduleAt ? socialScheduleAt.slice(0, 10) : today(),
+          time: socialScheduleAt ? socialScheduleAt.slice(11, 16) : new Date().toTimeString().slice(0, 5),
+          platforms: socialPlatforms, caption: socialCaption, imageUrl: adImg, link: adUrl,
+          status: socialScheduleAt ? 'scheduled' : 'published', postType: socialPostType,
+        })
+      } else {
+        const errMsg = data.error || data.message || (platformErrors[0]?.message) || 'Post failed'
+        setSocialResult({ ok: false, error: errMsg }); toast(errMsg, 'error')
+      }
+    } catch { toast('Post failed', 'error') }
+    setSocialPosting(false)
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 5, marginBottom: 18, flexWrap: 'wrap' }}>
+        {CREATOR_SUBTABS.map(([id, l]) => (
+          <button key={id} onClick={() => setSubTab(id)} style={{ background: subTab === id ? B.orange : B.white, color: subTab === id ? B.white : B.muted, border: `1px solid ${subTab === id ? B.orange : B.border}`, borderRadius: 4, padding: '6px 14px', fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: 'pointer' }}>{l}</button>
+        ))}
+      </div>
+
+      {subTab === 'saved' && <SavedAdsPanel savedAds={savedAds} onLoad={ad => { setAdTpl(ad.tpl || 'bold'); setAdSz(ad.sz || 'square'); setAdHeadline(ad.headline || ''); setAdSub(ad.sub || ''); setAdCta(ad.cta || ''); setAdBadge(ad.badge || ''); setAdBg(ad.bg || '#0A0A0A'); setAdTc(ad.tc || '#FFFFFF'); setAdAc(ad.ac || '#F37321'); setAdLogo(ad.logo !== false); setAdLogoUrl(ad.logoUrl || ''); setAdImg(ad.img || ''); setAdUrl(ad.url || ''); setSubTab('build'); toast(`Loaded "${ad.name}"`, 'success') }} onDelete={deleteSavedAd} />}
+      {subTab === 'calendar' && <SocialCalendar posts={socialPosts} onAdd={post => addSocialPost({ id: mkId(), createdAt: today(), ...post })} onUpdate={updateSocialPost} onDelete={deleteSocialPost} toast={toast} />}
+      {subTab === 'assets' && <AssetGallery toast={toast} />}
+
+      {subTab === 'build' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1, marginBottom: 10 }}>TEMPLATE</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                {[['bold', 'Bold — Dark + Headline'], ['clean', 'Clean — Centered'], ['split', 'Split — Copy | Image'], ['overlay', 'Overlay — Full Bleed']].map(([id, label]) => (
+                  <button key={id} onClick={() => setAdTpl(id)} style={{ background: adTpl === id ? B.orange : B.surface, color: adTpl === id ? B.white : B.text, border: `1px solid ${adTpl === id ? B.orange : B.border}`, borderRadius: 5, padding: '8px 10px', fontSize: 10, fontFamily: "'Lexend',sans-serif", fontWeight: adTpl === id ? 700 : 400, cursor: 'pointer', textAlign: 'left' }}>
+                    <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, letterSpacing: .5, marginBottom: 2 }}>{id.toUpperCase()}</div>
+                    <div style={{ fontSize: 9, opacity: .7 }}>{label.split('—')[1].trim()}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1, marginBottom: 10 }}>SIZE</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[['square', '1:1', '1080×1080'], ['landscape', '16:9', '1200×628'], ['story', '9:16', '1080×1920']].map(([id, ratio, dims]) => (
+                  <button key={id} onClick={() => setAdSz(id)} style={{ flex: 1, background: adSz === id ? B.orange : B.surface, color: adSz === id ? B.white : B.text, border: `1px solid ${adSz === id ? B.orange : B.border}`, borderRadius: 5, padding: '8px 6px', fontSize: 9, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', textAlign: 'center' }}>
+                    <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10, letterSpacing: .5, marginBottom: 1 }}>{ratio}</div>
+                    <div style={{ fontSize: 8, opacity: .65 }}>{dims}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1, marginBottom: 10 }}>AD TEXT</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div><Lbl s={{ marginBottom: 3 }}>Headline</Lbl><input value={adHeadline} onChange={e => setAdHeadline(e.target.value)} placeholder="TRAIN HARDER. WIN MORE." style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 12, fontFamily: "'Lexend',sans-serif", fontWeight: 600, boxSizing: 'border-box' }} /></div>
+                <div><Lbl s={{ marginBottom: 3 }}>Subheadline</Lbl><input value={adSub} onChange={e => setAdSub(e.target.value)} placeholder="Supporting copy (optional)" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: "'Lexend',sans-serif", boxSizing: 'border-box' }} /></div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div><Lbl s={{ marginBottom: 3 }}>CTA Button</Lbl><input value={adCta} onChange={e => setAdCta(e.target.value)} placeholder="SHOP NOW" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: "'Lexend',sans-serif", boxSizing: 'border-box' }} /></div>
+                  <div><Lbl s={{ marginBottom: 3 }}>Badge</Lbl><input value={adBadge} onChange={e => setAdBadge(e.target.value)} placeholder="NEW · SALE · FREE SHIP" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: "'Lexend',sans-serif", boxSizing: 'border-box' }} /></div>
+                </div>
+                <div><Lbl s={{ marginBottom: 3 }}>Link URL (appended to social posts)</Lbl><input value={adUrl} onChange={e => setAdUrl(e.target.value)} placeholder="https://st1sports.com/products/..." style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: 'monospace', boxSizing: 'border-box' }} /></div>
+              </div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1, marginBottom: 10 }}>COLORS</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[['Background', adBg, setAdBg], ['Text Color', adTc, setAdTc], ['Accent Color', adAc, setAdAc]].map(([label, val, setter]) => (
+                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, width: 90, flexShrink: 0 }}>{label}</div>
+                    <input type="color" value={val} onChange={e => setter(e.target.value)} style={{ width: 32, height: 28, border: `1px solid ${B.border}`, borderRadius: 4, cursor: 'pointer', padding: 2, background: B.surface }} />
+                    <input value={val} onChange={e => setter(e.target.value)} maxLength={7} style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '5px 8px', fontSize: 11, fontFamily: 'monospace' }} />
+                    <div style={{ width: 22, height: 22, borderRadius: 4, background: val, border: `1px solid ${B.border}`, flexShrink: 0 }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+                <input type="checkbox" id="adlogo" checked={adLogo} onChange={e => setAdLogo(e.target.checked)} style={{ width: 14, height: 14, cursor: 'pointer' }} />
+                <label htmlFor="adlogo" style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.text, cursor: 'pointer' }}>{adLogoUrl ? 'Show brand logo ✓' : 'Show brand logo (upload below)'}</label>
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+                <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, width: '100%', marginBottom: 2 }}>PRESETS</div>
+                {[['Dark', ['#0A0A0A', '#FFFFFF', '#F37321']], ['Light', ['#FFFFFF', '#0A0A0A', '#F37321']], ['Navy', ['#0B1A3E', '#FFFFFF', '#F37321']], ['Forest', ['#1A3A2A', '#FFFFFF', '#4CAF50']]].map(([name, [bg, tc, ac]]) => (
+                  <button key={name} onClick={() => { setAdBg(bg); setAdTc(tc); setAdAc(ac) }} style={{ background: bg, color: tc, border: `2px solid ${ac}`, borderRadius: 4, padding: '4px 10px', fontSize: 9, fontFamily: "'Lexend',sans-serif", cursor: 'pointer' }}>{name}</button>
+                ))}
+              </div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1 }}>BRAND ASSETS</div>
+                <button onClick={() => brandAssetRef.current?.click()} style={{ background: B.orangeBg, color: B.orange, border: `1px solid ${B.orange}40`, borderRadius: 4, padding: '3px 9px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer', letterSpacing: .5 }}>+ UPLOAD</button>
+                <input ref={brandAssetRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={async e => {
+                  const files = [...e.target.files]
+                  for (const f of files) {
+                    const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f) })
+                    const isLogo = /logo/i.test(f.name)
+                    addBrandAsset({ id: mkId(), name: f.name, url: dataUrl, type: isLogo ? 'logo' : 'asset', createdAt: new Date().toISOString().slice(0, 10) })
+                  }
+                  e.target.value = ''
+                  toast(`Uploaded ${files.length} asset${files.length > 1 ? 's' : ''}!`, 'success')
+                }} />
+              </div>
+              {brandAssets.length === 0 && (
+                <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, textAlign: 'center', padding: '10px 0' }}>No assets yet — upload logos, product shots, or brand images</div>
+              )}
+              {brandAssets.length > 0 && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6 }}>
+                  {brandAssets.map(a => {
+                    const isLogoSel = adLogoUrl === a.url
+                    const isImgSel = adImg === a.url
+                    return (
+                      <div key={a.id} style={{ position: 'relative', borderRadius: 6, overflow: 'hidden', border: `2px solid ${isLogoSel ? B.orange : isImgSel ? B.blue : B.border}`, background: B.surface }}>
+                        <img src={a.url} alt={a.name} style={{ width: '100%', height: 56, objectFit: 'contain', display: 'block', background: '#111', padding: 4 }} />
+                        <div style={{ padding: '3px 4px' }}>
+                          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 8, color: B.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name.replace(/\.[^.]+$/, '')}</div>
+                          <div style={{ display: 'flex', gap: 3, marginTop: 3, flexWrap: 'wrap' }}>
+                            <button onClick={() => { setAdLogoUrl(isLogoSel ? '' : a.url); if (!isLogoSel) setAdLogo(true) }} style={{ background: isLogoSel ? B.orange : B.orangeBg, color: isLogoSel ? B.white : B.orange, border: `1px solid ${B.orange}40`, borderRadius: 3, padding: '2px 4px', fontSize: 7, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>LOGO</button>
+                            <button onClick={() => setAdImg(isImgSel ? '' : a.url)} style={{ background: isImgSel ? B.blue : B.blueBg, color: isImgSel ? B.white : B.blue, border: `1px solid ${B.blue}40`, borderRadius: 3, padding: '2px 4px', fontSize: 7, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>IMG</button>
+                            <button onClick={() => { if (adLogoUrl === a.url) setAdLogoUrl(''); if (adImg === a.url) setAdImg(''); deleteBrandAsset(a.id) }} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 8, cursor: 'pointer', padding: '2px 3px', marginLeft: 'auto' }}>✕</button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              {brandAssets.length > 0 && (
+                <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted, marginTop: 8 }}>
+                  Click <span style={{ color: B.orange }}>LOGO</span> to use as brand logo · <span style={{ color: B.blue }}>IMG</span> to use as background/product image
+                </div>
+              )}
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.muted, letterSpacing: 1, marginBottom: 10 }}>PRODUCT IMAGE (Ideogram AI)</div>
+              <textarea value={ideoPrompt} onChange={e => setIdeoPrompt(e.target.value)} rows={3} placeholder="Describe what the image should show… e.g. 'Aluminum track hurdle on an Olympic running track, cinematic lighting, product photo'" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '7px 9px', fontSize: 11, fontFamily: "'Lexend',sans-serif", resize: 'vertical', marginBottom: 8, boxSizing: 'border-box' }} />
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center' }}>
+                <select value={ideoStyle} onChange={e => setIdeoStyle(e.target.value)} style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11 }}>
+                  {['REALISTIC', 'DESIGN', 'GENERAL', 'ANIME', 'AUTO'].map(st => <option key={st}>{st}</option>)}
+                </select>
+                <OBtn onClick={generateIdeogramImage} disabled={ideoRunning} style={{ flexShrink: 0 }}>
+                  {ideoRunning ? 'GENERATING...' : '✦ GENERATE'}
+                </OBtn>
+              </div>
+              {ideoResult && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                  <img src={ideoResult.imageUrl} alt="Generated" style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 6, border: `1px solid ${B.border}`, flexShrink: 0 }} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    <button onClick={() => setAdImg(ideoResult.imageUrl)} style={{ background: adImg === ideoResult.imageUrl ? B.orange : B.orangeBg, color: adImg === ideoResult.imageUrl ? B.white : B.orange, border: `1px solid ${B.orange}`, borderRadius: 4, padding: '5px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer' }}>
+                      {adImg === ideoResult.imageUrl ? '✓ IN USE' : 'USE IN AD'}
+                    </button>
+                    <button onClick={() => { setAdImg(ideoResult.imageUrl); const parts = [adHeadline, adSub, adCta ? `👉 ${adCta}` : '', '#ST1Sports #Athletics #TrackAndField'].filter(Boolean); setSocialCaption(parts.join('\n\n')); setShowSocialPanel(true); setSocialResult(null) }} style={{ background: B.purple, color: B.white, border: 'none', borderRadius: 4, padding: '5px 10px', fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", cursor: 'pointer', letterSpacing: .3 }}>
+                      📣 POST THIS
+                    </button>
+                    <button onClick={() => setAdImg('')} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 9, cursor: 'pointer', fontFamily: "'Lexend',sans-serif", textAlign: 'left' }}>Clear image</button>
+                  </div>
+                </div>
+              )}
+              <div style={{ marginTop: 10 }}>
+                <Lbl s={{ marginBottom: 3 }}>Or paste any image URL</Lbl>
+                <input value={adImg} onChange={e => setAdImg(e.target.value)} placeholder="https://…" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 10, fontFamily: 'monospace', boxSizing: 'border-box' }} />
+              </div>
+            </div>
+          </div>
+          <div style={{ position: 'sticky', top: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black }}>LIVE PREVIEW</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <a href={previewUrl} target="_blank" rel="noreferrer" style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.blue, textDecoration: 'none' }}>Open full size ↗</a>
+                <OBtn onClick={downloadAd} disabled={downloadRunning} style={{ padding: '6px 14px' }}>
+                  {downloadRunning ? 'DOWNLOADING...' : '⬇ DOWNLOAD PNG'}
+                </OBtn>
+                <button onClick={() => {
+                  const name = adHeadline || 'Untitled Ad'
+                  addSavedAd({ id: mkId(), name, tpl: adTpl, sz: adSz, headline: adHeadline, sub: adSub, cta: adCta, badge: adBadge, bg: adBg, tc: adTc, ac: adAc, logo: adLogo, logoUrl: adLogoUrl, img: adImg, url: adUrl, createdAt: today() })
+                  toast(`"${name}" saved!`, 'success')
+                }} style={{ background: B.white, color: B.green, border: `1px solid ${B.green}`, borderRadius: 4, padding: '6px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, fontWeight: 700, cursor: 'pointer', letterSpacing: .4 }}>
+                  ✦ SAVE AD
+                </button>
+                <button onClick={openSocialPanel} style={{ background: showSocialPanel ? `${B.purple}14` : B.white, color: B.purple, border: `1px solid ${B.purple}`, borderRadius: 4, padding: '6px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, fontWeight: 700, cursor: 'pointer', letterSpacing: .4 }}>
+                  📣 POST TO SOCIAL
+                </button>
+              </div>
+            </div>
+            <div style={{ background: '#111', borderRadius: 10, padding: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
+              <AdPreview tpl={adTpl} sz={adSz} headline={adHeadline || 'YOUR HEADLINE'} sub={adSub} cta={adCta} badge={adBadge} img={adImg} bg={adBg} tc={adTc} ac={adAc} logo={adLogo} logoUrl={adLogoUrl} maxH={adSz === 'story' ? 560 : adSz === 'landscape' ? 320 : 440} />
+            </div>
+            <div style={{ marginTop: 8, fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, textAlign: 'center' }}>
+              Preview updates automatically · {adTpl.toUpperCase()} template · {adSz === 'square' ? '1080×1080' : adSz === 'landscape' ? '1200×628' : '1080×1920'}
+            </div>
+            {showSocialPanel && (
+              <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 16, marginTop: 12, borderTop: `3px solid ${B.purple}` }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                  <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black }}>POST TO SOCIAL</div>
+                  <button onClick={() => { setShowSocialPanel(false); setSocialResult(null) }} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 16, cursor: 'pointer' }}>✕</button>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 2, marginBottom: 6 }}>PLATFORMS</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {[{ id: 'twitter', label: '𝕏', name: 'Twitter/X', color: '#000' }, { id: 'linkedin', label: 'in', name: 'LinkedIn', color: '#0A66C2' }, { id: 'instagram', label: 'IG', name: 'Instagram', color: '#E1306C' }, { id: 'facebook', label: 'f', name: 'Facebook', color: '#1877F2' }, { id: 'tiktok', label: 'TT', name: 'TikTok', color: '#000' }].map(({ id, label, name, color }) => {
+                      const sel = socialPlatforms.includes(id)
+                      return (
+                        <button key={id} onClick={() => setSocialPlatforms(p => sel ? p.filter(x => x !== id) : [...p, id])}
+                          style={{ background: sel ? `${color}14` : B.surface, color: sel ? color : B.muted, border: `1.5px solid ${sel ? color : B.border}`, borderRadius: 5, padding: '5px 12px', fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', fontWeight: sel ? 700 : 400 }}>
+                          <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10 }}>{label}</span> {name}{sel && <span style={{ marginLeft: 4 }}>✓</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 2, marginBottom: 6 }}>POST TYPE</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {[['post', 'Post'], ['story', 'Story'], ['ad', 'Ad (Meta/Google)']].map(([id, label]) => (
+                      <button key={id} onClick={() => setSocialPostType(id)}
+                        style={{ background: socialPostType === id ? B.purple : B.surface, color: socialPostType === id ? B.white : B.muted, border: `1px solid ${socialPostType === id ? B.purple : B.border}`, borderRadius: 5, padding: '5px 14px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', fontWeight: socialPostType === id ? 700 : 400 }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {socialPostType === 'ad' && (
+                    <div style={{ marginTop: 8, background: '#f0f4ff', border: '1px solid #c5d0f0', borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#354080', lineHeight: 1.6 }}>
+                      <strong>Ad Manager links:</strong>&nbsp;
+                      <a href="https://adsmanager.facebook.com" target="_blank" rel="noreferrer" style={{ color: '#1877F2', fontWeight: 700, marginRight: 10 }}>Meta Ads ↗</a>
+                      <a href="https://ads.google.com" target="_blank" rel="noreferrer" style={{ color: '#4285F4', fontWeight: 700 }}>Google Ads ↗</a>
+                      <div style={{ marginTop: 4, fontSize: 10, color: '#667' }}>Download your ad image below and upload it directly in Ads Manager. The caption and URL below are ready to copy.</div>
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginBottom: 12 }}>
+                  <CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast} />
+                  <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, marginTop: 3 }}>
+                    {socialCaption.length} chars · {adImg ? '📎 image attached' : 'no image'}{adUrl && ' · 🔗 link included'}
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+                  <div>
+                    <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 1, marginBottom: 4 }}>SCHEDULE (leave blank = post now)</div>
+                    <input type="datetime-local" value={socialScheduleAt} onChange={e => setSocialScheduleAt(e.target.value)}
+                      style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11 }} />
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 1, marginBottom: 4 }}>LINK URL</div>
+                    <input value={adUrl} onChange={e => setAdUrl(e.target.value)} placeholder="https://st1sports.com/…"
+                      style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, color: B.text, borderRadius: 4, padding: '6px 8px', fontSize: 11, fontFamily: 'monospace' }} />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button onClick={submitSocialPost} disabled={socialPosting || !socialPlatforms.length || !socialCaption.trim()}
+                    style={{ background: socialPosting || !socialPlatforms.length || !socialCaption.trim() ? B.muted : B.purple, color: B.white, border: 'none', borderRadius: 5, padding: '9px 20px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10, fontWeight: 700, cursor: 'pointer', letterSpacing: .5 }}>
+                    {socialPosting ? 'POSTING…' : socialScheduleAt ? '🗓 SCHEDULE POST' : '📣 POST NOW'}
+                  </button>
+                  {adImg && <a href={adImg} download="st1-ad.png" style={{ background: B.surface, color: B.text, border: `1px solid ${B.border}`, borderRadius: 5, padding: '8px 14px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, fontWeight: 700, textDecoration: 'none', letterSpacing: .5 }}>⬇ DOWNLOAD IMAGE</a>}
+                  {socialResult?.ok && socialResult.failedNets?.length === 0 && <span style={{ color: B.green, fontFamily: "'Lexend',sans-serif", fontSize: 11, fontWeight: 600 }}>{socialScheduleAt ? '✓ Scheduled!' : '✓ Posted!'}</span>}
+                  {socialResult?.ok && socialResult.failedNets?.length > 0 && <span style={{ color: '#C77800', fontFamily: "'Lexend',sans-serif", fontSize: 10 }}>⚠ Partial — failed: {socialResult.failedNets.join(', ')}</span>}
+                  {socialResult?.error && <span style={{ color: B.red, fontFamily: "'Lexend',sans-serif", fontSize: 10 }}>✗ {socialResult.error.slice(0, 100)}</span>}
+                </div>
+                {socialResult?.warning && (
+                  <div style={{ marginTop: 10, background: '#fff3cd', border: '1px solid #f0ad0060', borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#7a4f00', lineHeight: 1.6 }}>
+                    ⚠ <strong>Image not attached:</strong> {socialResult.warning}
+                  </div>
+                )}
+                {socialResult?.error && (
+                  <div style={{ marginTop: 10, background: '#fff3cd', border: '1px solid #f0ad0060', borderRadius: 6, padding: '10px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#7a4f00', lineHeight: 1.6 }}>
+                    <strong>Post failed:</strong> {socialResult.error}
+                  </div>
+                )}
+              </div>
+            )}
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: 12, marginTop: 12 }}>
+              <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.muted, letterSpacing: 1, marginBottom: 8 }}>QUICK COPY PRESETS</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {[
+                  ['Track & Field', 'BUILT FOR CHAMPIONS', 'Competition-grade equipment for serious athletes', 'SHOP NOW', 'NEW'],
+                  ['School Sports', 'EQUIP YOUR TEAM', 'ST1 Sports — trusted by coaches nationwide', 'GET A QUOTE', ''],
+                  ['Hurdles', 'CLEAR EVERY BAR', 'Professional hurdles. Championship results.', 'SHOP HURDLES', ''],
+                  ['Sale', 'LIMITED TIME OFFER', 'Save big on top-rated athletic equipment', 'SAVE NOW', 'SALE'],
+                ].map(([name, h, sub, c, b]) => (
+                  <button key={name} onClick={() => { setAdHeadline(h); setAdSub(sub); setAdCta(c); setAdBadge(b) }} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: '6px 10px', fontSize: 10, fontFamily: "'Lexend',sans-serif", cursor: 'pointer', textAlign: 'left', color: B.text }}>
+                    <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange, letterSpacing: .5 }}>{name}</span> — {h}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── MAIN EXPORT ──────────────────────────────────────────────────────────────
-export default function AdHubModule({ userRole }) {
+export default function AdHubModule({ userRole, s, dispatch, toast }) {
   const [tab,        setTab]       = useState('dashboard')
   const [platforms,  setPlatforms] = useState(PLATFORMS.map(p => p.id))
   const [dateRange,  setDateRange] = useState('last_30_days')
@@ -1825,6 +2501,7 @@ export default function AdHubModule({ userRole }) {
       )}
 
       {tab === 'dashboard'   && <DashboardTab   platforms={platforms} dateRange={dateRange} userRole={userRole} />}
+      {tab === 'creator'     && <AdCreatorTab   s={s} dispatch={dispatch} toast={toast} />}
       {tab === 'campaigns'   && <CampaignsTab   platforms={platforms} dateRange={dateRange} />}
       {tab === 'create'      && <CreateTab       userRole={userRole} onSwitchToTab={setTab} />}
       {tab === 'attribution' && <AttributionTab />}

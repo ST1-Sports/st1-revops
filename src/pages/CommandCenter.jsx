@@ -1333,7 +1333,7 @@ function PriceIntelModule({ userRole }) {
   )
 }
 
-function ActivePanel({ mod, userRole }) {
+function ActivePanel({ mod, userRole, s, dispatch, toast }) {
   if (mod.id === 'sales-copy')   return <SalesCopyModule   userRole={userRole} />
   if (mod.id === 'social')       return <SocialModule       userRole={userRole} />
   if (mod.id === 'image')        return <ImageModule        userRole={userRole} />
@@ -1341,14 +1341,14 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
-  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} />
+  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} s={s} dispatch={dispatch} toast={toast} />
   if (mod.id === 'analytics')    return <AnalyticsWidget />
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
-export default function CommandCenter({ initialModuleId = 'sales-copy', embedded = false }) {
+export default function CommandCenter({ initialModuleId = 'sales-copy', embedded = false, s, dispatch, toast }) {
   const userRole      = getStoredRole()
   const [activeId, setActiveId] = useState(initialModuleId)
   const [slim,     setSlim]     = useState(false)
@@ -1359,7 +1359,7 @@ export default function CommandCenter({ initialModuleId = 'sales-copy', embedded
   if (embedded) {
     return (
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', background: B.pageBg, fontFamily: "'Lexend',sans-serif", color: B.text }}>
-        {activeMod && <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />}
+        {activeMod && <ActivePanel mod={activeMod} userRole={userRole} s={s} dispatch={dispatch} toast={toast} key={activeMod.id} />}
       </div>
     )
   }
@@ -1546,7 +1546,7 @@ export default function CommandCenter({ initialModuleId = 'sales-copy', embedded
         {/* Panel */}
         <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
           {activeMod && (
-            <ActivePanel mod={activeMod} userRole={userRole} key={activeMod.id} />
+            <ActivePanel mod={activeMod} userRole={userRole} s={s} dispatch={dispatch} toast={toast} key={activeMod.id} />
           )}
         </div>
       </div>

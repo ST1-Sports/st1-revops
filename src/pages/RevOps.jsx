@@ -126,6 +126,7 @@ contactLists: [],
 appUsers: [],
 invoiceLastSync: null,
 crmNav: null,
+prospectingNav: null,
 };
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
@@ -455,6 +456,7 @@ case "DEL_COMPETE_INTEL":   {const next={...(prev.competeIntel||{})};delete next
 case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||{}),...payload}};
 case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
 case "SET_CRM_NAV":         return {...prev, crmNav:payload};
+case "SET_PROSPECTING_NAV": return {...prev, prospectingNav:payload};
 case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
 case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
 case "SET_EDGAR_DRAFT":     return {...prev, edgarDraft:payload};
@@ -826,7 +828,6 @@ const NAV = useMemo(()=>[
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
 {id:"social",      icon:"📱", label:"Social"},
-{id:"marketing",   icon:"✦", label:"Campaigns"},
 {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
 {id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
 {id:"_s_tools"},
@@ -1137,7 +1138,6 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="reorder"     && <ModReorder/>}
 {mod==="prospecting" && <ModProspecting/>}
 {mod==="social"      && <ModSocial/>}
-{mod==="marketing"   && <ModMarketing/>}
 {mod==="compete"     && <ModCompete/>}
 {mod==="activity"    && <ModActivity/>}
 {mod==="settings"    && <ModSettings/>}
@@ -1151,7 +1151,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}
-{mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod}/></Suspense>}
+{mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod} s={s} dispatch={dispatch} toast={toast}/></Suspense>}
 </ErrBound>
 </main>
 </div>
@@ -1187,7 +1187,7 @@ return(
 <div style={{maxHeight:400,overflowY:"auto"}}>
 <Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
 <Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
-<Grp title="CAMPAIGNS" items={campaigns} go={()=>setMod("marketing")} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
+<Grp title="CAMPAIGNS" items={campaigns} go={()=>{dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");}} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
 <Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
 </div>
 );
@@ -1777,7 +1777,7 @@ dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
 crmCreate("Contacts",{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Designation:c.title,Account_Name:c.school}).then(()=>toast("✓ Synced to Zoho","success")).catch(()=>{});
 return;
 }
-if(action.type==="create_campaign"){setMod("marketing");toast("Switched to Marketing","info");return;}
+if(action.type==="create_campaign"){dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");toast("Switched to Campaigns","info");return;}
 if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
 if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
 if(action.type==="edgar_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedEdgarQuote(e=>e===key?null:key);return;}
@@ -1808,7 +1808,7 @@ source:"agent",
 dispatch("ADD_CAMPAIGN",camp);
 dispatch("LOG",{msg:`Campaign "${camp.name}" created with ${enrollments.length} contacts via agent`});
 toast(`✓ "${camp.name}" created — ${enrollments.length} contacts enrolled${sendAt?`, scheduled ${sendAt}`:""}. Go to Campaigns to send.`,"success");
-setTimeout(()=>setMod("marketing"),1200);
+setTimeout(()=>{dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");},1200);
 }catch(e){toast(`Campaign error: ${e.message}`,"error");}
 setLaunchingCampaign(null);
 };
@@ -5336,6 +5336,11 @@ setCrmSyncing(false);
 };
 const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
 const [view,setView]=useState("brad");
+useEffect(()=>{
+if(!s.prospectingNav) return;
+setView(s.prospectingNav);
+dispatch("SET_PROSPECTING_NAV",null);
+},[s.prospectingNav]);
 const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
 const [editing,setEditing]=useState(null);
 const [areaCounts,setAreaCounts]=useState({});
@@ -6090,7 +6095,7 @@ setView("contacts");loadDbContacts(1,"");
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
 const statDot={done:B.green,scraping:B.orange,empty:B.muted,pending:B.border};
 const totalContactsAll=dbTotal+(s.contacts||[]).length;
-const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${totalContactsAll>0?totalContactsAll.toLocaleString():"DB"})`],["areas","SEGMENTS"]];
+const PVIEWS=[["brad","✉ BRAD"],["contacts",`CONTACTS (${totalContactsAll>0?totalContactsAll.toLocaleString():"DB"})`],["areas","SEGMENTS"],["campaigns","CAMPAIGNS"]];
 return (
 <div style={{padding:"22px 26px"}}>
 <PH title="BRAD" sub="AI outreach recommendations — reads your CRM and drafts personalized emails"
@@ -7279,14 +7284,14 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{(s.campaigns||[]).length} CAMPAIGN{(s.campaigns||[]).length!==1?"S":""}</div>
 <div style={{display:"flex",gap:6}}>
-<GBtn onClick={()=>setMod("marketing")} style={{fontSize:9,padding:"4px 10px"}}>FULL EDITOR ↗</GBtn>
-<OBtn sm onClick={()=>setMod("marketing")}>+ NEW CAMPAIGN</OBtn>
+<GBtn onClick={()=>setView("campaigns")} style={{fontSize:9,padding:"4px 10px"}}>FULL EDITOR ↗</GBtn>
+<OBtn sm onClick={()=>setView("campaigns")}>+ NEW CAMPAIGN</OBtn>
 </div>
 </div>
 {(s.campaigns||[]).length===0?(
 <div style={{textAlign:"center",padding:"60px 0",background:B.surface,borderRadius:8,border:`1px solid ${B.border}`}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>No campaigns yet — create one from a contact list.</div>
-<OBtn onClick={()=>setMod("marketing")}>+ CREATE FIRST CAMPAIGN →</OBtn>
+<OBtn onClick={()=>setView("campaigns")}>+ CREATE FIRST CAMPAIGN →</OBtn>
 </div>
 ):(
 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:20}}>
@@ -7311,7 +7316,7 @@ return(
 </div>
 <div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${camp.name}"?`))dispatch("DELETE_CAMPAIGN",camp.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
-<button onClick={()=>setMod("marketing")} style={{background:"none",border:"none",color:B.orange,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",padding:0,letterSpacing:.5}}>OPEN IN EDITOR →</button>
+<button onClick={()=>setView("campaigns")} style={{background:"none",border:"none",color:B.orange,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",padding:0,letterSpacing:.5}}>OPEN IN EDITOR →</button>
 </div>
 </div>
 );
@@ -7328,7 +7333,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{list.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(list.contactIds||[]).length} contacts</div>
 </div>
-<OBtn sm col={B.teal} onClick={()=>setMod("marketing")}>START CAMPAIGN →</OBtn>
+<OBtn sm col={B.teal} onClick={()=>setView("campaigns")}>START CAMPAIGN →</OBtn>
 </div>
 ))}
 </div>
@@ -7419,6 +7424,7 @@ toast(`${bulkSel.size} contacts opted out`,"info");setBulkSel(new Set());
 <button onClick={()=>setBulkSel(new Set())} style={{background:"none",color:"#ffffff70",border:"1px solid #ffffff30",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer",marginLeft:"auto"}}>✕ CLEAR</button>
 </div>
 )}
+{view==="campaigns"&&<ModMarketing/>}
 </div>
 );
 }
@@ -7459,13 +7465,7 @@ const CAMP_TEMPLATES = [
 ];
 function ModMarketing() {
 const {s,dispatch,toast,setMod}=useApp();
-const [tab,setTab]=useState("plans");
-const [selPlanId,setSelPlanId]=useState(null);
-const [showNewPlanForm,setShowNewPlanForm]=useState(false);
-const [planDraft,setPlanDraft]=useState(null);
-const [editingPlanId,setEditingPlanId]=useState(null);
-const [planSuggestRunning,setPlanSuggestRunning]=useState(false);
-const [planSuggestions,setPlanSuggestions]=useState(null);
+const [tab,setTab]=useState("campaigns");
 const [selCampId,setSelCampId]=useState(null);
 const [showNewCampForm,setShowNewCampForm]=useState(false);
 const [showTemplateSelect,setShowTemplateSelect]=useState(false);
@@ -7473,8 +7473,6 @@ const [campDraft,setCampDraft]=useState(null);
 const [campListUploading,setCampListUploading]=useState(false);
 const [campSubTab,setCampSubTab]=useState("strategy");
 const [campStep,setCampStep]=useState(1);
-const [calYear,setCalYear]=useState(()=>new Date().getFullYear());
-const [calMonth,setCalMonth]=useState(()=>new Date().getMonth());
 const [genRunning,setGenRunning]=useState(false);
 const [genSocialRunning,setGenSocialRunning]=useState(false);
 const [genAdRunning,setGenAdRunning]=useState(false);
@@ -7600,15 +7598,11 @@ if(Object.keys(updates).length) setBatchSchedules(prev=>({...prev,...updates}));
 const [showAddPost,setShowAddPost]=useState(false);
 const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
 const [matchingContacts,setMatchingContacts]=useState(null);
-const [flightChecked,setFlightChecked]=useState({});
-const [flightDates,setFlightDates]=useState({});
 const campaigns = s.campaigns || [];
-const strategies = s.strategies || [];
 const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
 const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
 selCampIdRef.current = selCamp?.id || null;
 campaignsRef.current = campaigns;
-const selPlan = selPlanId ? strategies.find(p=>p.id===selPlanId) : null;
 const allSports = useMemo(()=>[...new Set((s.contacts||[]).map(c=>c.sport).filter(Boolean))].sort(),[s.contacts]);
 const CHANNELS = [
 {id:"email",icon:"✉",label:"Cold Email"},
@@ -7848,26 +7842,6 @@ if(socialTypes.length>0) await generateSocialDrafts();
 if(types.includes("adcopy")) await generateAdCopy();
 if(types.includes("callscript")) await generateCallScript();
 if(types.includes("directmail")) await generateDirectMail();
-};
-const suggestCampaignPlan = async () => {
-if(!planDraft) return;
-setPlanSuggestRunning(true); setPlanSuggestions(null);
-const result = await aiCall(
-`You are a marketing strategist for ST1 Sports, a school/team sports equipment company.\n${ST1}\n\n`+
-`MARKETING PLAN REQUEST:\n`+
-`Plan Name: ${planDraft.name}\nSport Focus: ${planDraft.sport||"General"}\nStates/Areas: ${(planDraft.states||[]).join(", ")||"All"}\n`+
-`Segment: ${planDraft.segment||"All Levels"}\nSeason Window: ${planDraft.seasonStart||""} to ${planDraft.seasonEnd||""}\n`+
-`Goals: ${planDraft.goals||"Drive awareness and quotes"}\n\n`+
-`Generate 4-6 campaign ideas that work together to achieve these goals.\n`+
-`Return JSON: {"campaigns":[{"name":"","goal":"","timing":"","channels":[],"assetTypes":[]}]}\n`+
-`channels options: email, social, paid_ads, phone, sms, newsletter\n`+
-`assetTypes options: email3, email5, social3, social6, adcopy, callscript, directmail\n`+
-`Make campaigns specific to the sport, region, and buying season. Return ONLY valid JSON.`,
-{json:true,tokens:1400}
-);
-setPlanSuggestions(result?.campaigns||[]);
-setPlanSuggestRunning(false);
-if(!result?.campaigns?.length) toast("No suggestions returned — try adding more detail to the plan","info");
 };
 const analyzeAudience = async () => {
 if(!campDraft) return;
@@ -8237,25 +8211,6 @@ toast("Posted successfully","success");
 }else{toast(d.error||"Post failed","error");}
 }catch(e){toast(e?.message||"Post failed","error");}
 };
-const calDaysInMonth=(y,m)=>new Date(y,m+1,0).getDate();
-const calFirstDay=(y,m)=>new Date(y,m,1).getDay();
-const MONTH_NAMES=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const DAY_NAMES=["Su","Mo","Tu","We","Th","Fr","Sa"];
-const getCalDayEvents=(y,m,d)=>{
-const dateStr=`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-const events=[];
-campaigns.forEach(camp=>{
-(camp.touches||[]).forEach(touch=>{
-const base=camp.startDate||camp.createdAt||today();
-const d2=new Date(base); d2.setDate(d2.getDate()+(touch.dayOffset||0));
-if(d2.toISOString().slice(0,10)===dateStr) events.push({type:"email",campName:camp.name,label:touch.subject||`Touch ${touch.step}`,color:camp.color||B.orange});
-});
-(camp.socialPosts||[]).forEach(post=>{
-if((post.date||"")===dateStr) events.push({type:"social",campName:camp.name,label:post.caption?.slice(0,30)||"Post",color:camp.color||B.orange});
-});
-});
-return events;
-};
 const ASSET_TYPE_OPTIONS = [
 {id:"email3",label:"3-Touch Email Sequence"},
 {id:"email5",label:"5-Touch Email Sequence"},
@@ -8269,518 +8224,13 @@ const COMMON_TITLES = ["Athletic Director","Head Coach","Assistant Coach","Procu
 const SEGMENT_OPTIONS = ["High School","College","All School Levels","Youth / Club Sports","Professional / Semi-Pro"];
 return (
 <div style={{padding:"22px 26px"}}>
-<PH title="CAMPAIGNS" sub="Strategy builder, campaign wizard, and execution hub"/>
+<PH title="CAMPAIGNS" sub="Campaign wizard and execution hub"/>
 <div style={{display:"flex",gap:5,marginBottom:18,flexWrap:"wrap"}}>
-{[["plans","PLANS"],["campaigns","CAMPAIGNS"],["calendar","CALENDAR"],["adengine","AD ENGINE"],["reps","REP DASHBOARD"],["send-status","⚡ SEND STATUS"]].map(([id,l])=>(
+{[["campaigns","CAMPAIGNS"],["send-status","⚡ SEND STATUS"]].map(([id,l])=>(
 <button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{l}</button>
 ))}
 </div>
-{tab==="adengine"&&<ModAds/>}
 {tab==="send-status"&&<SendStatusPanel/>}
-{/* ── REP DASHBOARD TAB ──────────────────────────────────────────────────── */}
-{tab==="reps"&&(
-<div>
-{(s.reps||[]).length===0?(
-<div className="card" style={{padding:40,textAlign:"center"}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:8}}>No reps yet</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:16}}>Add your sales team in Settings to track their campaigns and pipeline.</div>
-<OBtn sm onClick={()=>setMod("settings")}>GO TO SETTINGS →</OBtn>
-</div>
-):(
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
-{(s.reps||[]).map(rep=>{
-const repCamps=campaigns.filter(c=>c.repId===rep.id);
-const enrolledCount=repCamps.reduce((sum,c)=>{return sum+(c.enrollments||[]).filter(e=>e.status==="active").length;},0);
-const todayStr=today();
-const dueCount=repCamps.reduce((sum,c)=>{return sum+(c.enrollments||[]).filter(e=>e.status==="active"&&(e.nextDate||todayStr)<=todayStr).length;},0);
-const repDeals=(s.deals||[]).filter(d=>d.repId===rep.id||d.assignedTo===rep.id||(d.assignedTo&&d.assignedTo===rep.email));
-const pipeline=repDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)).reduce((s,d)=>s+(parseFloat(d.amount)||0),0);
-return(
-<div key={rep.id} className="card" style={{padding:16,borderTop:`3px solid ${B.blue}`}}>
-<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
-<div style={{width:36,height:36,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.white}}>{(rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase()}</span>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{rep.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{rep.title||""}{rep.email?` · ${rep.email}`:""}</div>
-</div>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12}}>
-{[[repCamps.length,"Campaigns",B.orange],[enrolledCount,"Enrolled",B.blue],[dueCount,"Due Today",dueCount>0?B.red:B.muted]].map(([v,l,c])=>(
-<div key={l} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",textAlign:"center"}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:c}}>{v}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginTop:2}}>{l}</div>
-</div>
-))}
-</div>
-{repCamps.length>0&&(
-<div style={{marginBottom:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:6}}>CAMPAIGNS</div>
-<div style={{display:"flex",flexDirection:"column",gap:3}}>
-{repCamps.slice(0,4).map(c=>(
-<div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"3px 0",borderBottom:`1px solid ${B.border}22`}}>
-{c.name}
-<span style={{color:B.muted,marginLeft:4}}>· {(c.enrollments||[]).filter(e=>e.status==="active").length} active</span>
-</div>
-))}
-{repCamps.length>4&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>+{repCamps.length-4} more</div>}
-</div>
-</div>
-)}
-{repDeals.length>0&&(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
-{repDeals.length} deal{repDeals.length!==1?"s":""}
-{pipeline>0&&<span style={{color:B.green}}> · ${pipeline.toLocaleString()} pipeline</span>}
-</div>
-)}
-<OBtn sm onClick={()=>setTab("campaigns")}>VIEW CAMPAIGNS →</OBtn>
-</div>
-);
-})}
-</div>
-)}
-{/* Daily Email Summary */}
-{(()=>{
-const days=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));return d.toISOString().slice(0,10);});
-const allUsers=(s.reps||[]);
-const repCampIds={};
-(s.campaigns||[]).forEach(camp=>{
-if(camp.repId){
-if(!repCampIds[camp.repId]) repCampIds[camp.repId]=new Set();
-repCampIds[camp.repId].add(camp.id);
-}
-});
-const repsWithCamps=allUsers.filter(u=>repCampIds[u.id]);
-if(!repsWithCamps.length) return null;
-const counts={};
-repsWithCamps.forEach(u=>{counts[u.id]={};});
-(s.contacts||[]).forEach(c=>{
-(c.activity||[]).forEach(a=>{
-if(a.type!=="sent") return;
-const camp=(s.campaigns||[]).find(x=>x.id===a.campaignId);
-if(!camp||!camp.repId) return;
-if(!counts[camp.repId]) return;
-const dateStr=new Date(a.ts).toISOString().slice(0,10);
-if(!counts[camp.repId][dateStr]) counts[camp.repId][dateStr]=0;
-counts[camp.repId][dateStr]++;
-});
-});
-return(
-<div style={{marginTop:24}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:12}}>DAILY EMAIL SUMMARY — LAST 7 DAYS</div>
-<div style={{overflowX:"auto"}}>
-<table style={{borderCollapse:"collapse",width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-<thead>
-<tr>
-<th style={{textAlign:"left",padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,minWidth:80}}>DATE</th>
-{repsWithCamps.map(u=>(
-<th key={u.id} style={{padding:"6px 10px",background:B.surface,border:`1px solid ${B.border}`,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.5,textAlign:"center",minWidth:80}}>
-<div style={{display:"flex",alignItems:"center",gap:4,justifyContent:"center"}}>
-<div style={{width:8,height:8,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
-<span style={{color:u.color||B.muted}}>{(u.name||"?").split(" ")[0].toUpperCase()}</span>
-</div>
-</th>
-))}
-</tr>
-</thead>
-<tbody>
-{days.map(dateStr=>{
-const isToday=dateStr===today();
-return(
-<tr key={dateStr} style={{background:isToday?`${B.orange}06`:B.white}}>
-<td style={{padding:"6px 10px",border:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:10,color:isToday?B.orange:B.text,fontWeight:isToday?600:400}}>
-{new Date(dateStr+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}{isToday?" (today)":""}
-</td>
-{repsWithCamps.map(u=>{
-const cnt=counts[u.id]?.[dateStr]||0;
-return(
-<td key={u.id} style={{padding:"6px 10px",border:`1px solid ${B.border}`,textAlign:"center",color:cnt>0?u.color||B.text:B.muted,fontWeight:cnt>0?600:400,fontSize:12}}>
-{cnt>0?cnt:"—"}
-</td>
-);
-})}
-</tr>
-);
-})}
-</tbody>
-</table>
-</div>
-</div>
-);
-})()}
-</div>
-)}
-{/* ── PLANS TAB ──────────────────────────────────────────────────────── */}
-{tab==="plans"&&(
-<div>
-{!selPlanId&&!showNewPlanForm&&(
-<>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{strategies.length} PLAN{strategies.length!==1?"S":""}</div>
-<OBtn sm onClick={()=>{setPlanDraft({name:"",icp:{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""},segment:"All School Levels",seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setSelPlanId(null);setPlanSuggestions(null);setMatchingContacts(null);}}>+ NEW PLAN</OBtn>
-</div>
-{strategies.length===0?(
-<div className="card" style={{padding:40,textAlign:"center"}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:8}}>No plans yet — build a marketing plan to organize your campaigns</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:18}}>A marketing plan defines your sport focus, target area, segment, and goals — then AI suggests campaigns to achieve them.</div>
-<OBtn onClick={()=>{setPlanDraft({name:"",icp:{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""},seasonStart:"",seasonEnd:"",goals:""});setShowNewPlanForm(true);setMatchingContacts(null);}}>+ CREATE FIRST PLAN</OBtn>
-</div>
-):(
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12}}>
-{strategies.map(plan=>{
-const linkedCamps=campaigns.filter(c=>c.planId===plan.id).length;
-return(
-<div key={plan.id} onClick={()=>setSelPlanId(plan.id)} className="card fu"
-style={{padding:0,overflow:"hidden",cursor:"pointer",borderTop:`3px solid ${B.orange}`}}>
-<div style={{padding:"14px 16px"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,marginBottom:5}}>{plan.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>
-{plan.sport&&<span style={{marginRight:8}}>{plan.sport}</span>}
-{(plan.states||[]).length>0&&<span>{(plan.states||[]).join(", ")}</span>}
-</div>
-{plan.segment&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3,display:"inline-block",marginBottom:6}}>{plan.segment}</div>}
-{(plan.seasonStart||plan.seasonEnd)&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{plan.seasonStart||""}{plan.seasonEnd?` → ${plan.seasonEnd}`:""}</div>}
-{plan.goals&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:8,lineHeight:1.4}}>{plan.goals.slice(0,80)}{plan.goals.length>80?"...":""}</div>}
-<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-{linkedCamps>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{linkedCamps} campaign{linkedCamps!==1?"s":""}</span>}
-</div>
-</div>
-<div style={{borderTop:`1px solid ${B.border}`,padding:"8px 16px",background:B.surface,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<button onClick={e=>{e.stopPropagation();if(window.confirm(`Delete "${plan.name}"?`)){dispatch("DEL_STRATEGY",plan.id);}}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif",padding:0}}>✕ DELETE</button>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>OPEN →</span>
-</div>
-</div>
-);
-})}
-</div>
-)}
-</>
-)}
-{/* New Plan Form */}
-{showNewPlanForm&&planDraft&&(
-<div style={{maxWidth:760}}>
-<div className="card" style={{padding:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>{editingPlanId?"EDIT MARKETING PLAN":"NEW MARKETING PLAN"}</div>
-<GBtn onClick={()=>{setShowNewPlanForm(false);setPlanDraft(null);setPlanSuggestions(null);setMatchingContacts(null);setEditingPlanId(null);if(editingPlanId)setSelPlanId(editingPlanId);}}>CANCEL</GBtn>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-<div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:4}}>Plan Name</Lbl><input value={planDraft.name} onChange={e=>setPlanDraft(d=>({...d,name:e.target.value}))} placeholder="e.g. Spring Track & Field 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
-<div><Lbl s={{marginBottom:4}}>Season Start</Lbl><input type="date" value={planDraft.seasonStart||""} onChange={e=>setPlanDraft(d=>({...d,seasonStart:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-<div><Lbl s={{marginBottom:4}}>Season End</Lbl><input type="date" value={planDraft.seasonEnd||""} onChange={e=>setPlanDraft(d=>({...d,seasonEnd:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}/></div>
-</div>
-<div style={{marginBottom:16}}>
-<Lbl s={{marginBottom:4}}>Goals</Lbl>
-<textarea value={planDraft.goals||""} onChange={e=>setPlanDraft(d=>({...d,goals:e.target.value}))} rows={3} placeholder="e.g. Drive 20 quotes in Iowa T&F ADs before Jan buying window, build brand awareness..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",lineHeight:1.5}}/>
-</div>
-{/* ICP SECTION */}
-<div style={{borderTop:`2px solid ${B.border}`,paddingTop:14,marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:1,marginBottom:12}}>IDEAL CUSTOMER PROFILE</div>
-{/* Sport Focus */}
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:6}}>SPORT FOCUS</Lbl>
-<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-{[["ALL SPORTS","all",B.orange],["ALL SCHOOL SPORTS","school",B.blue]].map(([label,val,col])=>{
-const on=(planDraft.icp?.sports||[]).includes(val);
-return(<button key={val} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,sports:on?[]:[val]}}))} style={{background:on?col:B.surface,color:on?B.white:B.muted,border:`2px solid ${on?col:B.border}`,borderRadius:4,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer"}}>{label}</button>);
-})}
-{SPORTS_LIST.map(sp=>{
-const isMeta=(planDraft.icp?.sports||[]).includes("all")||(planDraft.icp?.sports||[]).includes("school");
-const on=!isMeta&&(planDraft.icp?.sports||[]).includes(sp);
-return(<button key={sp} onClick={()=>setPlanDraft(d=>{const cur=(d.icp?.sports||[]).filter(x=>x!=="all"&&x!=="school");const next=cur.includes(sp)?cur.filter(x=>x!==sp):[...cur,sp];return{...d,icp:{...d.icp,sports:next}};})} style={{background:on?`${B.orange}14`:B.surface,color:on?B.orange:isMeta?`${B.muted}60`:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",opacity:isMeta?.5:1}}>{sp}</button>);
-})}
-</div>
-</div>
-{/* Target Titles */}
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:6}}>TARGET TITLES</Lbl>
-<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-{COMMON_TITLES.map(t=>{const on=(planDraft.icp?.titles||[]).includes(t);return(<button key={t} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,titles:on?(d.icp?.titles||[]).filter(x=>x!==t):[...(d.icp?.titles||[]),t]}}))} style={{background:on?`${B.blue}14`:B.surface,color:on?B.blue:B.muted,border:`1px solid ${on?B.blue:B.border}`,borderRadius:3,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{t}</button>);})}
-</div>
-</div>
-{/* Segment */}
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:6}}>SEGMENT / SCHOOL LEVEL</Lbl>
-<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-{SEGMENT_OPTIONS.map(sl=>(
-<button key={sl} onClick={()=>setPlanDraft(d=>({...d,icp:{...d.icp,schoolLevel:sl},segment:sl}))} style={{background:(planDraft.icp?.schoolLevel||"All School Levels")===sl?`${B.orange}14`:B.surface,color:(planDraft.icp?.schoolLevel||"All School Levels")===sl?B.orange:B.muted,border:`1px solid ${(planDraft.icp?.schoolLevel||"All School Levels")===sl?B.orange:B.border}`,borderRadius:3,padding:"6px 16px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sl}</button>
-))}
-</div>
-</div>
-{/* Target Area — Region-first */}
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:6}}>TARGET AREA</Lbl>
-<div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:8}}>
-{Object.entries(US_REGIONS).map(([r,{states:rs,color}])=>{
-const sel=(planDraft.icp?.regions||[]).includes(r);
-return(
-<button key={r} onClick={()=>setPlanDraft(d=>{const cur=d.icp?.regions||[];const newRegions=sel?cur.filter(x=>x!==r):[...cur,r];const newStates=[...new Set(newRegions.flatMap(rn=>US_REGIONS[rn]?.states||[]))];return{...d,icp:{...d.icp,regions:newRegions,states:newStates}};})} style={{background:sel?`${color}18`:B.surface,color:sel?color:B.muted,border:`2px solid ${sel?color:B.border}`,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:sel?600:400,cursor:"pointer"}}>
-{r} <span style={{fontSize:9,opacity:.7}}>({rs.length})</span>
-</button>
-);
-})}
-</div>
-{(planDraft.icp?.regions||[]).length>0&&(
-<div style={{display:"flex",flexWrap:"wrap",gap:4,padding:"8px",background:B.surface,borderRadius:4,border:`1px solid ${B.border}`}}>
-{[...new Set((planDraft.icp?.regions||[]).flatMap(r=>US_REGIONS[r]?.states||[]))].map(st=>{
-const on=(planDraft.icp?.states||[]).includes(st);
-const regionColor=Object.entries(US_REGIONS).find(([,v])=>v.states.includes(st))?.[1]?.color||B.orange;
-return(<button key={st} onClick={()=>setPlanDraft(d=>{const cur=d.icp?.states||[];const next=cur.includes(st)?cur.filter(x=>x!==st):[...cur,st];return{...d,icp:{...d.icp,states:next}};})} style={{background:on?`${regionColor}20`:B.white,color:on?regionColor:B.muted,border:`1px solid ${on?regionColor:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st}</button>);
-})}
-</div>
-)}
-{(planDraft.icp?.states||[]).length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>{(planDraft.icp?.states||[]).length} state{(planDraft.icp?.states||[]).length!==1?"s":""} selected</div>}
-</div>
-{/* Buying Season Notes */}
-<div style={{marginBottom:10}}>
-<Lbl s={{marginBottom:4}}>Buying Season Notes</Lbl>
-<textarea value={planDraft.icp?.buyingSeasonNotes||""} onChange={e=>setPlanDraft(d=>({...d,icp:{...d.icp,buyingSeasonNotes:e.target.value}}))} rows={2} placeholder="e.g. Track ADs buy Nov-Jan for spring season..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-</div>
-</div>
-{/* FIND MATCHING CONTACTS */}
-<div style={{marginBottom:16}}>
-<button onClick={()=>setMatchingContacts(findMatchingContacts(planDraft.icp))} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
-⊕ FIND MATCHING CONTACTS
-</button>
-{matchingContacts!==null&&(
-<div style={{marginTop:10,padding:"10px 14px",background:`${B.purple}08`,border:`1px solid ${B.purple}20`,borderRadius:6}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.purple,marginBottom:6}}>{matchingContacts.length} contacts match this ICP</div>
-{matchingContacts.length>0&&(
-<div style={{display:"flex",flexDirection:"column",gap:4,maxHeight:200,overflowY:"auto"}}>
-{matchingContacts.slice(0,8).map(c=>{
-const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim();
-const title=typeof c.title==="string"?c.title:c.title?.name||"";
-const school=typeof c.school==="string"?c.school:c.school?.name||"";
-return(
-<div key={c.id} style={{display:"flex",gap:8,padding:"5px 8px",background:B.white,borderRadius:4,border:`1px solid ${B.border}`}}>
-<div style={{flex:1}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{title}{school?` · ${school}`:""}{c.state?` · ${c.state}`:""}</div>
-</div>
-</div>
-);
-})}
-{matchingContacts.length>8&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"4px 0"}}>...and {matchingContacts.length-8} more</div>}
-</div>
-)}
-</div>
-)}
-</div>
-<div style={{display:"flex",gap:8,marginBottom:planSuggestions?20:0}}>
-<OBtn onClick={suggestCampaignPlan} disabled={planSuggestRunning||!planDraft.name}>
-{planSuggestRunning?"✦ GENERATING...":"✦ SUGGEST CAMPAIGN PLAN"}
-</OBtn>
-<OBtn onClick={()=>{
-if(!planDraft.name.trim()){toast("Add a plan name first","error");return;}
-const planId=editingPlanId||mkId();
-const plan={id:planId,name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
-if(editingPlanId){dispatch("UPDATE_STRATEGY",plan);setEditingPlanId(null);}else{dispatch("ADD_STRATEGY",plan);}
-setShowNewPlanForm(false);setSelPlanId(planId);setPlanSuggestions(null);setMatchingContacts(null);toast(editingPlanId?"Plan updated":"Plan saved","success");
-}} col={B.green} disabled={!planDraft.name.trim()}>{editingPlanId?"UPDATE PLAN":"SAVE PLAN"}</OBtn>
-</div>
-{planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>AI building campaign ideas for this plan…</div>}
-{planSuggestions&&planSuggestions.length>0&&(
-<div style={{marginTop:16}}>
-<Lbl s={{marginBottom:10}}>AI-SUGGESTED CAMPAIGNS</Lbl>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{planSuggestions.map((sug,i)=>(
-<div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${B.orange}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-<div style={{flex:1}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
-{sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
-<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-{(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}
-</div>
-</div>
-<button onClick={()=>{
-const savedPlan={id:mkId(),name:planDraft.name,sport:(planDraft.icp?.sports||[])[0]||"",states:planDraft.icp?.states||[],regions:planDraft.icp?.regions||[],segment:planDraft.icp?.schoolLevel||"All School Levels",seasonStart:planDraft.seasonStart,seasonEnd:planDraft.seasonEnd,goals:planDraft.goals,icp:{...planDraft.icp},channels:planDraft.channels||[],createdAt:today()};
-dispatch("ADD_STRATEGY",savedPlan);
-startNewCampaign(savedPlan);
-setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal,channels:sug.channels||[],assetTypes:sug.assetTypes||[],planId:savedPlan.id}));
-setShowNewPlanForm(false);
-setTab("campaigns");
-setPlanSuggestions(null);
-setMatchingContacts(null);
-toast("Plan saved — complete the campaign wizard","success");
-}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10,whiteSpace:"nowrap"}}>CREATE CAMPAIGN →</button>
-</div>
-</div>
-))}
-</div>
-</div>
-)}
-</div>
-</div>
-)}
-{/* Plan Detail */}
-{selPlanId&&selPlan&&(
-<div>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-<div style={{display:"flex",gap:10,alignItems:"center"}}>
-<button onClick={()=>setSelPlanId(null)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>← BACK</button>
-<div>
-<input value={selPlan.name||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,name:e.target.value})} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,letterSpacing:.2,marginBottom:2,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",width:"100%",maxWidth:420}}/>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{selPlan.sport&&`${selPlan.sport} · `}{(selPlan.states||[]).join(", ")||""}</div>
-</div>
-</div>
-<div style={{display:"flex",gap:8}}>
-<OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ CAMPAIGN FROM PLAN</OBtn>
-<button onClick={()=>{if(window.confirm("Delete this plan?")){{dispatch("DEL_STRATEGY",selPlan.id);setSelPlanId(null);}}}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>DELETE</button>
-</div>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
-<div className="card" style={{padding:"14px 16px",borderLeft:`4px solid ${B.orange}`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:6}}>PLAN GOALS</div>
-<textarea value={selPlan.goals||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,goals:e.target.value})} placeholder="Describe the goals of this plan…" rows={4} style={{width:"100%",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5,border:"none",borderBottom:`1px solid ${B.border}`,background:"transparent",outline:"none",resize:"vertical"}}/>
-</div>
-<div className="card" style={{padding:"14px 16px"}}>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEASON START</div>
-<input type="date" value={selPlan.seasonStart||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,seasonStart:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11}}/>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEASON END</div>
-<input type="date" value={selPlan.seasonEnd||""} onChange={e=>dispatch("UPDATE_STRATEGY",{...selPlan,seasonEnd:e.target.value})} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11}}/>
-</div>
-</div>
-{(selPlan.states||[]).length>0&&<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:5}}>TARGET STATES</div>
-<div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{(selPlan.states||[]).map(st=><span key={st} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{st}</span>)}</div>
-</div>}
-<div style={{marginTop:8}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:3}}>SEGMENT</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{selPlan.segment||"—"}</div>
-</div>
-</div>
-</div>
-{/* Linked campaigns */}
-{(()=>{
-const linked=campaigns.filter(c=>c.planId===selPlan.id);
-return(
-<div>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<Lbl>LINKED CAMPAIGNS ({linked.length})</Lbl>
-<OBtn sm onClick={()=>{startNewCampaign(selPlan);setTab("campaigns");}}>+ NEW CAMPAIGN</OBtn>
-</div>
-{linked.length===0?(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px",background:B.surface,borderRadius:5,border:`1px solid ${B.border}`}}>No campaigns linked to this plan yet. Use "AI SUGGEST" or create a campaign and link it to this plan.</div>
-):(
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
-{linked.map(camp=>{
-const enrs=camp.enrollments||[];
-const active=enrs.filter(e=>e.status==="active").length;
-const sc=CAMP_STATUS_COLORS[camp.status]||B.muted;
-return(
-<div key={camp.id} onClick={()=>{setSelCampId(camp.id);setCampSubTab("strategy");setTab("campaigns");}} className="card fu" style={{padding:"12px 14px",cursor:"pointer",borderTop:`3px solid ${camp.color||B.orange}`}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{camp.name}</div>
-<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:sc,background:`${sc}18`,padding:"2px 5px",borderRadius:3}}>{(camp.status||"draft").toUpperCase()}</span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 5px",borderRadius:3}}>{active} enrolled</span>
-</div>
-</div>
-);
-})}
-</div>
-)}
-{/* AI suggest campaigns for this plan — Flighting multi-select */}
-<div style={{marginTop:16}}>
-<button onClick={async()=>{
-setPlanSuggestRunning(true);setPlanSuggestions(null);setFlightChecked({});setFlightDates({});
-const result=await aiCall(
-`You are a marketing strategist for ST1 Sports, a school/team sports equipment company.\n${ST1}\n\n`+
-`MARKETING PLAN:\nPlan Name: ${selPlan.name}\nSport Focus: ${selPlan.sport||"General"}\n`+
-`States/Areas: ${(selPlan.states||[]).join(", ")||"All"}\nSegment: ${selPlan.segment||"All Levels"}\n`+
-`Season Window: ${selPlan.seasonStart||""} to ${selPlan.seasonEnd||""}\nGoals: ${selPlan.goals||"Drive awareness and quotes"}\n\n`+
-`Generate 4-6 campaign ideas. Return JSON: {"campaigns":[{"name":"","goal":"","timing":"","channels":[],"assetTypes":[]}]}\n`+
-`channels options: email, social, paid_ads, phone, sms\nassetTypes: email3, email5, social3, social6, adcopy, callscript, directmail`,
-{json:true,tokens:1400}
-);
-setPlanSuggestions(result?.campaigns||[]);
-setPlanSuggestRunning(false);
-}} disabled={planSuggestRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"8px 16px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",opacity:planSuggestRunning?.7:1}}>
-{planSuggestRunning?"✦ GENERATING...":"✦ AI SUGGEST CAMPAIGNS FOR THIS PLAN"}
-</button>
-{planSuggestRunning&&<div style={{display:"flex",gap:7,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.purple,padding:"10px 0"}}><Spin/>Generating campaign ideas…</div>}
-{planSuggestions&&planSuggestions.length>0&&(
-<div style={{marginTop:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,marginBottom:8}}>SELECT CAMPAIGNS TO INCLUDE IN FLIGHT — check each and set dates</div>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{planSuggestions.map((sug,i)=>{
-const checked=!!flightChecked[i];
-const fd=flightDates[i]||{startDate:"",endDate:""};
-return(
-<div key={i} className="card" style={{padding:"12px 14px",borderLeft:`3px solid ${checked?B.green:B.border}`}}>
-<div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-<input type="checkbox" checked={checked} onChange={()=>setFlightChecked(f=>({...f,[i]:!f[i]}))} style={{marginTop:3,flexShrink:0,accentColor:B.green,width:16,height:16}}/>
-<div style={{flex:1}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:600,marginBottom:4}}>{sug.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.5,marginBottom:5}}>{sug.goal}</div>
-{sug.timing&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,marginBottom:4}}>TIMING: {sug.timing}</div>}
-<div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:checked?8:0}}>{(sug.channels||[]).map(ch=><span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:`${B.orange}14`,padding:"2px 6px",borderRadius:3}}>{ch}</span>)}</div>
-{checked&&(
-<div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-<div style={{display:"flex",gap:6,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>START</span>
-<input type="date" value={fd.startDate} onChange={e=>setFlightDates(f=>({...f,[i]:{...fd,startDate:e.target.value}}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
-</div>
-<div style={{display:"flex",gap:6,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>END</span>
-<input type="date" value={fd.endDate} onChange={e=>setFlightDates(f=>({...f,[i]:{...fd,endDate:e.target.value}}))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"4px 7px",fontSize:11}}/>
-</div>
-</div>
-)}
-</div>
-<button onClick={()=>{
-startNewCampaign(selPlan);
-setCampDraft(cd=>({...cd,name:sug.name,goal:sug.goal||"",channels:sug.channels||[],assetTypes:sug.assetTypes||[],planId:selPlan.id,status:"draft"}));
-setTab("campaigns");
-setPlanSuggestions(null);
-toast("Campaign pre-filled — complete the wizard to launch","success");
-}} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer",flexShrink:0,whiteSpace:"nowrap",letterSpacing:.3}}>USE THIS CAMPAIGN →</button>
-</div>
-</div>
-);
-})}
-</div>
-{Object.values(flightChecked).some(Boolean)&&(
-<div style={{marginTop:12}}>
-<button onClick={()=>{
-const checked=planSuggestions.filter((_,i)=>flightChecked[i]);
-const created=[];
-checked.forEach((_,ii)=>{
-const idx=planSuggestions.indexOf(planSuggestions.filter((_,i)=>flightChecked[i])[ii]);
-const realIdx=planSuggestions.findIndex((s,i)=>flightChecked[i]&&planSuggestions.filter((_,j)=>flightChecked[j]).indexOf(s)===ii);
-});
-planSuggestions.forEach((sug,i)=>{
-if(!flightChecked[i]) return;
-const fd=flightDates[i]||{};
-const campId=mkId();
-const planIcp=selPlan?.icp||{sports:[],titles:[],schoolLevel:"All School Levels",regions:[],states:[],buyingSeasonNotes:""};
-const camp={id:campId,name:sug.name,product:"Track & Field Equipment",audience:"Athletic Director",tone:"friendly",goal:sug.goal||"",repId:"",startDate:fd.startDate||today(),endDate:fd.endDate||"",touches:[],enrollments:[],socialPosts:[],socialDrafts:[],adCopy:"",callScript:"",directMail:"",adIds:[],channels:sug.channels||[],metrics:["Opens","Replies","Quotes Sent"],assetTypes:sug.assetTypes||[],icp:{...planIcp},planId:selPlan.id,ctx:"",status:"draft",createdAt:today(),color:CAMP_COLORS[campaigns.length%CAMP_COLORS.length]};
-dispatch("ADD_CAMPAIGN",camp);
-created.push(campId);
-});
-setFlightChecked({});setFlightDates({});setPlanSuggestions(null);
-toast(`Flight launched: ${created.length} campaign${created.length!==1?"s":""} created`,"success");
-}} style={{background:B.green,color:B.white,border:"none",borderRadius:4,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
-🚀 LAUNCH FLIGHT ({Object.values(flightChecked).filter(Boolean).length} campaign{Object.values(flightChecked).filter(Boolean).length!==1?"s":""})
-</button>
-</div>
-)}
-</div>
-)}
-</div>
-</div>
-);
-})()}
-</div>
-)}
-</div>
-)}
 {/* ── CAMPAIGNS TAB ──────────────────────────────────────────────────────── */}
 {tab==="campaigns"&&(
 <div>
@@ -8891,7 +8341,6 @@ return(<React.Fragment key={n}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2}}>1 — DEFINE</div>
 <button onClick={()=>{setShowNewCampForm(false);setCampDraft(null);setShowTemplateSelect(true);}} style={{background:"none",border:"none",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer",padding:0}}>← BACK TO TEMPLATES</button>
 </div>
-{campDraft.planId&&(()=>{const plan=strategies.find(p=>p.id===campDraft.planId);return plan?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:10}}>Part of plan: <strong>{plan.name}</strong></div>:null;})()}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
 <div><Lbl s={{marginBottom:4}}>Campaign Name</Lbl><input value={campDraft.name} onChange={e=>setCampDraft(c=>({...c,name:e.target.value}))} placeholder="e.g. T&F Spring Push 2026" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
 <div><Lbl s={{marginBottom:4}}>Campaign Goal</Lbl><input value={campDraft.goal} onChange={e=>setCampDraft(c=>({...c,goal:e.target.value}))} placeholder="e.g. 5 new quotes, 10 meetings booked" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/></div>
@@ -8954,22 +8403,6 @@ No reps yet — <button onClick={()=>setMod("settings")} style={{background:"non
 )}
 </div>
 </div>
-{/* ICP carried from plan — show summary if available */}
-{campDraft.planId&&(()=>{
-const plan=strategies.find(p=>p.id===campDraft.planId);
-const icp=plan?.icp||campDraft.icp;
-if(!icp||(!(icp.sports||[]).length&&!(icp.titles||[]).length&&!(icp.states||[]).length)) return null;
-return(
-<div style={{padding:"8px 12px",background:`${B.blue}08`,border:`1px solid ${B.blue}20`,borderRadius:5,marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5,marginBottom:5}}>ICP FROM PLAN</div>
-<div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-{(icp.sports||[]).map(sp=><span key={sp} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,background:`${B.orange}14`,borderRadius:3,padding:"2px 7px"}}>{sp}</span>)}
-{(icp.titles||[]).map(t=><span key={t} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,background:B.blueBg,borderRadius:3,padding:"2px 7px"}}>{t}</span>)}
-{(icp.states||[]).length>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,background:B.surface,borderRadius:3,padding:"2px 7px"}}>{(icp.states||[]).length} states</span>}
-</div>
-</div>
-);
-})()}
 {/* Find matching contacts */}
 <div style={{marginBottom:14}}>
 <button onClick={()=>setMatchingContacts(findMatchingContacts(campDraft.icp))} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
@@ -9402,7 +8835,6 @@ style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,paddi
 </div>
 )}
 {/* Plan link */}
-{selCamp.planId&&(()=>{const plan=strategies.find(p=>p.id===selCamp.planId);return plan?(<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"5px 10px",borderRadius:4,marginBottom:12,cursor:"pointer"}} onClick={()=>{setSelPlanId(plan.id);setSelCampId(null);setTab("plans");}}>Part of plan: <strong>{plan.name}</strong> — view plan →</div>):null;})()}
 {/* Strategy header — inline editable */}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
 {/* Left: Goal + context — editable */}
@@ -10821,53 +10253,6 @@ style={{display:"flex",alignItems:"center",gap:3}}>
 )}
 </div>
 )}
-{/* ── CALENDAR ──────────────────────────────────────────────────────── */}
-{tab==="calendar"&&(
-<div>
-<div style={{display:"flex",gap:10,alignItems:"center",marginBottom:16}}>
-<button onClick={()=>{let m=calMonth-1,y=calYear;if(m<0){m=11;y--;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:12,cursor:"pointer",color:B.text}}>←</button>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,minWidth:120,textAlign:"center"}}>{MONTH_NAMES[calMonth]} {calYear}</div>
-<button onClick={()=>{let m=calMonth+1,y=calYear;if(m>11){m=0;y++;}setCalMonth(m);setCalYear(y);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 12px",fontSize:12,cursor:"pointer",color:B.text}}>→</button>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,background:B.border,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
-{DAY_NAMES.map(d=>(<div key={d} style={{background:B.surface,padding:"6px 0",textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{d}</div>))}
-{Array.from({length:calFirstDay(calYear,calMonth)},(_,i)=>(<div key={`e${i}`} style={{background:B.white,minHeight:80}}/>))}
-{Array.from({length:calDaysInMonth(calYear,calMonth)},(_,i)=>{
-const d=i+1;
-const events=getCalDayEvents(calYear,calMonth,d);
-const isToday=`${calYear}-${String(calMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`===today();
-return(<div key={d} style={{background:B.white,minHeight:80,padding:"4px 6px"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:3}}>{d}</div>
-{events.slice(0,3).map((ev,ei)=>(<div key={ei} style={{background:`${ev.color}18`,border:`1px solid ${ev.color}40`,borderRadius:3,padding:"2px 4px",marginBottom:2,overflow:"hidden"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:ev.color,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.type==="email"?"✉":"📱"} {ev.label}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:7,color:B.muted,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ev.campName}</div>
-</div>))}
-{events.length>3&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted}}>+{events.length-3} more</div>}
-</div>);
-})}
-</div>
-<div style={{display:"flex",gap:16,marginTop:14,flexWrap:"wrap"}}>
-{campaigns.map(camp=>(<div key={camp.id} style={{display:"flex",gap:6,alignItems:"center"}}><div style={{width:10,height:10,borderRadius:2,background:camp.color||B.orange}}/><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{camp.name}</div></div>))}
-</div>
-{/* Rep color key */}
-{(()=>{
-const repUsers=(s.reps||[]);
-const activeReps=repUsers.filter(u=>campaigns.some(c=>c.repId===u.id));
-if(!activeReps.length) return null;
-return(
-<div style={{display:"flex",gap:12,marginTop:10,flexWrap:"wrap",alignItems:"center",padding:"8px 12px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>REPS:</span>
-{activeReps.map(u=>(
-<div key={u.id} style={{display:"flex",gap:5,alignItems:"center"}}>
-<div style={{width:12,height:12,borderRadius:"50%",background:u.color||B.muted,flexShrink:0}}/>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name}</span>
-</div>
-))}
-</div>
-);
-})()}
-</div>
-)}
 {/* ── EMAIL PREVIEW MODAL ─────────────────────────────────────────── */}
 {previewModal&&(
 <div onClick={()=>setPreviewModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
@@ -10900,39 +10285,6 @@ To: {previewModal.contact.fullName||`${previewModal.contact.firstName||""} ${pre
 </div>
 );
 }
-const AD_OBJECTIVES = ["AWARENESS","CONSIDERATION","CONVERSION","RETARGETING"];
-const AD_PLATFORMS  = ["meta","instagram","tiktok","google","email"];
-const AD_IMG_STYLES = ["product_only","lifestyle","team","action"];
-const AD_SCENE_STYLES = ["action","studio","outdoor","classroom"];
-const AD_STATUS_COLORS = {
-DRAFT:B.muted, ACTIVE:B.green, PAUSED:B.yellow, COMPLETE:B.blue, ARCHIVED:B.muted
-};
-function adFetch(path, opts={}) {
-return fetch(`/api/adengine${path}`, {
-headers: {"Content-Type":"application/json"},
-...opts,
-body: opts.body ? JSON.stringify(opts.body) : undefined,
-}).then(r=>r.json());
-}
-const AD_PV_SIZES = { square:{w:1080,h:1080}, landscape:{w:1200,h:628}, story:{w:1080,h:1920} };
-function AdPreview({ tpl, sz, headline, sub, cta, badge, img, bg, tc, ac, logo, logoUrl, maxH=460 }) {
-const {w,h} = AD_PV_SIZES[sz]||AD_PV_SIZES.square;
-const scale = Math.min(maxH/h, 520/w, 1);
-const props = {headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl};
-const inner = tpl==="clean"?<_AdClean {...props}/>:tpl==="split"?<_AdSplit {...props}/>:tpl==="overlay"?<_AdOverlay {...props}/>:<_AdBold {...props}/>;
-return (
-<div style={{width:Math.round(w*scale),height:Math.round(h*scale),overflow:"hidden",borderRadius:6,flexShrink:0,position:"relative"}}>
-<div style={{width:w,height:h,transform:`scale(${scale})`,transformOrigin:"top left",position:"absolute",top:0,left:0}}>
-{inner}
-</div>
-</div>
-);
-}
-function _AdLogo({ac,logo,logoUrl}){if(!logo)return null;if(logoUrl)return <img src={logoUrl} style={{maxHeight:36,maxWidth:140,objectFit:"contain"}} alt="Logo"/>;return <div style={{display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:26,background:ac,borderRadius:2}}/><div style={{fontSize:17,fontWeight:900,color:ac,letterSpacing:3,fontFamily:"system-ui"}}>ST1 SPORTS</div></div>;}
-function _AdBold({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.055);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box"}}><div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:Math.round(h*.042)}}><_AdLogo ac={ac} logo={logo} logoUrl={logoUrl}/>{badge&&<div style={{background:ac,color:"#fff",padding:"7px 18px",borderRadius:4,fontSize:16,fontWeight:800,letterSpacing:1}}>{badge.toUpperCase()}</div>}</div><div style={{display:"flex",flex:1,alignItems:"center",gap:Math.round(w*.05)}}><div style={{display:"flex",flexDirection:"column",flex:img?1.1:1,gap:20}}><div style={{fontSize:Math.round(h*.076),fontWeight:900,color:tc,lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.028),color:tc+"BB",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.042)}px`,borderRadius:7,fontSize:Math.round(h*.028),fontWeight:800,marginTop:10}}>{cta}</div>}</div>{img&&<div style={{flex:.9,display:"flex",justifyContent:"center",alignItems:"center"}}><img src={img} style={{width:Math.round(w*.38),height:Math.round(h*.57),objectFit:"contain",borderRadius:16}}/></div>}</div></div>);}
-function _AdClean({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",flexDirection:"column",background:bg,width:"100%",height:"100%",padding:p,fontFamily:"system-ui",boxSizing:"border-box",alignItems:"center",justifyContent:"center"}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:40,maxWidth:160,objectFit:"contain",marginBottom:Math.round(h*.035)}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:Math.round(h*.035)}}><div style={{width:5,height:24,background:ac,borderRadius:2}}/><div style={{fontSize:16,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{img&&<img src={img} style={{width:Math.round(w*.52),height:Math.round(h*.44),objectFit:"contain",borderRadius:14,marginBottom:Math.round(h*.038)}}/>}{badge&&<div style={{background:ac,color:"#fff",padding:"6px 16px",borderRadius:4,fontSize:14,fontWeight:800,marginBottom:16}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.066),fontWeight:900,color:tc,lineHeight:1.08,letterSpacing:-.5,textAlign:"center",marginBottom:16}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.025),color:tc+"99",lineHeight:1.55,textAlign:"center",maxWidth:Math.round(w*.76),marginBottom:22}}>{sub}</div>}{cta&&<div style={{background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.052)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:Math.round(h*.045)}}>ST1SPORTS.COM</div></div>);}
-function _AdSplit({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const p=Math.round(h*.06);return(<div style={{display:"flex",background:bg,width:"100%",height:"100%",fontFamily:"system-ui"}}><div style={{display:"flex",flexDirection:"column",flex:1,padding:p,justifyContent:"center",gap:18}}>{logo&&(logoUrl?<img src={logoUrl} style={{maxHeight:34,maxWidth:130,objectFit:"contain",marginBottom:6}} alt="Logo"/>:<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:ac,letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:"6px 14px",borderRadius:4,fontSize:13,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{fontSize:Math.round(h*.074),fontWeight:900,color:tc,lineHeight:1.06,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.026),color:tc+"AA",lineHeight:1.5}}>{sub}</div>}{cta&&<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.021)}px ${Math.round(h*.04)}px`,borderRadius:7,fontSize:Math.round(h*.026),fontWeight:800,marginTop:8}}>{cta}</div>}<div style={{fontSize:12,color:tc+"44",letterSpacing:3,marginTop:"auto"}}>ST1SPORTS.COM</div></div><div style={{flex:1,display:"flex",justifyContent:"center",alignItems:"center",background:`${ac}0F`,borderLeft:`4px solid ${ac}`}}>{img?<img src={img} style={{width:Math.round(w*.41),height:Math.round(h*.66),objectFit:"contain",borderRadius:10}}/>:<div style={{fontSize:18,color:tc+"33",fontWeight:700,letterSpacing:2}}>PRODUCT IMAGE</div>}</div></div>);}
-function _AdOverlay({headline,sub,cta,badge,img,bg,tc,ac,w,h,logo,logoUrl}){const px=Math.round(w*.05),py=Math.round(h*.045);return(<div style={{position:"relative",background:bg,width:"100%",height:"100%",fontFamily:"system-ui",overflow:"hidden"}}>{img&&<img src={img} style={{position:"absolute",top:0,left:0,width:"100%",height:"100%",objectFit:"cover"}}/>}<div style={{position:"absolute",bottom:0,left:0,right:0,height:"58%",background:"linear-gradient(to top,rgba(0,0,0,.93) 0%,rgba(0,0,0,0) 100%)"}}/>  {logo&&(logoUrl?<img src={logoUrl} style={{position:"absolute",top:py,left:px,maxHeight:32,maxWidth:120,objectFit:"contain"}} alt="Logo"/>:<div style={{position:"absolute",top:py,left:px,display:"flex",alignItems:"center",gap:8}}><div style={{width:5,height:22,background:ac,borderRadius:2}}/><div style={{fontSize:15,fontWeight:900,color:"#fff",letterSpacing:3}}>ST1 SPORTS</div></div>)}{badge&&<div style={{position:"absolute",top:py,right:px,background:ac,color:"#fff",padding:"7px 17px",borderRadius:4,fontSize:14,fontWeight:800}}>{badge.toUpperCase()}</div>}<div style={{position:"absolute",bottom:0,left:0,right:0,padding:`${Math.round(h*.05)}px ${px}px`,display:"flex",flexDirection:"column",gap:12}}><div style={{fontSize:Math.round(h*.072),fontWeight:900,color:"#fff",lineHeight:1.05,letterSpacing:-1}}>{headline}</div>{sub&&<div style={{fontSize:Math.round(h*.024),color:"#FFFFFFCC",lineHeight:1.45}}>{sub}</div>}<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6}}>{cta?<div style={{display:"inline-block",background:ac,color:"#fff",padding:`${Math.round(h*.019)}px ${Math.round(h*.037)}px`,borderRadius:7,fontSize:Math.round(h*.025),fontWeight:800}}>{cta}</div>:<div/>}<div style={{fontSize:12,color:"#FFFFFF66",letterSpacing:3}}>ST1SPORTS.COM</div></div></div></div>);}
 function SendStatusPanel(){
 const [status,setStatus]=useState(null);
 const [loading,setLoading]=useState(true);
@@ -11628,1168 +10980,6 @@ style={{width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.t
 </div>
 </div>
 )}
-</div>
-);
-}
-function ModAds() {
-const {s, dispatch, toast} = useApp();
-const [tab, setTab] = useState("campaigns");
-const [campaigns, setCampaigns] = useState([]);
-const [campTotal, setCampTotal] = useState(0);
-const [campLoading, setCampLoading] = useState(false);
-const [statusFilter, setStatusFilter] = useState("");
-const [selCamp, setSelCamp] = useState(null);
-const [selCampId, setSelCampId] = useState(null);
-const [detailLoading, setDetailLoading] = useState(false);
-const [showCreate, setShowCreate] = useState(false);
-const [createForm, setCreateForm] = useState({
-name:"", brief:"", audience:"", objective:"AWARENESS",
-platforms:["meta"], imageStyle:"product_only", sceneStyle:"action",
-variantsPerProduct:2, startDate:"", endDate:"",
-});
-const [creating, setCreating] = useState(false);
-const [copyProdName, setCopyProdName] = useState("");
-const [copyProdDesc, setCopyProdDesc] = useState("");
-const [copyProdPrice, setCopyProdPrice] = useState("");
-const [genCopyRunning, setGenCopyRunning] = useState(false);
-const [imgProdName, setImgProdName] = useState("");
-const [imgStyle, setImgStyle] = useState("product_only");
-const [imgScene, setImgScene] = useState("action");
-const [genImgRunning, setGenImgRunning] = useState(false);
-const [lastImg, setLastImg] = useState(null);
-const [products, setProducts] = useState([]);
-const [prodSearch, setProdSearch] = useState("");
-const [prodLoading, setProdLoading] = useState(false);
-const [syncing, setSyncing] = useState(false);
-const previewTimerRef = useRef(null);
-const [adTpl, setAdTpl] = useState("bold");
-const [adSz, setAdSz] = useState("square");
-const [adHeadline, setAdHeadline] = useState("TRAIN HARDER. WIN MORE.");
-const [adSub, setAdSub] = useState("");
-const [adCta, setAdCta] = useState("SHOP NOW");
-const [adBadge, setAdBadge] = useState("");
-const [adBg, setAdBg] = useState("#0A0A0A");
-const [adTc, setAdTc] = useState("#FFFFFF");
-const [adAc, setAdAc] = useState("#F37321");
-const [adLogo, setAdLogo] = useState(true);
-const [adImg, setAdImg] = useState("");
-const [adUrl, setAdUrl] = useState("");
-const [previewUrl, setPreviewUrl] = useState("/api/adengine/render-ad?tpl=bold&sz=square&headline=TRAIN+HARDER.+WIN+MORE.&cta=SHOP+NOW&bg=%230A0A0A&tc=%23FFFFFF&ac=%23F37321");
-const [ideoPrompt, setIdeoPrompt] = useState("");
-const [ideoStyle, setIdeoStyle] = useState("REALISTIC");
-const [ideoRunning, setIdeoRunning] = useState(false);
-const [ideoResult, setIdeoResult] = useState(null);
-const [downloadRunning, setDownloadRunning] = useState(false);
-const [creatorCopyIdx, setCreatorCopyIdx] = useState(0);
-const [adLogoUrl, setAdLogoUrl] = useState("");
-const brandAssetRef = useRef();
-useEffect(() => {
-if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
-previewTimerRef.current = setTimeout(() => {
-const p = new URLSearchParams();
-p.set("tpl", adTpl);
-p.set("sz", adSz);
-p.set("headline", adHeadline || "YOUR HEADLINE");
-if (adSub) p.set("sub", adSub);
-if (adCta) p.set("cta", adCta);
-if (adBadge) p.set("badge", adBadge);
-p.set("bg", adBg);
-p.set("tc", adTc);
-p.set("ac", adAc);
-p.set("logo", adLogo ? "true" : "false");
-if (adImg) p.set("img", adImg);
-setPreviewUrl(`/api/adengine/render-ad?${p.toString()}`);
-}, 600);
-return () => { if (previewTimerRef.current) clearTimeout(previewTimerRef.current); };
-}, [adTpl, adSz, adHeadline, adSub, adCta, adBadge, adBg, adTc, adAc, adLogo, adImg]);
-const generateIdeogramImage = async () => {
-if (!ideoPrompt.trim()) { toast("Enter a product description first", "error"); return; }
-setIdeoRunning(true);
-setIdeoResult(null);
-try {
-const data = await adFetch("/generate-product-image", {
-method: "POST",
-body: { prompt: ideoPrompt, style: ideoStyle, sizeKey: adSz, campaignId: selCamp?.id },
-});
-if (data.imageUrl) {
-setIdeoResult({ imageUrl: data.imageUrl, assetId: data.asset?.id });
-toast("Image generated!", "success");
-} else { toast(data.error || "Image gen failed", "error"); }
-} catch { toast("Image gen failed", "error"); }
-setIdeoRunning(false);
-};
-const downloadAd = async () => {
-if (!previewUrl) return;
-setDownloadRunning(true);
-try {
-const res = await fetch(previewUrl);
-const blob = await res.blob();
-const url = URL.createObjectURL(blob);
-const a = document.createElement("a");
-a.href = url;
-a.download = `st1-ad-${adTpl}-${adSz}-${Date.now()}.png`;
-a.click();
-URL.revokeObjectURL(url);
-} catch { toast("Download failed", "error"); }
-setDownloadRunning(false);
-};
-const [showSocialPanel, setShowSocialPanel] = useState(false);
-const [socialCaption, setSocialCaption] = useState("");
-const [socialPlatforms, setSocialPlatforms] = useState(["twitter","linkedin","instagram","facebook"]);
-const [socialPostType, setSocialPostType] = useState("post");
-const [socialScheduleAt, setSocialScheduleAt] = useState("");
-const [socialPosting, setSocialPosting] = useState(false);
-const [socialResult, setSocialResult] = useState(null);
-const [copyGenRunning, setCopyGenRunning] = useState(false);
-const [generatedCopies, setGeneratedCopies] = useState(null);
-const generatePlatformCopy = async () => {
-setCopyGenRunning(true);
-setGeneratedCopies(null);
-try {
-const context = [adHeadline&&`Headline: ${adHeadline}`, adSub&&`Subheadline: ${adSub}`, adCta&&`CTA: ${adCta}`, adBadge&&`Badge: ${adBadge}`].filter(Boolean).join("\n");
-const r = await fetch("/api/claude", {
-method:"POST", headers:{"Content-Type":"application/json"},
-body: JSON.stringify({
-model:"claude-haiku-4-5-20251001", max_tokens:600,
-messages:[{role:"user",content:`Generate social media captions for this ad from ST1 Sports (athletic equipment company):\n\n${context}\n\nRespond ONLY with valid JSON:\n{"twitter":"<280 chars, punchy, 1-2 hashtags>","linkedin":"<professional, 2-3 sentences, no hashtags>","instagram":"<engaging, 3-4 sentences, 6-8 hashtags>","facebook":"<conversational, 2-3 sentences, 1-2 hashtags>"}`}]
-})
-});
-const d = await r.json();
-const text = (d.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
-const match = text.match(/\{[\s\S]*\}/);
-if (match) setGeneratedCopies(JSON.parse(match[0]));
-} catch { toast("Copy generation failed","error"); }
-setCopyGenRunning(false);
-};
-const openSocialPanel = () => {
-setShowSocialPanel(true);
-setSocialResult(null);
-const parts = [adHeadline, adSub, adCta ? `👉 ${adCta}` : "", "#ST1Sports #Athletics #TrackAndField"].filter(Boolean);
-setSocialCaption(parts.join("\n\n"));
-};
-const submitSocialPost = async () => {
-if (!socialPlatforms.length) { toast("Select at least one platform","error"); return; }
-if (!socialCaption.trim()) { toast("Caption is required","error"); return; }
-setSocialPosting(true);
-setSocialResult(null);
-try {
-const r = await fetch("/api/social-post", {
-method:"POST",
-headers:{"Content-Type":"application/json"},
-body: JSON.stringify({
-post: socialCaption,
-platforms: socialPlatforms,
-mediaUrls: adImg ? [adImg] : undefined,
-scheduleDate: socialScheduleAt || undefined,
-isStory: socialPostType === "story",
-link: adUrl || undefined,
-}),
-});
-const data = await r.json();
-const platformErrors = Array.isArray(data.errors) ? data.errors : [];
-const isSuccess = (data.status === "success" || data.status === "scheduled") && !data.error;
-if (isSuccess) {
-const failedNets = platformErrors.map(e=>e.network||e.platform).filter(Boolean);
-const okCount = socialPlatforms.length - failedNets.length;
-setSocialResult({ ok:true, platformErrors, failedNets, warning: data._warning });
-if (failedNets.length === 0) {
-toast(socialScheduleAt ? `Scheduled for ${new Date(socialScheduleAt).toLocaleString()}!` : `Posted to ${okCount} platform(s)!`, "success");
-} else {
-toast(`Posted to ${okCount} platform(s). Failed: ${failedNets.join(", ")}`, "warn");
-}
-dispatch("ADD_SOCIAL_POST", {
-id:mkId(), createdAt:today(),
-date: socialScheduleAt ? socialScheduleAt.slice(0,10) : today(),
-time: socialScheduleAt ? socialScheduleAt.slice(11,16) : new Date().toTimeString().slice(0,5),
-platforms: socialPlatforms,
-caption: socialCaption,
-imageUrl: adImg,
-link: adUrl,
-status: socialScheduleAt ? "scheduled" : "published",
-postType: socialPostType,
-});
-} else {
-const errMsg = data.error || data.message || (platformErrors[0]?.message) || "Post failed";
-setSocialResult({ ok:false, error: errMsg });
-toast(errMsg, "error");
-}
-} catch { toast("Post failed","error"); }
-setSocialPosting(false);
-};
-const loadCopyIntoCreator = (copy) => {
-if (!copy) return;
-if (copy.headline) setAdHeadline(copy.headline.toUpperCase());
-if (copy.subheadline) setAdSub(copy.subheadline);
-if (copy.cta) setAdCta(copy.cta.toUpperCase());
-if (copy.badge) setAdBadge(copy.badge.toUpperCase());
-setTab("creator");
-toast("Copy loaded into Ad Creator", "success");
-};
-const loadCampaigns = async () => {
-setCampLoading(true);
-try {
-const q = statusFilter ? `?status=${statusFilter}` : "";
-const data = await adFetch(`/campaigns${q}`);
-setCampaigns(data.items || []);
-setCampTotal(data.total || 0);
-} catch { toast("Failed to load campaigns","error"); }
-setCampLoading(false);
-};
-const loadCampaignDetail = async (id) => {
-setDetailLoading(true);
-setSelCampId(id);
-try {
-const data = await adFetch(`/campaigns/${id}`);
-setSelCamp(data.campaign);
-} catch { toast("Failed to load campaign","error"); }
-setDetailLoading(false);
-};
-const loadProducts = async (search="") => {
-setProdLoading(true);
-try {
-const q = search ? `?search=${encodeURIComponent(search)}` : "";
-const data = await adFetch(`/products${q}`);
-setProducts(data.products || []);
-} catch { toast("Failed to load products","error"); }
-setProdLoading(false);
-};
-useEffect(()=>{ if(tab==="campaigns") loadCampaigns(); },[tab,statusFilter]);
-useEffect(()=>{ if(tab==="products") loadProducts(prodSearch); },[tab]);
-const createCampaign = async () => {
-if (!createForm.name.trim()) { toast("Name required","error"); return; }
-setCreating(true);
-try {
-const data = await adFetch("/campaigns", { method:"POST", body: createForm });
-if (data.campaign) {
-toast(`Campaign "${data.campaign.name}" created`,"success");
-setShowCreate(false);
-setCreateForm({name:"",brief:"",audience:"",objective:"AWARENESS",platforms:["meta"],imageStyle:"product_only",sceneStyle:"action",variantsPerProduct:2,startDate:"",endDate:""});
-loadCampaigns();
-loadCampaignDetail(data.campaign.id);
-} else {
-toast(data.error || "Create failed","error");
-}
-} catch { toast("Create failed","error"); }
-setCreating(false);
-};
-const updateStatus = async (id, status) => {
-await adFetch(`/campaigns/${id}`, { method:"PATCH", body:{status} });
-loadCampaignDetail(id);
-loadCampaigns();
-toast(`Status → ${status}`,"success");
-};
-const generateCopy = async () => {
-if (!selCamp) return;
-setGenCopyRunning(true);
-try {
-const data = await adFetch("/generate-copy", {
-method:"POST",
-body:{ campaignId:selCamp.id, productName:copyProdName||undefined, productDesc:copyProdDesc||undefined, productPrice:copyProdPrice||undefined },
-});
-if (data.copy) {
-toast("Copy generated","success");
-loadCampaignDetail(selCamp.id);
-} else {
-toast(data.error || "Copy gen failed","error");
-}
-} catch { toast("Copy gen failed","error"); }
-setGenCopyRunning(false);
-};
-const generateImage = async () => {
-if (!selCamp) return;
-setGenImgRunning(true);
-setLastImg(null);
-try {
-const data = await adFetch("/generate-product-image", {
-method:"POST",
-body:{ campaignId:selCamp.id, prompt:imgProdName||`${selCamp.name} product photo`, style:imgStyle, sizeKey:imgScene||"square" },
-});
-if (data.imageUrl) {
-setLastImg({ url: data.imageUrl, assetId: data.asset?.id });
-toast("Image generated","success");
-loadCampaignDetail(selCamp.id);
-} else {
-toast(data.error || "Image gen failed","error");
-}
-} catch { toast("Image gen failed","error"); }
-setGenImgRunning(false);
-};
-const syncCatalog = async () => {
-setSyncing(true);
-try {
-const data = await adFetch("/products", { method:"POST" });
-toast(data.error ? data.error : `Synced ${data.synced} products`, data.error ? "error" : "success");
-if (!data.error) loadProducts();
-} catch { toast("Sync failed","error"); }
-setSyncing(false);
-};
-const exportCSV = (id) => {
-window.open(`/api/adengine/export-copy-csv?campaignId=${id}`, "_blank");
-};
-const StatusPill = ({status}) => (
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:AD_STATUS_COLORS[status]||B.muted,background:`${AD_STATUS_COLORS[status]||B.muted}18`,padding:"2px 7px",borderRadius:3,letterSpacing:.5}}>
-{status}
-</span>
-);
-return (
-<div style={{padding:"22px 26px"}}>
-<PH title="AD ENGINE" sub="Product campaigns, AI image generation, Meta ad copy, and asset management" action={(()=>{
-try {
-const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-const contacts = Array.isArray(store.contacts)?store.contacts:[];
-const now = Date.now();
-const cold = contacts.filter(c=>{
-if(!c.email)return false;
-const lastAct = c.activity?.length?Math.max(...c.activity.map(a=>new Date(a.ts||a.date||0).getTime())):0;
-return (c.score||0)<25&&(!lastAct||(now-lastAct)>30*24*60*60*1000);
-});
-if(!cold.length)return null;
-return (
-<div style={{display:"flex",alignItems:"center",gap:8}}>
-<div style={{background:B.blueBg,border:`1px solid ${B.blue}30`,borderRadius:5,padding:"4px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5}}>
-{cold.length} COLD LEADS
-</div>
-<a href="/integrations" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"none"}}>Sync to Campaigns →</a>
-</div>
-);
-} catch { return null; }
-})()}/>
-<div style={{display:"flex",gap:7,marginBottom:18}}>
-{[["campaigns","Campaigns"],["creator","Ad Creator"],["saved","Saved Ads"],["calendar","Social Calendar"],["products","Products"],["assets","Assets"]].map(([id,l])=>(
-<button key={id} onClick={()=>setTab(id)} style={{background:tab===id?B.orange:B.white,color:tab===id?B.white:B.muted,border:`1px solid ${tab===id?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4}}>{l}</button>
-))}
-</div>
-{/* ── CAMPAIGNS ──────────────────────────────────────────────────────────── */}
-{tab==="campaigns"&&(
-<div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:16}}>
-{/* Left: list */}
-<div>
-<div style={{display:"flex",gap:6,marginBottom:10}}>
-<OBtn sm onClick={()=>setShowCreate(true)} style={{flex:1}}>+ NEW CAMPAIGN</OBtn>
-</div>
-<div style={{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
-{["","DRAFT","ACTIVE","PAUSED","COMPLETE"].map(s=>(
-<button key={s} onClick={()=>setStatusFilter(s)} style={{background:statusFilter===s?`${B.orange}14`:B.white,color:statusFilter===s?B.orange:B.muted,border:`1px solid ${statusFilter===s?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{s||"All"}</button>
-))}
-</div>
-{campLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11,padding:"10px 0"}}><Spin/>Loading…</div>}
-{!campLoading&&campaigns.length===0&&(
-<div className="card" style={{padding:20,textAlign:"center",fontSize:11,color:B.muted,fontFamily:"'Lexend',sans-serif"}}>
-No campaigns yet. Create one to get started.
-</div>
-)}
-{campaigns.map(c=>(
-<div key={c.id} onClick={()=>loadCampaignDetail(c.id)} className="card fu" style={{padding:"11px 13px",marginBottom:8,borderLeft:`3px solid ${selCampId===c.id?B.orange:B.border}`,cursor:"pointer",background:selCampId===c.id?`${B.orange}06`:B.white}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,flex:1,marginRight:8}}>{c.name}</div>
-<StatusPill status={c.status}/>
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:5}}>{c.objective} · {(c.platforms||[]).join(", ")}</div>
-<div style={{display:"flex",gap:6}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{c._count?.copies||0} copies</span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 5px",borderRadius:3}}>{c._count?.assets||0} assets</span>
-</div>
-</div>
-))}
-</div>
-{/* Right: detail / create form */}
-<div>
-{showCreate&&(
-<div className="card" style={{padding:16,marginBottom:16}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>NEW CAMPAIGN</div>
-<GBtn onClick={()=>setShowCreate(false)}>CANCEL</GBtn>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-<div style={{gridColumn:"1/-1"}}>
-<Lbl s={{marginBottom:4}}>Campaign Name *</Lbl>
-<input value={createForm.name} onChange={e=>setCreateForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Spring Track 2026 — Meta" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>Objective</Lbl>
-<select value={createForm.objective} onChange={e=>setCreateForm(f=>({...f,objective:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-{AD_OBJECTIVES.map(o=><option key={o}>{o}</option>)}
-</select>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>Audience</Lbl>
-<input value={createForm.audience} onChange={e=>setCreateForm(f=>({...f,audience:e.target.value}))} placeholder="Athletic Directors, K-12 coaches…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>Image Style</Lbl>
-<select value={createForm.imageStyle} onChange={e=>setCreateForm(f=>({...f,imageStyle:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-{AD_IMG_STYLES.map(o=><option key={o} value={o}>{o.replace("_"," ")}</option>)}
-</select>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>Scene Style</Lbl>
-<select value={createForm.sceneStyle} onChange={e=>setCreateForm(f=>({...f,sceneStyle:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-{AD_SCENE_STYLES.map(o=><option key={o}>{o}</option>)}
-</select>
-</div>
-<div>
-<Lbl s={{marginBottom:4}}>Variants / Product</Lbl>
-<select value={createForm.variantsPerProduct} onChange={e=>setCreateForm(f=>({...f,variantsPerProduct:parseInt(e.target.value)}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12}}>
-{[1,2,3].map(n=><option key={n} value={n}>{n}</option>)}
-</select>
-</div>
-</div>
-<div style={{marginBottom:12}}>
-<Lbl s={{marginBottom:4}}>Platforms</Lbl>
-<div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-{AD_PLATFORMS.map(p=>{
-const sel=(createForm.platforms||[]).includes(p);
-return <button key={p} onClick={()=>setCreateForm(f=>({...f,platforms:sel?f.platforms.filter(x=>x!==p):[...f.platforms,p]}))} style={{background:sel?`${B.orange}14`:B.white,color:sel?B.orange:B.muted,border:`1px solid ${sel?B.orange:B.border}`,borderRadius:3,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>{p}</button>;
-})}
-</div>
-</div>
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:4}}>Brief / Context</Lbl>
-<textarea value={createForm.brief} onChange={e=>setCreateForm(f=>({...f,brief:e.target.value}))} rows={2} placeholder="Campaign objective, key messaging, special offers…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,resize:"vertical",fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<OBtn onClick={createCampaign} disabled={creating} style={{width:"100%"}}>
-{creating?"CREATING...":"✓ CREATE CAMPAIGN"}
-</OBtn>
-</div>
-)}
-{detailLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:12,padding:20}}><Spin/>Loading campaign…</div>}
-{selCamp&&!detailLoading&&(
-<div>
-{/* Header */}
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
-<div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,marginBottom:3}}>{selCamp.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{selCamp.objective} · {(selCamp.platforms||[]).join(", ")} · {selCamp.imageStyle?.replace("_"," ")} · {selCamp.sceneStyle}</div>
-{selCamp.audience&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Audience: {selCamp.audience}</div>}
-{selCamp.brief&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginTop:6,maxWidth:500}}>{selCamp.brief}</div>}
-</div>
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
-<StatusPill status={selCamp.status}/>
-<select value={selCamp.status} onChange={e=>updateStatus(selCamp.id,e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:10}}>
-{["DRAFT","ACTIVE","PAUSED","COMPLETE","ARCHIVED"].map(s=><option key={s}>{s}</option>)}
-</select>
-<GBtn onClick={()=>exportCSV(selCamp.id)} style={{fontSize:9}}>⬇ CSV</GBtn>
-</div>
-</div>
-{/* Generate copy */}
-<div className="card" style={{padding:14,marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE AD COPY</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
-<div>
-<Lbl s={{marginBottom:3}}>Product Name</Lbl>
-<input value={copyProdName} onChange={e=>setCopyProdName(e.target.value)} placeholder="e.g. Blazer Hurdle H-28" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Product Price</Lbl>
-<input value={copyProdPrice} onChange={e=>setCopyProdPrice(e.target.value)} placeholder="$149.99" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Description</Lbl>
-<input value={copyProdDesc} onChange={e=>setCopyProdDesc(e.target.value)} placeholder="Short product description" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-</div>
-<OBtn onClick={generateCopy} disabled={genCopyRunning}>
-{genCopyRunning?"✦ GENERATING COPY...":"✦ GENERATE AD COPY"}
-</OBtn>
-</div>
-{/* Generate image — Ideogram */}
-<div className="card" style={{padding:14,marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>GENERATE PRODUCT IMAGE (Ideogram AI)</div>
-<div style={{marginBottom:8}}>
-<Lbl s={{marginBottom:3}}>Describe the product / scene</Lbl>
-<textarea value={imgProdName} onChange={e=>setImgProdName(e.target.value)} rows={2} placeholder="e.g. Aluminum hurdle with bright orange uprights on a professional track, cinematic lighting" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical"}}/>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-<div>
-<Lbl s={{marginBottom:3}}>Style</Lbl>
-<select value={imgStyle} onChange={e=>setImgStyle(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-{["REALISTIC","DESIGN","GENERAL","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
-</select>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Size</Lbl>
-<select value={imgScene} onChange={e=>setImgScene(e.target.value)} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-<option value="square">Square 1:1</option>
-<option value="landscape">Landscape 16:9</option>
-<option value="story">Story 9:16</option>
-</select>
-</div>
-</div>
-<div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-<OBtn onClick={generateImage} disabled={genImgRunning}>
-{genImgRunning?"✦ GENERATING...":"✦ GENERATE IMAGE"}
-</OBtn>
-{lastImg&&(
-<button onClick={()=>{setAdImg(lastImg.url);setTab("creator");toast("Image loaded into Ad Creator","success");}} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"6px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>USE IN AD CREATOR →</button>
-)}
-</div>
-{lastImg&&(
-<div style={{marginTop:10}}>
-<img src={lastImg.url} alt="Generated" style={{maxWidth:"100%",maxHeight:240,borderRadius:6,objectFit:"contain",border:`1px solid ${B.border}`}}/>
-</div>
-)}
-</div>
-{/* Copy list */}
-{(selCamp.copies||[]).length>0&&(
-<div style={{marginBottom:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:8}}>AD COPY ({selCamp.copies.length})</div>
-{selCamp.copies.map((c,i)=>(
-<div key={c.id} className="card" style={{padding:12,marginBottom:8,borderLeft:`3px solid ${B.orange}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:.5}}>
-{c.product?.name||`Copy #${i+1}`}
-</span>
-<div style={{display:"flex",gap:5,alignItems:"center"}}>
-{c.badge&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,background:B.redBg,padding:"1px 5px",borderRadius:2}}>{c.badge}</span>}
-<button onClick={()=>loadCopyIntoCreator(c)} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:3,padding:"2px 7px",fontSize:8,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>→ AD CREATOR</button>
-</div>
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{c.headline}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>{c.subheadline} {c.cta&&`· CTA: ${c.cta}`}</div>
-{[c.primary_text_v1,c.primary_text_v2,c.primary_text_v3].filter(Boolean).map((t,vi)=>(
-<div key={vi} style={{background:B.surface,borderRadius:4,padding:"8px 10px",marginBottom:5,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6,display:"flex",justifyContent:"space-between",gap:8}}>
-<div><span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginRight:6}}>V{vi+1}</span>{t}</div>
-<GBtn onClick={()=>navigator.clipboard?.writeText(t)} style={{fontSize:8,padding:"2px 6px",flexShrink:0}}>COPY</GBtn>
-</div>
-))}
-{(c.headline_v1||c.headline_v2)&&(
-<div style={{display:"flex",gap:6,marginTop:4,flexWrap:"wrap"}}>
-{[c.headline_v1,c.headline_v2].filter(Boolean).map((h,hi)=>(
-<div key={hi} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,background:B.blueBg,padding:"3px 8px",borderRadius:3,display:"flex",gap:5,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted}}>H{hi+1}</span>{h}
-<GBtn onClick={()=>navigator.clipboard?.writeText(h)} style={{fontSize:7,padding:"1px 4px"}}>⎘</GBtn>
-</div>
-))}
-</div>
-)}
-</div>
-))}
-</div>
-)}
-{/* Asset gallery */}
-{(selCamp.assets||[]).length>0&&(
-<div>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>ASSETS ({selCamp.assets.length})</div>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(140px,1fr))",gap:10}}>
-{selCamp.assets.map(a=>{
-const url=a.metadata?.url||(a.metadata?.b64?`data:${a.mimeType};base64,${a.metadata.b64}`:null);
-return (
-<div key={a.id} className="card" style={{padding:8,display:"flex",flexDirection:"column",gap:6}}>
-{url?(
-<img src={url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4}}/>
-):(
-<div style={{width:"100%",aspectRatio:"1",background:B.surface,borderRadius:4,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>No preview</div>
-)}
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5}}>{a.width}×{a.height} · {a.platform}</div>
-{url&&<a href={url} download={`asset-${a.id}.png`} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>⬇ Download</a>}
-</div>
-);
-})}
-</div>
-</div>
-)}
-{(selCamp.copies||[]).length===0&&(selCamp.assets||[]).length===0&&(
-<div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
-No copy or assets yet — use the Generate buttons above to get started.
-</div>
-)}
-</div>
-)}
-{!selCamp&&!detailLoading&&!showCreate&&(
-<div style={{display:"flex",alignItems:"center",justifyContent:"center",height:200,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>
-Select a campaign or create a new one
-</div>
-)}
-</div>
-</div>
-)}
-{/* ── AD CREATOR ─────────────────────────────────────────────────────────── */}
-{tab==="creator"&&(
-<div style={{display:"grid",gridTemplateColumns:"340px 1fr",gap:20,alignItems:"start"}}>
-{/* Left: controls */}
-<div style={{display:"flex",flexDirection:"column",gap:12}}>
-{/* Template picker */}
-<div className="card" style={{padding:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>TEMPLATE</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-{[["bold","Bold — Dark + Headline"],["clean","Clean — Centered"],["split","Split — Copy | Image"],["overlay","Overlay — Full Bleed"]].map(([id,label])=>(
-<button key={id} onClick={()=>setAdTpl(id)} style={{background:adTpl===id?B.orange:B.surface,color:adTpl===id?B.white:B.text,border:`1px solid ${adTpl===id?B.orange:B.border}`,borderRadius:5,padding:"8px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",fontWeight:adTpl===id?700:400,cursor:"pointer",textAlign:"left"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:.5,marginBottom:2}}>{id.toUpperCase()}</div>
-<div style={{fontSize:9,opacity:.7}}>{label.split("—")[1].trim()}</div>
-</button>
-))}
-</div>
-</div>
-{/* Size picker */}
-<div className="card" style={{padding:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>SIZE</div>
-<div style={{display:"flex",gap:6}}>
-{[["square","1:1","1080×1080"],["landscape","16:9","1200×628"],["story","9:16","1080×1920"]].map(([id,ratio,dims])=>(
-<button key={id} onClick={()=>setAdSz(id)} style={{flex:1,background:adSz===id?B.orange:B.surface,color:adSz===id?B.white:B.text,border:`1px solid ${adSz===id?B.orange:B.border}`,borderRadius:5,padding:"8px 6px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",textAlign:"center"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,letterSpacing:.5,marginBottom:1}}>{ratio}</div>
-<div style={{fontSize:8,opacity:.65}}>{dims}</div>
-</button>
-))}
-</div>
-</div>
-{/* Text fields */}
-<div className="card" style={{padding:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>AD TEXT</div>
-{selCamp&&(selCamp.copies||[]).length>0&&(
-<div style={{display:"flex",gap:6,marginBottom:10,alignItems:"center"}}>
-<select value={creatorCopyIdx} onChange={e=>setCreatorCopyIdx(Number(e.target.value))} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 7px",fontSize:10}}>
-{(selCamp.copies||[]).map((c,i)=><option key={c.id} value={i}>{c.product?.name||`Copy #${i+1}`} — {c.headline?.slice(0,30)}</option>)}
-</select>
-<button onClick={()=>loadCopyIntoCreator(selCamp.copies[creatorCopyIdx])} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"5px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>LOAD</button>
-</div>
-)}
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-<div>
-<Lbl s={{marginBottom:3}}>Headline</Lbl>
-<input value={adHeadline} onChange={e=>setAdHeadline(e.target.value)} placeholder="TRAIN HARDER. WIN MORE." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Subheadline</Lbl>
-<input value={adSub} onChange={e=>setAdSub(e.target.value)} placeholder="Supporting copy (optional)" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-<div>
-<Lbl s={{marginBottom:3}}>CTA Button</Lbl>
-<input value={adCta} onChange={e=>setAdCta(e.target.value)} placeholder="SHOP NOW" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Badge</Lbl>
-<input value={adBadge} onChange={e=>setAdBadge(e.target.value)} placeholder="NEW · SALE · FREE SHIP" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}/>
-</div>
-</div>
-<div>
-<Lbl s={{marginBottom:3}}>Link URL (appended to social posts)</Lbl>
-<input value={adUrl} onChange={e=>setAdUrl(e.target.value)} placeholder="https://st1sports.com/products/..." style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"monospace"}}/>
-</div>
-</div>
-</div>
-{/* Colors + logo */}
-<div className="card" style={{padding:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>COLORS</div>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{[["Background","adBg",adBg,setAdBg],["Text Color","adTc",adTc,setAdTc],["Accent Color","adAc",adAc,setAdAc]].map(([label,,val,setter])=>(
-<div key={label} style={{display:"flex",alignItems:"center",gap:8}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,width:90,flexShrink:0}}>{label}</div>
-<input type="color" value={val} onChange={e=>setter(e.target.value)} style={{width:32,height:28,border:`1px solid ${B.border}`,borderRadius:4,cursor:"pointer",padding:2,background:B.surface}}/>
-<input value={val} onChange={e=>setter(e.target.value)} maxLength={7} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:11,fontFamily:"monospace"}}/>
-<div style={{width:22,height:22,borderRadius:4,background:val,border:`1px solid ${B.border}`,flexShrink:0}}/>
-</div>
-))}
-</div>
-<div style={{display:"flex",alignItems:"center",gap:8,marginTop:10}}>
-<input type="checkbox" id="adlogo" checked={adLogo} onChange={e=>setAdLogo(e.target.checked)} style={{width:14,height:14,cursor:"pointer"}}/>
-<label htmlFor="adlogo" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,cursor:"pointer"}}>{adLogoUrl?"Show brand logo ✓":"Show brand logo (upload below)"}</label>
-</div>
-<div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,width:"100%",marginBottom:2}}>PRESETS</div>
-{[["Dark",["#0A0A0A","#FFFFFF","#F37321"]],["Light",["#FFFFFF","#0A0A0A","#F37321"]],["Navy",["#0B1A3E","#FFFFFF","#F37321"]],["Forest",["#1A3A2A","#FFFFFF","#4CAF50"]]].map(([name,[bg,tc,ac]])=>(
-<button key={name} onClick={()=>{setAdBg(bg);setAdTc(tc);setAdAc(ac);}} style={{background:bg,color:tc,border:`2px solid ${ac}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{name}</button>
-))}
-</div>
-</div>
-{/* Brand Assets */}
-<div className="card" style={{padding:14}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>BRAND ASSETS</div>
-<button onClick={()=>brandAssetRef.current?.click()} style={{background:B.orangeBg,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.5}}>+ UPLOAD</button>
-<input ref={brandAssetRef} type="file" accept="image/*" multiple style={{display:"none"}} onChange={async e=>{
-const files=[...e.target.files];
-for(const f of files){
-const dataUrl=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f);});
-const isLogo=/logo/i.test(f.name);
-dispatch("ADD_BRAND_ASSET",{id:mkId(),name:f.name,url:dataUrl,type:isLogo?"logo":"asset",createdAt:new Date().toISOString().slice(0,10)});
-}
-e.target.value="";
-toast(`Uploaded ${files.length} asset${files.length>1?"s":""}!`,"success");
-}}/>
-</div>
-{(s.brandAssets||[]).length===0&&(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center",padding:"10px 0"}}>No assets yet — upload logos, product shots, or brand images</div>
-)}
-{(s.brandAssets||[]).length>0&&(
-<div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
-{(s.brandAssets||[]).map(a=>{
-const isLogoSel=adLogoUrl===a.url;
-const isImgSel=adImg===a.url;
-return(
-<div key={a.id} style={{position:"relative",borderRadius:6,overflow:"hidden",border:`2px solid ${isLogoSel?B.orange:isImgSel?B.blue:B.border}`,background:B.surface}}>
-<img src={a.url} alt={a.name} style={{width:"100%",height:56,objectFit:"contain",display:"block",background:"#111",padding:4}}/>
-<div style={{padding:"3px 4px"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.name.replace(/\.[^.]+$/,"")}</div>
-<div style={{display:"flex",gap:3,marginTop:3,flexWrap:"wrap"}}>
-<button onClick={()=>{setAdLogoUrl(isLogoSel?"":a.url);if(!isLogoSel)setAdLogo(true);}} style={{background:isLogoSel?B.orange:B.orangeBg,color:isLogoSel?B.white:B.orange,border:`1px solid ${B.orange}40`,borderRadius:3,padding:"2px 4px",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>LOGO</button>
-<button onClick={()=>setAdImg(isImgSel?"":a.url)} style={{background:isImgSel?B.blue:B.blueBg,color:isImgSel?B.white:B.blue,border:`1px solid ${B.blue}40`,borderRadius:3,padding:"2px 4px",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>IMG</button>
-<button onClick={()=>{if(adLogoUrl===a.url)setAdLogoUrl("");if(adImg===a.url)setAdImg("");dispatch("DELETE_BRAND_ASSET",a.id);}} style={{background:"none",border:"none",color:B.muted,fontSize:8,cursor:"pointer",padding:"2px 3px",marginLeft:"auto"}}>✕</button>
-</div>
-</div>
-</div>
-);
-})}
-</div>
-)}
-{(s.brandAssets||[]).length>0&&(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:8}}>
-Click <span style={{color:B.orange}}>LOGO</span> to use as brand logo · <span style={{color:B.blue}}>IMG</span> to use as background/product image
-</div>
-)}
-</div>
-{/* Image source */}
-<div className="card" style={{padding:14}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1,marginBottom:10}}>PRODUCT IMAGE (Ideogram AI)</div>
-<textarea value={ideoPrompt} onChange={e=>setIdeoPrompt(e.target.value)} rows={3} placeholder="Describe what the image should show… e.g. 'Aluminum track hurdle on an Olympic running track, cinematic lighting, product photo'" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",marginBottom:8}}/>
-<div style={{display:"flex",gap:8,marginBottom:8,alignItems:"center"}}>
-<select value={ideoStyle} onChange={e=>setIdeoStyle(e.target.value)} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>
-{["REALISTIC","DESIGN","GENERAL","ANIME","AUTO"].map(s=><option key={s}>{s}</option>)}
-</select>
-<OBtn onClick={generateIdeogramImage} disabled={ideoRunning} style={{flexShrink:0}}>
-{ideoRunning?"GENERATING...":"✦ GENERATE"}
-</OBtn>
-</div>
-{ideoResult&&(
-<div style={{display:"flex",gap:8,alignItems:"flex-start"}}>
-<img src={ideoResult.imageUrl} alt="Generated" style={{width:80,height:80,objectFit:"cover",borderRadius:6,border:`1px solid ${B.border}`,flexShrink:0}}/>
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-<button onClick={()=>setAdImg(ideoResult.imageUrl)} style={{background:adImg===ideoResult.imageUrl?B.orange:B.orangeBg,color:adImg===ideoResult.imageUrl?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
-{adImg===ideoResult.imageUrl?"✓ IN USE":"USE IN AD"}
-</button>
-<button onClick={()=>{
-setAdImg(ideoResult.imageUrl);
-const parts=[adHeadline,adSub,adCta?`👉 ${adCta}`:"","#ST1Sports #Athletics #TrackAndField"].filter(Boolean);
-setSocialCaption(parts.join("\n\n"));
-setShowSocialPanel(true);
-setSocialResult(null);
-}} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer",letterSpacing:.3}}>
-📣 POST THIS
-</button>
-<button onClick={()=>setAdImg("")} style={{background:"none",border:"none",color:B.muted,fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textAlign:"left"}}>Clear image</button>
-</div>
-</div>
-)}
-<div style={{marginTop:10}}>
-<Lbl s={{marginBottom:3}}>Or paste any image URL</Lbl>
-<input value={adImg} onChange={e=>setAdImg(e.target.value)} placeholder="https://…" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:10,fontFamily:"monospace"}}/>
-</div>
-</div>
-</div>
-{/* Right: live preview */}
-<div style={{position:"sticky",top:20}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>LIVE PREVIEW</div>
-<div style={{display:"flex",gap:8,alignItems:"center"}}>
-<a href={previewUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,textDecoration:"none"}}>Open full size ↗</a>
-<OBtn onClick={downloadAd} disabled={downloadRunning} style={{padding:"6px 14px"}}>
-{downloadRunning?"DOWNLOADING...":"⬇ DOWNLOAD PNG"}
-</OBtn>
-<button onClick={()=>{
-const name=adHeadline||"Untitled Ad";
-dispatch("ADD_SAVED_AD",{id:mkId(),name,tpl:adTpl,sz:adSz,headline:adHeadline,sub:adSub,cta:adCta,badge:adBadge,bg:adBg,tc:adTc,ac:adAc,logo:adLogo,logoUrl:adLogoUrl,img:adImg,url:adUrl,createdAt:today()});
-toast(`"${name}" saved!`,"success");
-}} style={{background:B.white,color:B.green,border:`1px solid ${B.green}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
-✦ SAVE AD
-</button>
-<button onClick={openSocialPanel} style={{background:showSocialPanel?`${B.purple}14`:B.white,color:B.purple,border:`1px solid ${B.purple}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:.4}}>
-📣 POST TO SOCIAL
-</button>
-</div>
-</div>
-<div style={{background:"#111",borderRadius:10,padding:12,display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
-<AdPreview tpl={adTpl} sz={adSz} headline={adHeadline||"YOUR HEADLINE"} sub={adSub} cta={adCta} badge={adBadge} img={adImg} bg={adBg} tc={adTc} ac={adAc} logo={adLogo} logoUrl={adLogoUrl} maxH={adSz==="story"?560:adSz==="landscape"?320:440}/>
-</div>
-<div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center"}}>
-Preview updates automatically · {adTpl.toUpperCase()} template · {adSz === "square" ? "1080×1080" : adSz === "landscape" ? "1200×628" : "1080×1920"}
-</div>
-{/* Post to Social Panel */}
-{showSocialPanel&&(
-<div className="card" style={{padding:16,marginTop:12,borderTop:`3px solid ${B.purple}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>POST TO SOCIAL</div>
-<button onClick={()=>{setShowSocialPanel(false);setSocialResult(null);}} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
-</div>
-{/* Platform picker */}
-<div style={{marginBottom:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>PLATFORMS</div>
-<div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-{[
-{id:"twitter",label:"𝕏",name:"Twitter/X",color:"#000"},
-{id:"linkedin",label:"in",name:"LinkedIn",color:"#0A66C2"},
-{id:"instagram",label:"IG",name:"Instagram",color:"#E1306C"},
-{id:"facebook",label:"f",name:"Facebook",color:"#1877F2"},
-{id:"tiktok",label:"TT",name:"TikTok",color:"#000"},
-].map(({id,label,name,color})=>{
-const sel=socialPlatforms.includes(id);
-return(
-<button key={id} onClick={()=>setSocialPlatforms(p=>sel?p.filter(x=>x!==id):[...p,id])}
-style={{background:sel?`${color}14`:B.surface,color:sel?color:B.muted,border:`1.5px solid ${sel?color:B.border}`,borderRadius:5,padding:"5px 12px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:sel?700:400}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:10}}>{label}</span> {name}{sel&&<span style={{marginLeft:4}}>✓</span>}
-</button>
-);
-})}
-</div>
-</div>
-{/* Post type */}
-<div style={{marginBottom:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:6}}>POST TYPE</div>
-<div style={{display:"flex",gap:6}}>
-{[["post","Post"],["story","Story"],["ad","Ad (Meta/Google)"]].map(([id,label])=>(
-<button key={id} onClick={()=>setSocialPostType(id)}
-style={{background:socialPostType===id?B.purple:B.surface,color:socialPostType===id?B.white:B.muted,border:`1px solid ${socialPostType===id?B.purple:B.border}`,borderRadius:5,padding:"5px 14px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",fontWeight:socialPostType===id?700:400}}>
-{label}
-</button>
-))}
-</div>
-{socialPostType==="ad"&&(
-<div style={{marginTop:8,background:"#f0f4ff",border:"1px solid #c5d0f0",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#354080",lineHeight:1.6}}>
-<strong>Ad Manager links:</strong>&nbsp;
-<a href="https://adsmanager.facebook.com" target="_blank" rel="noreferrer" style={{color:"#1877F2",fontWeight:700,marginRight:10}}>Meta Ads ↗</a>
-<a href="https://ads.google.com" target="_blank" rel="noreferrer" style={{color:"#4285F4",fontWeight:700}}>Google Ads ↗</a>
-<div style={{marginTop:4,fontSize:10,color:"#667"}}>Download your ad image below and upload it directly in Ads Manager. The caption and URL below are ready to copy.</div>
-</div>
-)}
-</div>
-{/* Caption + AI copy */}
-<div style={{marginBottom:12}}>
-<CaptionEditor caption={socialCaption} onCaption={setSocialCaption} onGenerate={generatePlatformCopy} generating={copyGenRunning} generatedCopies={generatedCopies} toast={toast}/>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:3}}>
-{socialCaption.length} chars · {adImg?"📎 image attached":"no image"}{adUrl&&" · 🔗 link included"}
-</div>
-</div>
-{/* Schedule + URL */}
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>SCHEDULE (leave blank = post now)</div>
-<input type="datetime-local" value={socialScheduleAt} onChange={e=>setSocialScheduleAt(e.target.value)}
-style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}/>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:4}}>LINK URL</div>
-<input value={adUrl} onChange={e=>setAdUrl(e.target.value)} placeholder="https://st1sports.com/…"
-style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"monospace"}}/>
-</div>
-</div>
-{/* Actions */}
-<div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-<button onClick={submitSocialPost} disabled={socialPosting||!socialPlatforms.length||!socialCaption.trim()}
-style={{background:socialPosting||!socialPlatforms.length||!socialCaption.trim()?B.muted:B.purple,color:B.white,border:"none",borderRadius:5,padding:"9px 20px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>
-{socialPosting?"POSTING…":socialScheduleAt?"🗓 SCHEDULE POST":"📣 POST NOW"}
-</button>
-{adImg&&<a href={adImg} download="st1-ad.png" style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,textDecoration:"none",letterSpacing:.5}}>⬇ DOWNLOAD IMAGE</a>}
-{socialResult?.ok&&socialResult.failedNets?.length===0&&<span style={{color:B.green,fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600}}>{socialScheduleAt?"✓ Scheduled!":"✓ Posted!"}</span>}
-{socialResult?.ok&&socialResult.failedNets?.length>0&&<span style={{color:B.yellow,fontFamily:"'Lexend',sans-serif",fontSize:10}}>⚠ Partial — failed: {socialResult.failedNets.join(", ")}</span>}
-{socialResult?.error&&<span style={{color:B.red,fontFamily:"'Lexend',sans-serif",fontSize:10}}>✗ {socialResult.error.slice(0,100)}</span>}
-</div>
-{/* Image URL warning */}
-{socialResult?.warning&&(
-<div style={{marginTop:10,background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.6}}>
-⚠ <strong>Image not attached:</strong> {socialResult.warning}
-</div>
-)}
-{/* Social API error warning */}
-{socialResult?.error&&(
-<div style={{marginTop:10,background:"#fff3cd",border:"1px solid #f0ad0060",borderRadius:6,padding:"10px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#7a4f00",lineHeight:1.6}}>
-<strong>Post failed:</strong> {socialResult.error}
-</div>
-)}
-</div>
-)}
-{/* Quick text presets */}
-<div className="card" style={{padding:12,marginTop:12}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>QUICK COPY PRESETS</div>
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-{[
-["Track & Field","BUILT FOR CHAMPIONS","Competition-grade equipment for serious athletes","SHOP NOW","NEW"],
-["School Sports","EQUIP YOUR TEAM","ST1 Sports — trusted by coaches nationwide","GET A QUOTE",""],
-["Hurdles","CLEAR EVERY BAR","Professional hurdles. Championship results.","SHOP HURDLES",""],
-["Sale","LIMITED TIME OFFER","Save big on top-rated athletic equipment","SAVE NOW","SALE"],
-].map(([name,h,s,c,b])=>(
-<button key={name} onClick={()=>{setAdHeadline(h);setAdSub(s);setAdCta(c);setAdBadge(b);}} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",textAlign:"left",color:B.text}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:.5}}>{name}</span> — {h}
-</button>
-))}
-</div>
-</div>
-</div>
-</div>
-)}
-{/* ── PRODUCTS ───────────────────────────────────────────────────────────── */}
-{tab==="products"&&(
-<div>
-<div style={{display:"flex",gap:10,marginBottom:14,alignItems:"center"}}>
-<input value={prodSearch} onChange={e=>setProdSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&loadProducts(prodSearch)} placeholder="Search products…" style={{flex:1,maxWidth:280,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12,fontFamily:"'Lexend',sans-serif"}}/>
-<GBtn onClick={()=>loadProducts(prodSearch)} style={{padding:"7px 14px"}}>SEARCH</GBtn>
-<OBtn onClick={syncCatalog} disabled={syncing}>{syncing?"SYNCING...":"⟳ SYNC FROM SHOPIFY"}</OBtn>
-</div>
-{prodLoading&&<div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:11}}><Spin/>Loading…</div>}
-{!prodLoading&&products.length===0&&(
-<div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
-No products in catalog. Sync from Shopify or add SHOPIFY_STORE_URL, SHOPIFY_ACCESS_TOKEN to your Vercel env vars.
-</div>
-)}
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:10}}>
-{products.map(p=>(
-<div key={p.id} className="card fu" style={{padding:10}}>
-{p.main_image_url&&<img src={p.main_image_url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4,marginBottom:8}}/>}
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:3}}>{p.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:p.sale_price?B.red:B.muted}}>
-{p.sale_price?<><s style={{color:B.muted}}>${p.price}</s> ${p.sale_price}</>:p.price?`$${p.price}`:"—"}
-</div>
-<div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:p.stock_status==="instock"?B.green:B.red,background:p.stock_status==="instock"?B.greenBg:B.redBg,padding:"1px 5px",borderRadius:2}}>{p.stock_status}</span>
-{p.on_sale&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"1px 5px",borderRadius:2}}>SALE</span>}
-</div>
-</div>
-))}
-</div>
-</div>
-)}
-{/* ── ASSETS ─────────────────────────────────────────────────────────────── */}
-{tab==="saved"&&(
-<SavedAdsPanel
-savedAds={s.savedAds||[]}
-onLoad={ad=>{setAdTpl(ad.tpl||"bold");setAdSz(ad.sz||"square");setAdHeadline(ad.headline||"");setAdSub(ad.sub||"");setAdCta(ad.cta||"");setAdBadge(ad.badge||"");setAdBg(ad.bg||"#0A0A0A");setAdTc(ad.tc||"#FFFFFF");setAdAc(ad.ac||"#F37321");setAdLogo(ad.logo!==false);setAdLogoUrl(ad.logoUrl||"");setAdImg(ad.img||"");setAdUrl(ad.url||"");setTab("creator");toast(`Loaded "${ad.name}"`, "success");}}
-onDelete={id=>dispatch("DELETE_SAVED_AD",id)}
-/>
-)}
-{tab==="calendar"&&(
-<SocialCalendar
-posts={s.socialPosts||[]}
-onAdd={post=>dispatch("ADD_SOCIAL_POST",{id:mkId(),createdAt:today(),...post})}
-onUpdate={post=>dispatch("UPDATE_SOCIAL_POST",post)}
-onDelete={id=>dispatch("DELETE_SOCIAL_POST",id)}
-toast={toast}
-/>
-)}
-{tab==="assets"&&(
-<AssetGallery toast={toast}/>
-)}
-</div>
-);
-}
-function CaptionEditor({caption, onCaption, onGenerate, generating, generatedCopies, toast}) {
-const NETS = [{id:"twitter",label:"𝕏",color:"#000"},{id:"linkedin",label:"in",color:"#0A66C2"},{id:"instagram",label:"IG",color:"#E1306C"},{id:"facebook",label:"f",color:"#1877F2"}];
-return (
-<div>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-<Lbl>CAPTION</Lbl>
-<button onClick={onGenerate} disabled={generating} style={{background:generating?B.surface:B.orange,color:generating?B.muted:B.white,border:"none",borderRadius:4,padding:"4px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:generating?"default":"pointer",letterSpacing:.5}}>
-{generating?"GENERATING…":"✦ AI COPY"}
-</button>
-</div>
-<textarea value={caption} onChange={e=>onCaption(e.target.value)} rows={3}
-style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
-<div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{caption.length} chars</div>
-<button onClick={()=>{navigator.clipboard.writeText(caption);toast("Copied!","success");}} style={{background:"none",border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"3px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,cursor:"pointer"}}>⎘ COPY</button>
-</div>
-{generatedCopies&&(
-<div style={{marginTop:10,background:B.surface,borderRadius:6,padding:10,border:`1px solid ${B.border}`}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1,marginBottom:8}}>AI GENERATED — click to use</div>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{NETS.map(({id,label,color})=>generatedCopies[id]&&(
-<div key={id} style={{display:"flex",gap:8,alignItems:"flex-start",padding:"7px 9px",background:B.white,borderRadius:5,border:`1px solid ${B.border}`,cursor:"pointer"}}
-onClick={()=>{onCaption(generatedCopies[id]);toast(`${label} copy loaded`,"success");}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color,minWidth:18,fontWeight:700}}>{label}</span>
-<div style={{flex:1,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.4}}>{generatedCopies[id].slice(0,180)}{generatedCopies[id].length>180?"…":""}</div>
-<button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(generatedCopies[id]);toast("Copied!","success");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",flexShrink:0,padding:0}}>⎘</button>
-</div>
-))}
-</div>
-</div>
-)}
-</div>
-);
-}
-function SavedAdsPanel({savedAds, onLoad, onDelete}) {
-if (!savedAds.length) return (
-<div className="card" style={{padding:24,textAlign:"center",color:B.muted,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-No saved ads yet — design an ad in the Ad Creator and click <strong>✦ SAVE AD</strong> to save it here.
-</div>
-);
-const SZ_LABELS = {square:"1080×1080",landscape:"1200×628",story:"1080×1920"};
-return (
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:12}}>
-{savedAds.map(ad=>(
-<div key={ad.id} className="card" style={{padding:0,overflow:"hidden"}}>
-{/* Mini preview */}
-<div style={{height:120,background:ad.bg||"#0A0A0A",display:"flex",alignItems:"center",justifyContent:"center",padding:12,position:"relative"}}>
-<div style={{fontFamily:"system-ui",fontWeight:900,color:ad.tc||"#fff",fontSize:18,lineHeight:1.1,textAlign:"center",maxWidth:"90%",overflow:"hidden"}}>{(ad.headline||"").slice(0,40)}</div>
-{ad.badge&&<div style={{position:"absolute",top:8,right:8,background:ad.ac||"#F37321",color:"#fff",fontSize:9,fontWeight:800,padding:"3px 7px",borderRadius:3}}>{ad.badge}</div>}
-</div>
-<div style={{padding:"10px 12px"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ad.name}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:8}}>{(ad.tpl||"bold").toUpperCase()} · {SZ_LABELS[ad.sz]||ad.sz} · {ad.createdAt}</div>
-<div style={{display:"flex",gap:6}}>
-<button onClick={()=>onLoad(ad)} style={{flex:1,background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",letterSpacing:.5}}>LOAD</button>
-<button onClick={()=>{if(window.confirm("Delete this saved ad?"))onDelete(ad.id);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:4,padding:"6px 10px",fontSize:10,cursor:"pointer"}}>✕</button>
-</div>
-</div>
-</div>
-))}
-</div>
-);
-}
-function SocialCalendar({posts, onAdd, onUpdate, onDelete, toast}) {
-const today2 = new Date();
-const [viewYear, setViewYear] = useState(today2.getFullYear());
-const [viewMonth, setViewMonth] = useState(today2.getMonth());
-const [showForm, setShowForm] = useState(false);
-const [editing, setEditing] = useState(null);
-const [form, setForm] = useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",status:"draft"});
-const NET_COLORS = {twitter:"#000",linkedin:"#0A66C2",instagram:"#E1306C",facebook:"#1877F2"};
-const NET_LABELS = {twitter:"𝕏",linkedin:"in",instagram:"IG",facebook:"f"};
-const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
-const firstDay = new Date(viewYear, viewMonth, 1).getDay();
-const todayStr = today2.toISOString().slice(0,10);
-const openNew = (dateStr) => {
-setEditing(null);
-setForm({date:dateStr||"",time:"09:00",platforms:[],caption:"",imageUrl:"",status:"draft"});
-setShowForm(true);
-};
-const openEdit = (post) => {
-setEditing(post.id);
-setForm({date:post.date||"",time:post.time||"09:00",platforms:post.platforms||[],caption:post.caption||"",imageUrl:post.imageUrl||"",status:post.status||"draft"});
-setShowForm(true);
-};
-const save = () => {
-if (!form.date||!form.caption.trim()) { toast("Date and caption required","error"); return; }
-if (editing) onUpdate({id:editing,...form});
-else onAdd(form);
-setShowForm(false);
-};
-const toggleNet = (n) => setForm(f=>({...f,platforms:f.platforms.includes(n)?f.platforms.filter(x=>x!==n):[...f.platforms,n]}));
-const monthName = new Date(viewYear,viewMonth).toLocaleString("en-US",{month:"long",year:"numeric"});
-return (
-<div>
-{/* Header */}
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-<div style={{display:"flex",alignItems:"center",gap:12}}>
-<button onClick={()=>{let m=viewMonth-1,y=viewYear;if(m<0){m=11;y--;}setViewMonth(m);setViewYear(y);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12}}>‹</button>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black,minWidth:160,textAlign:"center"}}>{monthName.toUpperCase()}</div>
-<button onClick={()=>{let m=viewMonth+1,y=viewYear;if(m>11){m=0;y++;}setViewMonth(m);setViewYear(y);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12}}>›</button>
-</div>
-<OBtn sm onClick={()=>openNew(todayStr)}>+ NEW POST</OBtn>
-</div>
-{/* Calendar grid */}
-<div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:1,background:B.border,borderRadius:8,overflow:"hidden",marginBottom:16}}>
-{["SUN","MON","TUE","WED","THU","FRI","SAT"].map(d=>(
-<div key={d} style={{background:B.surface,padding:"6px 0",textAlign:"center",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{d}</div>
-))}
-{Array.from({length:firstDay}).map((_,i)=>(
-<div key={`e${i}`} style={{background:B.surface,minHeight:80}}/>
-))}
-{Array.from({length:daysInMonth}).map((_,i)=>{
-const d = i+1;
-const dateStr = `${viewYear}-${String(viewMonth+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
-const dayPosts = posts.filter(p=>p.date===dateStr);
-const isToday = dateStr===todayStr;
-return (
-<div key={d} onClick={()=>openNew(dateStr)} style={{background:B.white,minHeight:80,padding:6,cursor:"pointer",position:"relative"}}
-onMouseEnter={e=>e.currentTarget.style.background=B.surface} onMouseLeave={e=>e.currentTarget.style.background=B.white}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:isToday?B.orange:B.text,fontWeight:isToday?700:400,marginBottom:4,display:"inline-block",
-...(isToday?{background:B.orange,color:B.white,borderRadius:"50%",width:20,height:20,lineHeight:"20px",textAlign:"center",fontSize:10}:{})}}>{d}</div>
-<div style={{display:"flex",flexDirection:"column",gap:2}}>
-{dayPosts.map(p=>(
-<div key={p.id} onClick={e=>{e.stopPropagation();openEdit(p);}}
-style={{background:p.status==="published"?B.greenBg:p.status==="scheduled"?B.blueBg:B.orangeBg,borderRadius:3,padding:"2px 5px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:p.status==="published"?B.green:p.status==="scheduled"?B.blue:B.orange,cursor:"pointer",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-{(p.platforms||[]).map(n=><span key={n} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:NET_COLORS[n],marginRight:2}}>{NET_LABELS[n]}</span>)}
-{p.caption.slice(0,25)}{p.caption.length>25?"…":""}
-</div>
-))}
-</div>
-</div>
-);
-})}
-</div>
-{/* Post form modal */}
-{showForm&&(
-<div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}} onClick={()=>setShowForm(false)}>
-<div style={{background:B.white,borderRadius:10,padding:22,width:480,maxHeight:"85vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}} onClick={e=>e.stopPropagation()}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{editing?"EDIT POST":"NEW POST"}</div>
-<button onClick={()=>setShowForm(false)} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:B.muted}}>✕</button>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
-<div><Lbl s={{marginBottom:3}}>DATE</Lbl><input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/></div>
-<div><Lbl s={{marginBottom:3}}>TIME</Lbl><input type="time" value={form.time} onChange={e=>setForm(f=>({...f,time:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12}}/></div>
-</div>
-<div style={{marginBottom:12}}>
-<Lbl s={{marginBottom:6}}>PLATFORMS</Lbl>
-<div style={{display:"flex",gap:7}}>
-{Object.entries(NET_LABELS).map(([id,label])=>{
-const sel=form.platforms.includes(id);
-const c=NET_COLORS[id];
-return <button key={id} onClick={()=>toggleNet(id)} style={{background:sel?`${c}14`:B.surface,color:sel?c:B.muted,border:`1px solid ${sel?c:B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,cursor:"pointer"}}>{label}</button>;
-})}
-</div>
-</div>
-<div style={{marginBottom:12}}>
-<Lbl s={{marginBottom:3}}>CAPTION</Lbl>
-<textarea value={form.caption} onChange={e=>setForm(f=>({...f,caption:e.target.value}))} rows={4} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/>
-</div>
-<div style={{marginBottom:14}}>
-<Lbl s={{marginBottom:3}}>STATUS</Lbl>
-<div style={{display:"flex",gap:7}}>
-{[["draft","Draft",B.orange],["scheduled","Scheduled",B.blue],["published","Published",B.green]].map(([v,l,c])=>(
-<button key={v} onClick={()=>setForm(f=>({...f,status:v}))} style={{flex:1,background:form.status===v?`${c}14`:B.surface,color:form.status===v?c:B.muted,border:`1px solid ${form.status===v?c:B.border}`,borderRadius:4,padding:"6px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer"}}>{l.toUpperCase()}</button>
-))}
-</div>
-</div>
-<div style={{display:"flex",gap:8}}>
-<OBtn onClick={save} style={{flex:1}}>{editing?"SAVE CHANGES":"CREATE POST"}</OBtn>
-{editing&&<button onClick={()=>{if(window.confirm("Delete this post?"))onDelete(editing);setShowForm(false);}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"8px 14px",fontSize:11,cursor:"pointer"}}>Delete</button>}
-</div>
-</div>
-</div>
-)}
-</div>
-);
-}
-function AssetGallery({toast}) {
-const [assets,setAssets]=useState([]);
-const [loading,setLoading]=useState(true);
-useEffect(()=>{
-fetch("/api/adengine/assets?limit=100")
-.then(r=>r.json())
-.then(d=>setAssets(d.assets||[]))
-.catch(()=>toast("Failed to load assets","error"))
-.finally(()=>setLoading(false));
-},[]);
-const del=async(id)=>{
-if(!confirm("Delete this asset?"))return;
-await fetch(`/api/adengine/assets?id=${id}`,{method:"DELETE"});
-setAssets(a=>a.filter(x=>x.id!==id));
-toast("Asset deleted","success");
-};
-if(loading) return <div style={{display:"flex",gap:7,alignItems:"center",color:B.muted,fontSize:12,padding:20}}><Spin/>Loading assets…</div>;
-if(!assets.length) return <div className="card" style={{padding:20,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No generated assets yet. Go to Campaigns and generate images.</div>;
-return (
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>{assets.length} assets</div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
-{assets.map(a=>{
-const url=a.displayUrl;
-return (
-<div key={a.id} className="card" style={{padding:10}}>
-{url
-? <img src={url} alt="" style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:4,marginBottom:8}}/>
-: <div style={{width:"100%",aspectRatio:"1",background:B.surface,borderRadius:4,marginBottom:8,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>Stored on S3</div>
-}
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,marginBottom:3}}>{a.product?.name||"—"}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,marginBottom:6}}>{a.width}×{a.height} · {a.platform} · {a.variant}</div>
-<div style={{display:"flex",gap:5}}>
-{url&&<a href={url} download={`asset-${a.id}.png`} style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.blue,textDecoration:"none"}}>⬇</a>}
-<button onClick={()=>del(a.id)} style={{background:"none",border:"none",color:B.red,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>✕ Delete</button>
-</div>
-</div>
-);
-})}
-</div>
 </div>
 );
 }
