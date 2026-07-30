@@ -3165,7 +3165,6 @@ const [backfillingOrgs,setBackfillingOrgs]=useState(false);
 const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
-const [accountWebsites,setAccountWebsites]=useState({});
 const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
@@ -3540,6 +3539,7 @@ const numAthletes=primaryC?.numAthletes||"";
 const numSports=primaryC?.numSports||"";
 const state=primaryC?.state||"";
 const city=primaryC?.city||"";
+const website=primaryC?.website||"";
 const renameAccount=async()=>{
 const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
@@ -3568,9 +3568,12 @@ const r=await fetch("/api/contacts/enrich-website",{method:"POST",headers:{"Cont
 const d=await r.json();
 if(!d.ok){toast(d.error||"Website search failed","error");setEnrichingWebsite(false);return;}
 if(!d.website){toast("Couldn't confidently find an official website","info");setEnrichingWebsite(false);return;}
-setAccountWebsites(prev=>({...prev,[selSchool]:d.website}));
+// Store on every contact in the account (synced to Postgres via the same
+// app-state pipeline as school/city/state) so it's visible to the whole
+// team on next load — not just this browser tab.
+schoolContacts.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,website:d.website}));
 try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
-toast(`Found ${d.website} — saved to Zoho`,"success");
+toast(`Found ${d.website} — saved to Zoho and shared account record`,"success");
 }catch(e){toast(`Enrich error: ${e.message}`,"error");}
 setEnrichingWebsite(false);
 };
@@ -3625,11 +3628,11 @@ return(
 <div style={{display:"flex",alignItems:"center",gap:8}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{schoolCleanName}</div>
 <button onClick={()=>{setAccountNameInput(schoolCleanName==="(No School)"?"":schoolCleanName);setEditingAccountName(true);}} title="Rename account" style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,padding:2}}>✎</button>
-{!accountWebsites[selSchool]&&<button onClick={enrichWebsite} disabled={enrichingWebsite} title="Search for this org's official website and save it to Zoho" style={{background:"none",border:`1px solid ${B.border}`,color:enrichingWebsite?B.muted:B.blue,borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:enrichingWebsite?"default":"pointer",letterSpacing:.3,whiteSpace:"nowrap"}}>{enrichingWebsite?"SEARCHING…":"🔍 ENRICH"}</button>}
+{!website&&<button onClick={enrichWebsite} disabled={enrichingWebsite} title="Search for this org's official website and save it to Zoho" style={{background:"none",border:`1px solid ${B.border}`,color:enrichingWebsite?B.muted:B.blue,borderRadius:4,padding:"2px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:enrichingWebsite?"default":"pointer",letterSpacing:.3,whiteSpace:"nowrap"}}>{enrichingWebsite?"SEARCHING…":"🔍 ENRICH"}</button>}
 </div>
 )}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
-{accountWebsites[selSchool]&&<a href={accountWebsites[selSchool]} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{accountWebsites[selSchool].replace(/^https?:\/\//,"")}</a>}
+{website&&<a href={website} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{website.replace(/^https?:\/\//,"")}</a>}
 {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
 {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
