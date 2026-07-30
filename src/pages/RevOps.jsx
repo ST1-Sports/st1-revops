@@ -5319,6 +5319,107 @@ Last order: {fmtD(r.lastOrderDate)}&nbsp;
 );
 }
 const SCRAPE_TASK_ID = "prospecting_scrape";
+// Contact lists only store contactIds — the actual contact record can live
+// in the local (uploaded/scraped) s.contacts array OR in the Postgres
+// salesContact table (contacts found via CRM search / area-browse never get
+// copied into s.contacts). Resolve against local state first, then fetch
+// whatever's missing from /api/contacts?ids=... . Used by both the Brad
+// "MY LISTS" tab and the Segments "LISTS" tab so both stay in sync.
+function ContactListCard({ list, localContacts, isOpen, onToggle, isRenaming, renameValue, onRenameStart, onRenameChange, onRenameSave, onRenameCancel, onDelete, onUseInCampaign }) {
+const [preview,setPreview]=useState(null);
+const [full,setFull]=useState(null);
+const [fullLoading,setFullLoading]=useState(false);
+const total=(list.contactIds||[]).length;
+const companyOf=c=>(typeof c.school==="string"?c.school:c.school?.name||"")||c.companyName||"";
+const resolveIds=async(ids)=>{
+if(!ids.length) return [];
+const localMap=Object.fromEntries((localContacts||[]).map(c=>[c.id,c]));
+const missing=ids.filter(id=>!localMap[id]);
+let fetchedMap={};
+if(missing.length){
+try{
+const r=await fetch(`/api/contacts?ids=${encodeURIComponent(missing.join(","))}`);
+const d=await r.json();
+fetchedMap=Object.fromEntries((d.contacts||[]).map(c=>[c.id,c]));
+}catch{}
+}
+return ids.map(id=>localMap[id]||fetchedMap[id]).filter(Boolean);
+};
+useEffect(()=>{
+let alive=true;
+resolveIds((list.contactIds||[]).slice(0,3)).then(r=>{if(alive)setPreview(r);});
+return ()=>{alive=false;};
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[list.id,total]);
+useEffect(()=>{
+if(!isOpen) return;
+let alive=true;
+setFullLoading(true);
+resolveIds((list.contactIds||[]).slice(0,300)).then(r=>{if(alive){setFull(r);setFullLoading(false);}});
+return ()=>{alive=false;};
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[isOpen,list.id]);
+return(
+<div className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
+<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",flexWrap:"wrap"}}>
+{isRenaming?(
+<input autoFocus value={renameValue} onChange={e=>onRenameChange(e.target.value)}
+onKeyDown={e=>{if(e.key==="Enter")onRenameSave();if(e.key==="Escape")onRenameCancel();}}
+style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
+):(
+<div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={onToggle}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{list.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{total} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""} {isOpen?"· click to collapse":"· click to preview"}</div>
+{!isOpen&&(
+preview===null?(
+<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading preview…</div>
+):preview.length>0?(
+<div style={{marginTop:5,display:"flex",flexDirection:"column",gap:2}}>
+{preview.map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
+<div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+<span style={{color:B.text,fontWeight:500}}>{name}</span>{c.email?` · ${c.email}`:""}{company?` · ${company}`:""}
+</div>
+);})}
+{total>preview.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>+{total-preview.length} more — click to view full list</div>}
+</div>
+):(
+<div style={{marginTop:5,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic"}}>Contacts not found — they may have been removed</div>
+)
+)}
+</div>
+)}
+<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
+{isRenaming?(<><OBtn sm onClick={onRenameSave}>SAVE</OBtn><button onClick={onRenameCancel} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
+<button onClick={onRenameStart} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
+<OBtn sm col={B.teal} onClick={onUseInCampaign}>USE IN CAMPAIGN →</OBtn>
+<button onClick={onDelete} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
+<span onClick={onToggle} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span>
+</>)}
+</div>
+</div>
+{isOpen&&(
+<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:360,overflowY:"auto"}}>
+{fullLoading&&full===null?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Loading contacts…</div>
+):(full||[]).length===0?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>No contacts could be resolved for this list.</div>
+):(
+<div style={{display:"flex",flexDirection:"column",gap:4}}>
+{full.map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
+<div key={c.id} style={{display:"flex",gap:8,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+<span style={{fontWeight:600,minWidth:150}}>{name}</span>
+<span style={{color:B.muted,fontSize:10}}>{c.email||"no email"}</span>
+{company&&<span style={{color:B.blue,fontSize:9,background:B.blueBg,padding:"1px 6px",borderRadius:3}}>{company}</span>}
+</div>
+);})}
+{total>full.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {total-full.length} more (showing first {full.length})</div>}
+</div>
+)}
+</div>
+)}
+</div>
+);
+}
 function ModProspecting() {
 const {s,dispatch,toast,setMod,crmSyncRef}=useApp();
 const [crmSyncing, setCrmSyncing] = useState(false);
@@ -6398,60 +6499,18 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No lists yet — create one from a segment (browse contacts → select → create list) or import a CSV.</div>
 ):(
 <div style={{display:"flex",flexDirection:"column",gap:12}}>
-{(s.contactLists||[]).map(list=>{
-const isOpen=expandedListId===list.id;
-const isRenaming=renamingListId===list.id;
-const listContacts=(list.contactIds||[]).map(id=>(s.contacts||[]).find(c=>c.id===id)).filter(Boolean);
-const preview=listContacts.slice(0,3);
-const companyOf=c=>(typeof c.school==="string"?c.school:c.school?.name||"")||c.companyName||"";
-return(
-<div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
-<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",flexWrap:"wrap"}}>
-{isRenaming?(
-<input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
-onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
-style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
-):(
-<div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{list.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{(list.contactIds||[]).length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""} {isOpen?"· click to collapse":"· click to preview"}</div>
-{!isOpen&&preview.length>0&&(
-<div style={{marginTop:5,display:"flex",flexDirection:"column",gap:2}}>
-{preview.map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
-<div key={c.id} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-<span style={{color:B.text,fontWeight:500}}>{name}</span>{c.email?` · ${c.email}`:""}{company?` · ${company}`:""}
-</div>
-);})}
-{listContacts.length>preview.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>+{listContacts.length-preview.length} more — click to view full list</div>}
-</div>
-)}
-</div>
-)}
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
-{isRenaming?(<><OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn><button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
-<button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
-<OBtn sm col={B.teal} onClick={()=>setView("campaigns")}>USE IN CAMPAIGN →</OBtn>
-<button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
-<span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span></>)}
-</div>
-</div>
-{isOpen&&listContacts.length>0&&(
-<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:360,overflowY:"auto"}}>
-<div style={{display:"flex",flexDirection:"column",gap:4}}>
-{listContacts.slice(0,300).map(c=>{const name=[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email||"Unnamed";const company=companyOf(c);return(
-<div key={c.id} style={{display:"flex",gap:8,alignItems:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"4px 0",borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
-<span style={{fontWeight:600,minWidth:150}}>{name}</span>
-<span style={{color:B.muted,fontSize:10}}>{c.email||"no email"}</span>
-{company&&<span style={{color:B.blue,fontSize:9,background:B.blueBg,padding:"1px 6px",borderRadius:3}}>{company}</span>}
-</div>
-);})}
-{listContacts.length>300&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {listContacts.length-300} more</div>}
-</div>
-</div>
-)}
-</div>
-);
-})}
+{(s.contactLists||[]).map(list=>(
+<ContactListCard key={list.id} list={list} localContacts={s.contacts}
+isOpen={expandedListId===list.id} onToggle={()=>setExpandedListId(expandedListId===list.id?null:list.id)}
+isRenaming={renamingListId===list.id} renameValue={renameValue}
+onRenameStart={()=>{setRenamingListId(list.id);setRenameValue(list.name);}}
+onRenameChange={setRenameValue}
+onRenameSave={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}
+onRenameCancel={()=>setRenamingListId(null)}
+onDelete={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}}
+onUseInCampaign={()=>setView("campaigns")}
+/>
+))}
 </div>
 )}
 </div>
@@ -7417,41 +7476,18 @@ return(
 <div style={{textAlign:"center",padding:"60px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>No lists yet — create one from a Segment or browse contacts.</div>
 ):(
 <div style={{display:"flex",flexDirection:"column",gap:12}}>
-{(s.contactLists||[]).map(list=>{
-const isOpen=expandedListId===list.id;
-const isRenaming=renamingListId===list.id;
-return(
-<div key={list.id} className="card" style={{padding:0,overflow:"hidden",borderLeft:`3px solid ${B.orange}`}}>
-<div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 14px",flexWrap:"wrap"}}>
-{isRenaming?(
-<input autoFocus value={renameValue} onChange={e=>setRenameValue(e.target.value)}
-onKeyDown={e=>{if(e.key==="Enter"){dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}if(e.key==="Escape")setRenamingListId(null);}}
-style={{flex:1,background:B.surface,border:`1px solid ${B.orange}`,color:B.text,borderRadius:4,padding:"5px 8px",fontSize:13,fontFamily:"'Lexend',sans-serif",fontWeight:600}}/>
-):(
-<div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setExpandedListId(isOpen?null:list.id)}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{list.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{(list.contactIds||[]).length} contacts · {list.createdAt?new Date(list.createdAt).toLocaleDateString():""}  {isOpen?"· click to collapse":""}</div>
-</div>
-)}
-<div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
-{isRenaming?(<><OBtn sm onClick={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}>SAVE</OBtn><button onClick={()=>setRenamingListId(null)} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
-<button onClick={()=>{setRenamingListId(list.id);setRenameValue(list.name);}} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
-<OBtn sm col={B.teal} onClick={()=>setBradTab("campaigns")}>USE IN CAMPAIGN →</OBtn>
-<button onClick={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
-<span onClick={()=>setExpandedListId(isOpen?null:list.id)} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span></>)}
-</div>
-</div>
-{isOpen&&(list.contactIds||[]).length>0&&(
-<div style={{borderTop:`1px solid ${B.border}`,padding:"10px 14px",maxHeight:260,overflowY:"auto"}}>
-<div style={{display:"flex",flexDirection:"column",gap:3}}>
-{(list.contactIds||[]).slice(0,100).map(id=>{const c=(s.contacts||[]).find(x=>x.id===id);const name=c?[c.firstName,c.lastName].filter(Boolean).join(" ")||c.email:id;return(<div key={id} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"2px 0",borderBottom:`1px solid ${B.border}`}}>{name}{c?.title?<span style={{color:B.muted,fontSize:10,marginLeft:6}}>{typeof c.title==="string"?c.title:c.title?.name||""}</span>:null}</div>);})}
-{(list.contactIds||[]).length>100&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:4}}>…and {(list.contactIds||[]).length-100} more</div>}
-</div>
-</div>
-)}
-</div>
-);
-})}
+{(s.contactLists||[]).map(list=>(
+<ContactListCard key={list.id} list={list} localContacts={s.contacts}
+isOpen={expandedListId===list.id} onToggle={()=>setExpandedListId(expandedListId===list.id?null:list.id)}
+isRenaming={renamingListId===list.id} renameValue={renameValue}
+onRenameStart={()=>{setRenamingListId(list.id);setRenameValue(list.name);}}
+onRenameChange={setRenameValue}
+onRenameSave={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.trim()||list.name});setRenamingListId(null);}}
+onRenameCancel={()=>setRenamingListId(null)}
+onDelete={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}}
+onUseInCampaign={()=>setView("campaigns")}
+/>
+))}
 </div>
 )}
 </div>

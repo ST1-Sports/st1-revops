@@ -12,6 +12,10 @@
  *   sport        — filter by sport (partial match)
  *   pushedToZoho — "true" | "false" to filter by Zoho sync status
  *   minScore     — minimum score filter
+ *   ids          — comma-separated contact ids; when present, returns exactly
+ *                  those records (paging/search/other filters ignored). Used
+ *                  to resolve a saved contact list's ids back to full
+ *                  records, since a list only stores ids.
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
@@ -20,6 +24,28 @@ export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'GET')    return res.status(405).json({ error: 'GET only' })
+
+  const idsParam = (req.query.ids || '').trim()
+  if (idsParam) {
+    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean).slice(0, 500)
+    try {
+      const contacts = await prisma.salesContact.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true, email: true, firstName: true, lastName: true,
+          title: true, companyName: true, phone: true,
+          sport: true, state: true, city: true,
+          score: true, segment: true, status: true,
+          pushedToZoho: true, zohoCrmId: true, notes: true,
+          source: true, createdAt: true,
+        },
+      })
+      return res.json({ contacts, total: contacts.length })
+    } catch (err) {
+      console.error('[contacts/index] ids lookup', err.message)
+      return res.status(500).json({ error: err.message })
+    }
+  }
 
   const page     = Math.max(1, parseInt(req.query.page  || '1',   10))
   const limit    = Math.min(100, Math.max(1, parseInt(req.query.limit || '50', 10)))
