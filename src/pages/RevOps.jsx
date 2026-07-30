@@ -3158,6 +3158,10 @@ const [selSchool,setSelSchool]=useState(null);
 const [profileForm,setProfileForm]=useState({});
 const [profileDirty,setProfileDirty]=useState(false);
 const [zohoSyncing,setZohoSyncing]=useState(false);
+const [editingAccountName,setEditingAccountName]=useState(false);
+const [accountNameInput,setAccountNameInput]=useState("");
+const [savingAccountName,setSavingAccountName]=useState(false);
+const [backfillingOrgs,setBackfillingOrgs]=useState(false);
 const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
@@ -3171,6 +3175,45 @@ return st?`${sch} — ${st}`:sch;
 };
 const cleanSchoolName=(key)=>(key||"").replace(/ — [^—]*$/,"");
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
+const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
+const fillMissingOrgs=async()=>{
+setBackfillingOrgs(true);
+const byDomain=new Map();
+contacts.filter(c=>!c.deadStatus&&c.email?.includes("@")).forEach(c=>{
+const domain=c.email.split("@")[1].toLowerCase();
+if(FREE_EMAIL_DOMAINS.has(domain))return;
+if(!byDomain.has(domain))byDomain.set(domain,[]);
+byDomain.get(domain).push(c);
+});
+const toFix=[];
+for(const group of byDomain.values()){
+const named=group.filter(c=>(c.school||"").trim());
+const blank=group.filter(c=>!(c.school||"").trim());
+if(!named.length||!blank.length)continue;
+const counts=new Map();
+named.forEach(c=>counts.set(c.school,(counts.get(c.school)||0)+1));
+const bestSchool=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0][0];
+const bestMatch=named.find(c=>c.school===bestSchool);
+blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,city:bestMatch.city}));
+}
+if(!toFix.length){toast("No blank orgs could be matched via email domain","info");setBackfillingOrgs(false);return;}
+for(const {contact,school,state,city}of toFix){
+dispatch("UPDATE_CONTACT",{id:contact.id,school,...(state?{state}:{}),...(city?{city}:{})});
+if(contact.zohoId){
+const isLead=(contact.id||"").startsWith("zoho_l_");
+if(isLead){crmUpdate("Leads",contact.zohoId,{Company:school});}
+else{
+try{
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:school,city,state})});
+const d=await r.json();
+if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
+}catch{}
+}
+}
+}
+toast(`Filled ${toFix.length} contact${toFix.length!==1?"s":""} across ${byDomain.size} domain${byDomain.size!==1?"s":""} matched`,"success");
+setBackfillingOrgs(false);
+};
 const cdMap=useMemo(()=>{
 const m=new Map();
 for(const c of contacts){
@@ -3319,6 +3362,9 @@ return(
 )}
 </div>
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+{leftMode==="accounts"&&(
+<button onClick={fillMissingOrgs} disabled={backfillingOrgs} title="Match contacts with a blank org against others in our DB sharing the same email domain, and fill in the org from whichever already has one" style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ FILL MISSING ORGS FROM DB"}</button>
+)}
 {leftMode==="contacts"&&(
 <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
 {[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
@@ -3456,6 +3502,27 @@ const numAthletes=primaryC?.numAthletes||"";
 const numSports=primaryC?.numSports||"";
 const state=primaryC?.state||"";
 const city=primaryC?.city||"";
+const renameAccount=async()=>{
+const newName=accountNameInput.trim();
+if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
+setSavingAccountName(true);
+try{
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:newName,city,state})});
+const d=await r.json();
+if(!d.ok){toast(d.error||"Could not resolve Zoho Account","error");setSavingAccountName(false);return;}
+schoolContacts.forEach(c=>{
+dispatch("UPDATE_CONTACT",{id:c.id,school:newName});
+if(c.zohoId){
+const isLead=(c.id||"").startsWith("zoho_l_");
+crmUpdate(isLead?"Leads":"Contacts",c.zohoId,isLead?{Company:newName}:{Account_Name:{id:d.accountId}});
+}
+});
+setSelSchool(state?`${newName} — ${state}`:newName);
+setEditingAccountName(false);
+toast(`Renamed to ${newName}${d.accountCreated?" (new Zoho Account created)":""}`,"success");
+}catch(e){toast(`Rename error: ${e.message}`,"error");}
+setSavingAccountName(false);
+};
 const sponsorshipMin=primaryC?.sponsorshipMin||null;
 const sponsorshipMax=primaryC?.sponsorshipMax||null;
 const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
@@ -3498,7 +3565,18 @@ return(
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+{editingAccountName?(
+<div style={{display:"flex",gap:6,alignItems:"center"}}>
+<input autoFocus value={accountNameInput} onChange={e=>setAccountNameInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameAccount();if(e.key==="Escape")setEditingAccountName(false);}} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 8px",minWidth:220}}/>
+<button onClick={renameAccount} disabled={savingAccountName} style={{background:B.orange,border:"none",color:B.white,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>{savingAccountName?"SAVING...":"SAVE"}</button>
+<button onClick={()=>setEditingAccountName(false)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>CANCEL</button>
+</div>
+):(
+<div style={{display:"flex",alignItems:"center",gap:8}}>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{schoolCleanName}</div>
+<button onClick={()=>{setAccountNameInput(schoolCleanName==="(No School)"?"":schoolCleanName);setEditingAccountName(true);}} title="Rename account" style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:12,padding:2}}>✎</button>
+</div>
+)}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
