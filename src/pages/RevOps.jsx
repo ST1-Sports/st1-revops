@@ -3190,7 +3190,7 @@ return na.length>4&&nb.length>4&&(na.includes(nb)||nb.includes(na));
 };
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
-const fillMissingOrgs=async()=>{
+const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
 let backendLinked=0,backendPushed=0;
 try{
@@ -3207,11 +3207,19 @@ if(FREE_EMAIL_DOMAINS.has(domain))return;
 if(!byDomain.has(domain))byDomain.set(domain,[]);
 byDomain.get(domain).push(c);
 });
+// Never create or assign an account off cold prospect data alone — only pull
+// teammates in once someone at that org has actually shown positive intent
+// (same bar used everywhere else in this view: replied/interested, scored,
+// or already a real Zoho contact). A shared email domain by itself is not
+// intent; it's just how we find the Athletic Director and other coaches
+// once the track coach who DID reply tells us which school they're at.
 const toFix=[];
 for(const group of byDomain.values()){
 const named=group.filter(c=>(c.school||"").trim());
 const blank=group.filter(c=>!(c.school||"").trim());
 if(!named.length||!blank.length)continue;
+const hasIntent=group.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
+if(!hasIntent)continue;
 const counts=new Map();
 named.forEach(c=>counts.set(c.school,(counts.get(c.school)||0)+1));
 const bestSchool=[...counts.entries()].sort((a,b)=>b[1]-a[1])[0][0];
@@ -3219,7 +3227,7 @@ const bestMatch=named.find(c=>c.school===bestSchool);
 blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,city:bestMatch.city}));
 }
 if(!toFix.length){
-toast(backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no additional email-domain matches`:"No matches — no Books/CRM links found and no shared email domains with a known org","info");
+toast(backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet","info");
 setBackfillingOrgs(false);return;
 }
 for(const {contact,school,state,city}of toFix){
@@ -3236,7 +3244,7 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 }
-toast(`Filled ${toFix.length} contact${toFix.length!==1?"s":""} across ${byDomain.size} domain${byDomain.size!==1?"s":""} matched — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`,"success");
+toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`,"success");
 setBackfillingOrgs(false);
 };
 const loadBooksContacts=async(customerId)=>{
@@ -3400,7 +3408,7 @@ return(
 </div>
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="accounts"&&(
-<button onClick={fillMissingOrgs} disabled={backfillingOrgs} title="Match contacts with a blank org against others in our DB sharing the same email domain, and fill in the org from whichever already has one" style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ FILL MISSING ORGS FROM DB"}</button>
+<button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Never creates an account from cold prospects. Only for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho) — pulls in other contacts at the same org (e.g. the AD, other coaches) from our database so the whole staff shows up under that account." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL TEAMMATES INTO QUALIFYING ACCOUNTS"}</button>
 )}
 {leftMode==="contacts"&&(
 <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
