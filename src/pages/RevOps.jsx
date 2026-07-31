@@ -3380,17 +3380,46 @@ setFindingStaff(false);
 const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",label:"Quote"},{id:"order",label:"Order"}];
 const phaseIdx={lead:0,deal:1,quote:2,order:3};
 const [showBreakdown,setShowBreakdown]=useState(false);
+const [showDuplicates,setShowDuplicates]=useState(false);
 const sourceBreakdown=useMemo(()=>{
 const buckets={};
-let dead=0,zohoSynced=0;
+let dead=0,zohoSynced=0,leads=0,zohoContacts=0;
+const nameMap=new Map(); // normalized full name -> contacts sharing it
 for(const c of contacts){
 if(c.deadStatus) dead++;
 if(c.zohoId||(c.id||"").startsWith("zoho_")) zohoSynced++;
+const isLead=(c.id||"").startsWith("zoho_l_");
+if(isLead) leads++;
+else if((c.id||"").startsWith("zoho_c_")) zohoContacts++;
 const src=c.source||"(none)";
-const key=src.startsWith("zoho")?"zoho-crm / zoho-crm-lead (real Zoho CRM sync)":src;
+const key=src.startsWith("zoho")?(isLead?"zoho-crm-lead (real Zoho CRM sync)":"zoho-crm (real Zoho CRM sync)"):src;
 buckets[key]=(buckets[key]||0)+1;
+if(!c.deadStatus){
+const nm=cName(c).trim().toLowerCase();
+if(nm&&nm!=="unnamed"){
+if(!nameMap.has(nm))nameMap.set(nm,[]);
+nameMap.get(nm).push(c);
 }
-return {rows:Object.entries(buckets).sort(([,a],[,b])=>b-a),dead,zohoSynced,total:contacts.length};
+}
+}
+// Same name, more than one distinct email — likely the same person entered
+// twice (or a lead/contact pair that never got merged), not a real
+// coincidence at this volume.
+const dupGroups=[...nameMap.entries()]
+.map(([name,list])=>({name,contacts:list,emails:[...new Set(list.map(c=>(c.email||"").toLowerCase()).filter(Boolean))]}))
+.filter(g=>g.emails.length>1)
+.sort((a,b)=>b.contacts.length-a.contacts.length);
+const schoolKeys=new Set();
+contacts.filter(c=>!c.deadStatus).forEach(c=>{
+const key=schoolKeyOf(c);
+if(cleanSchoolName(key)!=="(No School)")schoolKeys.add(key);
+});
+return {
+rows:Object.entries(buckets).sort(([,a],[,b])=>b-a),
+dead,zohoSynced,total:contacts.length,
+leads,zohoContacts,accounts:schoolKeys.size,
+dupGroups,dupPeopleCount:dupGroups.reduce((s,g)=>s+g.contacts.length,0),
+};
 },[contacts]);
 return(
 <div className="rv-crm-split" style={{display:"flex",height:"100%",overflow:"hidden"}}>
@@ -3406,6 +3435,11 @@ return(
 <button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
 </div>
 <div style={{marginBottom:7}}>
+<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:4}}>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.leads.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> leads</span></div>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.zohoContacts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> contacts</span></div>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{sourceBreakdown.accounts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> accounts</span></div>
+</div>
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
 <button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
@@ -3416,6 +3450,22 @@ return(
 <div key={src} style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,padding:"1px 0"}}><span>{src}</span><span style={{color:B.muted}}>{n.toLocaleString()}</span></div>
 ))}
 {sourceBreakdown.dead>0&&<div style={{display:"flex",justifyContent:"space-between",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"1px 0",marginTop:3,borderTop:`1px solid ${B.border}`}}><span>marked dead (hidden from list)</span><span>{sourceBreakdown.dead.toLocaleString()}</span></div>}
+</div>
+)}
+{sourceBreakdown.dupGroups.length>0&&(
+<div style={{marginTop:5}}>
+<button onClick={()=>setShowDuplicates(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚠ {sourceBreakdown.dupPeopleCount.toLocaleString()} contacts share a name with a different email ({sourceBreakdown.dupGroups.length.toLocaleString()} names) — {showDuplicates?"hide":"show"}</button>
+{showDuplicates&&(
+<div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px",maxHeight:220,overflowY:"auto"}}>
+{sourceBreakdown.dupGroups.slice(0,50).map(g=>(
+<div key={g.name} style={{padding:"4px 0",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text,fontWeight:600,textTransform:"capitalize"}}>{g.name} <span style={{color:B.muted,fontWeight:400}}>({g.contacts.length})</span></div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{g.emails.join(" · ")}</div>
+</div>
+))}
+{sourceBreakdown.dupGroups.length>50&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,paddingTop:4}}>+{sourceBreakdown.dupGroups.length-50} more</div>}
+</div>
+)}
 </div>
 )}
 </div>
