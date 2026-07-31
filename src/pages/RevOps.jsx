@@ -367,6 +367,18 @@ return {adContact,covered,gaps};
 // (replied:50, meeting:75, deal:100) — shared by the CRM-tab cold-contact
 // sweep and anything else that needs to ask "has this contact shown intent?"
 const CONTACT_INTENT_SCORE=50;
+// Texting is for 1:1 follow-up with people we already have a real relationship
+// with — never cold prospects — so the Text tab only shows up once a contact
+// is a real Zoho Contact, has shown reply intent, has a deal, or is invoiced.
+function isWarmContact(c,cd,invoices) {
+if(!c) return false;
+if((c.id||"").startsWith("zoho_c_")) return true;
+if((c.score||0)>=CONTACT_INTENT_SCORE) return true;
+if(["replied","interested"].includes(c.outreachStatus)) return true;
+if(cd?.cd?.length>0) return true;
+if(findCustomerInvoice(c,invoices||[])) return true;
+return false;
+}
 function scoreTier(score) {
 const n=score||0;
 if(n>=100) return {label:"🔥 FIRE",color:"#C0392B",bg:"#FDECEA"};
@@ -3165,6 +3177,10 @@ const [backfillingOrgs,setBackfillingOrgs]=useState(false);
 const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
+const [smsHistory,setSmsHistory]=useState([]);
+const [smsLoading,setSmsLoading]=useState(false);
+const [smsBody,setSmsBody]=useState("");
+const [smsSending,setSmsSending]=useState(false);
 const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
@@ -3326,6 +3342,28 @@ const c=selId?(contacts.find(x=>x.id===selId)||null):null;
 if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
 setProfileDirty(false);
 },[selId]);
+useEffect(()=>{
+setSmsBody("");setSmsHistory([]);
+if(!sel?.phone)return;
+let cancelled=false;
+setSmsLoading(true);
+fetch(`/api/sms?phone=${encodeURIComponent(sel.phone)}`).then(r=>r.json()).then(d=>{if(!cancelled)setSmsHistory(d.ok?d.messages:[]);}).catch(()=>{}).finally(()=>{if(!cancelled)setSmsLoading(false);});
+return()=>{cancelled=true;};
+},[sel?.phone]);
+const sendText=async()=>{
+if(!sel?.phone||!smsBody.trim())return;
+setSmsSending(true);
+try{
+const r=await fetch("/api/sms",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({to:sel.phone,body:smsBody.trim()})});
+const d=await r.json();
+if(d.ok){
+setSmsHistory(prev=>[...prev,d.message]);
+setSmsBody("");
+dispatch("LOG",{msg:`Texted ${cName(sel)}: "${smsBody.trim().slice(0,60)}"`});
+}else toast(d.error||"Text failed","error");
+}catch(e){toast(`Text error: ${e.message}`,"error");}
+setSmsSending(false);
+};
 const logTouch=()=>{
 if(!touchNote.trim()||!activeDeal) return;
 dispatch("UPDATE_DEAL",{id:activeDeal.id,touchHistory:[...(activeDeal.touchHistory||[]),{id:mkId(),type:"note",date:today(),note:touchNote,author:cu?.id}]});
@@ -4097,7 +4135,7 @@ return(
 </div>
 {/* Tabs */}
 <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-{[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"]].map(([id,label])=>(
+{[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],...(sel.phone&&isWarmContact(sel,selCD,s.invoices)?[["sms","Text"]]:[])].map(([id,label])=>(
 <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
 {label}
 {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
@@ -4485,6 +4523,25 @@ return(
 );
 })}
 {selCD.co.length>0&&<OBtn sm onClick={()=>setShowNewOrder(true)} style={{marginTop:6}}>+ ADD ANOTHER ORDER</OBtn>}
+</div>
+)}
+{crmTab==="sms"&&(
+<div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>Texting {sel.phone} — every message includes a "Reply STOP to opt out" line automatically.</div>
+<div style={{flex:1,overflowY:"auto",display:"flex",flexDirection:"column",gap:6,marginBottom:12,minHeight:120}}>
+{smsLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:20}}>Loading conversation…</div>}
+{!smsLoading&&smsHistory.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",padding:20}}>No texts yet — say hello.</div>}
+{smsHistory.map(m=>(
+<div key={m.id} style={{alignSelf:m.direction==="out"?"flex-end":"flex-start",maxWidth:"75%",background:m.direction==="out"?B.orange:B.surface,color:m.direction==="out"?B.white:B.text,border:m.direction==="out"?"none":`1px solid ${B.border}`,borderRadius:8,padding:"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:12,whiteSpace:"pre-wrap"}}>
+{m.body}
+<div style={{fontSize:9,opacity:.7,marginTop:3}}>{new Date(m.createdAt).toLocaleString()}</div>
+</div>
+))}
+</div>
+<div style={{display:"flex",gap:6}}>
+<input value={smsBody} onChange={e=>setSmsBody(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendText();}}} placeholder="Type a text…" style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"8px 11px",fontSize:12,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
+<OBtn onClick={sendText} disabled={smsSending||!smsBody.trim()}>{smsSending?"SENDING...":"SEND"}</OBtn>
+</div>
 </div>
 )}
 {crmTab==="history"&&(()=>{

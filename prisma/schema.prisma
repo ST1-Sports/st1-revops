@@ -986,3 +986,16 @@ model CustomerReliability {
   updatedAt       DateTime @updatedAt
   @@index([reliabilityFlag])
 }
+
+// ── SMS (Twilio) ────────────────────────────────────────────────────────────
+
+model SmsMessage {
+  id        String   @id @default(cuid())
+  phone     String                                // E.164, e.g. +19195551234
+  direction String                                // out | in
+  body      String   @db.Text
+  status    String   @default("sent")             // sent | delivered | failed | received
+  twilioSid String?
+  createdAt DateTime @default(now())
+  @@index([phone])
+}
