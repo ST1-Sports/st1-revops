@@ -32,15 +32,10 @@ import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { ACCOUNT_SPORTS, COACH_ROLES, resolveSport, inferRoleFromTitle } from '../_lib/roleUtils.js'
-import { findOrCreateZohoAccount } from '../_lib/accountUtils.js'
+import { findOrCreateZohoAccount, normalizeAccountName } from '../_lib/accountUtils.js'
 
 const CRM_BASE   = 'https://www.zohoapis.com/crm/v3'
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
-
-const fuzzyMatch = (a, b) => {
-  a = (a || '').toLowerCase(); b = (b || '').toLowerCase()
-  return a.length > 4 && b.length > 4 && (a.includes(b) || b.includes(a))
-}
 
 async function ensureField(fieldLabel, pickListValues, headers) {
   const getRes = await fetch(`${CRM_BASE}/settings/fields?module=Contacts`, { headers })
@@ -107,7 +102,16 @@ export default async function handler(req, res) {
       invoices = invData?.invoices || []
     }
   } catch (err) { result.errors.push(`Books invoice lookup: ${err.message}`) }
-  const isInvoiced = (accountName) => invoices.some(inv => fuzzyMatch(accountName, inv.customer_name))
+  // Exact match only (after the same case/whitespace/punctuation normalization
+  // used for the Account dedup key) — a loose "one name contains the other"
+  // match here means one generically-named invoice can silently mark dozens
+  // of unrelated accounts as invoiced/qualifying and push their entire
+  // prospect list into Zoho as real Contacts, which is what happened before
+  // this fix.
+  const isInvoiced = (accountName) => {
+    const norm = normalizeAccountName(accountName)
+    return !!norm && invoices.some(inv => normalizeAccountName(inv.customer_name) === norm)
+  }
 
   // 3. Find candidate accounts (have at least one contact not yet pushed),
   //    then filter to ones that actually qualify.

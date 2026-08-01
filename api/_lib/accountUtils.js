@@ -86,5 +86,13 @@ export async function findOrCreateZohoAccount({ name, city, state }, headers) {
   const createData = await createRes.json().catch(() => null)
   const rec = createData?.data?.[0]
   if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
-  return rec?.details?.id || null
+  if (!rec?.details?.id) {
+    // Zoho didn't return the shape we expect (e.g. a permission or
+    // validation error at the top level instead of a per-record error) —
+    // throw instead of silently returning null, so a systemic failure here
+    // shows up as a reported error instead of contacts getting created with
+    // no Account_Name at all.
+    throw new Error(`Zoho account create returned no id for "${trimmedName}": ${JSON.stringify(createData).slice(0, 300)}`)
+  }
+  return rec.details.id
 }

@@ -3209,6 +3209,7 @@ const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook
 const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
 let backendLinked=0,backendPushed=0,noContactAccounts=0;
+const backendErrors=[];
 try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
 backendLinked=syncRes?.contactsLinked||0;
@@ -3221,12 +3222,17 @@ let remaining=1,guard=0;
 while(remaining>0&&guard<10){
 const alignRes=await fetch("/api/contacts/zoho-align-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:100})}).then(r=>r.json());
 backendPushed+=alignRes?.contactsPushed||0;
+backendErrors.push(...(alignRes?.errors||[]));
 remaining=alignRes?.accountsRemaining||0;
 guard++;
 if(!alignRes?.accountsProcessed)break;
 }
 if(crmSyncRef?.current)await crmSyncRef.current(true);
 }catch(e){toast(`Books/Zoho sync error: ${e.message}`,"error");}
+if(backendErrors.length){
+toast(`${backendErrors.length} error${backendErrors.length!==1?"s":""} while pushing to Zoho — first: ${backendErrors[0]}`,"error");
+dispatch("LOG",{msg:`zoho-align-accounts errors (${backendErrors.length}): ${backendErrors.slice(0,5).join(" | ")}`});
+}
 const byDomain=new Map();
 contacts.filter(c=>!c.deadStatus&&c.email?.includes("@")).forEach(c=>{
 const domain=c.email.split("@")[1].toLowerCase();
