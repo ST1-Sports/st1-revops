@@ -6,6 +6,7 @@ const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
+const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 function usePrefetchPanels() {
 useEffect(() => {
 import('./CommandCenter.jsx');
@@ -840,6 +841,7 @@ const NAV = useMemo(()=>[
 {id:"_s_tools"},
 {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
 {id:"team-stores", icon:"🛒", label:"Team Stores"},
+{id:"flagship-store", icon:"🏪", label:"Flagship Store"},
 {id:"compete",     icon:"⊗", label:"Competitors"},
 {id:"price-lists", icon:"$", label:"Price Lists"},
 {id:"edgar",       icon:"▤", label:"Edgar – Quotes"},
@@ -1200,6 +1202,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="edgar"       &&<ModEdgar/>}
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
+{mod==="flagship-store" &&<Suspense fallback={<PanelLoader/>}><FlagshipStorePage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}
 {mod.startsWith("cc-")&&<Suspense fallback={<PanelLoader/>}><CmdCenter initialModuleId={mod.slice(3)} embedded key={mod} s={s} dispatch={dispatch} toast={toast}/></Suspense>}
 </ErrBound>
