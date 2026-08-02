@@ -69,12 +69,20 @@ export function parseAddr(raw = '') {
   return { name: null, email: raw.split(',')[0].trim().toLowerCase() }
 }
 
-/** Push a positive-intent contact into Zoho as a real Account+Contact. Fire-and-forget. */
+/**
+ * Push a contact who just replied into Zoho as a Lead. Fire-and-forget.
+ *
+ * A reply is engagement, not a sale — it should not create a real Account+
+ * Contact by itself. That promotion only happens later, when an actual quote
+ * or deal gets built for them (api/contacts/promote.js's createAsContact
+ * path, triggered from Edgar's "Create in Zoho" flow) — a real, deliberate
+ * next step, not an automatic reaction to any reply classified as intent.
+ */
 export async function promoteContactToZoho(host, contactId) {
   if (!host) return
   await fetch(`https://${host}/api/contacts/promote`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ contactId, createAsContact: true }),
+    body:    JSON.stringify({ contactId }),
   }).catch(() => {})
 }

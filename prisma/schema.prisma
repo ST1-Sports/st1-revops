@@ -241,6 +241,7 @@ model SalesContact {
   score        Int             @default(0)
   segment      String          @default("cold")
   zohoCrmId    String?
+  zohoModule   String?                                  // "Leads" | "Contacts" — which module zohoCrmId actually points at
   zohoAccountId String?
   pushedToZoho Boolean         @default(false)
   status       String          @default("new")

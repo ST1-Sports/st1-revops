@@ -26,7 +26,8 @@
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
-import { upsertAccountForContact, findOrCreateZohoAccount } from '../_lib/accountUtils.js'
+import { upsertAccountForContact } from '../_lib/accountUtils.js'
+import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 
 const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
 
@@ -47,12 +48,22 @@ async function findOrCreateAccount(contact, headers) {
   }).catch(() => null)
   if (sibling?.zohoAccountId) return sibling.zohoAccountId
 
-  return findOrCreateZohoAccount({ name, city: contact.city, state: contact.state }, headers)
+  const { id } = await findOrCreateZohoAccount({ name, city: contact.city, state: contact.state }, headers)
+  return id
 }
 
-/** POST-or-PUT a record into a Zoho module, then mirror the result onto SalesContact. */
+/**
+ * POST-or-PUT a record into a Zoho module, then mirror the result onto
+ * SalesContact. Only treats this as an update if the existing zohoCrmId
+ * actually belongs to THIS module — a contact promoted from Lead to Contact
+ * (createAsContact) has a zohoCrmId that points at the old Lead record, and
+ * PUTing that id onto /Contacts would either 404 or hit an unrelated record.
+ * In that case this creates a real new Contact instead; the old Lead is
+ * left in Zoho rather than formally converted (Zoho's Convert-Lead API
+ * would be the fuller fix, but isn't wired up here).
+ */
 async function upsertZohoRecord({ module, payload, contact, headers, extraContactUpdate = {} }) {
-  const isUpdate = !!contact.zohoCrmId
+  const isUpdate = !!contact.zohoCrmId && contact.zohoModule === module
   const url    = isUpdate ? `${CRM_BASE}/${module}/${contact.zohoCrmId}` : `${CRM_BASE}/${module}`
   const method = isUpdate ? 'PUT' : 'POST'
 
@@ -68,7 +79,7 @@ async function upsertZohoRecord({ module, payload, contact, headers, extraContac
 
   await prisma.salesContact.update({
     where: { id: contact.id },
-    data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined, ...extraContactUpdate },
+    data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined, zohoModule: module, ...extraContactUpdate },
   })
 
   return zohoId

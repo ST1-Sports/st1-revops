@@ -1833,7 +1833,12 @@ return;
 if(action.type==="add_contact"){
 const c={id:mkId(),firstName:action.firstName||"",lastName:action.lastName||"",fullName:`${action.firstName||""} ${action.lastName||""}`.trim(),title:action.title||"",school:action.school||"",state:action.state||"",email:action.email||"",phone:action.phone||"",sport:action.sport||"",orgType:"school",priority:"medium",confidence:"medium",source:"agent",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);toast(`Contact added: ${c.fullName}`,"success");
-crmCreate("Contacts",{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Designation:c.title,Account_Name:c.school}).then(()=>toast("✓ Synced to Zoho","success")).catch(()=>{});
+// A new prospect from chat is engagement at most, not a sale — this goes to
+// Zoho as a Lead, never a real Account-linked Contact. Contacts only get
+// created later, when an actual quote/deal gets built for them (Edgar's
+// "Create in Zoho" flow), and Account_Name as a bare string here wouldn't
+// have linked to a real Account anyway (that field is a lookup, not text).
+crmCreate("Leads",{First_Name:c.firstName,Last_Name:c.lastName,Email:c.email,Phone:c.phone,Designation:c.title,Company:c.school,Lead_Source:"ST1 RevOps",Lead_Status:"Working"}).then(()=>toast("✓ Synced to Zoho as a Lead","success")).catch(()=>{});
 return;
 }
 if(action.type==="create_campaign"){dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");toast("Switched to Campaigns","info");return;}
@@ -1982,7 +1987,7 @@ const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[o
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
 const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg},ledger_payments:{c:B.green,bg:B.greenBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD CONTACT",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD LEAD",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -3217,7 +3222,7 @@ const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
-let backendLinked=0,backendPushed=0,noContactAccounts=0;
+let backendLinked=0,backendPushed=0,backendLeadsPushed=0,noContactAccounts=0;
 const backendErrors=[];
 try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
@@ -3231,6 +3236,11 @@ let remaining=1,guard=0;
 while(remaining>0&&guard<10){
 const alignRes=await fetch("/api/contacts/zoho-align-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({limit:100})}).then(r=>r.json());
 backendPushed+=alignRes?.contactsPushed||0;
+// Only invoiced (real customer) accounts get pushed as Contacts; everyone
+// else who merely qualified by engagement goes to Zoho as a Lead instead
+// — see zoho-align-accounts.js for why. Tracked separately so this toast
+// doesn't overstate how many became real, Account-linked Contacts.
+backendLeadsPushed+=alignRes?.leadsPushed||0;
 backendErrors.push(...(alignRes?.errors||[]));
 remaining=alignRes?.accountsRemaining||0;
 guard++;
@@ -3270,7 +3280,7 @@ blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,c
 }
 if(!toFix.length){
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere in our system — those need a real person added manually, not matched`:"";
-toast((backendLinked||backendPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed to Zoho CRM — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
+toast((backendLinked||backendPushed||backendLeadsPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed as Contacts (invoiced customers), ${backendLeadsPushed} pushed as Leads (engaged, not yet a customer) — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
 setBackfillingOrgs(false);return;
 }
 for(const {contact,school,state,city}of toFix){
@@ -3288,7 +3298,7 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere — need a real person added manually`:"";
-toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed to Zoho CRM`+gapNote,"success");
+toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed as Contacts (invoiced), ${backendLeadsPushed} pushed as Leads`+gapNote,"success");
 setBackfillingOrgs(false);
 };
 const loadBooksContacts=async(customerId)=>{
@@ -3397,7 +3407,16 @@ setZohoSyncing(true);
 const isLead=sel.id?.startsWith("zoho_l_");
 const mod=isLead?"Leads":"Contacts";
 try{
-const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,Account_Name:pf.school,Mailing_State:pf.state,Mailing_City:pf.city};
+let accountId=null;
+if(!isLead&&pf.school){
+// Contacts' Account_Name is a lookup field — sending the school name as a
+// bare string here wouldn't actually link it, same issue as Deals/Quotes
+// had before those were fixed to resolve a real Account id first.
+const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
+const d=await r.json();
+if(d.ok)accountId=d.accountId;
+}
+const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,...(accountId?{Account_Name:{id:accountId}}:{}),Mailing_State:pf.state,Mailing_City:pf.city};
 await crmUpdate(mod,sel.zohoId,fields);
 if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,sel.zohoId,`Sport / primary contact sport: ${pf.sport}`);
 toast("Profile saved + synced to Zoho","success");
