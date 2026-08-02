@@ -96,23 +96,39 @@ async function loadShopify(days) {
   }
 }
 
+const FUNNEL_STEPS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase']
+
 async function loadGa4(startDate, endDate) {
   const { propertyId } = ga4Creds()
   if (!propertyId) return { configured: false }
-  const [overview, bySource, addToCart] = await Promise.all([
+  const [overview, bySource, addToCart, funnelReport, landingPages] = await Promise.all([
     ga4Run(propertyId, { dateRanges: [{ startDate, endDate }], metrics: [{ name: 'sessions' }, { name: 'activeUsers' }, { name: 'screenPageViews' }, { name: 'conversions' }] }),
-    ga4Run(propertyId, { dateRanges: [{ startDate, endDate }], dimensions: [{ name: 'sessionSourceMedium' }], metrics: [{ name: 'sessions' }], orderBys: [{ metric: { metricName: 'sessions' }, desc: true }], limit: 8 }),
+    // Revenue by source, not just session counts — which channels actually
+    // make money, not just which send the most clicks.
+    ga4Run(propertyId, { dateRanges: [{ startDate, endDate }], dimensions: [{ name: 'sessionSourceMedium' }], metrics: [{ name: 'sessions' }, { name: 'purchaseRevenue' }], orderBys: [{ metric: { metricName: 'sessions' }, desc: true }], limit: 8 }),
     ga4Run(propertyId, { dateRanges: [{ startDate, endDate }], dimensions: [{ name: 'itemName' }], metrics: [{ name: 'itemsAddedToCart' }], orderBys: [{ metric: { metricName: 'itemsAddedToCart' }, desc: true }], limit: 10 }),
+    // view_item -> add_to_cart -> begin_checkout -> purchase, as event counts
+    // — where people actually drop off, not just top-line conversion rate.
+    ga4Run(propertyId, {
+      dateRanges: [{ startDate, endDate }],
+      dimensions: [{ name: 'eventName' }],
+      metrics: [{ name: 'eventCount' }],
+      dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: FUNNEL_STEPS } } },
+    }),
+    ga4Run(propertyId, { dateRanges: [{ startDate, endDate }], dimensions: [{ name: 'landingPage' }], metrics: [{ name: 'sessions' }, { name: 'conversions' }], orderBys: [{ metric: { metricName: 'sessions' }, desc: true }], limit: 10 }),
   ])
   const ov = ga4Rows(overview)[0] || {}
+  const funnelByStep = new Map(ga4Rows(funnelReport).map(r => [r.eventName, r.eventCount]))
   return {
     configured:  true,
     sessions:    ov.sessions || 0,
     activeUsers: ov.activeUsers || 0,
     pageViews:   ov.screenPageViews || 0,
     conversions: ov.conversions || 0,
-    topSources:  ga4Rows(bySource).map(r => ({ source: r.sessionSourceMedium, sessions: r.sessions })),
+    topSources:  ga4Rows(bySource).map(r => ({ source: r.sessionSourceMedium, sessions: r.sessions, revenue: r.purchaseRevenue })),
     addToCartProducts: ga4Rows(addToCart).map(r => ({ item: r.itemName, adds: r.itemsAddedToCart })).filter(r => r.item),
+    funnel: FUNNEL_STEPS.map(step => ({ step, count: funnelByStep.get(step) || 0 })),
+    landingPages: ga4Rows(landingPages).map(r => ({ page: r.landingPage, sessions: r.sessions, conversions: r.conversions })).filter(r => r.page),
   }
 }
 
