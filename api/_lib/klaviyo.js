@@ -31,12 +31,20 @@ async function klaviyoFetch(path, opts = {}) {
 
 /** Find a metric by name (first match wins, in the order given) — e.g. the
  * form-submission metric is called "Filled Out Form" for native Klaviyo
- * signup forms, or "Subscribed to List" for plain list signups. */
+ * signup forms, or "Subscribed to List" for plain list signups. Klaviyo's
+ * /metrics/ endpoint is cursor-paginated with no page-size override, so
+ * this follows links.next until it finds a match or runs out of pages. */
 export async function findMetricId(nameCandidates) {
-  const data = await klaviyoFetch('/metrics/?page[size]=100')
-  const metrics = data?.data || []
+  const all = []
+  let path = '/metrics/'
+  for (let page = 0; path && page < 20; page++) {
+    const data = await klaviyoFetch(path)
+    all.push(...(data?.data || []))
+    const next = data?.links?.next || null
+    path = next ? next.replace(/^https:\/\/a\.klaviyo\.com\/api/, '') : null
+  }
   for (const name of nameCandidates) {
-    const match = metrics.find(m => (m.attributes?.name || '').toLowerCase() === name.toLowerCase())
+    const match = all.find(m => (m.attributes?.name || '').toLowerCase() === name.toLowerCase())
     if (match) return { id: match.id, name: match.attributes.name }
   }
   return null

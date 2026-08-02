@@ -66,6 +66,11 @@ async function loadShopify(days) {
     shopifyRequest(`/orders.json?status=any&created_at_min=${encodeURIComponent(since)}&limit=250`),
     shopifyRequest(`/checkouts.json?created_at_min=${encodeURIComponent(since)}&limit=250`),
   ])
+  // Shopify returns 200 with a normal-looking body even for scope/permission
+  // errors on some endpoints — check ok explicitly so a permissions problem
+  // shows up as an error instead of silently reading as "zero orders".
+  if (!ordersRes.ok)    throw new Error(`Shopify orders: ${JSON.stringify(ordersRes.data?.errors || ordersRes.data).slice(0, 200)}`)
+  if (!checkoutsRes.ok) throw new Error(`Shopify checkouts: ${JSON.stringify(checkoutsRes.data?.errors || checkoutsRes.data).slice(0, 200)}`)
   const orders    = ordersRes.data?.orders || []
   const checkouts = checkoutsRes.data?.checkouts || []
   const revenue = orders.reduce((s, o) => s + (Number(o.total_price) || 0), 0)
