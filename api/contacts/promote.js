@@ -28,8 +28,7 @@ import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { upsertAccountForContact } from '../_lib/accountUtils.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
-
-const CRM_BASE = 'https://www.zohoapis.com/crm/v3'
+import { upsertZohoRecord as zohoUpsert, INTENT_SCORE_THRESHOLD } from '../_lib/zohoCrm.js'
 
 async function findOrCreateAccount(contact, headers) {
   const name = (contact.companyName || '').trim()
@@ -52,37 +51,16 @@ async function findOrCreateAccount(contact, headers) {
   return id
 }
 
-/**
- * POST-or-PUT a record into a Zoho module, then mirror the result onto
- * SalesContact. Only treats this as an update if the existing zohoCrmId
- * actually belongs to THIS module — a contact promoted from Lead to Contact
- * (createAsContact) has a zohoCrmId that points at the old Lead record, and
- * PUTing that id onto /Contacts would either 404 or hit an unrelated record.
- * In that case this creates a real new Contact instead; the old Lead is
- * left in Zoho rather than formally converted (Zoho's Convert-Lead API
- * would be the fuller fix, but isn't wired up here).
- */
-async function upsertZohoRecord({ module, payload, contact, headers, extraContactUpdate = {} }) {
-  const isUpdate = !!contact.zohoCrmId && contact.zohoModule === module
-  const url    = isUpdate ? `${CRM_BASE}/${module}/${contact.zohoCrmId}` : `${CRM_BASE}/${module}`
-  const method = isUpdate ? 'PUT' : 'POST'
-
-  const zohoRes = await fetch(url, { method, headers, body: JSON.stringify({ data: [payload] }) })
-  const data   = await zohoRes.json()
-  const record = data?.data?.[0]
-
-  if (record?.status === 'error') {
-    throw Object.assign(new Error(record.message || 'Zoho API error'), { isZohoError: true })
-  }
-
-  const zohoId = record?.details?.id || contact.zohoCrmId
-
+/** upsertZohoRecord from zohoCrm.js does the Zoho HTTP call only (shared with
+ * zoho-align-accounts.js) — this wraps it with the Prisma bookkeeping this
+ * endpoint specifically needs. */
+async function upsertRecord({ module, payload, contact, headers, extraContactUpdate = {} }) {
+  const { zohoCrmId } = await zohoUpsert({ module, payload, contact, headers })
   await prisma.salesContact.update({
     where: { id: contact.id },
-    data:  { pushedToZoho: true, zohoCrmId: zohoId || undefined, zohoModule: module, ...extraContactUpdate },
+    data:  { pushedToZoho: true, zohoCrmId: zohoCrmId || undefined, zohoModule: module, ...extraContactUpdate },
   })
-
-  return zohoId
+  return zohoCrmId
 }
 
 export default async function handler(req, res) {
@@ -100,7 +78,7 @@ export default async function handler(req, res) {
   // (The createAsContact path is only ever called after intent is already
   // established: Brad's reply-intent classifier, or a rep-approved Edgar
   // quote for an already-qualified prospect.)
-  if (!createAsContact && (contact.score || 0) < 50 && !contact.pushedToZoho) {
+  if (!createAsContact && (contact.score || 0) < INTENT_SCORE_THRESHOLD && !contact.pushedToZoho) {
     return res.status(403).json({ error: 'Contact has not shown intent yet (no reply on record) — not pushing to Zoho.' })
   }
 
@@ -122,7 +100,7 @@ export default async function handler(req, res) {
       if (localAccountId && accountId) {
         await prisma.account.update({ where: { id: localAccountId }, data: { zohoAccountId: accountId } }).catch(() => {})
       }
-      const zohoId = await upsertZohoRecord({
+      const zohoId = await upsertRecord({
         module: 'Contacts',
         payload: {
           First_Name:  contact.firstName || '',
@@ -140,7 +118,7 @@ export default async function handler(req, res) {
     }
 
     // ── Default: push as Lead (bulk/manual promote from Prospecting) ──────────
-    const zohoId = await upsertZohoRecord({
+    const zohoId = await upsertRecord({
       module: 'Leads',
       payload: {
         First_Name:   contact.firstName || '',

@@ -39,6 +39,7 @@ import { getZohoToken } from '../_lib/zoho-token.js'
 import { ACCOUNT_SPORTS, COACH_ROLES, resolveSport, inferRoleFromTitle } from '../_lib/roleUtils.js'
 import { normalizeAccountName } from '../_lib/accountUtils.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
+import { upsertZohoRecord, INTENT_SCORE_THRESHOLD } from '../_lib/zohoCrm.js'
 
 const CRM_BASE   = 'https://www.zohoapis.com/crm/v3'
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
@@ -64,21 +65,6 @@ async function ensureField(fieldLabel, pickListValues, headers) {
     throw new Error(`Zoho field create failed for "${fieldLabel}": ${rec?.message || createData?.message || 'unknown error'}`)
   }
   return { created: true, api_name: rec.details?.api_name || null }
-}
-
-/** POST-or-PUT into a Zoho module, module-aware like promote.js's version — a
- * contact whose zohoCrmId belongs to a different module (e.g. upgrading from
- * a Lead once their account gets invoiced) gets a fresh record, not a PUT
- * onto the wrong module's id. */
-async function upsertZohoRecord({ module, payload, contact, headers }) {
-  const isUpdate = !!contact.zohoCrmId && contact.zohoModule === module
-  const url    = isUpdate ? `${CRM_BASE}/${module}/${contact.zohoCrmId}` : `${CRM_BASE}/${module}`
-  const method = isUpdate ? 'PUT' : 'POST'
-  const zohoRes = await fetch(url, { method, headers, body: JSON.stringify({ data: [payload] }) })
-  const zohoData = await zohoRes.json().catch(() => null)
-  const rec = zohoData?.data?.[0]
-  if (rec?.status === 'error') throw Object.assign(new Error(rec.message || 'Zoho error'), { isZohoError: true })
-  return { zohoCrmId: rec?.details?.id || contact.zohoCrmId, isUpdate }
 }
 
 export default async function handler(req, res) {
@@ -142,9 +128,13 @@ export default async function handler(req, res) {
   const candidates = candidateIds.length
     ? await prisma.account.findMany({ where: { id: { in: candidateIds } }, include: { contacts: true } })
     : []
-  const engagementQualifying = (acc) => acc.contacts.some(c => (c.score || 0) >= 50 || c.pushedToZoho)
-  const invoicedAccounts   = candidates.filter(acc => isInvoiced(acc.name))
-  const leadOnlyAccounts   = candidates.filter(acc => !isInvoiced(acc.name) && engagementQualifying(acc))
+  const engagementQualifying = (acc) => acc.contacts.some(c => (c.score || 0) >= INTENT_SCORE_THRESHOLD || c.pushedToZoho)
+  // isInvoiced does a normalize + linear scan over the invoice list, so it's
+  // computed once per account here rather than re-run later to recover the
+  // same boolean via an O(n) .includes() lookup.
+  const tagged = candidates.map(account => ({ account, isRealCustomer: isInvoiced(account.name) }))
+  const invoicedAccounts = tagged.filter(t => t.isRealCustomer)
+  const leadOnlyAccounts = tagged.filter(t => !t.isRealCustomer && engagementQualifying(t.account))
   const qualifying = [...invoicedAccounts, ...leadOnlyAccounts]
   result.accountsQualifying = qualifying.length
 
@@ -156,8 +146,7 @@ export default async function handler(req, res) {
   const toProcess = qualifying.slice(0, limit)
   result.accountsRemaining = Math.max(0, qualifying.length - toProcess.length)
 
-  for (const account of toProcess) {
-    const isRealCustomer = invoicedAccounts.includes(account)
+  for (const { account, isRealCustomer } of toProcess) {
     try {
       let zohoAccountId = account.zohoAccountId
       if (isRealCustomer) {

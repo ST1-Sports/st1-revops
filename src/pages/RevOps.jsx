@@ -3408,13 +3408,20 @@ const isLead=sel.id?.startsWith("zoho_l_");
 const mod=isLead?"Leads":"Contacts";
 try{
 let accountId=null;
+const schoolChanged=pf.school!==sel.school||pf.city!==sel.city||pf.state!==sel.state;
 if(!isLead&&pf.school){
+if(!schoolChanged&&sel.zohoAccountId){
+// Nothing about the school changed since the last successful resolve —
+// skip the extra Zoho round-trip and reuse the id already on file.
+accountId=sel.zohoAccountId;
+}else{
 // Contacts' Account_Name is a lookup field — sending the school name as a
 // bare string here wouldn't actually link it, same issue as Deals/Quotes
 // had before those were fixed to resolve a real Account id first.
 const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
 const d=await r.json();
-if(d.ok)accountId=d.accountId;
+if(d.ok){accountId=d.accountId;dispatch("UPDATE_CONTACT",{id:sel.id,zohoAccountId:accountId});}
+}
 }
 const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,...(accountId?{Account_Name:{id:accountId}}:{}),Mailing_State:pf.state,Mailing_City:pf.city};
 await crmUpdate(mod,sel.zohoId,fields);
@@ -6593,11 +6600,11 @@ return(
 <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 <button onClick={()=>{setOneOffName(name);setOneOffEmail(c.email);setOneOffContext(c.companyName||"");setView("brad");setTimeout(()=>window.scrollTo(0,document.body.scrollHeight),200);}}
 style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ DRAFT</button>
-{/* Only push to Zoho once there's a real signal (a reply — score>=50) —
-    no CRM promotion off a cold, unengaged contact. */}
-{!inZoho&&(c.score||0)>=50&&<button onClick={()=>promoteToZoho(c.id)} disabled={promoting}
+{/* Only push to Zoho once there's a real signal (a reply) — no CRM
+    promotion off a cold, unengaged contact. */}
+{!inZoho&&(c.score||0)>=CONTACT_INTENT_SCORE&&<button onClick={()=>promoteToZoho(c.id)} disabled={promoting}
 style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,border:"none",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,padding:"3px 10px",borderRadius:3,cursor:promoting?"default":"pointer",letterSpacing:.3}}>{promoting?"…":"↑ ZOHO"}</button>}
-{!inZoho&&(c.score||0)<50&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontStyle:"italic"}}>no reply yet</span>}
+{!inZoho&&(c.score||0)<CONTACT_INTENT_SCORE&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontStyle:"italic"}}>no reply yet</span>}
 </div>
 </div>
 );
@@ -13252,7 +13259,7 @@ setSendingZoho("edgar_main");
 // Only auto-promote a Brad's-List prospect into Zoho CRM once they've shown
 // real intent (score>=50, i.e. a reply) — building a quote for them isn't
 // itself a CRM-worthy signal. The quote still gets built either way.
-const hasIntent=(matchedContact?.score||0)>=50;
+const hasIntent=(matchedContact?.score||0)>=CONTACT_INTENT_SCORE;
 if(matchedContact?.source==="brad"&&!matchedContact.pushedToZoho&&hasIntent){
 try{
 await fetch("/api/contacts/promote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId:matchedContact.id,createAsContact:true})});
