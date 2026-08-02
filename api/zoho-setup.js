@@ -23,7 +23,7 @@ const SCOPES = [
   "ZohoCRM.modules.Leads.ALL",
   "ZohoCRM.modules.Deals.ALL",
   "ZohoCRM.modules.Accounts.ALL",
-  "ZohoCRM.settings.fields.READ",
+  "ZohoCRM.settings.fields.ALL", // write access — zoho-align-accounts.js creates the Sport/Coach Role custom fields on first run
   "ZohoCRM.users.READ",
   // Zoho Campaigns
   "ZohoCampaigns.campaign.ALL",
@@ -127,7 +127,7 @@ export default async function handler(req, res) {
       <strong>Permissions being requested:</strong>
       <ul style="margin:10px 0 0;padding-left:20px;line-height:2">
         <li><strong>Zoho Books</strong> — invoices, contacts, payments, estimates, items</li>
-        <li><strong>Zoho CRM</strong> — Contacts, Leads, Deals, Accounts (read/write), plus field metadata (read-only, needed for full-field CRM exports)</li>
+        <li><strong>Zoho CRM</strong> — Contacts, Leads, Deals, Accounts (read/write), plus field settings (read/write, needed to create the Sport/Coach Role custom fields)</li>
         <li><strong>Zoho Campaigns</strong> — mailing lists, subscribers, campaigns</li>
       </ul>
       <p style="margin:10px 0 0;color:#888;font-size:12px">Social media posting uses direct platform links — no Zoho Social subscription needed.</p>

@@ -682,6 +682,16 @@ let all=[],page=1;
 while(true){
 const sep=baseEndpoint.includes("?")?"&":"?";
 const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+// Zoho returns HTTP 204 (no JSON body) for a genuinely empty module — that's
+// not an error, res.data is just legitimately absent. But an actual failure
+// (bad token, missing scope, rate limit) comes back as a 200-wrapped error
+// object with no `data` field either — api/zoho.js always responds 200 so
+// the client can inspect it, so `res.data||[]` alone can't tell "zero
+// records" apart from "the call failed" and was silently reporting the
+// latter as the former.
+if(res.status==="error"||(res.error&&res._http_status&&res._http_status!==204)){
+throw new Error(`Zoho ${baseEndpoint.split("?")[0]}: ${res.message||res.error||res.code||`HTTP ${res._http_status}`}`);
+}
 const batch=res.data||[];
 all=[...all,...batch];
 if(!res.info?.more_records||batch.length<200) break;
@@ -3189,6 +3199,7 @@ const [accountNameInput,setAccountNameInput]=useState("");
 const [savingAccountName,setSavingAccountName]=useState(false);
 const [backfillingOrgs,setBackfillingOrgs]=useState(false);
 const [acctStatus,setAcctStatus]=useState(null);
+const [acctStatusError,setAcctStatusError]=useState(null);
 const [loadingAcctStatus,setLoadingAcctStatus]=useState(false);
 const [showNewAccounts,setShowNewAccounts]=useState(false);
 const [showUnassigned,setShowUnassigned]=useState(false);
@@ -3316,8 +3327,9 @@ setLoadingAcctStatus(true);
 try{
 const r=await fetch("/api/crm/accounts-status");
 const d=await r.json();
-setAcctStatus(d.ok?d:null);
-}catch{setAcctStatus(null);}
+if(d.ok){setAcctStatus(d);setAcctStatusError(null);}
+else{setAcctStatus(null);setAcctStatusError(d.error||`HTTP ${r.status}`);}
+}catch(e){setAcctStatus(null);setAcctStatusError(e.message);}
 setLoadingAcctStatus(false);
 },[]);
 useEffect(()=>{
@@ -3592,7 +3604,8 @@ return(
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,color:B.muted}}>ZOHO ACCOUNTS</span>
 <button onClick={refreshAcctStatus} disabled={loadingAcctStatus} title="Re-check real Zoho Account counts + unlinked matches" style={{background:"none",border:"none",fontSize:10,color:loadingAcctStatus?B.muted:B.purple,cursor:loadingAcctStatus?"default":"pointer"}}>{loadingAcctStatus?"…":"↻"}</button>
 </div>
-{!acctStatus&&!loadingAcctStatus&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>Not loaded yet</div>}
+{!acctStatus&&!loadingAcctStatus&&acctStatusError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,marginTop:3}}>⚠ Couldn't load: {acctStatusError}</div>}
+{!acctStatus&&!loadingAcctStatus&&!acctStatusError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>Not loaded yet</div>}
 {loadingAcctStatus&&!acctStatus&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>Checking Zoho…</div>}
 {acctStatus&&(<>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.text,marginTop:3}}>{acctStatus.totalAccounts.toLocaleString()}<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontWeight:400}}> accounts in Zoho</span></div>
