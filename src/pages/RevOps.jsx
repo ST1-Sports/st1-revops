@@ -498,7 +498,7 @@ return {...c,touches};
 })};
 }
 case "DELETE_CAMPAIGN": return {...prev, campaigns:(prev.campaigns||[]).filter(c=>c.id!==payload)};
-case "ADD_PRICE_LIST":  return {...prev, priceLists:[payload,...(prev.priceLists||[])]};
+case "ADD_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).some(pl=>pl.id===payload.id)?(prev.priceLists||[]).map(pl=>pl.id===payload.id?payload:pl):[payload,...(prev.priceLists||[])]};
 case "UPDATE_PRICE_LIST": return {...prev, priceLists:(prev.priceLists||[]).map(pl=>pl.id===payload.id?{...pl,...payload}:pl)};
 case "DEL_PRICE_LIST":  return {...prev, priceLists:(prev.priceLists||[]).filter(pl=>pl.id!==payload)};
 case "UPDATE_PRICE_LIST_ITEM": {
@@ -1350,6 +1350,12 @@ const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFam
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
 const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
+const DbSyncBadge=React.memo(function DbSyncBadge({pl,sm}){
+const fs=sm?7:8,pad=sm?"0 4px":"1px 6px";
+if(!pl.dbSyncedAt) return <span title="Never saved to the database — Edgar can't quote from this list yet" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:fs,color:B.muted,background:B.surface,border:`1px solid ${B.border}`,borderRadius:2,padding:pad,letterSpacing:.3,whiteSpace:"nowrap"}}>NOT IN DB</span>;
+if(pl.dbItemCount!==(pl.items||[]).length) return <span title={`${(pl.items||[]).length} items now vs ${pl.dbItemCount} last saved — click Save to DB to update`} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:fs,color:"#C77800",background:"#FFF8E6",borderRadius:2,padding:pad,letterSpacing:.3,whiteSpace:"nowrap"}}>OUT OF SYNC</span>;
+return <span title={`Saved to the database ${new Date(pl.dbSyncedAt).toLocaleString()}`} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:fs,color:B.green,background:B.greenBg,borderRadius:2,padding:pad,letterSpacing:.3,whiteSpace:"nowrap"}}>✓ IN DB</span>;
+});
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
 const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
@@ -12362,10 +12368,35 @@ const [editItem,setEditItem]=useState(null);
 const [searchQ,setSearchQ]=useState("");
 const [dbSaving,setDbSaving]=useState(false);
 const [dbSaveMsg,setDbSaveMsg]=useState(null);
+const [dbSnapshot,setDbSnapshot]=useState(null);
+const [dbSnapshotLoading,setDbSnapshotLoading]=useState(false);
+// Ground truth of what's actually in the database right now — independent
+// of local sync-status flags, which only reflect what THIS browser last
+// pushed and could drift if the DB was changed some other way.
+const fetchDbSnapshot=useCallback(async()=>{
+setDbSnapshotLoading(true);
+try{
+const r=await fetch("/api/pricelists");
+const d=await r.json();
+if(d.ok) setDbSnapshot({
+suppliers:(d.suppliers||[]).map(sup=>({id:sup.id,name:sup.name,items:sup.products.length,lastUpdated:sup.lastUpdated})),
+competitors:(d.competitors||[]).map(sup=>({id:sup.id,name:sup.competitorName,items:sup.items.length,lastUpdated:sup.lastUpdated})),
+fetchedAt:Date.now(),
+});
+}catch{}
+setDbSnapshotLoading(false);
+},[]);
+useEffect(()=>{fetchDbSnapshot();},[fetchDbSnapshot]);
+// A list is "dirty" — needs saving — if it's never been synced, or its
+// item count has changed since the last successful sync. This is what lets
+// SAVE TO DB skip lists that are already up to date instead of re-writing
+// everything on every click.
+const isDirty=(pl)=>!pl.dbSyncedAt||pl.dbItemCount!==(pl.items||[]).length;
 const saveToDB=async()=>{
-  const own=(s.priceLists||[]).filter(pl=>pl.type==="own");
-  const comp=(s.priceLists||[]).filter(pl=>pl.type==="competitor");
-  if(!own.length&&!comp.length){toast("No price lists to save","error");return;}
+  const own=(s.priceLists||[]).filter(pl=>pl.type==="own"&&isDirty(pl));
+  const comp=(s.priceLists||[]).filter(pl=>pl.type==="competitor"&&isDirty(pl));
+  const skipped=(s.priceLists||[]).length-own.length-comp.length;
+  if(!own.length&&!comp.length){toast(skipped?"Everything is already up to date in the database":"No price lists to save","info");return;}
   setDbSaving(true);setDbSaveMsg(null);
   let totalItems=0;
   const CHUNK=500;
@@ -12386,6 +12417,7 @@ const saveToDB=async()=>{
       for(let j=0;j<products.length;j+=CHUNK)
         await postJSON("/api/pricelists/items",{supplierId:pl.id,products:products.slice(j,j+CHUNK)});
       totalItems+=products.length;
+      dispatch("UPDATE_PRICE_LIST",{id:pl.id,dbSupplierId:pl.id,dbSyncedAt:Date.now(),dbItemCount:products.length});
     }
     // ── Competitor price lists ──────────────────────────────────────────
     // Stored in same tables, tagged with __COMPETITOR__: prefix in category
@@ -12404,11 +12436,13 @@ const saveToDB=async()=>{
       for(let j=0;j<products.length;j+=CHUNK)
         await postJSON("/api/pricelists/items",{supplierId:sid,products:products.slice(j,j+CHUNK)});
       totalItems+=products.length;
+      dispatch("UPDATE_PRICE_LIST",{id:pl.id,dbSupplierId:sid,dbSyncedAt:Date.now(),dbItemCount:products.length});
     }
-    const msg=`✓ ${own.length} supplier${own.length!==1?"s":""}${comp.length?` · ${comp.length} competitor${comp.length!==1?"s":""}`:"" } · ${totalItems} items saved`;
+    const msg=`✓ ${own.length} supplier${own.length!==1?"s":""}${comp.length?` · ${comp.length} competitor${comp.length!==1?"s":""}`:"" } · ${totalItems} items saved${skipped?` · ${skipped} already up to date`:""}`;
     setDbSaveMsg(msg);
     setTimeout(()=>setDbSaveMsg(null),6000);
     toast("Price lists saved — Edgar can now use both supplier costs and competitor pricing","success");
+    fetchDbSnapshot();
   }catch(e){
     setDbSaveMsg(`Save failed: ${e.message}`);
     toast("DB save failed","error");
@@ -12421,6 +12455,7 @@ const compLists=useMemo(()=>allLists.filter(pl=>pl.type==="competitor"),[allList
 const lists=tab==="own"?ownLists:compLists;
 const selected=useMemo(()=>selId?allLists.find(pl=>pl.id===selId):null,[allLists,selId]);
 const totalProducts=useMemo(()=>allLists.reduce((a,pl)=>a+(pl.items||[]).length,0),[allLists]);
+const anyDirty=useMemo(()=>allLists.some(isDirty),[allLists]);
 const {avgMargin,lowCount}=useMemo(()=>{
 let sum=0,cnt=0,low=0;
 ownLists.forEach(pl=>(pl.items||[]).forEach(it=>{
@@ -12460,10 +12495,12 @@ return(
 {ownLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5}}>{avgMargin}% AVG MARGIN</span>}
 {lowCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:"#C77800",letterSpacing:.5,background:"#FFF8E6",borderRadius:3,padding:"1px 5px"}}>{lowCount} LOW MARGIN</span>}
 {compLists.length>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,letterSpacing:.5}}>{compLists.length} COMPETITOR SOURCES</span>}
+{dbSnapshot&&<span title={`Last checked ${new Date(dbSnapshot.fetchedAt).toLocaleTimeString()}`} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:.5,background:B.greenBg,borderRadius:3,padding:"1px 5px"}}>DB HAS: {dbSnapshot.suppliers.length} SUPPLIERS · {dbSnapshot.suppliers.reduce((a,s)=>a+s.items,0)+dbSnapshot.competitors.reduce((a,s)=>a+s.items,0)} ITEMS</span>}
+<button onClick={fetchDbSnapshot} disabled={dbSnapshotLoading} title="Re-check what's actually saved in the database" style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:dbSnapshotLoading?"default":"pointer",padding:0}}>{dbSnapshotLoading?"⟳":"↻"}</button>
 <div style={{flex:1}}/>
 {dbSaveMsg&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:dbSaveMsg.startsWith("✓")?B.green:B.red}}>{dbSaveMsg}</span>}
-<button onClick={saveToDB} disabled={dbSaving} style={{padding:"6px 14px",background:dbSaving?"#aaa":B.green,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:dbSaving?"not-allowed":"pointer",opacity:dbSaving?.7:1}}>
-  {dbSaving?"SAVING…":"SAVE TO DB"}
+<button onClick={saveToDB} disabled={dbSaving||!anyDirty} title={anyDirty?"":"Every list already matches what's in the database"} style={{padding:"6px 14px",background:dbSaving?"#aaa":anyDirty?B.green:B.border,color:anyDirty?"#fff":B.muted,border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:(dbSaving||!anyDirty)?"not-allowed":"pointer",opacity:dbSaving?.7:1}}>
+  {dbSaving?"SAVING…":anyDirty?"SAVE TO DB":"✓ ALL SYNCED"}
 </button>
 <button onClick={()=>setShowUpload(true)} style={{padding:"6px 14px",background:B.orange,color:"#fff",border:"none",borderRadius:5,fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ UPLOAD LIST</button>
 </div>
@@ -12481,9 +12518,10 @@ const lowItems=(pl.items||[]).filter(it=>it.cost>0&&it.price>0&&(it.price-it.cos
 return(
 <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("own");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.orange:"transparent"}`,background:selId===pl.id?`${B.orange}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.supplierName||pl.name}</div>
-<div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+<div style={{display:"flex",gap:6,alignItems:"center",marginTop:2,flexWrap:"wrap"}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
 {lowItems>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:"#C77800",background:"#FFF8E6",borderRadius:2,padding:"0 4px",letterSpacing:.3}}>{lowItems} LOW</span>}
+<DbSyncBadge pl={pl} sm/>
 </div>
 </div>
 );
@@ -12496,9 +12534,10 @@ return(
 {compLists.map(pl=>(
 <div key={pl.id} onClick={()=>{setSelId(pl.id);setTab("competitor");setSearchQ("");}} style={{padding:"7px 12px",cursor:"pointer",borderLeft:`3px solid ${selId===pl.id?B.blue:"transparent"}`,background:selId===pl.id?`${B.blue}08`:"transparent",borderBottom:`1px solid ${B.border}`}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pl.competitorName||pl.name}</div>
-<div style={{display:"flex",gap:6,alignItems:"center",marginTop:2}}>
+<div style={{display:"flex",gap:6,alignItems:"center",marginTop:2,flexWrap:"wrap"}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{(pl.items||[]).length} items</span>
 {pl.source&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.3}}>{pl.source.slice(0,10).toUpperCase()}</span>}
+<DbSyncBadge pl={pl} sm/>
 </div>
 </div>
 ))}
@@ -12526,6 +12565,7 @@ return(
 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 {selected.source&&<Pill v={selected.source} sc={B.blue} bc={B.blue}/>}
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(selected.items||[]).length} items · {new Date(selected.uploadedAt).toLocaleDateString()}</span>
+<DbSyncBadge pl={selected}/>
 </div>
 </div>
 <button onClick={()=>delList(selected.id)} style={{background:B.redBg,color:B.red,border:"none",borderRadius:5,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",flexShrink:0}}>DELETE</button>
@@ -12854,15 +12894,24 @@ if(!name.trim()){setError("Please enter a list name.");return;}
 if(type==="competitor"&&!competitorName.trim()){setError("Please enter the competitor name.");return;}
 const items=buildItems();
 if(items.length===0){setError("No items could be parsed.");return;}
+// A name match against an existing list is treated as updating that same
+// list in place (same id, and the same DB record once saved) rather than
+// creating a second, disconnected entry with the same name — re-uploading
+// a newer version of a supplier's catalog should never leave two copies
+// behind, one stale in the database.
 const dup=(existingLists||[]).find(pl=>pl.name.toLowerCase()===name.toLowerCase()&&pl.type===type);
-if(dup&&!window.confirm(`A list named "${name}" already exists. Continue?`)) return;
-onSave({id:mkId(),name:name.trim(),type,
+if(dup&&!window.confirm(`"${name}" already exists (${(dup.items||[]).length} items). This will UPDATE that existing list — including its database record once saved — with the ${items.length} items from this file, not create a second copy. Continue?`)) return;
+onSave({id:dup?.id||mkId(),name:name.trim(),type,
 supplierName:type==="own"?supplierName.trim():"",
 repName:type==="own"?repName.trim():"",
 repEmail:type==="own"?repEmail.trim():"",
 repPhone:type==="own"?repPhone.trim():"",
 competitorName:type==="competitor"?competitorName.trim():"",
 source:source.trim()||"Upload",notes:notes.trim(),
+// Carry the DB link forward so the next save updates the same row, but
+// drop the sync bookkeeping — this content hasn't been saved yet, so it
+// should show as out of sync until the user saves again.
+dbSupplierId:dup?.dbSupplierId||null,dbSyncedAt:null,dbItemCount:null,
 uploadedAt:Date.now(),items});
 };
 const inp={width:"100%",padding:"7px 10px",border:`1px solid ${B.border}`,borderRadius:5,fontSize:11,fontFamily:"'Lexend',sans-serif"};
