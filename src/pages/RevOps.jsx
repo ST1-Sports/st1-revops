@@ -12665,6 +12665,7 @@ const [mapping,setMapping]=useState({});
 const [loading,setLoading]=useState(false);
 const [loadMsg,setLoadMsg]=useState("");
 const [error,setError]=useState("");
+const [manualMode,setManualMode]=useState(false);
 const fileRef=useRef(null);
 const FIELDS=useMemo(()=>[
 {key:"name",    label:"Item Name",   required:true},
@@ -12703,23 +12704,17 @@ res.push(cur.trim());
 return res;
 });
 };
-const handleFile=async(f)=>{
-if(!f) return;
-setLoading(true);setError("");setLoadMsg("");
-const isPdf=f.name.toLowerCase().endsWith(".pdf");
-const isCsv=f.name.toLowerCase().endsWith(".csv");
-try{
-if(isPdf){
-setLoadMsg("Reading PDF...");
-const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
+// Shared AI-extraction path for PDFs (always) and CSV/XLSX (unless the user
+// picks "map manually instead") — one supplier list this often spans several
+// messy tabs with the real header row buried a few lines down, which is
+// exactly the kind of thing worth handing to the model instead of asking a
+// human to fix a column-mapping dropdown by hand.
+const runAiExtraction=async(contentBlocks)=>{
 setLoadMsg("Extracting data with AI...");
 const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 model:"claude-sonnet-4-6",max_tokens:16000,stream:true,
 system:"Return ONLY valid JSON, no markdown, no code fences.",
-messages:[{role:"user",content:[
-{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-{type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
-]}]
+messages:[{role:"user",content:contentBlocks}]
 })});
 if(!resp.ok){
 let e=`HTTP ${resp.status}`;
@@ -12748,7 +12743,7 @@ else if(ev.type==="error") throw new Error(ev.error?.message||ev.error?.type||"A
 }
 }
 let txt=accumulated.trim();
-if(!txt) throw new Error("AI returned empty response — the PDF may be too large or unsupported");
+if(!txt) throw new Error("AI returned empty response — the file may be too large or unsupported");
 txt=txt.replace(/^```(?:json)?\s*/i,"").replace(/\s*```\s*$/,"").trim();
 let parsed;
 try{
@@ -12771,11 +12766,45 @@ const items=(parsed.products||[]).map(p=>({
 id:mkId(),name:p.name||"",sku:p.sku||"",category:p.category||"",unit:p.unit||"each",
 cost:parseFloat(p.cost)||0,price:parseFloat(p.price)||0,map:parseFloat(p.map)||0,notes:p.notes||""
 }));
+if(!items.length) throw new Error("AI couldn't find any products in this file — try \"map columns manually instead\" below");
 setRawRows(items.map(it=>[it.name,it.sku,it.category,it.unit,it.cost,it.price,it.map,it.notes]));
 const syntheticHdrs=["name","sku","category","unit","cost","price","map","notes"];
 setHeaders(syntheticHdrs);
 setMapping({name:0,sku:1,category:2,unit:3,cost:4,price:5,map:6,notes:7});
 setStep(3);
+};
+const handleFile=async(f)=>{
+if(!f) return;
+setLoading(true);setError("");setLoadMsg("");
+const isPdf=f.name.toLowerCase().endsWith(".pdf");
+const isCsv=f.name.toLowerCase().endsWith(".csv");
+try{
+if(isPdf){
+setLoadMsg("Reading PDF...");
+const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
+await runAiExtraction([
+{type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
+{type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
+]);
+}else if(!manualMode){
+let sheetsText;
+if(isCsv){
+setLoadMsg("Reading CSV...");
+sheetsText=`=== ${f.name} ===\n${await f.text()}`;
+}else{
+setLoadMsg("Reading spreadsheet...");
+const XLSX=await import("xlsx");
+const buf=await toBuffer(f);
+const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
+sheetsText=wb.SheetNames.map(sn=>`=== Sheet: ${sn} ===\n${XLSX.utils.sheet_to_csv(wb.Sheets[sn])}`).join("\n\n");
+}
+const MAX_CHARS=180000;
+if(sheetsText.length>MAX_CHARS) sheetsText=sheetsText.slice(0,MAX_CHARS)+"\n\n[...truncated, file was larger than could be fully processed]";
+if(!name) setName(f.name.replace(/\.[^.]+$/,""));
+await runAiExtraction([
+{type:"text",text:sheetsText},
+{type:"text",text:"This is a raw export of one or more tabs from a supplier price list spreadsheet. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), columns can be in any order or use inconsistent names, and there may be multiple tabs that all need combining into one product list — if a tab's name looks like a category (e.g. a sport or product line) and there's no explicit category column, use the tab name as that item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract a clean, consolidated list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
+]);
 }else{
 let rows;
 if(isCsv){
@@ -12935,12 +12964,17 @@ style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:
 <>
 <div style={{fontSize:24,marginBottom:6,opacity:.5}}>📄</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:4}}>Drop file here or click to browse</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>.pdf (AI extracts automatically) · .csv · .xlsx · .xls</div>
-{rawRows&&<div style={{marginTop:8,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5}}>✓ {rawRows.length} ROWS LOADED — ADJUST MAPPING BELOW</div>}
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>.pdf · .csv · .xlsx · .xls — {manualMode?"you'll map columns yourself below":"AI reads it and figures out the columns, even messy multi-tab sheets"}</div>
+{rawRows&&manualMode&&<div style={{marginTop:8,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:.5}}>✓ {rawRows.length} ROWS LOADED — ADJUST MAPPING BELOW</div>}
 </>
 )}
 </div>
-{rawRows&&headers.length>0&&(
+<div style={{marginBottom:14,textAlign:"right"}}>
+<button onClick={()=>{setManualMode(m=>!m);setRawRows(null);setHeaders([]);setError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>
+{manualMode?"← Let AI extract it instead":"Trouble with AI extraction? Map columns manually instead"}
+</button>
+</div>
+{manualMode&&rawRows&&headers.length>0&&(
 <>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>COLUMN MAPPING</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
