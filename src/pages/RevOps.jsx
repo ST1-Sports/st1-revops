@@ -765,7 +765,7 @@ const syncContacts=async(force=false)=>{
 if(!force&&s.contactsLastSync&&Date.now()-s.contactsLastSync<CONTACT_SYNC_INTERVAL) return;
 const now=Date.now();
 const existingDeals=s.deals||[];
-let toAdd=[],toUpdate=[],dealRows=[],dealsAdded=0,dealsUpdated=0,fetchFailed=false,fetchErrMsg="";
+let toAdd=[],toUpdate=[],dealRows=[],allZoho=[],dealsAdded=0,dealsUpdated=0,fetchFailed=false,fetchErrMsg="";
 try {
 const [contactRows,leadRows,_dealRows]=await Promise.all([
 fetchAllPages("/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,Mailing_City,Mailing_State,Lead_Source"),
@@ -776,7 +776,7 @@ dealRows=_dealRows;
 const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
 const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
 const existingIds=new Set((s.contacts||[]).map(c=>c.id));
-const allZoho=[...contacts,...leads];
+allZoho=[...contacts,...leads];
 toAdd=allZoho.filter(c=>!existingIds.has(c.id));
 toUpdate=allZoho.filter(c=>existingIds.has(c.id));
 
@@ -805,7 +805,16 @@ console.error("CRM sync (Zoho fetch) failed:",e);
 // cluttering the CRM tab. Runs every sync, so this also sweeps the existing
 // backlog, not just newly-fetched records.
 const updMap=new Map(toUpdate.map(c=>[c.id,c]));
-const mergedExisting=(s.contacts||[]).map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
+// A zoho_c_*/zoho_l_* contact absent from a *successful* fresh pull was
+// deleted directly in Zoho — merging above only ever adds/updates, so
+// without this a deleted-in-Zoho record just sits in the local cache
+// forever (this cache is our own Postgres app_state, entirely separate
+// from Zoho — deleting there never touches it on its own).
+const liveZohoIds=new Set(allZoho.map(c=>c.id));
+const isZohoSourced=(c)=>(c.id||"").startsWith("zoho_c_")||(c.id||"").startsWith("zoho_l_");
+const survivingExisting=(s.contacts||[]).filter(c=>fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id));
+const removedCount=(s.contacts||[]).length-survivingExisting.length;
+const mergedExisting=survivingExisting.map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
 const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase,s.invoices||[]);
@@ -817,7 +826,7 @@ if(cold.length) movedToProspecting=await pushColdContactsToProspecting(cold);
 if(force){
 const discardNote=discard.length?` · ${discard.length} discarded (no email, unworkable)`:"";
 if(fetchFailed) toast(`Zoho fetch failed (${fetchErrMsg}) — cleaned up local cache anyway: ${movedToProspecting} cold contact(s) moved to Prospecting DB${discardNote}`,cold.length?"info":"error");
-else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}${discardNote}`, "success");
+else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated${removedCount?`, ${removedCount} removed (deleted in Zoho)`:""} · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}${discardNote}`, "success");
 }
 };
 crmSyncRef.current = syncContacts;
