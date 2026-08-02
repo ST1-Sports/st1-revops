@@ -140,20 +140,23 @@ export default function FlagshipStore() {
             {/* ── TOP TRAFFIC SOURCES (GA4) ── */}
             <Panel title="TOP TRAFFIC SOURCES" accent={B.blue}>
               {!ga4?.configured ? <NotConfigured what="Google Analytics" envVars={["GA4_PROPERTY_ID", "GOOGLE_ANALYTICS_CLIENT_ID", "GOOGLE_ANALYTICS_CLIENT_SECRET", "GOOGLE_ANALYTICS_REFRESH_TOKEN"]} /> :
-                ga4.topSources.length === 0 ? <div style={{ fontSize: 12, color: B.muted }}>No sessions in this range.</div> :
+                ga4.error ? <div style={{ fontSize: 12, color: B.red }}>{ga4.error}</div> :
+                (ga4.topSources || []).length === 0 ? <div style={{ fontSize: 12, color: B.muted }}>No sessions in this range.</div> :
                 ga4.topSources.map(s => <BarRow key={s.source} label={s.source} value={s.sessions} max={maxSource} color={B.blue} />)}
             </Panel>
 
             {/* ── TOP PRODUCTS SOLD (Shopify) ── */}
             <Panel title="TOP PRODUCTS SOLD" accent={B.green}>
               {!shopify?.configured ? <NotConfigured what="Shopify" envVars={["SHOPIFY_STORE_URL", "SHOPIFY_ACCESS_TOKEN"]} /> :
-                shopify.topProducts.length === 0 ? <div style={{ fontSize: 12, color: B.muted }}>No orders in this range.</div> :
+                shopify.error ? <div style={{ fontSize: 12, color: B.red }}>{shopify.error}</div> :
+                (shopify.topProducts || []).length === 0 ? <div style={{ fontSize: 12, color: B.muted }}>No orders in this range.</div> :
                 shopify.topProducts.map(p => <BarRow key={p.name} label={p.name} value={p.qty} max={maxProduct} color={B.green} />)}
             </Panel>
 
             {/* ── TOP ADD-TO-CART PRODUCTS (GA4 ecommerce) ── */}
             <Panel title="MOST ADDED TO CART" accent={B.orange} note="from GA4 ecommerce events">
               {!ga4?.configured ? <NotConfigured what="Google Analytics" envVars={["GA4_PROPERTY_ID"]} /> :
+                ga4.error ? <div style={{ fontSize: 12, color: B.red }}>{ga4.error}</div> :
                 (ga4.addToCartProducts || []).length === 0 ? <div style={{ fontSize: 12, color: B.muted }}>No add-to-cart events tracked in this range — check that Shopify's GA4 ecommerce tracking is enabled.</div> :
                 ga4.addToCartProducts.map(p => <BarRow key={p.item} label={p.item} value={p.adds} max={maxCartItem} color={B.orange} />)}
             </Panel>
