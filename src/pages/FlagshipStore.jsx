@@ -162,6 +162,51 @@ export default function FlagshipStore() {
             </Panel>
           </div>
 
+          {/* ── RECENT KLAVIYO SIGNUPS ── */}
+          {klaviyo?.configured && !klaviyo?.error && (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "16px 20px", marginTop: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: B.purple }}>RECENT SIGNUPS</div>
+                {klaviyo.metricUsed && <div style={{ fontSize: 11, color: B.muted }}>via "{klaviyo.metricUsed}"</div>}
+              </div>
+              {(klaviyo.signups || []).length === 0 ? (
+                <div style={{ fontSize: 12, color: B.muted }}>No signups in this range.</div>
+              ) : (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: B.muted, textTransform: "uppercase", fontSize: 10, letterSpacing: "0.05em" }}>
+                        <th style={{ padding: "6px 10px 6px 0", borderBottom: `1px solid ${B.border}` }}>Name</th>
+                        <th style={{ padding: "6px 10px", borderBottom: `1px solid ${B.border}` }}>Date</th>
+                        <th style={{ padding: "6px 10px", borderBottom: `1px solid ${B.border}` }}>Email</th>
+                        <th style={{ padding: "6px 10px", borderBottom: `1px solid ${B.border}` }}>Phone</th>
+                        <th style={{ padding: "6px 0 6px 10px", borderBottom: `1px solid ${B.border}` }}>Provided</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {klaviyo.signups.map((s, i) => {
+                        const both = s.email && s.phone;
+                        return (
+                          <tr key={i} style={{ borderBottom: `1px solid ${B.border}` }}>
+                            <td style={{ padding: "8px 10px 8px 0", color: B.text }}>{s.name}</td>
+                            <td style={{ padding: "8px 10px", color: B.muted, whiteSpace: "nowrap" }}>{s.date ? new Date(s.date).toLocaleDateString() : "—"}</td>
+                            <td style={{ padding: "8px 10px", color: B.text }}>{s.email || "—"}</td>
+                            <td style={{ padding: "8px 10px", color: B.text }}>{s.phone || "—"}</td>
+                            <td style={{ padding: "8px 0 8px 10px" }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, color: both ? B.purple : s.email ? B.blue : s.phone ? B.green : B.muted, background: both ? B.purpleBg : s.email ? B.blueBg : s.phone ? B.greenBg : B.surface, padding: "2px 8px", borderRadius: 10 }}>
+                                {both ? "BOTH" : s.email ? "EMAIL" : s.phone ? "PHONE" : "—"}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
           {(shopify?.error || ga4?.error || klaviyo?.error) && (
             <div style={{ marginTop: 16, background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 8, padding: "12px 16px", fontSize: 12, color: B.textMid, lineHeight: 1.7 }}>
               {shopify?.error && <div>Shopify: {shopify.error}</div>}

@@ -73,3 +73,24 @@ export async function metricCount(metricId, sinceISO, untilISO) {
   }
   return total
 }
+
+/** Individual signup events for a metric, newest first, with the profile's
+ * name/email/phone sideloaded — for a "who signed up and when" table, not
+ * just a count. Capped at `limit` (most recent) rather than paginating
+ * through everything, since this is for display, not aggregation. */
+export async function listMetricEvents(metricId, sinceISO, untilISO, limit = 50) {
+  const filter = `and(equals(metric_id,"${metricId}"),greater-or-equal(datetime,${sinceISO}),less-than(datetime,${untilISO}))`
+  const qs = new URLSearchParams({ filter, include: 'profile', sort: '-datetime', 'page[size]': String(Math.min(limit, 200)) })
+  const data = await klaviyoFetch(`/events/?${qs.toString()}`)
+  const profilesById = new Map((data?.included || []).filter(i => i.type === 'profile').map(p => [p.id, p]))
+  return (data?.data || []).slice(0, limit).map(ev => {
+    const profile = profilesById.get(ev.relationships?.profile?.data?.id)?.attributes || {}
+    const name = [profile.first_name, profile.last_name].filter(Boolean).join(' ') || profile.email || profile.phone_number || 'Unknown'
+    return {
+      name,
+      date:  ev.attributes?.datetime || null,
+      email: profile.email || null,
+      phone: profile.phone_number || null,
+    }
+  })
+}

@@ -14,7 +14,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { shopifyRequest, shopifyConfigured } from '../_lib/shopify.js'
-import { klaviyoConfigured, findMetricId, metricCount } from '../_lib/klaviyo.js'
+import { klaviyoConfigured, findMetricId, metricCount, listMetricEvents } from '../_lib/klaviyo.js'
 
 let _ga4Token = null, _ga4Expiry = 0
 function ga4Creds() {
@@ -119,9 +119,12 @@ async function loadGa4(startDate, endDate) {
 async function loadKlaviyo(sinceISO, untilISO) {
   if (!klaviyoConfigured()) return { configured: false }
   const metric = await findMetricId(['Filled Out Form', 'Subscribed to List'])
-  if (!metric) return { configured: true, formSubmissions: 0, metricUsed: null, note: 'No "Filled Out Form" or "Subscribed to List" metric found in this Klaviyo account yet' }
-  const formSubmissions = await metricCount(metric.id, sinceISO, untilISO)
-  return { configured: true, formSubmissions, metricUsed: metric.name }
+  if (!metric) return { configured: true, formSubmissions: 0, metricUsed: null, signups: [], note: 'No "Filled Out Form" or "Subscribed to List" metric found in this Klaviyo account yet' }
+  const [formSubmissions, signups] = await Promise.all([
+    metricCount(metric.id, sinceISO, untilISO),
+    listMetricEvents(metric.id, sinceISO, untilISO, 100),
+  ])
+  return { configured: true, formSubmissions, metricUsed: metric.name, signups }
 }
 
 export default async function handler(req, res) {
