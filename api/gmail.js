@@ -13,6 +13,7 @@
  */
 
 import { prisma } from './_lib/prisma.js';
+import { classifyEmailIntent } from './_lib/brad-shared.js';
 
 export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
@@ -117,6 +118,20 @@ export default async function handler(req, res) {
     } catch(e) {
       return res.json({ found: false, email: null, error: e.message });
     }
+  }
+
+  // ── CLASSIFY-INTENT: does a matched inbox message actually show interest,
+  //    or is it an out-of-office/bounce/unsubscribe that just happens to be
+  //    from the right address? No Gmail token needed — just the LLM call
+  //    checkReplies (RevOps.jsx) already uses to filter matches before
+  //    crediting a contact's score with a "replied" signal.
+  if (action === "classify-intent") {
+    const { items } = req.body || {};
+    if (!Array.isArray(items)) return res.status(400).json({ error: "items array required" });
+    const results = await Promise.all(
+      items.slice(0, 30).map(it => classifyEmailIntent(it.subject || "", it.snippet || ""))
+    );
+    return res.json({ results });
   }
 
   try {

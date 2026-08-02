@@ -8690,15 +8690,29 @@ const query=activeEmails.slice(0,15).map(e=>`from:${e}`).join(" OR ");
 const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
 body:JSON.stringify({action:"list",query,maxResults:50})});
 const data=await r.json();
-const repliedSet=new Set((data.messages||[]).map(m=>{
+// One message per address — "from:" can surface several (e.g. an
+// auto-reply thread); the first match is enough to judge intent from.
+const byEmail=new Map();
+(data.messages||[]).forEach(m=>{
 const match=m.from?.match(/<([^>]+)>/)||m.from?.match(/([^\s]+@[^\s]+)/);
-return match?.[1]?.toLowerCase();
-}).filter(Boolean));
-let found=0;
-activeEnrolls.forEach(e=>{
-const c=contactMap[e.contactId];
-if(c?.email&&repliedSet.has(c.email.toLowerCase())){markReplied(campId,e.contactId);found++;}
+const addr=match?.[1]?.toLowerCase();
+if(addr&&!byEmail.has(addr))byEmail.set(addr,m);
 });
+const candidates=activeEnrolls.map(e=>({e,c:contactMap[e.contactId]})).filter(({c})=>c?.email&&byEmail.has(c.email.toLowerCase()));
+let found=0;
+if(candidates.length){
+// An address showing up in the inbox isn't itself intent — an
+// out-of-office reply, a bounce, or an unsubscribe matches "from:" just
+// as well as a genuine one, and this used to credit all of them the same
+// +50 "replied" score that pushes a contact toward a real Zoho record.
+// Classify before crediting it, same INTENT/PASS check Brad's inbound-
+// email pipeline already uses for exactly this reason.
+const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||""};});
+const cls=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify-intent",items})}).then(r=>r.json()).catch(()=>({results:[]}));
+candidates.forEach(({e},i)=>{
+if((cls.results||[])[i]==="INTENT"){markReplied(campId,e.contactId);found++;}
+});
+}
 toast(found>0?`Found ${found} repl${found!==1?"ies":"y"}!`:"No new replies detected",found>0?"success":"info");
 }catch(err){toast("Reply check failed: "+err.message,"error");}
 setCheckingReplies(false);
