@@ -435,6 +435,7 @@ case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r
 case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
 case "SET_CONTACTS":      return {...prev, contacts:payload};
 case "SET_DEALS":         return {...prev, deals:payload};
+case "REMOVE_DEALS":      return {...prev, deals:(prev.deals||[]).filter(d=>!payload.includes(d.id))};
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
 // One-time reset after the out-of-office/bounce auto-reply scoring bug —
@@ -805,6 +806,19 @@ fetchFailed=true; fetchErrMsg=e.message;
 console.error("CRM sync (Zoho fetch) failed:",e);
 }
 
+// A local Deal whose zohoId no longer shows up in a *successful* fresh
+// pull was deleted directly in Zoho (including by the wipe-and-rebuild
+// invoice reset) — same stale-cache problem contacts had, fixed the same
+// way: only ever adding/updating a Deal here left a deleted one as a
+// permanent zombie otherwise.
+let dealsRemoved=0;
+if(!fetchFailed){
+const liveDealIds=new Set(dealRows.map(zd=>zd.id));
+const deadDealIds=existingDeals.filter(d=>d.zohoId&&!liveDealIds.has(d.zohoId)).map(d=>d.id);
+dealsRemoved=deadDealIds.length;
+if(dealsRemoved) dispatch("REMOVE_DEALS",deadDealIds);
+}
+
 // Local cold-contact sweep — runs whether or not the Zoho fetch above
 // succeeded, since it only needs what's already cached locally: merge in
 // anything freshly fetched, then split off any contact (any source, except
@@ -834,7 +848,7 @@ if(cold.length) movedToProspecting=await pushColdContactsToProspecting(cold);
 if(force){
 const discardNote=discard.length?` · ${discard.length} discarded (no email, unworkable)`:"";
 if(fetchFailed) toast(`Zoho fetch failed (${fetchErrMsg}) — cleaned up local cache anyway: ${movedToProspecting} cold contact(s) moved to Prospecting DB${discardNote}`,cold.length?"info":"error");
-else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated${removedCount?`, ${removedCount} removed (deleted in Zoho)`:""} · ${dealsAdded} deals added, ${dealsUpdated} updated${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}${discardNote}`, "success");
+else toast(`Zoho CRM: ${toAdd.length} contacts added, ${toUpdate.length} updated${removedCount?`, ${removedCount} removed (deleted in Zoho)`:""} · ${dealsAdded} deals added, ${dealsUpdated} updated${dealsRemoved?`, ${dealsRemoved} removed (deleted in Zoho)`:""}${cold.length?` · ${movedToProspecting} cold contact(s) moved to Prospecting DB (no deal/reply yet)`:""}${discardNote}`, "success");
 }
 };
 crmSyncRef.current = syncContacts;
@@ -3197,6 +3211,27 @@ toast(`Scores reset: ${n} contact(s) here, ${d.reset||0} in the prospecting data
 }catch(e){toast(`Local scores reset — prospecting DB reset failed: ${e.message}`,"info");}
 setResettingScores(false);
 };
+const [rebuildingDeals,setRebuildingDeals]=useState(false);
+const rebuildDealsFromInvoices=async()=>{
+setRebuildingDeals(true);
+let preview;
+try{
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dryRun:true})});
+preview=await r.json();
+}catch(e){toast(`Couldn't check invoices: ${e.message}`,"error");setRebuildingDeals(false);return;}
+if(!preview?.ok){toast(preview?.error||"Couldn't check invoices","error");setRebuildingDeals(false);return;}
+if(!window.confirm(`This deletes ALL ${preview.existingDeals} current Deal(s) in Zoho CRM — including any in-progress ones not yet invoiced — and creates exactly ${preview.invoicesUsable} new Deal(s), one per real invoice (${preview.invoicesSkipped} draft/void invoice(s) skipped). This cannot be undone. Continue?`))
+{setRebuildingDeals(false);return;}
+try{
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+const d=await r.json();
+if(!d.ok){toast(d.error||"Rebuild failed","error");setRebuildingDeals(false);return;}
+dispatch("SET_DEALS",[]);
+if(crmSyncRef?.current)await crmSyncRef.current(true);
+toast(`Deleted ${d.dealsDeleted} old deal(s), created ${d.dealsCreated} from invoices${d.errors?.length?` · ${d.errors.length} error(s), first: ${d.errors[0]}`:""}`,d.errors?.length?"info":"success");
+}catch(e){toast(`Rebuild error: ${e.message}`,"error");}
+setRebuildingDeals(false);
+};
 const [search,setSearch]=useState("");
 const [filter,setFilter]=useState("all");
 const [selId,setSelId]=useState(null);
@@ -3268,12 +3303,14 @@ const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
-let backendLinked=0,backendPushed=0,backendLeadsPushed=0,noContactAccounts=0;
+let backendLinked=0,backendPushed=0,backendLeadsPushed=0,noContactAccounts=0,backendBooksContacts=0;
 const backendErrors=[];
 try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
 backendLinked=syncRes?.contactsLinked||0;
+backendBooksContacts=syncRes?.contactsFromBooks||0;
 noContactAccounts=(syncRes?.accountsWithNoContacts||[]).length;
+backendErrors.push(...(syncRes?.errors||[]));
 // zoho-align-accounts only processes `limit` qualifying accounts per call
 // (so any single run stays fast) — keep re-triggering it until it reports
 // nothing left, instead of silently leaving most qualifying accounts at
@@ -3326,7 +3363,7 @@ blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,c
 }
 if(!toFix.length){
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere in our system — those need a real person added manually, not matched`:"";
-toast((backendLinked||backendPushed||backendLeadsPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed as Contacts (invoiced customers), ${backendLeadsPushed} pushed as Leads (engaged, not yet a customer) — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
+toast((backendBooksContacts||backendLinked||backendPushed||backendLeadsPushed?`${backendBooksContacts} contact${backendBooksContacts!==1?"s":""} pulled from Zoho Books, ${backendLinked} linked from our database, ${backendPushed} pushed as Contacts (invoiced customers), ${backendLeadsPushed} pushed as Leads (engaged, not yet a customer) — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
 setBackfillingOrgs(false);refreshAcctStatus();return;
 }
 for(const {contact,school,state,city}of toFix){
@@ -3344,7 +3381,7 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere — need a real person added manually`:"";
-toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed as Contacts (invoiced), ${backendLeadsPushed} pushed as Leads`+gapNote,"success");
+toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendBooksContacts} pulled from Zoho Books, ${backendLinked} linked from our database, ${backendPushed} pushed as Contacts (invoiced), ${backendLeadsPushed} pushed as Leads`+gapNote,"success");
 setBackfillingOrgs(false);
 refreshAcctStatus();
 };
@@ -3599,6 +3636,7 @@ return(
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
 <button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
 <button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
+<button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Deletes every Deal in Zoho CRM and recreates exactly one Deal per real (non-draft/void) Zoho Books invoice — a Deal should only exist because of a real invoice" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
 </div>
 {showBreakdown&&(
 <div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
@@ -3627,7 +3665,7 @@ return(
 </div>
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="accounts"&&(
-<button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Never creates an account from cold prospects. Only for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho) — pulls in other contacts at the same org (e.g. the AD, other coaches) from our database so the whole staff shows up under that account." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL TEAMMATES INTO QUALIFYING ACCOUNTS"}</button>
+<button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Pulls every Zoho Books customer in as a real Account, plus their actual Contact Persons straight from Books — then, for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho), also pulls in other contacts at the same org from our database. Never creates an account from cold prospects." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL FROM ZOHO BOOKS + MATCH ACCOUNTS"}</button>
 )}
 {leftMode==="accounts"&&(
 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>

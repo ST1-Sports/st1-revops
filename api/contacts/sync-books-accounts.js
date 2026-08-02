@@ -16,20 +16,30 @@
  *      and links it — this is the "map the contacts into the accounts"
  *      step, run from the account side so it also catches contacts that
  *      existed before their account did.
- *   3. Reports which invoiced accounts still have ZERO linked contacts —
- *      that's the direct answer to "do we actually have contacts for
- *      these" — those are the accounts to go find staff for.
+ *   3. Pulls that customer's actual Contact Persons directly from Zoho
+ *      Books (separate from anything already in our SalesContact pool —
+ *      an AP/billing contact Books has on file that we never captured any
+ *      other way) and upserts them as real SalesContact rows linked to
+ *      the account. This is the actual "pull contacts from Zoho Books"
+ *      step — step 2 only links contacts that were already in our pool
+ *      some other way; this is what makes a Books-only contact show up
+ *      at all.
+ *   4. Reports which invoiced accounts still have ZERO linked contacts
+ *      even after checking Books directly — that's the direct answer to
+ *      "do we actually have contacts for these" — those are the accounts
+ *      to go find staff for.
  *
  * Idempotent — safe to re-run any time new invoices show up.
  *
  * Body: { dryRun?: boolean }
  * Returns: { accountsFromBooks, accountsCreated, accountsUpdated,
- *            contactsLinked, accountsWithNoContacts: [{name,state}] }
+ *            contactsLinked, contactsFromBooks, accountsWithNoContacts: [{name,state}] }
  */
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { accountDedupKey, normalizeAccountName } from '../_lib/accountUtils.js'
+import { booksGet }     from '../_lib/zoho-books.js'
 
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
 
@@ -65,7 +75,7 @@ export default async function handler(req, res) {
 
   // Dedup Books customers by name (+ best-effort state from the billing
   // address, when Books provides one on the invoice — it doesn't always).
-  const customers = new Map() // dedupKey -> { name, state, city }
+  const customers = new Map() // dedupKey -> { name, state, city, customerId }
   for (const inv of invoices) {
     const name = (inv.customer_name || '').trim()
     if (!name) continue
@@ -73,7 +83,7 @@ export default async function handler(req, res) {
     const city  = inv.billing_address?.city  || inv.shipping_address?.city  || ''
     const key = accountDedupKey(name, state)
     if (!key) continue
-    if (!customers.has(key)) customers.set(key, { name, state, city })
+    if (!customers.has(key)) customers.set(key, { name, state, city, customerId: inv.customer_id || null })
   }
 
   if (dryRun) {
@@ -96,8 +106,9 @@ export default async function handler(req, res) {
     if (nk) { if (!byNameOnly.has(nk)) byNameOnly.set(nk, []); byNameOnly.get(nk).push(c) }
   }
 
-  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0
+  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0
   const accountsWithNoContacts = []
+  const errors = []
 
   for (const [dedupKey, cust] of customers) {
     const existing = await prisma.account.findUnique({ where: { normalizedName: dedupKey } })
@@ -121,13 +132,48 @@ export default async function handler(req, res) {
       contactsLinked += result.count
     }
 
+    // Pull this customer's actual Contact Persons from Zoho Books — the
+    // step that was missing entirely before. A Books contact person has no
+    // separate "intent" signal of their own (they were never scraped or
+    // emailed) — being on file for an already-invoiced customer's account
+    // is itself the qualifying signal, same bar as any other contact on a
+    // real customer's account.
+    if (cust.customerId) {
+      try {
+        const cpData = await booksGet(`/contacts/${cust.customerId}/contactpersons`)
+        for (const p of (cpData.contact_persons || [])) {
+          const email = (p.email || '').trim().toLowerCase()
+          if (!email) continue
+          const firstName = p.first_name || ''
+          const lastName  = p.last_name || ''
+          const phone     = p.phone || p.mobile || ''
+          const result = await prisma.salesContact.upsert({
+            where: { email },
+            create: {
+              email, firstName, lastName, phone,
+              companyName: cust.name, state: cust.state || null, city: cust.city || null,
+              accountId: account.id, source: 'zoho-books',
+            },
+            update: {
+              accountId: account.id,
+              firstName: firstName || undefined, lastName: lastName || undefined,
+              phone: phone || undefined,
+            },
+          })
+          if (result) contactsFromBooks++
+        }
+      } catch (err) {
+        errors.push(`${cust.name}: Books contact persons — ${err.message}`)
+      }
+    }
+
     const totalContacts = await prisma.salesContact.count({ where: { accountId: account.id } })
     if (totalContacts === 0) accountsWithNoContacts.push({ name: cust.name, state: cust.state || null })
   }
 
   return res.json({
     accountsFromBooks: customers.size,
-    accountsCreated, accountsUpdated, contactsLinked,
-    accountsWithNoContacts,
+    accountsCreated, accountsUpdated, contactsLinked, contactsFromBooks,
+    accountsWithNoContacts, errors,
   })
 }
