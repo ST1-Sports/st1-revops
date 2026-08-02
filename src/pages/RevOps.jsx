@@ -3188,6 +3188,11 @@ const [editingAccountName,setEditingAccountName]=useState(false);
 const [accountNameInput,setAccountNameInput]=useState("");
 const [savingAccountName,setSavingAccountName]=useState(false);
 const [backfillingOrgs,setBackfillingOrgs]=useState(false);
+const [acctStatus,setAcctStatus]=useState(null);
+const [loadingAcctStatus,setLoadingAcctStatus]=useState(false);
+const [showNewAccounts,setShowNewAccounts]=useState(false);
+const [showUnassigned,setShowUnassigned]=useState(false);
+const [assigningContactId,setAssigningContactId]=useState(null);
 const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
@@ -3281,7 +3286,7 @@ blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,c
 if(!toFix.length){
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere in our system — those need a real person added manually, not matched`:"";
 toast((backendLinked||backendPushed||backendLeadsPushed?`${backendLinked} contact${backendLinked!==1?"s":""} linked from Books, ${backendPushed} pushed as Contacts (invoiced customers), ${backendLeadsPushed} pushed as Leads (engaged, not yet a customer) — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
-setBackfillingOrgs(false);return;
+setBackfillingOrgs(false);refreshAcctStatus();return;
 }
 for(const {contact,school,state,city}of toFix){
 dispatch("UPDATE_CONTACT",{id:contact.id,school,...(state?{state}:{}),...(city?{city}:{})});
@@ -3300,6 +3305,35 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere — need a real person added manually`:"";
 toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendLinked} linked from Books, ${backendPushed} pushed as Contacts (invoiced), ${backendLeadsPushed} pushed as Leads`+gapNote,"success");
 setBackfillingOrgs(false);
+refreshAcctStatus();
+};
+// Real Zoho Accounts count + who's new + which already-real Contacts match an
+// Account by name but never got linked (the visibility this backfill button
+// used to have none of — it just ran, then a toast said how many, with no way
+// to see the actual accounts or fix a leftover unlinked match by hand).
+const refreshAcctStatus=useCallback(async()=>{
+setLoadingAcctStatus(true);
+try{
+const r=await fetch("/api/crm/accounts-status");
+const d=await r.json();
+setAcctStatus(d.ok?d:null);
+}catch{setAcctStatus(null);}
+setLoadingAcctStatus(false);
+},[]);
+useEffect(()=>{
+if(leftMode==="accounts"&&!acctStatus&&!loadingAcctStatus)refreshAcctStatus();
+},[leftMode]);
+const assignContactToAccount=async(contactId,accountId)=>{
+setAssigningContactId(contactId);
+try{
+const r=await fetch("/api/crm/assign-account",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId,accountId})});
+const d=await r.json();
+if(d.ok){
+toast("Linked to account","success");
+setAcctStatus(prev=>prev?{...prev,unassignedMatches:prev.unassignedMatches.filter(m=>m.contactId!==contactId)}:prev);
+}else toast(d.error||"Assign failed","error");
+}catch(e){toast(`Assign error: ${e.message}`,"error");}
+setAssigningContactId(null);
 };
 const loadBooksContacts=async(customerId)=>{
 if(!customerId||booksContactsByCustomer[customerId])return;
@@ -3551,6 +3585,50 @@ return(
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="accounts"&&(
 <button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Never creates an account from cold prospects. Only for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho) — pulls in other contacts at the same org (e.g. the AD, other coaches) from our database so the whole staff shows up under that account." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL TEAMMATES INTO QUALIFYING ACCOUNTS"}</button>
+)}
+{leftMode==="accounts"&&(
+<div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,color:B.muted}}>ZOHO ACCOUNTS</span>
+<button onClick={refreshAcctStatus} disabled={loadingAcctStatus} title="Re-check real Zoho Account counts + unlinked matches" style={{background:"none",border:"none",fontSize:10,color:loadingAcctStatus?B.muted:B.purple,cursor:loadingAcctStatus?"default":"pointer"}}>{loadingAcctStatus?"…":"↻"}</button>
+</div>
+{!acctStatus&&!loadingAcctStatus&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>Not loaded yet</div>}
+{loadingAcctStatus&&!acctStatus&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>Checking Zoho…</div>}
+{acctStatus&&(<>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.text,marginTop:3}}>{acctStatus.totalAccounts.toLocaleString()}<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,fontWeight:400}}> accounts in Zoho</span></div>
+{acctStatus.newAccounts.length>0&&(
+<div style={{marginTop:4}}>
+<button onClick={()=>setShowNewAccounts(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.green,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{acctStatus.newAccounts.length} new in the last week — {showNewAccounts?"hide":"show"}</button>
+{showNewAccounts&&(
+<div style={{marginTop:4,maxHeight:160,overflowY:"auto"}}>
+{acctStatus.newAccounts.map(a=>(
+<div key={a.id} style={{padding:"3px 0",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{a.name||"(unnamed)"}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted}}>{[a.city,a.state].filter(Boolean).join(", ")}{a.createdTime?` · ${new Date(a.createdTime).toLocaleDateString()}`:""}</div>
+</div>
+))}
+</div>
+)}
+</div>
+)}
+{acctStatus.unassignedMatches.length>0&&(
+<div style={{marginTop:5}}>
+<button onClick={()=>setShowUnassigned(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.orange,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚠ {acctStatus.unassignedMatches.length} contact{acctStatus.unassignedMatches.length!==1?"s":""} match an account but aren't linked — {showUnassigned?"hide":"show"}</button>
+{showUnassigned&&(
+<div style={{marginTop:4,maxHeight:220,overflowY:"auto"}}>
+{acctStatus.unassignedMatches.map(m=>(
+<div key={m.contactId} style={{padding:"5px 0",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{m.name}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:8,color:B.muted}}>{m.companyName} → matches <b>{m.matchedAccountName}</b></div>
+<button onClick={()=>assignContactToAccount(m.contactId,m.matchedAccountId)} disabled={assigningContactId===m.contactId} style={{marginTop:2,background:"none",border:`1px solid ${assigningContactId===m.contactId?B.border:B.orange}`,color:assigningContactId===m.contactId?B.muted:B.orange,borderRadius:3,padding:"2px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:assigningContactId===m.contactId?"default":"pointer"}}>{assigningContactId===m.contactId?"LINKING…":"ASSIGN TO ACCOUNT"}</button>
+</div>
+))}
+</div>
+)}
+</div>
+)}
+</>)}
+</div>
 )}
 {leftMode==="contacts"&&(
 <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
