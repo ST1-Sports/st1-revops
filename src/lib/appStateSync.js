@@ -21,10 +21,12 @@
 export const APP_STATE_KEY = 'st1_revops_v2'
 
 // Mirrors RevOps.jsx's useStore() exactly: currentUserId is local-session
-// only; contacts and agentHistory are intentionally excluded from server
-// sync (contacts is a re-pullable Zoho CRM cache, not a durable record —
-// real durable contacts live in SalesContact via /api/contacts/*).
-const EXCLUDE_ON_SYNC = new Set(['currentUserId', 'contacts', 'agentHistory'])
+// only, and agentHistory is capped/excluded to keep payloads small. contacts
+// used to be excluded too (kept localStorage-only, on the theory that Zoho
+// CRM was contacts' real source of truth) — but that just meant a contact
+// deleted in Zoho, or a score earned in one browser, never showed up
+// anywhere else. It's a normal synced field now, same as deals/invoices.
+const EXCLUDE_ON_SYNC = new Set(['currentUserId', 'agentHistory'])
 
 export function readAppState() {
   try { return JSON.parse(localStorage.getItem(APP_STATE_KEY) || '{}') } catch { return {} }

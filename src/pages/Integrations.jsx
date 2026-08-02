@@ -167,11 +167,7 @@ export default function IntegrationsHub() {
   // Write contacts or deals into the shared RevOps localStorage store, then
   // push to /api/state ourselves — Integrations is a standalone route, so
   // without this, pulled CRM data only reached the database if the same
-  // browser later happened to load the main RevOps dashboard. (Note:
-  // "contacts" itself is intentionally excluded from /api/state sync — see
-  // appStateSync.js — because Zoho CRM is contacts' actual source of truth;
-  // pullCRMContacts below separately persists contacts durably via
-  // /api/contacts/import into SalesContact.)
+  // browser later happened to load the main RevOps dashboard.
   function pushToRevOps(key, items) {
     const added = pushItemsToAppState(key, items);
     if (added) pushAppStateToServer();
@@ -486,12 +482,11 @@ export default function IntegrationsHub() {
       setCrmSyncResult(prev=>({...(prev||{}), contacts:all.length, contactsAdded:added}));
       addLog(`✓ Pulled ${contacts.length} contacts + ${leads.length} leads — ${added} new added to RevOps`,"success");
 
-      // The RevOps localStorage copy above is just a fast local cache for
-      // this session's UI (contacts are deliberately excluded from
-      // /api/state sync — Zoho CRM is their real source of truth, not this
-      // blob). Persist them durably into SalesContact via the same import
-      // pipeline the cold-prospect-pool CSV upload uses, so a pull from
-      // this route actually leaves the browser.
+      // pushToRevOps above already syncs this to /api/state (shared across
+      // devices), but SalesContact is still the durable record prospecting
+      // features (scoring, enrichment, account-matching) actually query —
+      // persist there too via the same import pipeline the cold-prospect-
+      // pool CSV upload uses.
       try {
         const importRes = await fetch("/api/contacts/import", {
           method: "POST", headers: {"Content-Type":"application/json"},

@@ -208,20 +208,25 @@ return fetch("/api/state")
 .then(r => r.json())
 .then(d => {
 if (d.state && typeof d.state === "object") {
-const {contacts: _sc, agentHistory: _sah, ...serverClean} = d.state;
+// contacts used to be excluded here — a per-browser localStorage-only
+// cache of Zoho CRM, never durable and never shared across devices,
+// which is exactly why a contact deleted in Zoho (or a score earned on
+// one browser) could silently disappear or fail to show up anywhere
+// else. It's a normal synced field now, same as deals/invoices.
+const {agentHistory: _sah, ...serverClean} = d.state;
 setRaw(prev => {
 const merged = mergeServerState(prev, serverClean);
 setTimeout(() => {
 try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
 }, 0);
-const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = merged;
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = merged;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return merged;
 });
 } else {
 setRaw(prev => {
-const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = prev;
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = prev;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return prev;
@@ -248,7 +253,7 @@ else doSave();
 }, 300);
 if (serverTimer.current) clearTimeout(serverTimer.current);
 serverTimer.current = setTimeout(() => {
-const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 }, 2500);
@@ -432,6 +437,9 @@ case "SET_CONTACTS":      return {...prev, contacts:payload};
 case "SET_DEALS":         return {...prev, deals:payload};
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
+// One-time reset after the out-of-office/bounce auto-reply scoring bug —
+// every contact's engagement signal starts clean again, not just future ones.
+case "RESET_ALL_SCORES":   return {...prev, contacts:(prev.contacts||[]).map(c=>({...c,score:0,activity:[],outreachStatus:"new"}))};
 case "SCORE_CONTACT": {
 const {contactId,type,note,campaignId} = payload;
 const pts=({enrolled:5,sent:15,opened:10,clicked:25,replied:50,meeting:75,deal:100})[type]||5;
@@ -3176,6 +3184,19 @@ setCrmSyncing(true);
 await crmSyncRef.current(true);
 setCrmSyncing(false);
 };
+const [resettingScores,setResettingScores]=useState(false);
+const resetAllScores=async()=>{
+const n=(s.contacts||[]).filter(c=>(c.score||0)>0).length;
+if(!window.confirm(`Reset engagement score to 0 for all ${n} contact(s) here, plus every prospecting contact in the database? This clears activity history (sent/opened/clicked/replied) — cannot be undone.`))return;
+setResettingScores(true);
+dispatch("RESET_ALL_SCORES");
+try{
+const r=await fetch("/api/contacts/reset-scores",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+const d=await r.json();
+toast(`Scores reset: ${n} contact(s) here, ${d.reset||0} in the prospecting database`,"success");
+}catch(e){toast(`Local scores reset — prospecting DB reset failed: ${e.message}`,"info");}
+setResettingScores(false);
+};
 const [search,setSearch]=useState("");
 const [filter,setFilter]=useState("all");
 const [selId,setSelId]=useState(null);
@@ -3577,6 +3598,7 @@ return(
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
 <button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
+<button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
 </div>
 {showBreakdown&&(
 <div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
