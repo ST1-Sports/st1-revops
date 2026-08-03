@@ -418,18 +418,22 @@ Extract every product row. If a column is not present use null. cost should be t
         }], "", 8000);
 
       } else if(ext === "xlsx" || ext === "xls") {
-        // ── Excel: parse with SheetJS, convert first sheet to CSV text ──────
+        // ── Excel: parse EVERY sheet with SheetJS, convert each to CSV text ──
+        // (used to only read wb.SheetNames[0] — a multi-tab supplier catalog
+        // silently lost every tab after the first)
         addLog("Parsing Excel file...");
         const buf = await toBuffer(file);
         const XLSX = await import("xlsx");
         const wb  = XLSX.read(buf, {type:"array"});
-        const ws  = wb.Sheets[wb.SheetNames[0]];
-        const csv = XLSX.utils.sheet_to_csv(ws);
-        const rows = csv.split("\n").filter(l=>l.trim()).slice(0,150); // cap rows for context
-        addLog(`Loaded ${rows.length} rows from sheet "${wb.SheetNames[0]}", asking Claude to parse...`);
+        const sheetsText = wb.SheetNames.map(sn => {
+          const csv = XLSX.utils.sheet_to_csv(wb.Sheets[sn]);
+          const rows = csv.split("\n").filter(l=>l.trim()).slice(0,150); // cap rows per tab for context
+          return rows.length ? `=== Sheet: ${sn} ===\n${rows.join("\n")}` : null;
+        }).filter(Boolean).join("\n\n");
+        addLog(`Loaded ${wb.SheetNames.length} tab${wb.SheetNames.length!==1?"s":""}, asking Claude to parse...`);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`This is a supplier price list exported from Excel as CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
+          content:`This is a supplier price list exported from Excel as CSV, one or more tabs.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${sheetsText}\n\nExtract ALL products from every tab shown above. If a tab has no explicit category column and its name looks like a category (e.g. a sport or product line), use the tab name as that item's category. Return JSON:
 {
   "supplierName": "supplier/manufacturer name",
   "supplierCategory": "sport category",
@@ -440,7 +444,7 @@ Extract every product row. If a column is not present use null. cost should be t
   ]
 }
 cost = dealer/wholesale price. Skip blank rows and header rows.`
-        }], "", 6000);
+        }], "", 8000); // bumped from 6000 — now covers every tab, not just one
 
       } else {
         // ── CSV: read as text, same approach ────────────────────────────────

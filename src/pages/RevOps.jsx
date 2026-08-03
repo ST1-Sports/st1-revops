@@ -13017,7 +13017,15 @@ return res;
 // messy tabs with the real header row buried a few lines down, which is
 // exactly the kind of thing worth handing to the model instead of asking a
 // human to fix a column-mapping dropdown by hand.
-const runAiExtraction=async(contentBlocks)=>{
+// One AI call over one set of content blocks — returns the parsed JSON,
+// no state writes. Kept separate from runAiExtraction below so a multi-tab
+// spreadsheet can call this once per tab: max_tokens is a per-call output
+// budget, so combining every tab into a single call means a large early
+// tab can silently use up the whole budget and crowd out the ones after
+// it — the AI just stops producing products partway through, and the
+// JSON-repair logic salvages whatever came through as if it were the
+// whole file, with nothing telling you a tab got dropped.
+const extractFromContent=async(contentBlocks)=>{
 setLoadMsg("Extracting data with AI...");
 const resp=await fetch("/api/claude",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 model:"claude-sonnet-4-6",max_tokens:16000,stream:true,
@@ -13065,12 +13073,33 @@ const openBraces=(txt.match(/\{/g)||[]).length-(txt.match(/\}/g)||[]).length;
 txt+="]".repeat(Math.max(0,openBrackets))+"}".repeat(Math.max(0,openBraces));
 parsed=JSON.parse(txt);
 }
-if(!name&&parsed.supplierName) setName(parsed.supplierName);
-if(!supplierName&&parsed.supplierName) setSupplierName(parsed.supplierName);
-if(!repName&&parsed.repName) setRepName(parsed.repName||"");
-if(!repEmail&&parsed.repEmail) setRepEmail(parsed.repEmail||"");
-if(!repPhone&&parsed.repPhone) setRepPhone(parsed.repPhone||"");
-const items=(parsed.products||[]).map(p=>({
+return parsed;
+};
+// jobs = array of content-block arrays, one per tab/document. Each runs as
+// its own AI call (own output budget), then all their products merge into
+// one list — a handful at a time so a spreadsheet with many tabs doesn't
+// fire dozens of simultaneous Claude calls at once.
+const runAiExtraction=async(jobs)=>{
+const CONCURRENCY=4;
+const results=[];
+for(let i=0;i<jobs.length;i+=CONCURRENCY){
+const batch=jobs.slice(i,i+CONCURRENCY);
+results.push(...await Promise.all(batch.map(job=>extractFromContent(job))));
+}
+let allProducts=[],foundSupplier=null,foundRep=null,foundRepEmail=null,foundRepPhone=null;
+for(const parsed of results){
+if(parsed?.supplierName&&!foundSupplier) foundSupplier=parsed.supplierName;
+if(parsed?.repName&&!foundRep) foundRep=parsed.repName;
+if(parsed?.repEmail&&!foundRepEmail) foundRepEmail=parsed.repEmail;
+if(parsed?.repPhone&&!foundRepPhone) foundRepPhone=parsed.repPhone;
+allProducts=allProducts.concat(parsed?.products||[]);
+}
+if(!name&&foundSupplier) setName(foundSupplier);
+if(!supplierName&&foundSupplier) setSupplierName(foundSupplier);
+if(!repName&&foundRep) setRepName(foundRep);
+if(!repEmail&&foundRepEmail) setRepEmail(foundRepEmail);
+if(!repPhone&&foundRepPhone) setRepPhone(foundRepPhone);
+const items=allProducts.map(p=>({
 id:mkId(),name:p.name||"",sku:p.sku||"",category:p.category||"",unit:p.unit||"each",
 cost:parseFloat(p.cost)||0,price:parseFloat(p.price)||0,map:parseFloat(p.map)||0,notes:p.notes||""
 }));
@@ -13090,29 +13119,37 @@ try{
 if(isPdf){
 setLoadMsg("Reading PDF...");
 const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
-await runAiExtraction([
+await runAiExtraction([[
 {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
 {type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
-]);
+]]);
 }else if(!manualMode){
-let sheetsText;
+// One job per tab — each gets its own AI call and its own output-token
+// budget, so a big first tab can't silently crowd out the tabs after it
+// (see extractFromContent/runAiExtraction above for why that used to happen).
+let sheets;
 if(isCsv){
 setLoadMsg("Reading CSV...");
-sheetsText=`=== ${f.name} ===\n${await f.text()}`;
+sheets=[{name:f.name,csv:await f.text()}];
 }else{
 setLoadMsg("Reading spreadsheet...");
 const XLSX=await import("xlsx");
 const buf=await toBuffer(f);
 const wb=XLSX.read(new Uint8Array(buf),{type:"array"});
-sheetsText=wb.SheetNames.map(sn=>`=== Sheet: ${sn} ===\n${XLSX.utils.sheet_to_csv(wb.Sheets[sn])}`).join("\n\n");
+sheets=wb.SheetNames.map(sn=>({name:sn,csv:XLSX.utils.sheet_to_csv(wb.Sheets[sn])})).filter(s=>s.csv.trim());
 }
-const MAX_CHARS=180000;
-if(sheetsText.length>MAX_CHARS) sheetsText=sheetsText.slice(0,MAX_CHARS)+"\n\n[...truncated, file was larger than could be fully processed]";
+if(!sheets.length){setError("File appears empty or unreadable");setLoading(false);return;}
 if(!name) setName(f.name.replace(/\.[^.]+$/,""));
-await runAiExtraction([
-{type:"text",text:sheetsText},
-{type:"text",text:"This is a raw export of one or more tabs from a supplier price list spreadsheet. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), columns can be in any order or use inconsistent names, and there may be multiple tabs that all need combining into one product list — if a tab's name looks like a category (e.g. a sport or product line) and there's no explicit category column, use the tab name as that item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract a clean, consolidated list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
-]);
+const MAX_CHARS=180000;
+const jobs=sheets.map(s=>{
+let csv=s.csv;
+if(csv.length>MAX_CHARS) csv=csv.slice(0,MAX_CHARS)+"\n\n[...truncated, tab was larger than could be fully processed]";
+return [
+{type:"text",text:`=== Sheet: ${s.name} ===\n${csv}`},
+{type:"text",text:`This is one tab ("${s.name}") from a supplier price list spreadsheet, sent on its own. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), and columns can be in any order or use inconsistent names. If there's no explicit category column and this tab's name looks like a category (e.g. a sport or product line), use "${s.name}" as every item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract every real product row. Return JSON: {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,"products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation.`}
+];
+});
+await runAiExtraction(jobs);
 }else{
 let rows;
 if(isCsv){
