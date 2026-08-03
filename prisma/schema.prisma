@@ -767,6 +767,9 @@ model PriceItem {
 
   sku        String?
   name       String
+  brand      String?  // manufacturer/brand (e.g. "DeMarini", "Wilson") — distinct from
+                       // supplier/distributor, since one uploaded price list can span
+                       // many brands (a buying-group or distributor catalog)
   category   String?
   unit       String?  @default("each")
   cost       Decimal? @db.Decimal(12, 2)

@@ -25,6 +25,7 @@ export default async function handler(req, res) {
         supplierId,
         sku:       p.sku       || null,
         name:      p.name      || 'Unnamed',
+        brand:     p.brand     || null,
         category:  p.category  || null,
         unit:      p.unit      || 'each',
         cost:      nullNum(p.cost),

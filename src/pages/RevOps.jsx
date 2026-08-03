@@ -12678,7 +12678,7 @@ const saveToDB=async()=>{
         notes:pl.notes||null,
         lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null});
       const products=(pl.items||[]).map((it,i)=>({
-        id:`${pl.id}_${i}`,sku:it.sku||null,name:it.name||"Item",
+        id:`${pl.id}_${i}`,sku:it.sku||null,name:it.name||"Item",brand:it.brand||null,
         category:it.category||null,unit:it.unit||"each",
         cost:it.cost||null,ourPrice:it.price||null,map:it.map||null,
       }));
@@ -12697,7 +12697,7 @@ const saveToDB=async()=>{
         notes:pl.notes||pl.source||null,
         lastUpdated:pl.uploadedAt?new Date(pl.uploadedAt).toISOString().slice(0,10):null});
       const products=(pl.items||[]).map((it,i)=>({
-        id:`${sid}_${i}`,sku:it.sku||null,name:it.name||"Item",
+        id:`${sid}_${i}`,sku:it.sku||null,name:it.name||"Item",brand:it.brand||null,
         category:it.category||null,unit:it.unit||"each",
         cost:it.cost||null,ourPrice:null,map:it.map||null,
       }));
@@ -12860,6 +12860,7 @@ return(
 <tr style={{background:B.surface,position:"sticky",top:0,zIndex:1}}>
 <th style={{...th,textAlign:"left"}}>ITEM</th>
 <th style={{...th,textAlign:"left"}}>SKU</th>
+<th style={{...th,textAlign:"left"}}>BRAND</th>
 <th style={{...th,textAlign:"left"}}>CATEGORY</th>
 <th style={{...th,textAlign:"left"}}>UNIT</th>
 {selected.type==="own"?(
@@ -12888,6 +12889,7 @@ return(
 {it.notes&&selected.type!=="own"&&<div style={{fontSize:9,color:B.muted,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.notes}</div>}
 </td>
 <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.sku||"—"}</td>
+<td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.brand||"—"}</td>
 <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.category||"—"}</td>
 <td style={{padding:"7px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{it.unit||"—"}</td>
 {selected.type==="own"?(
@@ -12956,6 +12958,12 @@ return(
 </div>
 );
 }
+// MAP and MSRP both represent the same retail/list price concept, and
+// suppliers frequently only fill in one of the two for a given row —
+// telling the AI to treat either one as good for both fields, instead of
+// leaving the other null just because the value landed in the "wrong"
+// column, is what actually keeps that price from being lost.
+const MAP_MSRP_NOTE="MAP and MSRP are often the same number, and suppliers frequently only fill in one of the two for a given row (leaving the other blank) even though both represent the retail/list price — if you only find one, use that same value for both \"price\" and \"map\" in your output instead of leaving one null.";
 function PLUploadModal({onClose, onSave, existingLists}) {
 const [step,setStep]=useState(1);
 const [name,setName]=useState("");
@@ -12978,6 +12986,7 @@ const fileRef=useRef(null);
 const FIELDS=useMemo(()=>[
 {key:"name",    label:"Item Name",   required:true},
 {key:"sku",     label:"SKU",         required:false},
+{key:"brand",   label:"Brand",       required:false},
 {key:"category",label:"Category",    required:false},
 {key:"unit",    label:"Unit",        required:false},
 {key:"cost",    label:type==="own"?"Our Cost (dealer price)":"(skip)",  required:false},
@@ -12991,6 +13000,7 @@ const lc=hdrs.map(h=>(h||"").toLowerCase());
 const guess=(terms)=>lc.findIndex(h=>terms.some(t=>h.includes(t)));
 m.name     = guess(["item name","name","product","description","item"]);
 m.sku      = guess(["sku","item code","code","part"]);
+m.brand    = guess(["brand","manufacturer","mfg","vendor"]);
 m.category = guess(["category","cat","type","group"]);
 m.unit     = guess(["unit","uom","each","qty"]);
 m.cost     = guess(["cost","dealer","wholesale","our cost"]);
@@ -13099,15 +13109,26 @@ if(!supplierName&&foundSupplier) setSupplierName(foundSupplier);
 if(!repName&&foundRep) setRepName(foundRep);
 if(!repEmail&&foundRepEmail) setRepEmail(foundRepEmail);
 if(!repPhone&&foundRepPhone) setRepPhone(foundRepPhone);
-const items=allProducts.map(p=>({
-id:mkId(),name:p.name||"",sku:p.sku||"",category:p.category||"",unit:p.unit||"each",
-cost:parseFloat(p.cost)||0,price:parseFloat(p.price)||0,map:parseFloat(p.map)||0,notes:p.notes||""
-}));
+const items=allProducts.map(p=>{
+// Suppliers frequently only fill in one of MAP/MSRP for a given row (the
+// other left blank) even though both represent the same retail/list price
+// concept — treat whichever one is actually present as good for both
+// fields instead of losing it just because it landed in the "wrong" column.
+const rawPrice=parseFloat(p.price),rawMap=parseFloat(p.map);
+const hasPrice=Number.isFinite(rawPrice)&&rawPrice>0,hasMap=Number.isFinite(rawMap)&&rawMap>0;
+return{
+id:mkId(),name:p.name||"",sku:p.sku||"",brand:p.brand||"",category:p.category||"",unit:p.unit||"each",
+cost:parseFloat(p.cost)||0,
+price:hasPrice?rawPrice:(hasMap?rawMap:0),
+map:hasMap?rawMap:(hasPrice?rawPrice:0),
+notes:p.notes||""
+};
+});
 if(!items.length) throw new Error("AI couldn't find any products in this file — try \"map columns manually instead\" below");
-setRawRows(items.map(it=>[it.name,it.sku,it.category,it.unit,it.cost,it.price,it.map,it.notes]));
-const syntheticHdrs=["name","sku","category","unit","cost","price","map","notes"];
+setRawRows(items.map(it=>[it.name,it.sku,it.brand,it.category,it.unit,it.cost,it.price,it.map,it.notes]));
+const syntheticHdrs=["name","sku","brand","category","unit","cost","price","map","notes"];
 setHeaders(syntheticHdrs);
-setMapping({name:0,sku:1,category:2,unit:3,cost:4,price:5,map:6,notes:7});
+setMapping({name:0,sku:1,brand:2,category:3,unit:4,cost:5,price:6,map:7,notes:8});
 setStep(2);
 };
 const handleFile=async(f)=>{
@@ -13121,7 +13142,7 @@ setLoadMsg("Reading PDF...");
 const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
 await runAiExtraction([[
 {type:"document",source:{type:"base64",media_type:"application/pdf",data:b64}},
-{type:"text",text:"Extract this supplier price list. Return JSON: {\"supplierName\":\"\",\"repName\":null,\"repEmail\":null,\"repPhone\":null,\"products\":[{\"sku\":\"\",\"name\":\"\",\"cost\":0,\"price\":null,\"map\":null,\"category\":\"\",\"unit\":\"each\",\"notes\":\"\"}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation."}
+{type:"text",text:`Extract this supplier price list. Also identify each product's BRAND (manufacturer, e.g. "DeMarini", "Wilson", "Easton") — distinct from the overall supplier/distributor this list came from, since one distributor's price list often carries several brands. Figure it out from, in order: an explicit Brand/Manufacturer column (if present); a section/title heading above a group of products naming a brand or product line; or your own knowledge of the product line name if it clearly identifies a known brand. Leave it blank if genuinely unclear. ${MAP_MSRP_NOTE} Return JSON: {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,"products":[{"sku":"","name":"","brand":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation.`}
 ]]);
 }else if(!manualMode){
 // One job per tab — each gets its own AI call and its own output-token
@@ -13146,7 +13167,13 @@ let csv=s.csv;
 if(csv.length>MAX_CHARS) csv=csv.slice(0,MAX_CHARS)+"\n\n[...truncated, tab was larger than could be fully processed]";
 return [
 {type:"text",text:`=== Sheet: ${s.name} ===\n${csv}`},
-{type:"text",text:`This is one tab ("${s.name}") from a supplier price list spreadsheet, sent on its own. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), and columns can be in any order or use inconsistent names. If there's no explicit category column and this tab's name looks like a category (e.g. a sport or product line), use "${s.name}" as every item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract every real product row. Return JSON: {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,"products":[{"sku":"","name":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation.`}
+{type:"text",text:`This is one tab ("${s.name}") from a supplier price list spreadsheet, sent on its own. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), and columns can be in any order or use inconsistent names. If there's no explicit category column and this tab's name looks like a category (e.g. a sport or product line), use "${s.name}" as every item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract every real product row.
+
+Also identify each product's BRAND (manufacturer, e.g. "DeMarini", "Wilson", "Easton") — distinct from the overall supplier/distributor this whole file came from, since one distributor's price list often bundles several brands together across its tabs. Figure it out from, in order: (1) an explicit Brand/Manufacturer column — if a cell in that column is blank, it usually means "same brand as the closest non-blank cell above it" (spreadsheets often only label a group's brand once), so carry that value down; (2) a section/title row above a group of products (often bolded, ALL CAPS, or set off by asterisks/dashes, spanning otherwise-blank cells) naming a brand or product line; (3) this tab's own name, if it names a specific brand rather than a general category (e.g. a tab literally called "DeMarini Baseball"); (4) your own knowledge of the product line/series name or article-number prefix if it clearly identifies a known brand (e.g. recognizing a glove series or bat model name as belonging to a specific manufacturer). Leave it blank if genuinely unclear rather than guessing.
+
+${MAP_MSRP_NOTE}
+
+Return JSON: {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,"products":[{"sku":"","name":"","brand":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation.`}
 ];
 });
 await runAiExtraction(jobs);
@@ -13180,16 +13207,16 @@ if(f) await handleFile(f);
 };
 const buildItems=useCallback(()=>{
 if(!rawRows) return[];
-if(headers[0]==="name"&&headers[1]==="sku"&&headers[3]==="unit"){
+if(headers[0]==="name"&&headers[1]==="sku"&&headers[2]==="brand"){
 return rawRows.filter(r=>r[0]).map((r,i)=>({
-id:mkId(),name:String(r[0]||`Item ${i+1}`),sku:String(r[1]||""),category:String(r[2]||""),
-unit:String(r[3]||"each"),cost:parseFloat(r[4])||0,price:parseFloat(r[5])||0,
-map:parseFloat(r[6])||0,notes:String(r[7]||""),
+id:mkId(),name:String(r[0]||`Item ${i+1}`),sku:String(r[1]||""),brand:String(r[2]||""),category:String(r[3]||""),
+unit:String(r[4]||"each"),cost:parseFloat(r[5])||0,price:parseFloat(r[6])||0,
+map:parseFloat(r[7])||0,notes:String(r[8]||""),
 }));
 }
 return rawRows.filter(row=>row.some(c=>String(c||"").trim())).map((row,i)=>{
 const g=(k)=>{const idx=mapping[k];return(idx!=null&&idx>=0)?String(row[idx]||"").trim():"";}
-return{id:mkId(),name:g("name")||`Item ${i+1}`,sku:g("sku"),category:g("category"),
+return{id:mkId(),name:g("name")||`Item ${i+1}`,sku:g("sku"),brand:g("brand"),category:g("category"),
 unit:g("unit")||"each",cost:parseFloat(g("cost"))||0,price:parseFloat(g("price"))||0,
 map:parseFloat(g("map"))||0,notes:g("notes")};
 }).filter(it=>it.name);
@@ -13306,7 +13333,7 @@ return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,
 <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
 <thead>
 <tr style={{background:B.surface}}>
-{["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+{["Name","SKU","Brand","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
 </tr>
 </thead>
 <tbody>
@@ -13314,6 +13341,7 @@ return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,
 <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.brand||"—"}</td>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
 {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
@@ -13377,7 +13405,7 @@ style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:
 <table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
 <thead>
 <tr style={{background:B.surface}}>
-{["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+{["Name","SKU","Brand","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
 </tr>
 </thead>
 <tbody>
@@ -13385,6 +13413,7 @@ style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:
 <tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.brand||"—"}</td>
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
 {type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
 <td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>

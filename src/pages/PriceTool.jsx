@@ -159,6 +159,11 @@ async function callClaude(prompt, sys="") {
 const toText   = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsText(f);});
 const toBase64 = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result.split(",")[1]);r.onerror=rej;r.readAsDataURL(f);});
 const toBuffer = f => new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsArrayBuffer(f);});
+// MAP and MSRP both represent the same retail/list price concept, and
+// suppliers frequently only fill in one of the two for a given row — telling
+// the AI to treat either one as good for both fields keeps that price from
+// being lost just because it landed in the "wrong" column.
+const MAP_MSRP_NOTE="MAP and MSRP are often the same number, and suppliers frequently only fill in one of the two for a given row even though both represent the retail/list price — if you only find one, use that same value for both \"map\" and \"ourPrice\" in your output instead of leaving one null.";
 
 async function callClaudeMsg(messages, sys="", tokens=4000) {
   const r = await fetch("/api/claude",{
@@ -395,9 +400,14 @@ export default function PriceListManager({ onMakeQuote } = {}) {
             { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
             { type:"text", text:
 `This is a supplier price list PDF.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""} Extract ALL products listed.
+
+Each product also needs its own "brand" (the actual manufacturer, e.g. "DeMarini", "Wilson") — this can differ from item to item even within one file, since a single distributor's price list often bundles several manufacturers' products together. Infer it from an explicit brand/manufacturer column if present, a section heading naming a brand above a group of products, or your own knowledge of the product line if it clearly identifies a known brand; leave it blank if unclear.
+
+${MAP_MSRP_NOTE}
+
 Return JSON:
 {
-  "supplierName": "name of the supplier/manufacturer",
+  "supplierName": "name of the supplier/distributor this list came from",
   "supplierCategory": "sport category e.g. Track & Field, Baseball/Softball, Volleyball, Timing Systems",
   "repName": "sales rep name if visible or null",
   "repEmail": "rep email if visible or null",
@@ -405,6 +415,7 @@ Return JSON:
     {
       "sku": "item/part number",
       "name": "full product name",
+      "brand": "manufacturer/brand for this specific item, or empty string if unclear",
       "cost": dealer_cost_as_number,
       "map": map_price_as_number_or_null,
       "ourPrice": suggested_sell_price_as_number_or_null,
@@ -433,14 +444,20 @@ Extract every product row. If a column is not present use null. cost should be t
         addLog(`Loaded ${wb.SheetNames.length} tab${wb.SheetNames.length!==1?"s":""}, asking Claude to parse...`);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`This is a supplier price list exported from Excel as CSV, one or more tabs.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${sheetsText}\n\nExtract ALL products from every tab shown above. If a tab has no explicit category column and its name looks like a category (e.g. a sport or product line), use the tab name as that item's category. Return JSON:
+          content:`This is a supplier price list exported from Excel as CSV, one or more tabs.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${sheetsText}\n\nExtract ALL products from every tab shown above. If a tab has no explicit category column and its name looks like a category (e.g. a sport or product line), use the tab name as that item's category.
+
+Each product also needs its own "brand" (the actual manufacturer, e.g. "DeMarini", "Wilson") — distinct from the overall supplier/distributor, since one distributor's price list often bundles several manufacturers across its tabs. Infer it from an explicit brand column (carrying a value down through blank cells below it, since it's often only labeled once per group), a section heading naming a brand above a group of rows, the tab name if it names a specific brand, or your own knowledge of the product line; leave it blank if unclear.
+
+${MAP_MSRP_NOTE}
+
+Return JSON:
 {
-  "supplierName": "supplier/manufacturer name",
+  "supplierName": "supplier/distributor name",
   "supplierCategory": "sport category",
   "repName": null,
   "repEmail": null,
   "products": [
-    { "sku":"item number","name":"product name","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
+    { "sku":"item number","name":"product name","brand":"manufacturer or empty string","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
   ]
 }
 cost = dealer/wholesale price. Skip blank rows and header rows.`
@@ -453,14 +470,14 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
         const rows = text.split("\n").filter(l=>l.trim()).slice(0,150);
         extracted = await callClaudeMsg([{
           role:"user",
-          content:`Supplier price list CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Return JSON:
+          content:`Supplier price list CSV.${uploadTargetIds.length>0?` Expected brands: ${uploadTargetIds.map(id=>suppliers.find(s=>s.id===id)?.name||id).join(", ")}.`:""}\n\n${rows.join("\n")}\n\nExtract ALL products. Each product also needs its own "brand" (the actual manufacturer) if identifiable — distinct from the overall supplier/distributor. ${MAP_MSRP_NOTE} Return JSON:
 {
-  "supplierName": "supplier/manufacturer name",
+  "supplierName": "supplier/distributor name",
   "supplierCategory": "sport category",
   "repName": null,
   "repEmail": null,
   "products": [
-    { "sku":"item number","name":"product name","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
+    { "sku":"item number","name":"product name","brand":"manufacturer or empty string","cost":dealer_price,"map":map_or_null,"ourPrice":sell_price_or_null,"category":"subcategory","unit":"each" }
   ]
 }
 cost = dealer/wholesale price. Skip blank rows and header rows.`
@@ -537,9 +554,12 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
                 updatedAt:today};
             }
             added++;
-            return {id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed",
-              cost:parseFloat(p.cost)||0, map:p.map||null,
-              ourPrice:p.ourPrice || parseFloat(p.cost)*1.25 || 0,
+            // MAP and MSRP often represent the same retail price and a
+            // supplier frequently only fills in one of the two — fall back
+            // to whichever is present instead of losing it.
+            return {id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed", brand:p.brand||null,
+              cost:parseFloat(p.cost)||0, map:p.map||p.ourPrice||null,
+              ourPrice:p.ourPrice || p.map || parseFloat(p.cost)*1.25 || 0,
               category:p.category||"General", unit:p.unit||"each",
               lastCost:parseFloat(p.cost)||0, updatedAt:today};
           });
@@ -562,9 +582,9 @@ cost = dealer/wholesale price. Skip blank rows and header rows.`
           rep: repName, repEmail, repPhone:"",
           notes:"", lastUpdated:today,
           products: products.map(p=>({
-            id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed",
-            cost:parseFloat(p.cost)||0, map:p.map||null,
-            ourPrice:p.ourPrice || parseFloat(p.cost)*1.25 || 0,
+            id:uid(), sku:p.sku||uid(), name:p.name||"Unnamed", brand:p.brand||null,
+            cost:parseFloat(p.cost)||0, map:p.map||p.ourPrice||null,
+            ourPrice:p.ourPrice || p.map || parseFloat(p.cost)*1.25 || 0,
             category:p.category||"General", unit:p.unit||"each",
             lastCost:parseFloat(p.cost)||0, updatedAt:today,
           }))
@@ -1606,7 +1626,7 @@ Provide strategic pricing advice. Return JSON:
                   <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
                     <thead>
                       <tr style={{background:B.surface,borderBottom:`2px solid ${B.border}`}}>
-                        {["SKU","Product Name","Category","Unit","Cost","MAP","Our Price"].map(h=>(
+                        {["SKU","Product Name","Brand","Category","Unit","Cost","MAP","Our Price"].map(h=>(
                           <th key={h} style={{padding:"6px 8px",textAlign:h==="Cost"||h==="MAP"||h==="Our Price"?"right":"left",
                             fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,color:B.muted,fontWeight:700}}>{h}</th>
                         ))}
@@ -1617,6 +1637,7 @@ Provide strategic pricing advice. Return JSON:
                         <tr key={i} style={{borderBottom:`1px solid ${B.border}`,background:i%2===0?B.white:B.surface}}>
                           <td style={{padding:"5px 8px",color:B.muted,fontFamily:"monospace",fontSize:10}}>{p.sku||"—"}</td>
                           <td style={{padding:"5px 8px",color:B.text,fontWeight:500,maxWidth:220}}>{p.name||"—"}</td>
+                          <td style={{padding:"5px 8px",color:B.muted}}>{p.brand||"—"}</td>
                           <td style={{padding:"5px 8px",color:B.muted}}>{p.category||"—"}</td>
                           <td style={{padding:"5px 8px",color:B.muted}}>{p.unit||"each"}</td>
                           <td style={{padding:"5px 8px",textAlign:"right",color:B.text,fontWeight:500}}>{p.cost?fmt$(p.cost):"—"}</td>

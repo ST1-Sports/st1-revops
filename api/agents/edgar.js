@@ -188,8 +188,12 @@ function formatItem(item, supplierName) {
   const floor    = item.gmFloorPct ?? DEFAULT_FLOOR
   let line = `  • ${item.name}`
   if (item.sku)         line += ` [${item.sku}]`
+  if (item.brand)       line += ` — ${item.brand}`   // manufacturer (e.g. "DeMarini") — a
+                                                       // distributor's price list can span many
+                                                       // brands, so this is never assumed from
+                                                       // the supplier/list name alone
   if (item.category)    line += ` (${item.category})`
-  if (supplierName)     line += ` — ${supplierName}`
+  if (supplierName)     line += ` [via ${supplierName}]`
   if (cost != null)     line += ` | cost $${cost.toFixed(2)}`
   if (ourPrice != null) line += ` | list $${ourPrice.toFixed(2)}`
   if (map != null)      line += ` | MAP $${map.toFixed(2)}`
@@ -210,7 +214,10 @@ function buildItemLookup(ownSuppliers, matchedItems) {
         map:         dec(item.map),
         gmFloorPct:  item.gmFloorPct ?? DEFAULT_FLOOR,
         category:    item.category || null,
-        brand:       supplierName || item.supplier?.name || null,
+        // The item's own brand (e.g. "DeMarini") always wins — falling back to
+        // the supplier/distributor name only for a list that never captured
+        // brand per item, since one supplier can carry many brands.
+        brand:       item.brand || supplierName || item.supplier?.name || null,
       })
     }
   }
