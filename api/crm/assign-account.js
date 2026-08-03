@@ -13,7 +13,7 @@
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
-import { zohoCrmHeaders, CRM_BASE } from '../_lib/zohoCrm.js'
+import { zohoCrmHeaders, upsertZohoRecord } from '../_lib/zohoCrm.js'
 
 export default async function handler(req, res) {
   setCors(res)
@@ -33,13 +33,11 @@ export default async function handler(req, res) {
   try { token = await getZohoToken() } catch (err) { return res.status(500).json({ error: `Zoho auth: ${err.message}` }) }
   const headers = zohoCrmHeaders(token)
 
-  const putRes = await fetch(`${CRM_BASE}/Contacts/${contact.zohoCrmId}`, {
-    method: 'PUT', headers,
-    body: JSON.stringify({ data: [{ id: contact.zohoCrmId, Account_Name: { id: accountId } }] }),
-  })
-  const putData = await putRes.json().catch(() => null)
-  const rec = putData?.data?.[0]
-  if (rec?.status === 'error') return res.status(502).json({ error: rec.message || 'Zoho link failed' })
+  try {
+    await upsertZohoRecord({ module: 'Contacts', payload: { Account_Name: { id: accountId } }, contact, headers })
+  } catch (err) {
+    return res.status(502).json({ error: err.message || 'Zoho link failed' })
+  }
 
   // Also link the local Account row, if we have one for this Zoho Account id —
   // keeps the local Prisma side (used by sync-books-accounts/zoho-align-accounts)

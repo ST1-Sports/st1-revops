@@ -125,12 +125,17 @@ export default async function handler(req, res) {
   // (neither string literally contains the other).
   const SCHOOL_TYPE_WORDS = /\b(high school|middle school|elementary school|junior high|jr high|elementary|schools?|district|academy|area|public|community|hs|ms|jhs|isd|usd|csd)\b/gi
   const coreName = (raw) => normalizeAccountName(raw).replace(SCHOOL_TYPE_WORDS, '').replace(/\s+/g, ' ').trim()
-  const looseNameMatch = (a, b) => {
+  // The per-contact half of coreName() gets checked against every zero-
+  // contact account, not just one — precomputed once here instead of
+  // recomputed on every (account, contact) pair the loose-match filter
+  // considers below.
+  const contactCore = new Map(allContacts.map(c => [c.id, coreName(c.companyName)]))
+  const looseNameMatch = (a, b, coreA) => {
     const na = normalizeAccountName(a), nb = normalizeAccountName(b)
     if (!na || !nb) return false
     if (na === nb) return true
     if (na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na))) return true
-    const ca = coreName(a), cb = coreName(b)
+    const ca = coreA ?? coreName(a), cb = coreName(b)
     return ca.length > 2 && ca === cb
   }
   // Candidates aren't limited to totally-unlinked contacts — a real duplicate
@@ -143,13 +148,15 @@ export default async function handler(req, res) {
   const errors = []
 
   for (const [dedupKey, cust] of customers) {
-    const existing = await prisma.account.findUnique({ where: { normalizedName: dedupKey } })
     let account = await prisma.account.upsert({
       where: { normalizedName: dedupKey },
       create: { name: cust.name, normalizedName: dedupKey, city: cust.city || null, state: cust.state || null },
       update: { city: cust.city || undefined, state: cust.state || undefined },
     })
-    existing ? accountsUpdated++ : accountsCreated++
+    // A brand-new row's createdAt/updatedAt land in the same write: identical.
+    // An existing row keeps its original createdAt but gets a fresh
+    // updatedAt — tells create-vs-update apart without a separate read.
+    account.createdAt.getTime() === account.updatedAt.getTime() ? accountsCreated++ : accountsUpdated++
 
     // Resolve the real Zoho CRM Account right here — every one of these
     // customers is a real, invoiced account, so there's no need to wait on
@@ -248,7 +255,7 @@ export default async function handler(req, res) {
     const totalContacts = await prisma.salesContact.count({ where: { accountId: account.id } })
     if (totalContacts === 0) {
       const looseCandidates = allContacts
-        .filter(c => c.accountId !== account.id && looseNameMatch(c.companyName, cust.name))
+        .filter(c => c.accountId !== account.id && looseNameMatch(c.companyName, cust.name, contactCore.get(c.id)))
         .slice(0, 5)
         .map(c => ({ contactId: c.id, name: `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email, email: c.email, companyName: c.companyName, state: c.state || null }))
       accountsWithNoContacts.push({ accountId: account.id, name: cust.name, state: cust.state || null, looseCandidates })

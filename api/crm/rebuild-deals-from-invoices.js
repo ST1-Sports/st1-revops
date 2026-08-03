@@ -18,14 +18,12 @@ import { setCors }      from '../_lib/cors.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { zohoCrmHeaders, CRM_BASE } from '../_lib/zohoCrm.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
-import { ORG, BOOKS } from '../_lib/zoho-books.js'
+import { booksGet } from '../_lib/zoho-books.js'
 
-async function fetchAllInvoices(headers) {
+async function fetchAllInvoices() {
   let all = [], page = 1
   while (true) {
-    const res = await fetch(`${BOOKS}/invoices?per_page=200&page=${page}&organization_id=${ORG}`, { headers })
-    const data = await res.json().catch(() => null)
-    if (data?.message && !data?.invoices) throw new Error(data.message)
+    const data = await booksGet(`/invoices?per_page=200&page=${page}`)
     const batch = data?.invoices || []
     all = [...all, ...batch]
     if (!data?.page_context?.has_more_page || batch.length < 200) break
@@ -80,11 +78,10 @@ export default async function handler(req, res) {
 
   let token
   try { token = await getZohoToken() } catch (err) { return res.status(500).json({ error: `Zoho auth: ${err.message}` }) }
-  const crmHeaders   = zohoCrmHeaders(token)
-  const booksHeaders = { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }
+  const crmHeaders = zohoCrmHeaders(token)
 
   let invoices
-  try { invoices = await fetchAllInvoices(booksHeaders) }
+  try { invoices = await fetchAllInvoices() }
   catch (err) { return res.status(502).json({ error: `Zoho Books: ${err.message}` }) }
 
   const usable = invoices.filter(inv => !['draft', 'void'].includes(inv.status))
@@ -111,9 +108,13 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: `Deal wipe failed: ${err.message}` })
   }
 
-  // 2. One Deal per real, sent invoice.
-  let dealsCreated = 0
+  // 2. One Deal per real, sent invoice. Account resolution still has to be
+  //    sequential (a live Zoho search per not-yet-seen customer), but deal
+  //    creation itself doesn't — build every payload first, then create
+  //    them in batches of 100 (Zoho's bulk-insert max), same as the delete
+  //    step above, instead of one Deal per network round trip.
   const accountCache = new Map() // "name|state" -> zoho account id
+  const dealBatches = []
   for (const inv of usable) {
     try {
       const name = (inv.customer_name || '').trim()
@@ -129,22 +130,32 @@ export default async function handler(req, res) {
         accountId = acc.id
         accountCache.set(cacheKey, accountId)
       }
-      const payload = {
-        Deal_Name:    `${name} — Invoice ${inv.invoice_number || inv.invoice_id}`,
-        Amount:       Number(inv.total) || 0,
-        Stage:        'Closed Won',
-        Closing_Date: inv.date || undefined,
-        Description:  `Invoice ${inv.invoice_number || ''} (${inv.status}) — ${summarizeItems(inv.line_items)}`.slice(0, 2000),
-        ...(accountId ? { Account_Name: { id: accountId } } : {}),
-      }
-      const createRes  = await fetch(`${CRM_BASE}/Deals`, { method: 'POST', headers: crmHeaders, body: JSON.stringify({ data: [payload] }) })
-      const createData = await createRes.json().catch(() => null)
-      const rec = createData?.data?.[0]
-      if (rec?.status === 'error') { errors.push(`Invoice ${inv.invoice_number}: ${rec.message}`); continue }
-      dealsCreated++
+      dealBatches.push({
+        invoiceNumber: inv.invoice_number || inv.invoice_id,
+        payload: {
+          Deal_Name:    `${name} — Invoice ${inv.invoice_number || inv.invoice_id}`,
+          Amount:       Number(inv.total) || 0,
+          Stage:        'Closed Won',
+          Closing_Date: inv.date || undefined,
+          Description:  `Invoice ${inv.invoice_number || ''} (${inv.status}) — ${summarizeItems(inv.line_items)}`.slice(0, 2000),
+          ...(accountId ? { Account_Name: { id: accountId } } : {}),
+        },
+      })
     } catch (err) {
       errors.push(`Invoice ${inv.invoice_number || inv.invoice_id}: ${err.message}`)
     }
+  }
+
+  let dealsCreated = 0
+  for (let i = 0; i < dealBatches.length; i += 100) {
+    const batch = dealBatches.slice(i, i + 100)
+    const createRes  = await fetch(`${CRM_BASE}/Deals`, { method: 'POST', headers: crmHeaders, body: JSON.stringify({ data: batch.map(b => b.payload) }) })
+    const createData = await createRes.json().catch(() => null)
+    const results = createData?.data || []
+    results.forEach((rec, idx) => {
+      if (rec?.status === 'error') errors.push(`Invoice ${batch[idx].invoiceNumber}: ${rec.message}`)
+      else dealsCreated++
+    })
   }
 
   return res.json({
