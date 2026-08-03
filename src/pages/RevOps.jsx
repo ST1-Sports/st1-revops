@@ -3465,7 +3465,14 @@ for(const c of contacts){
 const nm=cName(c).toLowerCase();
 const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
 const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
-let phase="lead";
+// A real Zoho Contact (module, not Lead) only ever gets created for an
+// invoiced, paying customer (see zoho-align-accounts.js) — that's a
+// stronger signal than "no deal record happens to reference them by
+// name," which is all the fallback below actually checks. Without this,
+// a real customer with no deal linked by exact name/id still showed the
+// same "lead" tag as someone who's never bought anything.
+const isRealContact=(c.id||"").startsWith("zoho_c_");
+let phase=isRealContact?"customer":"lead";
 if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
 else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
 else if(cd.length>0) phase="deal";
@@ -3474,7 +3481,7 @@ m.set(c.id,{cd,co,phase});
 return m;
 },[contacts,deals,orders]);
 const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
-const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green};
+const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green,customer:B.green};
 useEffect(()=>{
 if(!s.crmNav) return;
 const {id,school}=s.crmNav;
@@ -3603,8 +3610,9 @@ else toast(`No verified contacts found for the missing roles at ${school}`,"info
 setFindingStaff(false);
 };
 const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",label:"Quote"},{id:"order",label:"Order"}];
-const phaseIdx={lead:0,deal:1,quote:2,order:3};
+const phaseIdx={lead:0,deal:1,quote:2,order:3,customer:3};
 const [showBreakdown,setShowBreakdown]=useState(false);
+const [showMaintenanceTools,setShowMaintenanceTools]=useState(false);
 const [showDuplicates,setShowDuplicates]=useState(false);
 const sourceBreakdown=useMemo(()=>{
 const buckets={};
@@ -3668,10 +3676,15 @@ return(
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
 <button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
+<button onClick={()=>setShowMaintenanceTools(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚙ maintenance tools — {showMaintenanceTools?"hide":"show"}</button>
+</div>
+{showMaintenanceTools&&(
+<div style={{marginTop:5,display:"flex",gap:6,flexWrap:"wrap"}}>
 <button onClick={wipeAndResyncContacts} disabled={wipingContacts} title="Clears the cached contact list (here and in the shared database) and rebuilds it fresh from what's live in Zoho right now — use this if the count keeps reverting to an old number" style={{background:"none",border:`1px solid ${wipingContacts?B.border:B.red}`,color:wipingContacts?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:wipingContacts?"default":"pointer"}}>{wipingContacts?"WIPING…":"⟲ WIPE + RESYNC CONTACTS"}</button>
 <button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
 <button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Deletes every Deal in Zoho CRM and recreates exactly one Deal per real (non-draft/void) Zoho Books invoice — a Deal should only exist because of a real invoice" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
 </div>
+)}
 {showBreakdown&&(
 <div style={{marginTop:5,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
 {sourceBreakdown.rows.map(([src,n])=>(
@@ -3711,7 +3724,7 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{a.name}{a.state?` — ${a.state}`:""}</div>
 {(a.looseCandidates||[]).length>0?(a.looseCandidates||[]).map(c=>(
 <div key={c.contactId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2,paddingLeft:6}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{c.name} <i>({c.companyName})</i></span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{c.name} <i>({c.companyName}{c.state?`, ${c.state}`:""})</i></span>
 <button onClick={()=>linkLooseCandidate(c.contactId,a.accountId)} disabled={linkingCandidateId===c.contactId} style={{background:"none",border:`1px solid ${linkingCandidateId===c.contactId?B.border:B.orange}`,color:linkingCandidateId===c.contactId?B.muted:B.orange,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:linkingCandidateId===c.contactId?"default":"pointer",flexShrink:0}}>{linkingCandidateId===c.contactId?"…":"LINK"}</button>
 </div>
 )):<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,paddingLeft:6,fontStyle:"italic"}}>no possible match found in our database — needs a real person added manually</div>}
@@ -3768,7 +3781,7 @@ return(
 )}
 {leftMode==="contacts"&&(
 <div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
-{[["all","All"],["mine","Mine"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+{[["all","All"],["mine","Mine"],["customer","Customer"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
 <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
 ))}
 </div>

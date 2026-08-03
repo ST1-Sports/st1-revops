@@ -34,7 +34,7 @@
  * Body: { dryRun?: boolean }
  * Returns: { accountsFromBooks, accountsCreated, accountsUpdated,
  *            contactsLinked, contactsFromBooks, noEmailContacts,
- *            accountsWithNoContacts: [{accountId,name,state,looseCandidates:[{contactId,name,email,companyName}]}] }
+ *            accountsWithNoContacts: [{accountId,name,state,looseCandidates:[{contactId,name,email,companyName,state}]}] }
  */
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
@@ -111,14 +111,26 @@ export default async function handler(req, res) {
   // stripping, see accountUtils.js) to avoid false merges, but that also
   // means "Albert Lea Area Schools" (Books) vs "Albert Lea Public Schools"
   // (however some scraped contact recorded it) never links automatically.
-  // Only surfaced as a suggestion for a human to confirm, never auto-linked.
+  // Only ever surfaced as a suggestion for a human to confirm — never
+  // auto-linked — so it's safe to be more aggressive here than the strict
+  // match above: strip common school-type words ("HS"/"High School"/
+  // "Middle School"/etc.) and compare what's left, which also catches
+  // "Boone HS" vs "Boone High School" that plain substring-includes can't
+  // (neither string literally contains the other).
+  const SCHOOL_TYPE_WORDS = /\b(high school|middle school|elementary school|junior high|jr high|elementary|schools?|district|academy|area|public|community|hs|ms|jhs|isd|usd|csd)\b/gi
+  const coreName = (raw) => normalizeAccountName(raw).replace(SCHOOL_TYPE_WORDS, '').replace(/\s+/g, ' ').trim()
   const looseNameMatch = (a, b) => {
     const na = normalizeAccountName(a), nb = normalizeAccountName(b)
     if (!na || !nb) return false
     if (na === nb) return true
-    return na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na))
+    if (na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na))) return true
+    const ca = coreName(a), cb = coreName(b)
+    return ca.length > 2 && ca === cb
   }
-  const unlinkedContacts = allContacts.filter(c => !c.accountId)
+  // Candidates aren't limited to totally-unlinked contacts — a real duplicate
+  // Account (the same school recorded under a slightly different name by an
+  // earlier import, before this one existed) can leave a contact linked to
+  // the WRONG local Account. Linking pulls them onto the real one instead.
 
   let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0, noEmailContacts = 0
   const accountsWithNoContacts = []
@@ -193,10 +205,10 @@ export default async function handler(req, res) {
 
     const totalContacts = await prisma.salesContact.count({ where: { accountId: account.id } })
     if (totalContacts === 0) {
-      const looseCandidates = unlinkedContacts
-        .filter(c => looseNameMatch(c.companyName, cust.name))
+      const looseCandidates = allContacts
+        .filter(c => c.accountId !== account.id && looseNameMatch(c.companyName, cust.name))
         .slice(0, 5)
-        .map(c => ({ contactId: c.id, name: `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email, email: c.email, companyName: c.companyName }))
+        .map(c => ({ contactId: c.id, name: `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email, email: c.email, companyName: c.companyName, state: c.state || null }))
       accountsWithNoContacts.push({ accountId: account.id, name: cust.name, state: cust.state || null, looseCandidates })
     }
   }
