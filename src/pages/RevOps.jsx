@@ -13162,20 +13162,35 @@ sheets=wb.SheetNames.map(sn=>({name:sn,csv:XLSX.utils.sheet_to_csv(wb.Sheets[sn]
 if(!sheets.length){setError("File appears empty or unreadable");setLoading(false);return;}
 if(!name) setName(f.name.replace(/\.[^.]+$/,""));
 const MAX_CHARS=180000;
-const jobs=sheets.map(s=>{
-let csv=s.csv;
-if(csv.length>MAX_CHARS) csv=csv.slice(0,MAX_CHARS)+"\n\n[...truncated, tab was larger than could be fully processed]";
-return [
-{type:"text",text:`=== Sheet: ${s.name} ===\n${csv}`},
-{type:"text",text:`This is one tab ("${s.name}") from a supplier price list spreadsheet, sent on its own. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), and columns can be in any order or use inconsistent names. If there's no explicit category column and this tab's name looks like a category (e.g. a sport or product line), use "${s.name}" as every item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract every real product row.
+// A single oversized tab has the exact same crowd-out risk as combining
+// multiple tabs did — a 1,500-row tab's product list can still overflow
+// one call's output budget on its own. Split any tab past CHUNK_ROWS into
+// several chunks (each its own job/budget), always carrying the tab's
+// first few lines along as header/title context so a later chunk still
+// knows what its columns mean even without the real header row at its top.
+const CHUNK_ROWS=250;
+const jobs=[];
+for(const s of sheets){
+const lines=s.csv.split(/\r?\n/);
+const headerContext=lines.slice(0,5).join("\n");
+const rowChunks=[];
+for(let i=0;i<lines.length;i+=CHUNK_ROWS) rowChunks.push(lines.slice(i,i+CHUNK_ROWS));
+rowChunks.forEach((chunkLines,ci)=>{
+let body=(ci===0?chunkLines:[headerContext,"...(earlier rows omitted from this chunk)...",...chunkLines]).join("\n");
+if(body.length>MAX_CHARS) body=body.slice(0,MAX_CHARS)+"\n\n[...truncated, chunk was larger than could be fully processed]";
+const partLabel=rowChunks.length>1?` — part ${ci+1} of ${rowChunks.length}`:"";
+jobs.push([
+{type:"text",text:`=== Sheet: ${s.name}${partLabel} ===\n${body}`},
+{type:"text",text:`This is one tab ("${s.name}")${rowChunks.length>1?`, split into ${rowChunks.length} parts for processing — this is part ${ci+1}`:""} from a supplier price list spreadsheet, sent on its own. Treat it as messy: the real header row may not be the first line (there can be title/note rows above it), and columns can be in any order or use inconsistent names. If there's no explicit category column and this tab's name looks like a category (e.g. a sport or product line), use "${s.name}" as every item's category. Skip rows that clearly aren't products (titles, subtotals, blank separators). Extract every real product row.
 
 Also identify each product's BRAND (manufacturer, e.g. "DeMarini", "Wilson", "Easton") — distinct from the overall supplier/distributor this whole file came from, since one distributor's price list often bundles several brands together across its tabs. Figure it out from, in order: (1) an explicit Brand/Manufacturer column — if a cell in that column is blank, it usually means "same brand as the closest non-blank cell above it" (spreadsheets often only label a group's brand once), so carry that value down; (2) a section/title row above a group of products (often bolded, ALL CAPS, or set off by asterisks/dashes, spanning otherwise-blank cells) naming a brand or product line; (3) this tab's own name, if it names a specific brand rather than a general category (e.g. a tab literally called "DeMarini Baseball"); (4) your own knowledge of the product line/series name or article-number prefix if it clearly identifies a known brand (e.g. recognizing a glove series or bat model name as belonging to a specific manufacturer). Leave it blank if genuinely unclear rather than guessing.
 
 ${MAP_MSRP_NOTE}
 
 Return JSON: {"supplierName":"","repName":null,"repEmail":null,"repPhone":null,"products":[{"sku":"","name":"","brand":"","cost":0,"price":null,"map":null,"category":"","unit":"each","notes":""}]} cost=dealer/wholesale price. price=suggested sell price or null. map=MAP price or null. Return ONLY the raw JSON object. No markdown. No explanation.`}
-];
+]);
 });
+}
 await runAiExtraction(jobs);
 }else{
 let rows;
