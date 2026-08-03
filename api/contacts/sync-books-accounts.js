@@ -33,7 +33,8 @@
  *
  * Body: { dryRun?: boolean }
  * Returns: { accountsFromBooks, accountsCreated, accountsUpdated,
- *            contactsLinked, contactsFromBooks, accountsWithNoContacts: [{name,state}] }
+ *            contactsLinked, contactsFromBooks, noEmailContacts,
+ *            accountsWithNoContacts: [{accountId,name,state,looseCandidates:[{contactId,name,email,companyName}]}] }
  */
 import { setCors }      from '../_lib/cors.js'
 import { prisma }       from '../_lib/prisma.js'
@@ -95,7 +96,7 @@ export default async function handler(req, res) {
   // would be a 66k-row query repeated per account, which doesn't scale.
   const allContacts = await prisma.salesContact.findMany({
     where: { companyName: { not: null } },
-    select: { id: true, companyName: true, state: true, accountId: true },
+    select: { id: true, firstName: true, lastName: true, email: true, companyName: true, state: true, accountId: true },
   })
   const byDedupKey = new Map()  // dedupKey (name+state) -> contacts
   const byNameOnly = new Map()  // normalized name only -> contacts (state-unknown fallback)
@@ -105,8 +106,21 @@ export default async function handler(req, res) {
     if (dk) { if (!byDedupKey.has(dk)) byDedupKey.set(dk, []); byDedupKey.get(dk).push(c) }
     if (nk) { if (!byNameOnly.has(nk)) byNameOnly.set(nk, []); byNameOnly.get(nk).push(c) }
   }
+  // A looser fallback for accounts that still end up with zero contacts —
+  // the exact dedup-key/name match above is intentionally strict (no suffix
+  // stripping, see accountUtils.js) to avoid false merges, but that also
+  // means "Albert Lea Area Schools" (Books) vs "Albert Lea Public Schools"
+  // (however some scraped contact recorded it) never links automatically.
+  // Only surfaced as a suggestion for a human to confirm, never auto-linked.
+  const looseNameMatch = (a, b) => {
+    const na = normalizeAccountName(a), nb = normalizeAccountName(b)
+    if (!na || !nb) return false
+    if (na === nb) return true
+    return na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na))
+  }
+  const unlinkedContacts = allContacts.filter(c => !c.accountId)
 
-  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0
+  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0, noEmailContacts = 0
   const accountsWithNoContacts = []
   const errors = []
 
@@ -143,7 +157,17 @@ export default async function handler(req, res) {
         const cpData = await booksGet(`/contacts/${cust.customerId}/contactpersons`)
         for (const p of (cpData.contact_persons || [])) {
           const email = (p.email || '').trim().toLowerCase()
-          if (!email) continue
+          if (!email) {
+            // A real Books contact person with no email on file — can't become
+            // a SalesContact (email is the unique key every other contact-
+            // handling path assumes exists), but still worth surfacing rather
+            // than silently vanishing: a rep can add the email in Books, or
+            // reach out by phone directly.
+            const cpName = [p.first_name, p.last_name].filter(Boolean).join(' ') || '(unnamed)'
+            errors.push(`${cust.name}: Books contact "${cpName}"${p.phone || p.mobile ? ` (${p.phone || p.mobile})` : ''} has no email on file — skipped`)
+            noEmailContacts++
+            continue
+          }
           const firstName = p.first_name || ''
           const lastName  = p.last_name || ''
           const phone     = p.phone || p.mobile || ''
@@ -168,12 +192,18 @@ export default async function handler(req, res) {
     }
 
     const totalContacts = await prisma.salesContact.count({ where: { accountId: account.id } })
-    if (totalContacts === 0) accountsWithNoContacts.push({ name: cust.name, state: cust.state || null })
+    if (totalContacts === 0) {
+      const looseCandidates = unlinkedContacts
+        .filter(c => looseNameMatch(c.companyName, cust.name))
+        .slice(0, 5)
+        .map(c => ({ contactId: c.id, name: `${c.firstName || ''} ${c.lastName || ''}`.trim() || c.email, email: c.email, companyName: c.companyName }))
+      accountsWithNoContacts.push({ accountId: account.id, name: cust.name, state: cust.state || null, looseCandidates })
+    }
   }
 
   return res.json({
     accountsFromBooks: customers.size,
-    accountsCreated, accountsUpdated, contactsLinked, contactsFromBooks,
+    accountsCreated, accountsUpdated, contactsLinked, contactsFromBooks, noEmailContacts,
     accountsWithNoContacts, errors,
   })
 }

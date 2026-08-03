@@ -3269,6 +3269,9 @@ const [loadingAcctStatus,setLoadingAcctStatus]=useState(false);
 const [showNewAccounts,setShowNewAccounts]=useState(false);
 const [showUnassigned,setShowUnassigned]=useState(false);
 const [assigningContactId,setAssigningContactId]=useState(null);
+const [noContactAccountsList,setNoContactAccountsList]=useState(null);
+const [showNoContactAccounts,setShowNoContactAccounts]=useState(false);
+const [linkingCandidateId,setLinkingCandidateId]=useState(null);
 const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
@@ -3303,13 +3306,15 @@ const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const pullTeammatesIntoQualifyingAccounts=async()=>{
 setBackfillingOrgs(true);
-let backendLinked=0,backendPushed=0,backendLeadsPushed=0,noContactAccounts=0,backendBooksContacts=0;
+let backendLinked=0,backendPushed=0,backendLeadsPushed=0,noContactAccounts=0,backendBooksContacts=0,backendNoEmail=0;
 const backendErrors=[];
 try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
 backendLinked=syncRes?.contactsLinked||0;
 backendBooksContacts=syncRes?.contactsFromBooks||0;
+backendNoEmail=syncRes?.noEmailContacts||0;
 noContactAccounts=(syncRes?.accountsWithNoContacts||[]).length;
+setNoContactAccountsList(syncRes?.accountsWithNoContacts||[]);
 backendErrors.push(...(syncRes?.errors||[]));
 // zoho-align-accounts only processes `limit` qualifying accounts per call
 // (so any single run stays fast) — keep re-triggering it until it reports
@@ -3362,7 +3367,7 @@ const bestMatch=named.find(c=>c.school===bestSchool);
 blank.forEach(c=>toFix.push({contact:c,school:bestSchool,state:bestMatch.state,city:bestMatch.city}));
 }
 if(!toFix.length){
-const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere in our system — those need a real person added manually, not matched`:"";
+const gapNote=(noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact — see below`:"")+(backendNoEmail?` · ${backendNoEmail} Books contact${backendNoEmail!==1?"s":""} skipped (no email on file)`:"");
 toast((backendBooksContacts||backendLinked||backendPushed||backendLeadsPushed?`${backendBooksContacts} contact${backendBooksContacts!==1?"s":""} pulled from Zoho Books, ${backendLinked} linked from our database, ${backendPushed} pushed as Contacts (invoiced customers), ${backendLeadsPushed} pushed as Leads (engaged, not yet a customer) — no other qualifying accounts had teammates to pull in`:"No matches — no Books/CRM links, and no domain shared a contact who's shown positive intent yet")+gapNote,"info");
 setBackfillingOrgs(false);refreshAcctStatus();return;
 }
@@ -3380,7 +3385,7 @@ if(d.ok)crmUpdate("Contacts",contact.zohoId,{Account_Name:{id:d.accountId}});
 }
 }
 }
-const gapNote=noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact anywhere — need a real person added manually`:"";
+const gapNote=(noContactAccounts?` · ${noContactAccounts} invoiced account${noContactAccounts!==1?"s":""} still ha${noContactAccounts!==1?"ve":"s"} no known contact — see below`:"")+(backendNoEmail?` · ${backendNoEmail} Books contact${backendNoEmail!==1?"s":""} skipped (no email on file)`:"");
 toast(`Pulled in ${toFix.length} teammate${toFix.length!==1?"s":""} at ${new Set(toFix.map(f=>f.school)).size} qualifying account${new Set(toFix.map(f=>f.school)).size!==1?"s":""} — plus ${backendBooksContacts} pulled from Zoho Books, ${backendLinked} linked from our database, ${backendPushed} pushed as Contacts (invoiced), ${backendLeadsPushed} pushed as Leads`+gapNote,"success");
 setBackfillingOrgs(false);
 refreshAcctStatus();
@@ -3413,6 +3418,18 @@ setAcctStatus(prev=>prev?{...prev,unassignedMatches:prev.unassignedMatches.filte
 }else toast(d.error||"Assign failed","error");
 }catch(e){toast(`Assign error: ${e.message}`,"error");}
 setAssigningContactId(null);
+};
+const linkLooseCandidate=async(contactId,accountId)=>{
+setLinkingCandidateId(contactId);
+try{
+const r=await fetch("/api/contacts/link-account",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contactId,accountId})});
+const d=await r.json();
+if(d.ok){
+toast("Linked — will push to Zoho on next Books pull","success");
+setNoContactAccountsList(prev=>(prev||[]).map(a=>a.accountId===accountId?{...a,looseCandidates:(a.looseCandidates||[]).filter(c=>c.contactId!==contactId)}:a));
+}else toast(d.error||"Link failed","error");
+}catch(e){toast(`Link error: ${e.message}`,"error");}
+setLinkingCandidateId(null);
 };
 const loadBooksContacts=async(customerId)=>{
 if(!customerId||booksContactsByCustomer[customerId])return;
@@ -3666,6 +3683,26 @@ return(
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="accounts"&&(
 <button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Pulls every Zoho Books customer in as a real Account, plus their actual Contact Persons straight from Books — then, for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho), also pulls in other contacts at the same org from our database. Never creates an account from cold prospects." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL FROM ZOHO BOOKS + MATCH ACCOUNTS"}</button>
+)}
+{leftMode==="accounts"&&noContactAccountsList&&noContactAccountsList.length>0&&(
+<div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
+<button onClick={()=>setShowNoContactAccounts(v=>!v)} style={{background:"none",border:"none",padding:0,width:"100%",textAlign:"left",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚠ {noContactAccountsList.length} invoiced account{noContactAccountsList.length!==1?"s":""} ha{noContactAccountsList.length!==1?"ve":"s"} 0 contacts — {showNoContactAccounts?"hide":"show"}</button>
+{showNoContactAccounts&&(
+<div style={{marginTop:5,maxHeight:260,overflowY:"auto"}}>
+{noContactAccountsList.map(a=>(
+<div key={a.accountId} style={{padding:"5px 0",borderBottom:`1px solid ${B.border}20`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.text}}>{a.name}{a.state?` — ${a.state}`:""}</div>
+{(a.looseCandidates||[]).length>0?(a.looseCandidates||[]).map(c=>(
+<div key={c.contactId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:2,paddingLeft:6}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{c.name} <i>({c.companyName})</i></span>
+<button onClick={()=>linkLooseCandidate(c.contactId,a.accountId)} disabled={linkingCandidateId===c.contactId} style={{background:"none",border:`1px solid ${linkingCandidateId===c.contactId?B.border:B.orange}`,color:linkingCandidateId===c.contactId?B.muted:B.orange,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:linkingCandidateId===c.contactId?"default":"pointer",flexShrink:0}}>{linkingCandidateId===c.contactId?"…":"LINK"}</button>
+</div>
+)):<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,paddingLeft:6,fontStyle:"italic"}}>no possible match found in our database — needs a real person added manually</div>}
+</div>
+))}
+</div>
+)}
+</div>
 )}
 {leftMode==="accounts"&&(
 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
