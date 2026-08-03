@@ -13079,7 +13079,7 @@ setRawRows(items.map(it=>[it.name,it.sku,it.category,it.unit,it.cost,it.price,it
 const syntheticHdrs=["name","sku","category","unit","cost","price","map","notes"];
 setHeaders(syntheticHdrs);
 setMapping({name:0,sku:1,category:2,unit:3,cost:4,price:5,map:6,notes:7});
-setStep(3);
+setStep(2);
 };
 const handleFile=async(f)=>{
 if(!f) return;
@@ -13130,7 +13130,8 @@ setHeaders(hdrs);
 setRawRows(rows.slice(1));
 setMapping(autoDetect(hdrs));
 if(!name) setName(f.name.replace(/\.[^.]+$/,""));
-setStep(2);
+// Stays on this same (upload) step — the mapping grid renders right here
+// once rawRows is set, so the user maps columns before moving on.
 }
 }catch(err){setError("Could not parse file: "+err.message);}
 setLoading(false);setLoadMsg("");
@@ -13192,7 +13193,7 @@ return(
 <div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5}}>UPLOAD PRICE LIST</div>
 <div style={{display:"flex",gap:0,marginTop:6}}>
-{["1 Info","2 File","3 Preview"].map((lbtext,idx)=>{
+{["1 Upload","2 Confirm & Save"].map((lbtext,idx)=>{
 const sn=idx+1;
 return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:.3,padding:"2px 8px",borderRadius:3,background:step===sn?B.orange:"transparent",color:step===sn?"#fff":B.muted,marginRight:2}}>{lbtext}</span>);
 })}
@@ -13202,8 +13203,9 @@ return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,
 </div>
 <div style={{flex:1,overflowY:"auto",padding:20}}>
 {error&&<div style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11}}>{error}</div>}
-{/* STEP 1: INFO */}
-{step===1&&(
+{/* STEP 2: CONFIRM INFO (pre-filled by AI where possible) + PREVIEW */}
+{step===2&&(
+<div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
 <div style={{gridColumn:"1/-1"}}>
 <label style={lbl}>LIST NAME *</label>
@@ -13261,9 +13263,35 @@ return(<span key={sn} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,
 <textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Date range, discount terms, RFP context..." rows={2} style={{...inp,resize:"vertical"}}/>
 </div>
 </div>
+<div style={{marginTop:16}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>PREVIEW — {buildItems().length} ITEMS READY TO SAVE</div>
+<div style={{overflowX:"auto",marginBottom:6}}>
+<table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
+<thead>
+<tr style={{background:B.surface}}>
+{["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
+</tr>
+</thead>
+<tbody>
+{buildItems().slice(0,5).map((it,i)=>(
+<tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
+{type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
+<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
+</tr>
+))}
+</tbody>
+</table>
+</div>
+{buildItems().length>5&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>...and {buildItems().length-5} more items</div>}
+</div>
+</div>
 )}
-{/* STEP 2: FILE + MAPPING */}
-{step===2&&(
+{/* STEP 1: UPLOAD */}
+{step===1&&(
 <div>
 <div
 onDragOver={e=>e.preventDefault()}
@@ -13335,54 +13363,19 @@ style={{border:`2px dashed ${B.border}`,borderRadius:8,padding:"24px",textAlign:
 )}
 </div>
 )}
-{/* STEP 3: PREVIEW / CONFIRM */}
-{step===3&&(
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.text,letterSpacing:.5,marginBottom:8}}>PREVIEW — {buildItems().length} ITEMS READY TO SAVE</div>
-<div style={{overflowX:"auto",marginBottom:14}}>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:10}}>
-<thead>
-<tr style={{background:B.surface}}>
-{["Name","SKU","Category",type==="own"?"Cost":"","Price","Notes"].filter(Boolean).map(h=><th key={h} style={{padding:"4px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:.5,textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>)}
-</tr>
-</thead>
-<tbody>
-{buildItems().slice(0,5).map((it,i)=>(
-<tr key={i} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text,maxWidth:140,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{it.name}</td>
-<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.sku||"—"}</td>
-<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.category||"—"}</td>
-{type==="own"&&<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.cost>0?`$${it.cost.toFixed(2)}`:"—"}</td>}
-<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.text}}>{it.price>0?`$${it.price.toFixed(2)}`:"—"}</td>
-<td style={{padding:"4px 8px",fontFamily:"'Lexend',sans-serif",color:B.muted}}>{it.notes||"—"}</td>
-</tr>
-))}
-</tbody>
-</table>
-</div>
-{buildItems().length>5&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>...and {buildItems().length-5} more items</div>}
-</div>
-)}
 </div>
 {/* Footer */}
 <div style={{padding:"12px 20px",borderTop:`1px solid ${B.border}`,display:"flex",gap:8,flexShrink:0}}>
 {step===1&&(
 <>
-<OBtn onClick={()=>{setError("");setStep(2);}}>NEXT: ADD FILE</OBtn>
+{rawRows&&buildItems().length>0&&<OBtn onClick={()=>{setError("");setStep(2);}}>REVIEW {buildItems().length} ITEMS</OBtn>}
 <GBtn onClick={onClose}>CANCEL</GBtn>
 </>
 )}
 {step===2&&(
 <>
-{rawRows&&buildItems().length>0&&<OBtn onClick={()=>{setError("");setStep(3);}}>REVIEW {buildItems().length} ITEMS</OBtn>}
-<GBtn onClick={()=>setStep(1)}>BACK</GBtn>
-<GBtn onClick={onClose}>CANCEL</GBtn>
-</>
-)}
-{step===3&&(
-<>
 <OBtn onClick={handleSave}>SAVE {buildItems().length} ITEMS</OBtn>
-<GBtn onClick={()=>setStep(2)}>BACK</GBtn>
+<GBtn onClick={()=>setStep(1)}>BACK</GBtn>
 <GBtn onClick={onClose}>CANCEL</GBtn>
 </>
 )}
