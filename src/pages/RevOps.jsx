@@ -3328,6 +3328,7 @@ try{
 const syncRes=await fetch("/api/contacts/sync-books-accounts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json());
 backendLinked=syncRes?.contactsLinked||0;
 backendBooksContacts=syncRes?.contactsFromBooks||0;
+backendPushed+=syncRes?.contactsPushedToZoho||0;
 backendNoEmail=syncRes?.noEmailContacts||0;
 noContactAccounts=(syncRes?.accountsWithNoContacts||[]).length;
 setNoContactAccountsList(syncRes?.accountsWithNoContacts||[]);

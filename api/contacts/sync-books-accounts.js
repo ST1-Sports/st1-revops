@@ -10,7 +10,11 @@
  *   1. Pulls every Zoho Books customer (from the invoice list) and
  *      upserts a real Account row for each (dedup by accountDedupKey —
  *      name+state, falling back to name-only when Books doesn't give us
- *      a state on the invoice).
+ *      a state on the invoice), AND resolves/creates the matching real
+ *      Zoho CRM Account — done here, immediately, rather than left for a
+ *      separate step, so this endpoint can push contacts to Zoho itself
+ *      instead of depending on a second call (zoho-align-accounts.js)
+ *      succeeding independently to actually make anything show up.
  *   2. For every one of those accounts, searches the FULL SalesContact
  *      pool (not just previously-unlinked rows) for a companyName match
  *      and links it — this is the "map the contacts into the accounts"
@@ -19,11 +23,11 @@
  *   3. Pulls that customer's actual Contact Persons directly from Zoho
  *      Books (separate from anything already in our SalesContact pool —
  *      an AP/billing contact Books has on file that we never captured any
- *      other way) and upserts them as real SalesContact rows linked to
- *      the account. This is the actual "pull contacts from Zoho Books"
- *      step — step 2 only links contacts that were already in our pool
- *      some other way; this is what makes a Books-only contact show up
- *      at all.
+ *      other way), upserts them as real SalesContact rows linked to the
+ *      account, AND pushes each one straight to Zoho CRM as a real
+ *      Contact right here — a Books contact person on an invoiced
+ *      customer's account IS the qualifying signal, no need to wait on a
+ *      separate pass to reconfirm that.
  *   4. Reports which invoiced accounts still have ZERO linked contacts
  *      even after checking Books directly — that's the direct answer to
  *      "do we actually have contacts for these" — those are the accounts
@@ -33,7 +37,7 @@
  *
  * Body: { dryRun?: boolean }
  * Returns: { accountsFromBooks, accountsCreated, accountsUpdated,
- *            contactsLinked, contactsFromBooks, noEmailContacts,
+ *            contactsLinked, contactsFromBooks, contactsPushedToZoho, noEmailContacts,
  *            accountsWithNoContacts: [{accountId,name,state,looseCandidates:[{contactId,name,email,companyName,state}]}] }
  */
 import { setCors }      from '../_lib/cors.js'
@@ -41,6 +45,8 @@ import { prisma }       from '../_lib/prisma.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { accountDedupKey, normalizeAccountName } from '../_lib/accountUtils.js'
 import { booksGet }     from '../_lib/zoho-books.js'
+import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
+import { upsertZohoRecord } from '../_lib/zohoCrm.js'
 
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
 
@@ -132,18 +138,33 @@ export default async function handler(req, res) {
   // earlier import, before this one existed) can leave a contact linked to
   // the WRONG local Account. Linking pulls them onto the real one instead.
 
-  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0, noEmailContacts = 0
+  let accountsCreated = 0, accountsUpdated = 0, contactsLinked = 0, contactsFromBooks = 0, contactsPushedToZoho = 0, noEmailContacts = 0
   const accountsWithNoContacts = []
   const errors = []
 
   for (const [dedupKey, cust] of customers) {
     const existing = await prisma.account.findUnique({ where: { normalizedName: dedupKey } })
-    const account = await prisma.account.upsert({
+    let account = await prisma.account.upsert({
       where: { normalizedName: dedupKey },
       create: { name: cust.name, normalizedName: dedupKey, city: cust.city || null, state: cust.state || null },
       update: { city: cust.city || undefined, state: cust.state || undefined },
     })
     existing ? accountsUpdated++ : accountsCreated++
+
+    // Resolve the real Zoho CRM Account right here — every one of these
+    // customers is a real, invoiced account, so there's no need to wait on
+    // a separate pass to re-confirm that before a contact can be pushed.
+    // findOrCreateZohoAccount searches by name first, so this reuses
+    // whatever rebuild-deals-from-invoices.js (or an earlier run of this
+    // endpoint) already created instead of making a duplicate.
+    if (!account.zohoAccountId) {
+      try {
+        const { id: zohoAccountId } = await findOrCreateZohoAccount({ name: cust.name, city: cust.city, state: cust.state }, headers)
+        if (zohoAccountId) account = await prisma.account.update({ where: { id: account.id }, data: { zohoAccountId } })
+      } catch (err) {
+        errors.push(`${cust.name}: Zoho Account resolve — ${err.message}`)
+      }
+    }
 
     // Match against the pre-built index — this is the "map the contacts
     // into the accounts" step, run from the account side so it also
@@ -163,7 +184,10 @@ export default async function handler(req, res) {
     // separate "intent" signal of their own (they were never scraped or
     // emailed) — being on file for an already-invoiced customer's account
     // is itself the qualifying signal, same bar as any other contact on a
-    // real customer's account.
+    // real customer's account. Pushed to Zoho CRM as a real Contact right
+    // here too — waiting on a separate zoho-align-accounts.js run to
+    // reconfirm "is this account really invoiced" was the actual reason
+    // this sometimes never showed up on the account at all.
     if (cust.customerId) {
       try {
         const cpData = await booksGet(`/contacts/${cust.customerId}/contactpersons`)
@@ -183,7 +207,7 @@ export default async function handler(req, res) {
           const firstName = p.first_name || ''
           const lastName  = p.last_name || ''
           const phone     = p.phone || p.mobile || ''
-          const result = await prisma.salesContact.upsert({
+          let contact = await prisma.salesContact.upsert({
             where: { email },
             create: {
               email, firstName, lastName, phone,
@@ -196,7 +220,25 @@ export default async function handler(req, res) {
               phone: phone || undefined,
             },
           })
-          if (result) contactsFromBooks++
+          contactsFromBooks++
+
+          if (account.zohoAccountId && !(contact.zohoModule === 'Contacts' && contact.zohoCrmId)) {
+            try {
+              const payload = {
+                First_Name: firstName, Last_Name: lastName || email.split('@')[0],
+                Email: email, Phone: phone,
+                Account_Name: { id: account.zohoAccountId },
+              }
+              const { zohoCrmId, isUpdate } = await upsertZohoRecord({ module: 'Contacts', payload, contact, headers })
+              await prisma.salesContact.update({
+                where: { id: contact.id },
+                data: { pushedToZoho: true, zohoCrmId, zohoModule: 'Contacts', zohoAccountId: account.zohoAccountId },
+              })
+              if (!isUpdate) contactsPushedToZoho++
+            } catch (err) {
+              errors.push(`${cust.name}: pushing ${email} to Zoho — ${err.message}`)
+            }
+          }
         }
       } catch (err) {
         errors.push(`${cust.name}: Books contact persons — ${err.message}`)
@@ -215,7 +257,7 @@ export default async function handler(req, res) {
 
   return res.json({
     accountsFromBooks: customers.size,
-    accountsCreated, accountsUpdated, contactsLinked, contactsFromBooks, noEmailContacts,
+    accountsCreated, accountsUpdated, contactsLinked, contactsFromBooks, contactsPushedToZoho, noEmailContacts,
     accountsWithNoContacts, errors,
   })
 }
