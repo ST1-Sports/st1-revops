@@ -140,7 +140,14 @@ integrations: {...(base.integrations||{}), ...(typeof server.integrations==="obj
 company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
 agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
 campaigns:    mergeById(base.campaigns,    server.campaigns),
-contacts:     mergeById(base.contacts,     server.contacts),
+// contacts is NOT union-merged like everything else here — it's meant to be
+// a live mirror of Zoho (reconciled by syncContacts, which already adds,
+// updates, AND prunes), not a set every browser independently adds to
+// forever. A union merge means any browser's stale local leftovers survive
+// every pull and get pushed right back to the server, endlessly reviving
+// contacts that were already correctly deleted — take the server's copy
+// outright (it's already the reconciled truth once any browser has synced).
+contacts:     Array.isArray(server.contacts) ? server.contacts : (base.contacts||[]),
 contactLists: mergeById(base.contactLists, server.contactLists),
 deals:        mergeById(base.deals,        server.deals),
 rfps:         mergeById(base.rfps,         server.rfps),
@@ -3198,6 +3205,15 @@ setCrmSyncing(true);
 await crmSyncRef.current(true);
 setCrmSyncing(false);
 };
+const [wipingContacts,setWipingContacts]=useState(false);
+const wipeAndResyncContacts=async()=>{
+if(!crmSyncRef?.current){toast("Sync not ready — reload the page","error");return;}
+if(!window.confirm(`This clears all ${(s.contacts||[]).length} locally-cached contact(s) (here and in the shared database) and rebuilds the list fresh from what's actually live in Zoho right now. Use this if the count keeps reverting to an old number. Continue?`))return;
+setWipingContacts(true);
+dispatch("SET_CONTACTS",[]);
+await crmSyncRef.current(true);
+setWipingContacts(false);
+};
 const [resettingScores,setResettingScores]=useState(false);
 const resetAllScores=async()=>{
 const n=(s.contacts||[]).filter(c=>(c.score||0)>0).length;
@@ -3652,6 +3668,7 @@ return(
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 <button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
 <button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
+<button onClick={wipeAndResyncContacts} disabled={wipingContacts} title="Clears the cached contact list (here and in the shared database) and rebuilds it fresh from what's live in Zoho right now — use this if the count keeps reverting to an old number" style={{background:"none",border:`1px solid ${wipingContacts?B.border:B.red}`,color:wipingContacts?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:wipingContacts?"default":"pointer"}}>{wipingContacts?"WIPING…":"⟲ WIPE + RESYNC CONTACTS"}</button>
 <button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
 <button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Deletes every Deal in Zoho CRM and recreates exactly one Deal per real (non-draft/void) Zoho Books invoice — a Deal should only exist because of a real invoice" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
 </div>

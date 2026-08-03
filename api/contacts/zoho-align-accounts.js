@@ -120,8 +120,16 @@ export default async function handler(req, res) {
   // 3. Find candidate accounts (have at least one contact not yet pushed to
   //    its correct module), split into invoiced (-> Contacts) vs
   //    engagement-only (-> Leads).
+  // A Lead already pushed to Zoho still needs reconsidering — if their
+  // account later becomes invoiced (a Books invoice lands after the fact),
+  // they should get upgraded to a real Contact, not stay a Lead forever
+  // just because pushedToZoho is already true. Only an already-real
+  // Contact is truly done; everything else (never pushed, or pushed as a
+  // Lead) stays a candidate. The per-contact module check further down
+  // still skips a Lead whose account isn't invoiced yet — this only
+  // reopens the ones that actually need re-evaluating.
   const pending = await prisma.salesContact.findMany({
-    where: { accountId: { not: null }, pushedToZoho: false },
+    where: { accountId: { not: null }, NOT: { zohoModule: 'Contacts' } },
     select: { accountId: true },
   })
   const candidateIds = [...new Set(pending.map(c => c.accountId))]
