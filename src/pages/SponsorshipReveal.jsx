@@ -18,6 +18,7 @@ function fmt$(n) {
 
 const WHAT_WE_DO = [
   { t: "Real Sponsorship Dollars", d: "Direct revenue back to your program — not just a discount on gear." },
+  { t: "Not Just Spirit Wear", d: "Equipment and gear run through your store too, alongside apparel — every category adds to your program's cut." },
   { t: "One Rep, Every Order", d: "K-12 specialists. Tax-exempt PO friendly. A real person answers the phone." },
 ]
 
@@ -60,17 +61,26 @@ export default function SponsorshipReveal() {
             {currentProvider && <span>· Currently with {currentProvider}</span>}
           </div>
         )}
-        <div style={{ display: "flex", gap: "10px 44px", flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", gap: "18px 44px", flexWrap: "wrap", justifyContent: "center", alignItems: "center", marginBottom: 14 }}>
           <div>
-            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 13, color: "rgba(255,255,255,.5)", letterSpacing: 2, marginBottom: 8 }}>GUARANTEED</div>
-            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: "clamp(46px,9vw,110px)", color: B.white, lineHeight: 1 }}>{fmt$(guaranteedMin)}</div>
+            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 14, color: "rgba(255,255,255,.5)", letterSpacing: 2, marginBottom: 10 }}>GUARANTEED</div>
+            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: "clamp(52px,10vw,124px)", color: B.white, lineHeight: 1 }}>{fmt$(guaranteedMin)}</div>
           </div>
-          <div>
-            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 13, color: B.orange, letterSpacing: 2, marginBottom: 8 }}>UPSIDE</div>
-            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: "clamp(46px,9vw,110px)", color: B.orange, lineHeight: 1 }}>{fmt$(upsideMax)}</div>
+          <div style={{ background: "rgba(243,115,33,.12)", border: `2px solid ${B.orange}`, borderRadius: 16, padding: "18px 36px", boxShadow: "0 0 50px rgba(243,115,33,.35)" }}>
+            <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 14, color: B.orange, letterSpacing: 2, marginBottom: 10 }}>UPSIDE POTENTIAL</div>
+            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: "clamp(66px,13vw,160px)", color: B.orange, lineHeight: 1 }}>{fmt$(upsideMax)}</div>
           </div>
         </div>
-        <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, color: "rgba(255,255,255,.45)", marginBottom: 44 }}>Estimated annual sponsorship value — real revenue back to your program.</div>
+        <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 14, color: "rgba(255,255,255,.45)", marginBottom: 48 }}>Estimated annual sponsorship value — real revenue back to your program.</div>
+
+        <div style={{ width: "100%", maxWidth: 860, marginBottom: 40 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 13, color: "rgba(255,255,255,.5)", letterSpacing: 2, marginBottom: 16 }}>20+ BRANDS YOUR ATHLETES ALREADY WEAR</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
+            {BRANDS.map(b => (
+              <div key={b} style={{ background: "rgba(255,255,255,.07)", border: "1px solid rgba(255,255,255,.14)", borderRadius: 22, padding: "9px 20px", fontFamily: "'Lexend Zetta',sans-serif", fontSize: 14, color: "rgba(255,255,255,.9)" }}>{b}</div>
+            ))}
+          </div>
+        </div>
 
         <div style={{ width: "100%", maxWidth: 700, marginBottom: 40 }}>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: "rgba(255,255,255,.45)", letterSpacing: 2, marginBottom: 14 }}>REAL TEAM STORES, LIVE RIGHT NOW</div>
@@ -102,15 +112,6 @@ export default function SponsorshipReveal() {
                   <a href={store.url} target="_blank" rel="noopener noreferrer" style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.orange, textDecoration: "none", letterSpacing: .3 }}>VIEW LIVE ↗</a>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ width: "100%", maxWidth: 820, marginBottom: 40 }}>
-          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: "rgba(255,255,255,.45)", letterSpacing: 2, marginBottom: 14 }}>20+ BRANDS YOUR ATHLETES ALREADY WEAR</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
-            {BRANDS.map(b => (
-              <div key={b} style={{ background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 20, padding: "7px 16px", fontFamily: "'Lexend',sans-serif", fontSize: 12, color: "rgba(255,255,255,.8)" }}>{b}</div>
             ))}
           </div>
         </div>
