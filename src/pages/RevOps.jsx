@@ -4900,65 +4900,6 @@ const SPONS_CONFIG_DEFAULTS={avgOrderValuePerAthlete:85,avgEquipmentOrderPerSpor
 // drive the estimate; capturing who the school/AD even is is a genuinely
 // optional second step, since that's the kind of thing you get once you're
 // actually mid-conversation, not before you can even show them a number.
-// Full-screen, branded "reveal" — meant to be turned around and shown to the
-// prospect directly (on a laptop/tablet at an event), not the rep's own
-// working view, so it drops all app chrome and only shows the number + the
-// pitch. Dark bg + orange accents + Russo One is the flagship ST1 look.
-function SponsorshipReveal({schoolName,currentProvider,schoolClass,numSports,numAthletes,calcResult,onClose}){
-const WHAT_WE_DO=[
-{t:"20+ Premium Brands",d:"Wilson, DeMarini, Louisville Slugger, EvoShield & more — one supplier, every sport."},
-{t:"Real Sponsorship Dollars",d:"Direct revenue back to your program — not just a discount on gear."},
-{t:"Team Store Built In",d:"An online store for parents & fans, with zero extra work for coaches."},
-{t:"One Rep, Every Order",d:"K-12 specialists. Tax-exempt PO friendly. A real person answers the phone."},
-];
-return(
-<div style={{position:"fixed",inset:0,background:`linear-gradient(160deg, ${B.black} 0%, ${B.gray1} 100%)`,zIndex:9999,display:"flex",flexDirection:"column",overflowY:"auto"}}>
-<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"22px 32px",flexShrink:0}}>
-<div style={{display:"flex",alignItems:"center",gap:10}}>
-<div style={{width:36,height:36,background:B.orange,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.white,letterSpacing:-1}}>ST1</span>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.white,letterSpacing:.5}}>ST1 SPORTS</div>
-</div>
-<button onClick={onClose} style={{background:"none",border:"1px solid rgba(255,255,255,.25)",color:"rgba(255,255,255,.6)",borderRadius:6,padding:"6px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>✕ Exit</button>
-</div>
-<div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"12px 24px 32px",textAlign:"center"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:12,color:B.orange,letterSpacing:3,marginBottom:10}}>SPONSORSHIP OPPORTUNITY</div>
-{schoolName&&<div style={{fontFamily:"'Russo One',sans-serif",fontSize:28,color:B.white,marginBottom:8}}>{schoolName}</div>}
-{(schoolClass||numAthletes||numSports||currentProvider)&&(
-<div style={{display:"flex",gap:12,flexWrap:"wrap",justifyContent:"center",marginBottom:36,fontFamily:"'Lexend',sans-serif",fontSize:13,color:"rgba(255,255,255,.55)"}}>
-{schoolClass&&<span>Class {schoolClass}</span>}
-{numAthletes&&<span>· {numAthletes} athletes</span>}
-{numSports&&<span>· {numSports} sports</span>}
-{currentProvider&&<span>· Currently with {currentProvider}</span>}
-</div>
-)}
-<div style={{display:"flex",gap:"10px 44px",flexWrap:"wrap",justifyContent:"center",marginBottom:10}}>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:13,color:"rgba(255,255,255,.5)",letterSpacing:2,marginBottom:8}}>GUARANTEED</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:"clamp(46px,9vw,110px)",color:B.white,lineHeight:1}}>{fmt$(calcResult?.guaranteedMin||0)}</div>
-</div>
-<div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:13,color:B.orange,letterSpacing:2,marginBottom:8}}>UPSIDE</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:"clamp(46px,9vw,110px)",color:B.orange,lineHeight:1}}>{fmt$(calcResult?.upsideMax||0)}</div>
-</div>
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:"rgba(255,255,255,.45)",marginBottom:44}}>Estimated annual sponsorship value — real revenue back to your program.</div>
-<div style={{width:"100%",maxWidth:820,display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:16}}>
-{WHAT_WE_DO.map(card=>(
-<div key={card.t} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:8,padding:"16px",textAlign:"left"}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,color:B.orange,letterSpacing:.3,marginBottom:6}}>{card.t}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"rgba(255,255,255,.6)",lineHeight:1.5}}>{card.d}</div>
-</div>
-))}
-</div>
-</div>
-<div style={{textAlign:"center",padding:"18px 24px 28px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:"rgba(255,255,255,.5)",flexShrink:0}}>
-Let's make it official — <span style={{color:B.orange}}>matt@st1sports.com</span> · 719-256-0275 · st1sports.com
-</div>
-</div>
-);
-}
 function QuickSponsorshipModal({onClose}){
 const {dispatch,toast,cu}=useApp();
 const [schoolClass,setSchoolClass]=useState("");
@@ -4973,7 +4914,6 @@ const [adName,setAdName]=useState("");
 const [adEmail,setAdEmail]=useState("");
 const [adPhone,setAdPhone]=useState("");
 const [currentProvider,setCurrentProvider]=useState("");
-const [showReveal,setShowReveal]=useState(false);
 const [saved,setSaved]=useState(false);
 const canCalc=(numSports||numAthletes)&&schoolClass&&hasBoosterClub!==null;
 const doCalc=()=>{
@@ -5017,7 +4957,14 @@ return <button key={opt} onClick={()=>onPick(opt==="Yes")} style={{flex:1,backgr
 })}
 </div>
 );
-if(showReveal) return <SponsorshipReveal schoolName={schoolName.trim()} currentProvider={currentProvider.trim()} schoolClass={schoolClass} numSports={numSports} numAthletes={numAthletes} calcResult={calcResult} onClose={()=>setShowReveal(false)}/>;
+const openReveal=()=>{
+const qp=new URLSearchParams({
+school:schoolName.trim(),provider:currentProvider.trim(),class:schoolClass,
+sports:String(numSports||""),athletes:String(numAthletes||""),
+min:String(calcResult?.guaranteedMin||0),max:String(calcResult?.upsideMax||0),
+});
+window.open(`/sponsorship-reveal?${qp.toString()}`,"_blank");
+};
 return(
 <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
 <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:460,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
@@ -5039,7 +4986,7 @@ return(
 <div style={{background:`${B.green}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>GUARANTEED MIN</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green}}>{fmt$(calcResult.guaranteedMin||0)}</div></div>
 <div style={{background:`${B.orange}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:4}}>UPSIDE MAX</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(calcResult.upsideMax||0)}</div></div>
 </div>
-<GBtn onClick={()=>setShowReveal(true)} style={{width:"100%",marginTop:10}}>▸ SHOW FULL SCREEN</GBtn>
+<GBtn onClick={openReveal} style={{width:"100%",marginTop:10}}>▸ OPEN FULL SCREEN (NEW TAB)</GBtn>
 {!saved?(
 <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
 <Lbl s={{marginBottom:8}}>Capture the school (optional — once you know who you're talking to)</Lbl>

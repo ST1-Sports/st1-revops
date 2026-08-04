@@ -11,6 +11,7 @@ const Expansion   = lazy(() => import('./pages/Expansion.jsx'))
 const Integrations= lazy(() => import('./pages/Integrations.jsx'))
 const Reddit      = lazy(() => import('./pages/Reddit.jsx'))
 const CommandCenter = lazy(() => import('./pages/CommandCenter.jsx'))
+const SponsorshipReveal = lazy(() => import('./pages/SponsorshipReveal.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
 // (e.g. null access in nav/header, unexpected server state merge)
@@ -197,6 +198,7 @@ export default function App() {
           <Route path="/integrations"element={<Integrations />} />
           <Route path="/reddit"      element={<Reddit />} />
           <Route path="/command-center" element={<CommandCenter />} />
+          <Route path="/sponsorship-reveal" element={<SponsorshipReveal />} />
 
           {/* Catch-all */}
           <Route path="*"            element={<Navigate to="/" replace />} />
