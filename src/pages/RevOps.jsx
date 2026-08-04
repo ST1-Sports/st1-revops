@@ -4963,7 +4963,7 @@ school:schoolName.trim(),provider:currentProvider.trim(),class:schoolClass,
 sports:String(numSports||""),athletes:String(numAthletes||""),
 min:String(calcResult?.guaranteedMin||0),max:String(calcResult?.upsideMax||0),
 });
-window.open(`/sponsorship-reveal?${qp.toString()}`,"_blank");
+window.open(`/sponsorship-reveal?${qp.toString()}`,"st1SponsorshipReveal");
 };
 return(
 <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -4986,7 +4986,7 @@ return(
 <div style={{background:`${B.green}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>GUARANTEED MIN</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green}}>{fmt$(calcResult.guaranteedMin||0)}</div></div>
 <div style={{background:`${B.orange}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:4}}>UPSIDE MAX</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(calcResult.upsideMax||0)}</div></div>
 </div>
-<GBtn onClick={openReveal} style={{width:"100%",marginTop:10}}>▸ OPEN FULL SCREEN (NEW TAB)</GBtn>
+<GBtn onClick={openReveal} style={{width:"100%",marginTop:10}}>▸ SHOW FULL SCREEN</GBtn>
 {!saved?(
 <div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
 <Lbl s={{marginBottom:8}}>Capture the school (optional — once you know who you're talking to)</Lbl>

@@ -23,15 +23,10 @@ const WHAT_WE_DO = [
 
 const BRANDS = ["Wilson", "DeMarini", "Louisville Slugger", "EvoShield", "Warstic", "Diamond", "All-Star", "Molten", "Gill Athletics", "Blazer", "FinishLynx", "Spalding", "Dudley", "BWTF"]
 
-const STORE_ITEMS = [
-  { icon: "🎽", name: "Team Jersey", price: "$48" },
-  { icon: "🧢", name: "Booster Cap", price: "$22" },
-  { icon: "👕", name: "Fan Hoodie", price: "$55" },
+const EXAMPLE_STORES = [
+  { name: "Norwalk HS Cross Country", url: "https://store.st1sports.com/norwalk-hs-xc" },
+  { name: "Nodaway Valley Volleyball", url: "https://store.st1sports.com/nodaway-valley-volleyball" },
 ]
-
-function slugify(s) {
-  return (s || "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")
-}
 
 export default function SponsorshipReveal() {
   const [params] = useSearchParams()
@@ -77,30 +72,37 @@ export default function SponsorshipReveal() {
         </div>
         <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, color: "rgba(255,255,255,.45)", marginBottom: 44 }}>Estimated annual sponsorship value — real revenue back to your program.</div>
 
-        <div style={{ width: "100%", maxWidth: 640, marginBottom: 40 }}>
-          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: "rgba(255,255,255,.45)", letterSpacing: 2, marginBottom: 14 }}>YOUR OWN TEAM STORE — LIVE IN DAYS</div>
-          <div style={{ background: "#fff", borderRadius: 10, overflow: "hidden", boxShadow: "0 12px 40px rgba(0,0,0,.35)", textAlign: "left" }}>
-            <div style={{ background: "#e8e8e8", padding: "8px 12px", display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ display: "flex", gap: 4 }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ff5f57", display: "inline-block" }} />
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ffbd2e", display: "inline-block" }} />
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#28c840", display: "inline-block" }} />
-              </div>
-              <div style={{ flex: 1, background: "#fff", borderRadius: 4, padding: "3px 10px", fontSize: 10, color: "#666", fontFamily: "monospace", marginLeft: 8 }}>shop.st1sports.com/{slugify(schoolName) || "your-school"}</div>
-            </div>
-            <div style={{ padding: "18px 20px", background: "#fafafa" }}>
-              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 15, color: B.gray1, marginBottom: 2 }}>{schoolName ? `${schoolName} FAN STORE` : "YOUR SCHOOL FAN STORE"}</div>
-              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: "#888", marginBottom: 14 }}>Every purchase gives back to the program</div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-                {STORE_ITEMS.map(item => (
-                  <div key={item.name} style={{ background: "#fff", border: "1px solid #eee", borderRadius: 8, padding: "10px 8px", textAlign: "center" }}>
-                    <div style={{ fontSize: 26, marginBottom: 6 }}>{item.icon}</div>
-                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.gray1, fontWeight: 600, marginBottom: 2 }}>{item.name}</div>
-                    <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: B.orange }}>{item.price}</div>
+        <div style={{ width: "100%", maxWidth: 700, marginBottom: 40 }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: "rgba(255,255,255,.45)", letterSpacing: 2, marginBottom: 14 }}>REAL TEAM STORES, LIVE RIGHT NOW</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 16 }}>
+            {EXAMPLE_STORES.map(store => (
+              <div key={store.url} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", boxShadow: "0 12px 40px rgba(0,0,0,.35)", textAlign: "left" }}>
+                <div style={{ background: "#e8e8e8", padding: "8px 12px", display: "flex", alignItems: "center", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ff5f57", display: "inline-block" }} />
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ffbd2e", display: "inline-block" }} />
+                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#28c840", display: "inline-block" }} />
                   </div>
-                ))}
+                  <div style={{ flex: 1, background: "#fff", borderRadius: 4, padding: "3px 10px", fontSize: 10, color: "#666", fontFamily: "monospace", marginLeft: 8, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>{store.url.replace("https://", "")}</div>
+                </div>
+                <div
+                  onClick={() => window.open(store.url, "_blank", "noopener,noreferrer")}
+                  style={{ height: 220, overflow: "hidden", position: "relative", background: "#fafafa", cursor: "pointer" }}
+                >
+                  <iframe
+                    src={store.url}
+                    title={store.name}
+                    loading="lazy"
+                    sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+                    style={{ width: 1280, height: 880, border: "none", transform: "scale(0.25)", transformOrigin: "top left", pointerEvents: "none" }}
+                  />
+                </div>
+                <div style={{ padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid #eee" }}>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.gray1, fontWeight: 600 }}>{store.name}</div>
+                  <a href={store.url} target="_blank" rel="noopener noreferrer" style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 9, color: B.orange, textDecoration: "none", letterSpacing: .3 }}>VIEW LIVE ↗</a>
+                </div>
               </div>
-            </div>
+            ))}
           </div>
         </div>
 
