@@ -4894,9 +4894,115 @@ return(
 );
 }
 const SPONS_CONFIG_DEFAULTS={avgOrderValuePerAthlete:85,avgEquipmentOrderPerSport:400,netMarginPct:0.18,givebackPct:0.30,schoolClassConfidence:{"1A":0.40,"2A":0.50,"3A":0.60,"4A":0.70,"5A":0.78,"6A":0.85},teamStoreRevenuePerAthlete:35,purchaseFrequencyPerYear:1.5,boosterMultiplier:1.15};
+// Quick, no-CRM-required sponsorship estimate — for pitching cold, in person
+// (a golf tournament, a booth, a hallway conversation) where there's no
+// existing contact/lead to look up first. Just the 4 numbers that actually
+// drive the estimate; capturing who the school/AD even is is a genuinely
+// optional second step, since that's the kind of thing you get once you're
+// actually mid-conversation, not before you can even show them a number.
+function QuickSponsorshipModal({onClose}){
+const {dispatch,toast,cu}=useApp();
+const [schoolClass,setSchoolClass]=useState("");
+const [numSports,setNumSports]=useState("");
+const [numAthletes,setNumAthletes]=useState("");
+const [hasBoosterClub,setHasBoosterClub]=useState(null);
+const [calcLoading,setCalcLoading]=useState(false);
+const [calcResult,setCalcResult]=useState(null);
+const [calcError,setCalcError]=useState("");
+const [schoolName,setSchoolName]=useState("");
+const [adName,setAdName]=useState("");
+const [adEmail,setAdEmail]=useState("");
+const [adPhone,setAdPhone]=useState("");
+const [saved,setSaved]=useState(false);
+const canCalc=(numSports||numAthletes)&&schoolClass&&hasBoosterClub!==null;
+const doCalc=()=>{
+if(!canCalc)return;
+setCalcLoading(true);setCalcError("");
+fetch("/api/sponsorship/calculate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
+hasOnlineStore:false,hasBoosterClub:hasBoosterClub===true,
+})})
+.then(r=>r.json()).then(d=>{
+if(d.error){setCalcError(d.error);setCalcLoading(false);return;}
+setCalcResult(d);setCalcLoading(false);
+}).catch(e=>{setCalcError(e.message);setCalcLoading(false);});
+};
+const saveToPipeline=()=>{
+if(!schoolName.trim()){toast("Enter the school name to save it to the pipeline","error");return;}
+const nameParts=adName.trim().split(/\s+/).filter(Boolean);
+const c={
+id:mkId(),
+firstName:nameParts[0]||"",lastName:nameParts.slice(1).join(" ")||"",
+fullName:adName.trim(),title:adName.trim()?"Athletic Director":"",
+school:schoolName.trim(),email:adEmail.trim(),phone:adPhone.trim(),
+schoolClass,numSports:Number(numSports||0),numAthletes:Number(numAthletes||0),
+hasBoosterClub:hasBoosterClub===true,hasOnlineStore:false,
+sponsorshipMin:calcResult?.guaranteedMin||0,sponsorshipMax:calcResult?.upsideMax||0,
+sponsorshipStatus:"proposed",
+ownerId:cu?.id,source:"event",orgType:"school",outreachStatus:"interested",
+importedAt:Date.now(),
+};
+dispatch("ADD_CONTACTS",[c]);
+toast(`${schoolName.trim()} added to the sponsorship pipeline`,"success");
+setSaved(true);
+};
+const inp={width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:12,boxSizing:"border-box"};
+const yn=(val,onPick)=>(
+<div style={{display:"flex",gap:6}}>
+{["Yes","No"].map(opt=>{
+const active=opt==="Yes"?val===true:val===false;
+return <button key={opt} onClick={()=>onPick(opt==="Yes")} style={{flex:1,background:active?B.green:B.surface,color:active?B.white:B.muted,border:`1px solid ${active?B.green:B.border}`,borderRadius:4,padding:"7px 8px",fontSize:11,cursor:"pointer",fontFamily:"'Lexend Zetta',sans-serif"}}>{opt}</button>;
+})}
+</div>
+);
+return(
+<div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+<div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:460,maxHeight:"90vh",overflow:"hidden",display:"flex",flexDirection:"column"}}>
+<div style={{padding:"16px 20px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5}}>QUICK SPONSORSHIP ESTIMATE</div>
+<button onClick={onClose} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+</div>
+<div style={{flex:1,overflowY:"auto",padding:20}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+<div><Lbl s={{marginBottom:3}}>School Class</Lbl><select value={schoolClass} onChange={e=>setSchoolClass(e.target.value)} style={{...inp,background:"#fff"}}><option value="">— Select —</option>{["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}</select></div>
+<div><Lbl s={{marginBottom:3}}># Sports</Lbl><input type="number" value={numSports} onChange={e=>setNumSports(e.target.value)} placeholder="e.g. 8" style={inp}/></div>
+<div><Lbl s={{marginBottom:3}}># Athletes (estimate)</Lbl><input type="number" value={numAthletes} onChange={e=>setNumAthletes(e.target.value)} placeholder="e.g. 250" style={inp}/></div>
+<div><Lbl s={{marginBottom:3}}>Booster Club?</Lbl>{yn(hasBoosterClub,setHasBoosterClub)}</div>
+</div>
+{calcError&&<div style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}30`,borderRadius:5,padding:"8px 12px",marginBottom:12,fontFamily:"'Lexend',sans-serif",fontSize:11}}>{calcError}</div>}
+<OBtn onClick={doCalc} disabled={!canCalc||calcLoading} style={{width:"100%"}}>{calcLoading?"CALCULATING…":"✦ CALCULATE"}</OBtn>
+{calcResult&&(<>
+<div style={{marginTop:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+<div style={{background:`${B.green}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1,marginBottom:4}}>GUARANTEED MIN</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.green}}>{fmt$(calcResult.guaranteedMin||0)}</div></div>
+<div style={{background:`${B.orange}10`,borderRadius:6,padding:"12px 14px"}}><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1,marginBottom:4}}>UPSIDE MAX</div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.orange}}>{fmt$(calcResult.upsideMax||0)}</div></div>
+</div>
+{!saved?(
+<div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${B.border}`}}>
+<Lbl s={{marginBottom:8}}>Capture the school (optional — once you know who you're talking to)</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+<div style={{gridColumn:"1/-1"}}><input value={schoolName} onChange={e=>setSchoolName(e.target.value)} placeholder="School name *" style={inp}/></div>
+<input value={adName} onChange={e=>setAdName(e.target.value)} placeholder="AD name" style={inp}/>
+<input value={adPhone} onChange={e=>setAdPhone(e.target.value)} placeholder="Phone" style={inp}/>
+<div style={{gridColumn:"1/-1"}}><input value={adEmail} onChange={e=>setAdEmail(e.target.value)} placeholder="Email" style={inp}/></div>
+</div>
+<OBtn onClick={saveToPipeline} style={{width:"100%"}}>SAVE TO PIPELINE</OBtn>
+</div>
+):(
+<div style={{marginTop:18,paddingTop:16,borderTop:`1px solid ${B.border}`,textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.green}}>✓ Saved to the pipeline — find it under Proposed.</div>
+)}
+</>)}
+</div>
+<div style={{padding:"12px 20px",borderTop:`1px solid ${B.border}`,flexShrink:0}}>
+<GBtn onClick={onClose} style={{width:"100%"}}>{saved?"DONE":"CLOSE"}</GBtn>
+</div>
+</div>
+</div>
+);
+}
 function ModSponsorships(){
 const {s,dispatch,toast,setMod,cu}=useApp();
 const [tab,setTab]=useState("proposed");
+const [showQuickEstimate,setShowQuickEstimate]=useState(false);
 const [confirmId,setConfirmId]=useState(null);
 const [confirmAmt,setConfirmAmt]=useState("");
 const [payFilter,setPayFilter]=useState("all");
@@ -5020,7 +5126,10 @@ return(
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.orange,letterSpacing:2.5,marginBottom:4}}>SPONSORSHIPS</div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:22,color:B.black}}>Sponsorship Pipeline</div>
 </div>
-<OBtn onClick={()=>setMod("crm")}>← Back to CRM</OBtn>
+<div style={{display:"flex",gap:8}}>
+<OBtn onClick={()=>setShowQuickEstimate(true)}>▸ START NOW</OBtn>
+<GBtn onClick={()=>setMod("crm")}>← Back to CRM</GBtn>
+</div>
 </div>
 {/* Summary cards */}
 <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:24}}>
@@ -5040,8 +5149,11 @@ return(
 proposed.length===0?(
 <div style={{textAlign:"center",padding:"60px 0"}}>
 <div style={{fontSize:32,marginBottom:12}}>★</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:16}}>No sponsorships proposed yet.<br/>Complete a Talk Track with a school to generate an estimate.</div>
-<OBtn onClick={()=>setMod("crm")}>Go to CRM →</OBtn>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted,marginBottom:16}}>No sponsorships proposed yet.<br/>Start a quick estimate — no CRM lookup needed — or complete a Talk Track with a school.</div>
+<div style={{display:"flex",gap:8,justifyContent:"center"}}>
+<OBtn onClick={()=>setShowQuickEstimate(true)}>▸ START NOW</OBtn>
+<GBtn onClick={()=>setMod("crm")}>Go to CRM →</GBtn>
+</div>
 </div>
 ):(
 proposed.map(c=><SCard key={c.id} c={c} showConfirmForm={false}/>)
@@ -5139,6 +5251,7 @@ style={{width:"100%",textAlign:"center",...inp}}/>
 })()}
 </div>
 )}
+{showQuickEstimate&&<QuickSponsorshipModal onClose={()=>setShowQuickEstimate(false)}/>}
 </div>
 );
 }
