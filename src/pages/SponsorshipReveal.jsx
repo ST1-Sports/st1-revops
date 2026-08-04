@@ -42,12 +42,7 @@ export default function SponsorshipReveal() {
   return (
     <div style={{ position: "fixed", inset: 0, background: `linear-gradient(160deg, ${B.black} 0%, ${B.gray1} 100%)`, display: "flex", flexDirection: "column", overflowY: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "22px 32px", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <div style={{ width: 36, height: 36, background: B.orange, borderRadius: 7, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <span style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.white, letterSpacing: -1 }}>ST1</span>
-          </div>
-          <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.white, letterSpacing: .5 }}>ST1 SPORTS</div>
-        </div>
+        <img src="/assets/st1-logo.png" alt="ST1 Sports" style={{ height: 42 }} />
         <button onClick={() => window.close()} style={{ background: "none", border: "1px solid rgba(255,255,255,.25)", color: "rgba(255,255,255,.6)", borderRadius: 6, padding: "6px 14px", fontFamily: "'Lexend',sans-serif", fontSize: 11, cursor: "pointer" }}>✕ Close</button>
       </div>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "12px 24px 32px", textAlign: "center" }}>
