@@ -22,11 +22,13 @@ const WHAT_WE_DO = [
   { t: "One Rep, Every Order", d: "K-12 specialists. Tax-exempt PO friendly. A real person answers the phone." },
 ]
 
-const BRANDS = ["Wilson", "DeMarini", "Louisville Slugger", "EvoShield", "Warstic", "Diamond", "All-Star", "Molten", "Gill Athletics", "Blazer", "FinishLynx", "Spalding", "Dudley", "BWTF"]
+const BRANDS = ["Wilson", "DeMarini", "Louisville Slugger", "EvoShield", "Warstic", "Diamond", "All-Star", "Molten", "Gill Athletics", "Blazer", "FinishLynx", "Spalding", "Dudley"]
 
 const EXAMPLE_STORES = [
   { name: "Norwalk HS Cross Country", url: "https://store.st1sports.com/norwalk-hs-xc" },
   { name: "Nodaway Valley Volleyball", url: "https://store.st1sports.com/nodaway-valley-volleyball" },
+  { name: "ADM Cross Country", url: "https://store.st1sports.com/admxc" },
+  { name: "Rampart Athletics", url: "https://store.st1sports.com/rampart-athletics" },
 ]
 
 export default function SponsorshipReveal() {
@@ -41,8 +43,8 @@ export default function SponsorshipReveal() {
 
   return (
     <div style={{ position: "fixed", inset: 0, background: `linear-gradient(160deg, ${B.black} 0%, ${B.gray1} 100%)`, display: "flex", flexDirection: "column", overflowY: "auto" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "22px 32px", flexShrink: 0 }}>
-        <img src="/assets/st1-logo.png" alt="ST1 Sports" style={{ height: 42 }} />
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "26px 40px", flexShrink: 0 }}>
+        <img src="/assets/st1-logo.png" alt="ST1 Sports" style={{ height: 100, filter: "drop-shadow(0 6px 24px rgba(243,115,33,.45))" }} />
         <button onClick={() => window.close()} style={{ background: "none", border: "1px solid rgba(255,255,255,.25)", color: "rgba(255,255,255,.6)", borderRadius: 6, padding: "6px 14px", fontFamily: "'Lexend',sans-serif", fontSize: 11, cursor: "pointer" }}>✕ Close</button>
       </div>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "12px 24px 32px", textAlign: "center" }}>
@@ -68,7 +70,7 @@ export default function SponsorshipReveal() {
         </div>
         <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 14, color: "rgba(255,255,255,.45)", marginBottom: 48 }}>Estimated annual sponsorship value — real revenue back to your program.</div>
 
-        <div style={{ width: "100%", maxWidth: 860, marginBottom: 40 }}>
+        <div style={{ width: "100%", maxWidth: 1300, marginBottom: 40 }}>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 13, color: "rgba(255,255,255,.5)", letterSpacing: 2, marginBottom: 16 }}>20+ BRANDS YOUR ATHLETES ALREADY WEAR</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, justifyContent: "center" }}>
             {BRANDS.map(b => (
@@ -77,9 +79,9 @@ export default function SponsorshipReveal() {
           </div>
         </div>
 
-        <div style={{ width: "100%", maxWidth: 700, marginBottom: 40 }}>
+        <div style={{ width: "100%", maxWidth: 1300, marginBottom: 40 }}>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: "rgba(255,255,255,.45)", letterSpacing: 2, marginBottom: 14 }}>REAL TEAM STORES, LIVE RIGHT NOW</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 16 }}>
             {EXAMPLE_STORES.map(store => (
               <div key={store.url} style={{ background: "#fff", borderRadius: 10, overflow: "hidden", boxShadow: "0 12px 40px rgba(0,0,0,.35)", textAlign: "left" }}>
                 <div style={{ background: "#e8e8e8", padding: "8px 12px", display: "flex", alignItems: "center", gap: 6 }}>
@@ -111,7 +113,7 @@ export default function SponsorshipReveal() {
           </div>
         </div>
 
-        <div style={{ width: "100%", maxWidth: 600, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
+        <div style={{ width: "100%", maxWidth: 900, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
           {WHAT_WE_DO.map(card => (
             <div key={card.t} style={{ background: "rgba(255,255,255,.05)", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8, padding: "16px", textAlign: "left" }}>
               <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 11, color: B.orange, letterSpacing: .3, marginBottom: 6 }}>{card.t}</div>
