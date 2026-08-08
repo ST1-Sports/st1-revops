@@ -1,17 +1,35 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, Component } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 
+// Wraps lazy(import) so a stale-chunk 404 (browser cached an old index.html
+// that points at hashed filenames a later deploy no longer serves) forces one
+// full reload to pick up the current build, instead of surfacing as a
+// confusing in-app crash.
+function lazyWithReload(importer) {
+  return lazy(() =>
+    importer().catch(err => {
+      const key = 'st1-chunk-reload-attempted'
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1')
+        window.location.reload()
+        return new Promise(() => {}) // reload is in flight; never resolve
+      }
+      throw err
+    })
+  )
+}
+
 // Main app shell (deals, briefing, invoicing, reorder, prospecting, etc.)
-const RevOps      = lazy(() => import('./pages/RevOps.jsx'))
+const RevOps      = lazyWithReload(() => import('./pages/RevOps.jsx'))
 
 // Standalone tools — loaded on demand, keep bundle small
-const RFPTool     = lazy(() => import('./pages/RFPTool.jsx'))
-const PriceTool   = lazy(() => import('./pages/PriceTool.jsx'))
-const Expansion   = lazy(() => import('./pages/Expansion.jsx'))
-const Integrations= lazy(() => import('./pages/Integrations.jsx'))
-const Reddit      = lazy(() => import('./pages/Reddit.jsx'))
-const CommandCenter = lazy(() => import('./pages/CommandCenter.jsx'))
-const SponsorshipReveal = lazy(() => import('./pages/SponsorshipReveal.jsx'))
+const RFPTool     = lazyWithReload(() => import('./pages/RFPTool.jsx'))
+const PriceTool   = lazyWithReload(() => import('./pages/PriceTool.jsx'))
+const Expansion   = lazyWithReload(() => import('./pages/Expansion.jsx'))
+const Integrations= lazyWithReload(() => import('./pages/Integrations.jsx'))
+const Reddit      = lazyWithReload(() => import('./pages/Reddit.jsx'))
+const CommandCenter = lazyWithReload(() => import('./pages/CommandCenter.jsx'))
+const SponsorshipReveal = lazyWithReload(() => import('./pages/SponsorshipReveal.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
 // (e.g. null access in nav/header, unexpected server state merge)
@@ -183,6 +201,10 @@ function BgNotifications() {
 }
 
 export default function App() {
+  // A chunk loaded successfully this session — clear the reload guard so a
+  // future stale-chunk error (after the next deploy) can still auto-recover.
+  useEffect(() => { sessionStorage.removeItem('st1-chunk-reload-attempted') }, [])
+
   return (
     <RootErrorBoundary>
       <Suspense fallback={<PageLoader />}>
