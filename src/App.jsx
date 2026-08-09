@@ -58,16 +58,29 @@ class RootErrorBoundary extends Component {
           </div>
           <pre style={{
             background: '#fff', border: '1px solid #f99', borderRadius: 8, padding: 16,
-            fontSize: 11, color: '#333', maxWidth: 700, whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 300,
-          }}>{this.state.err?.message}{'\n\n'}{this.state.err?.stack?.split('\n').slice(0,8).join('\n')}</pre>
-          <button
-            onClick={() => { this.setState({ err: null, info: null }); }}
-            style={{
-              background: '#F37321', color: '#fff', border: 'none', borderRadius: 6,
-              padding: '10px 24px', fontSize: 13, fontFamily: "'Lexend',sans-serif", cursor: 'pointer',
-            }}>
-            Reload App
-          </button>
+            fontSize: 11, color: '#333', maxWidth: 700, whiteSpace: 'pre-wrap', overflowY: 'auto', maxHeight: 400,
+          }}>{this.state.err?.message}{'\n\n'}{this.state.err?.stack}{this.state.info?.componentStack ? '\n\n--- component stack ---' + this.state.info.componentStack : ''}</pre>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button
+              onClick={() => {
+                const text = `${this.state.err?.message}\n\n${this.state.err?.stack}\n\n--- component stack ---${this.state.info?.componentStack || ''}`;
+                navigator.clipboard?.writeText(text).catch(() => {});
+              }}
+              style={{
+                background: '#424242', color: '#fff', border: 'none', borderRadius: 6,
+                padding: '10px 24px', fontSize: 13, fontFamily: "'Lexend',sans-serif", cursor: 'pointer',
+              }}>
+              Copy Error
+            </button>
+            <button
+              onClick={() => { window.location.reload(); }}
+              style={{
+                background: '#F37321', color: '#fff', border: 'none', borderRadius: 6,
+                padding: '10px 24px', fontSize: 13, fontFamily: "'Lexend',sans-serif", cursor: 'pointer',
+              }}>
+              Reload App
+            </button>
+          </div>
         </div>
       );
     }
