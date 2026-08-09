@@ -130,6 +130,80 @@ prospectingNav: null,
 };
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
+// Quote approve/download/send-email logic shared by ModHome's chat-agent
+// quote cards and ModEdgar's Quote Engine — both are separate top-level
+// components, so the approved-quote state and setters live locally in each
+// and get passed in here rather than closed over.
+async function sharedCreateQuoteNow(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
+setSQ(key);
+try{
+const r=await fetch("/api/crm/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+customerName:action.customer_name,
+accountCity:action.account_city||"",
+accountState:action.account_state||"",
+contactPerson:action.contact_person||"",
+email:action.email||"",
+lineItems:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0,cost:Number(li.cost)||0})),
+shippingCost:Number(action.shipping_cost)||0,
+notes:action.notes||"",
+})});
+const d=await r.json();
+if(d.ok){
+ctx.toast(`Quote created: ${d.quoteNumber}!`,"success");
+ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} created for ${action.customer_name}`});
+const matchDeal=(ctx.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
+if(matchDeal)ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`});
+setApprovedQuotes(prev=>({...prev,[key]:d}));
+setQuoteEmailDrafts(prev=>({...prev,[key]:{
+to:action.email||"",
+subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
+body:`Hi ${action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${ctx.cu?.name||"Matt Stone"}\n${ctx.cu?.email||""}\n${ctx.cu?.phone||""}`,
+sent:false,
+}}));
+}else{ctx.toast(d.error||"Quote creation failed","error");}
+}catch(e){ctx.toast(`Quote error: ${e.message}`,"error");}
+setSQ(null);
+}
+function sharedCreateEdgarQuoteInZoho(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
+const q=action.quote||{};
+return sharedCreateQuoteNow({
+customer_name:q.customer||action.customer||"Customer",
+line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
+notes:(q.warnings||[]).join("\n"),
+},key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx);
+}
+function sharedDownloadQuotePdf(approvedQuotes,key){
+const q=approvedQuotes[key];
+if(!q?.pdfBase64)return;
+const bytes=Uint8Array.from(atob(q.pdfBase64),c=>c.charCodeAt(0));
+const blob=new Blob([bytes],{type:"application/pdf"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");
+a.href=url;a.download=`Quote-${q.quoteNumber}.pdf`;a.click();
+URL.revokeObjectURL(url);
+}
+async function sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,ctx){
+const draft=quoteEmailDrafts[key];
+const q=approvedQuotes[key];
+if(!draft?.to||!q?.pdfBase64)return;
+setSendingQuoteEmail(key);
+try{
+const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+action:"send",
+...(ctx.cu?.gmailEnvKey?{repEnvKey:ctx.cu.gmailEnvKey}:{}),
+to_email:draft.to,subject:draft.subject,body:draft.body,
+...(ctx.cu?.email?{reply_to:ctx.cu.email,from_name:ctx.cu.name||""}:{}),
+attachments:[{filename:`Quote-${q.quoteNumber}.pdf`,mimeType:"application/pdf",contentBase64:q.pdfBase64}],
+})});
+const d=await r.json();
+if(d.sent||d.ok){
+setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],sent:true}}));
+ctx.toast(`Quote emailed to ${draft.to}`,"success");
+ctx.dispatch("LOG",{msg:`Quote ${q.quoteNumber} emailed to ${draft.to}`});
+}else ctx.toast(d.error||"Send failed","error");
+}catch(e){ctx.toast(`Send error: ${e.message}`,"error");}
+setSendingQuoteEmail(null);
+}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 return {
@@ -916,79 +990,6 @@ return(
 </div>
 );
 }
-const [approvedQuotes,setApprovedQuotes]=useState({});
-const [quoteEmailDrafts,setQuoteEmailDrafts]=useState({});
-const [sendingQuoteEmail,setSendingQuoteEmail]=useState(null);
-const downloadQuotePdf=(key)=>{
-const q=approvedQuotes[key];
-if(!q?.pdfBase64)return;
-const bytes=Uint8Array.from(atob(q.pdfBase64),c=>c.charCodeAt(0));
-const blob=new Blob([bytes],{type:"application/pdf"});
-const url=URL.createObjectURL(blob);
-const a=document.createElement("a");
-a.href=url;a.download=`Quote-${q.quoteNumber}.pdf`;a.click();
-URL.revokeObjectURL(url);
-};
-const sendQuoteEmail=async(key)=>{
-const draft=quoteEmailDrafts[key];
-const q=approvedQuotes[key];
-if(!draft?.to||!q?.pdfBase64)return;
-setSendingQuoteEmail(key);
-try{
-const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-action:"send",
-...(cu?.gmailEnvKey?{repEnvKey:cu.gmailEnvKey}:{}),
-to_email:draft.to,subject:draft.subject,body:draft.body,
-...(cu?.email?{reply_to:cu.email,from_name:cu.name||""}:{}),
-attachments:[{filename:`Quote-${q.quoteNumber}.pdf`,mimeType:"application/pdf",contentBase64:q.pdfBase64}],
-})});
-const d=await r.json();
-if(d.sent||d.ok){
-setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],sent:true}}));
-toast(`Quote emailed to ${draft.to}`,"success");
-dispatch("LOG",{msg:`Quote ${q.quoteNumber} emailed to ${draft.to}`});
-}else toast(d.error||"Send failed","error");
-}catch(e){toast(`Send error: ${e.message}`,"error");}
-setSendingQuoteEmail(null);
-};
-const sharedCreateQuoteNow=async(action,key,setSQ)=>{
-setSQ(key);
-try{
-const r=await fetch("/api/crm/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-customerName:action.customer_name,
-accountCity:action.account_city||"",
-accountState:action.account_state||"",
-contactPerson:action.contact_person||"",
-email:action.email||"",
-lineItems:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0,cost:Number(li.cost)||0})),
-shippingCost:Number(action.shipping_cost)||0,
-notes:action.notes||"",
-})});
-const d=await r.json();
-if(d.ok){
-toast(`Quote created: ${d.quoteNumber}!`,"success");
-dispatch("LOG",{msg:`Quote ${d.quoteNumber} created for ${action.customer_name}`});
-const matchDeal=(s.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
-if(matchDeal)dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`});
-setApprovedQuotes(prev=>({...prev,[key]:d}));
-setQuoteEmailDrafts(prev=>({...prev,[key]:{
-to:action.email||"",
-subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
-body:`Hi ${action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${cu?.name||"Matt Stone"}\n${cu?.email||""}\n${cu?.phone||""}`,
-sent:false,
-}}));
-}else{toast(d.error||"Quote creation failed","error");}
-}catch(e){toast(`Quote error: ${e.message}`,"error");}
-setSQ(null);
-};
-const sharedCreateEdgarQuoteInZoho=(action,key,setSQ)=>{
-const q=action.quote||{};
-return sharedCreateQuoteNow({
-customer_name:q.customer||action.customer||"Customer",
-line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
-notes:(q.warnings||[]).join("\n"),
-},key,setSQ);
-};
 const sharedSendBradEmail=async(draft,key,setSI)=>{
 if(!draft.contactEmail){toast("No email — can't send","error");return;}
 setSI(key);
@@ -1782,6 +1783,9 @@ const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
 const [invoiceCreated,setInvoiceCreated]=useState({});
 const [billCreated,setBillCreated]=useState({});
 const [billPdfStore,setBillPdfStore]=useState({});
+const [approvedQuotes,setApprovedQuotes]=useState({});
+const [quoteEmailDrafts,setQuoteEmailDrafts]=useState({});
+const [sendingQuoteEmail,setSendingQuoteEmail]=useState(null);
 const [agentStatus,setAgentStatus]=useState(null);
 const [lastMeta,setLastMeta]=useState(null);
 const [sendingEmail,setSendingEmail]=useState(null);
@@ -1897,8 +1901,11 @@ if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpanded
 if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
 if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
-const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote);
-const createEdgarQuoteInZoho=(action,key)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote);
+const quoteCtx={toast,dispatch,deals:s.deals,cu};
+const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
+const createEdgarQuoteInZoho=(action,key)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
+const downloadQuotePdf=(key)=>sharedDownloadQuotePdf(approvedQuotes,key);
+const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,quoteCtx);
 const launchCampaignNow=async(action,key,matchedContacts)=>{
 setLaunchingCampaign(key);
 try{
@@ -13623,13 +13630,16 @@ return (
 );
 }
 function ModEdgar() {
-const {s,dispatch,toast,setMod}=useApp();
+const {s,dispatch,toast,setMod,cu}=useApp();
 const [task,setTask]=useState("");
 const [customer,setCustomer]=useState("");
 const [loading,setLoading]=useState(false);
 const [result,setResult]=useState(null);
 const [summary,setSummary]=useState("");
 const [sendingZoho,setSendingZoho]=useState(false);
+const [approvedQuotes,setApprovedQuotes]=useState({});
+const [quoteEmailDrafts,setQuoteEmailDrafts]=useState({});
+const [sendingQuoteEmail,setSendingQuoteEmail]=useState(null);
 const [matches,setMatches]=useState([]);
 const [matchLoading,setMatchLoading]=useState(false);
 const [matchedContact,setMatchedContact]=useState(null);
@@ -13717,8 +13727,10 @@ email:matchedContact?.email||"",
 line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:[...(q.warnings||[]),linkNote].filter(Boolean).join("\n"),
 send_email:false,
-},"edgar_main",setSendingZoho);
+},"edgar_main",setSendingZoho,setApprovedQuotes,setQuoteEmailDrafts,{toast,dispatch,deals:s.deals,cu});
 };
+const downloadQuotePdf=(key)=>sharedDownloadQuotePdf(approvedQuotes,key);
+const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,{toast,dispatch,cu});
 return(
 <div style={{padding:"26px 34px",maxWidth:1280,margin:"0 auto"}}>
 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:22}}>
