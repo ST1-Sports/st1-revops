@@ -204,6 +204,41 @@ ctx.dispatch("LOG",{msg:`Quote ${q.quoteNumber} emailed to ${draft.to}`});
 }catch(e){ctx.toast(`Send error: ${e.message}`,"error");}
 setSendingQuoteEmail(null);
 }
+async function sharedSendBradEmail(draft,key,setSI,ctx){
+if(!draft.contactEmail){ctx.toast("No email — can't send","error");return;}
+setSI(key);
+try{
+const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
+const d=await r.json();
+if(d.sent){
+ctx.toast(`✉ Sent to ${draft.contactName||draft.contactEmail}`,"success");
+ctx.dispatch("LOG",{msg:`Brad email sent: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});
+const contact=(ctx.contacts||[]).find(c=>c.email===draft.contactEmail);
+if(contact)ctx.dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"brad",note:`Brad: ${draft.subject}`});
+}else ctx.toast(d.error||"Send failed","error");
+}catch(e){ctx.toast(`Send error: ${e.message}`,"error");}
+setSI(null);
+}
+async function sharedSendEmailNow(action,key,setSE,sendFn,ctx){
+if(!action.to_email){ctx.toast("No email — can't send","error");return;}
+setSE(key);
+try{
+const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body})});
+const d=await r.json();
+if(d.sent){
+ctx.toast(`Email sent to ${action.to_name||action.to_email}`,"success");
+ctx.dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
+const contact=(ctx.contacts||[]).find(c=>c.email===action.to_email);
+if(contact)ctx.dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
+const nameParts=(action.to_name||"").toLowerCase().split(" ");
+const matchDeal=(ctx.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
+if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});ctx.toast(`Follow-up auto-set ${f}`,"info");}
+setTimeout(()=>sendFn(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
+}else{ctx.toast(d.error||"Send failed","error");}
+}catch(e){ctx.toast(`Send error: ${e.message}`,"error");}
+setSE(null);
+}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 return {
@@ -990,41 +1025,6 @@ return(
 </div>
 );
 }
-const sharedSendBradEmail=async(draft,key,setSI)=>{
-if(!draft.contactEmail){toast("No email — can't send","error");return;}
-setSI(key);
-try{
-const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({contactEmail:draft.contactEmail,contactName:draft.contactName,subject:draft.subject,body:draft.body,contactId:draft.contactId})});
-const d=await r.json();
-if(d.sent){
-toast(`✉ Sent to ${draft.contactName||draft.contactEmail}`,"success");
-dispatch("LOG",{msg:`Brad email sent: ${draft.contactName||draft.contactEmail} — "${draft.subject}"`});
-const contact=(s.contacts||[]).find(c=>c.email===draft.contactEmail);
-if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"brad",note:`Brad: ${draft.subject}`});
-}else toast(d.error||"Send failed","error");
-}catch(e){toast(`Send error: ${e.message}`,"error");}
-setSI(null);
-};
-const sharedSendEmailNow=async(action,key,setSE,sendFn)=>{
-if(!action.to_email){toast("No email — can't send","error");return;}
-setSE(key);
-try{
-const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"send",to_email:action.to_email,to_name:action.to_name,subject:action.subject,body:action.body})});
-const d=await r.json();
-if(d.sent){
-toast(`Email sent to ${action.to_name||action.to_email}`,"success");
-dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
-const contact=(s.contacts||[]).find(c=>c.email===action.to_email);
-if(contact)dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
-const nameParts=(action.to_name||"").toLowerCase().split(" ");
-const matchDeal=(s.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
-if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});toast(`Follow-up auto-set ${f}`,"info");}
-setTimeout(()=>sendFn(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
-}else{toast(d.error||"Send failed","error");}
-}catch(e){toast(`Send error: ${e.message}`,"error");}
-setSE(null);
-};
 if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 const navLabel = (id) => {
 for (const n of NAV) {
@@ -1931,8 +1931,8 @@ setTimeout(()=>{dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting"
 }catch(e){toast(`Campaign error: ${e.message}`,"error");}
 setLaunchingCampaign(null);
 };
-const sendEmailNow=(action,key)=>sharedSendEmailNow(action,key,setSendingEmail,send);
-const sendBradEmail=(draft,key)=>sharedSendBradEmail(draft,key,setSendingInstantly);
+const sendEmailNow=(action,key)=>sharedSendEmailNow(action,key,setSendingEmail,send,{toast,dispatch,contacts:s.contacts,deals:s.deals});
+const sendBradEmail=(draft,key)=>sharedSendBradEmail(draft,key,setSendingInstantly,{toast,dispatch,contacts:s.contacts});
 const send=async(overrideMsg)=>{
 const msg=(overrideMsg||input).trim();
 if(!msg||running)return;
@@ -6150,6 +6150,7 @@ preview===null?(
 }
 function ModProspecting() {
 const {s,dispatch,toast,setMod,crmSyncRef}=useApp();
+const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
 const [crmSyncing, setCrmSyncing] = useState(false);
 const forceCrmSync = async () => {
 if (!crmSyncRef?.current) { toast("Sync not ready","error"); return; }
@@ -9522,7 +9523,7 @@ style={{display:"flex",alignItems:"center",gap:6,padding:"6px 12px",background:s
 </div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:16}}>AI-match your contacts to find the best fit for this campaign, then select who to enroll.</div>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{totalContactsAll.toLocaleString()} contacts <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>({dbTotal.toLocaleString()} CRM · {(s.contacts||[]).length.toLocaleString()} uploaded)</span></div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{(s.contacts||[]).length.toLocaleString()} contacts available</div>
 <button onClick={analyzeAudience} disabled={segRunning} style={{background:B.purple,color:B.white,border:"none",borderRadius:4,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,letterSpacing:.5,cursor:"pointer",opacity:segRunning?.7:1}}>
 {segRunning?"✦ ANALYZING...":"✦ AI SMART SEGMENT"}
 </button>
