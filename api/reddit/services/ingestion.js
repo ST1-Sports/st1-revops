@@ -7,6 +7,7 @@
 
 const { searchSubredditRSS } = require('./rss-fetcher');
 const { checkGuardrails }    = require('./db-guardrails');
+const { getPrisma }          = require('./_prisma');
 
 
 /**

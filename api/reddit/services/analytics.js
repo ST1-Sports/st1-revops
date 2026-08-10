@@ -9,6 +9,7 @@
  */
 
 const { getCommentMetrics } = require('../reddit-client');
+const { getPrisma } = require('./_prisma');
 
 
 /**

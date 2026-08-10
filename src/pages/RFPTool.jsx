@@ -47,6 +47,9 @@ const toBase64 = file => new Promise((res,rej)=>{
 const toArrayBuffer = file => new Promise((res,rej)=>{
   const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsArrayBuffer(file);
 });
+const toText = file => new Promise((res,rej)=>{
+  const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file);
+});
 
 // Extract plain text from a PDF using pdfjs-dist (browser build)
 async function extractPdfText(arrayBuffer) {

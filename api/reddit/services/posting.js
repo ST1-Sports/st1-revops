@@ -32,6 +32,7 @@ const { postComment }   = require('../reddit-client');
 const { logPostAction } = require('./db-guardrails');
 const { checkContent }  = require('./content-guardrail');
 const { _jaccardWords } = require('../validators');
+const { getPrisma }     = require('./_prisma');
 
 
 const SIMILARITY_LOOKBACK_DAYS = 14;
