@@ -51,6 +51,23 @@ return(
 return this.props.children;
 }
 }
+// Isolates a single chat message's render (action cards especially — a lot
+// of different shapes come through there) so a bad message can't take down
+// the whole Home screen; every other message and the input bar stay usable.
+class MsgErrBound extends Component {
+constructor(p){super(p);this.state={err:null};}
+static getDerivedStateFromError(e){return{err:e};}
+render(){
+if(this.state.err){
+return(
+<div style={{maxWidth:"88%",padding:"8px 12px",borderRadius:8,background:"#fff8f8",border:"1px solid #f99",fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#c00"}}>
+⚠ This message failed to render ({this.state.err?.message||"unknown error"}).
+</div>
+);
+}
+return this.props.children;
+}
+}
 const B = {
 pageBg:"#F2F2F0", white:"#FFFFFF", surface:"#F8F7F5",
 orange:"#F37321", orangeL:"#FF9942", orangeBg:"#FEF3EC",
@@ -2122,7 +2139,8 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 </div>
 )}
 {history.map((m,msgIdx)=>(
-<div key={m.id||msgIdx} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+<MsgErrBound key={m.id||msgIdx}>
+<div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
 <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
 {/* Action buttons */}
 {m.actions?.length>0&&(
@@ -2747,6 +2765,7 @@ return(
 )}
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
 </div>
+</MsgErrBound>
 ))}
 {running&&(
 <div style={{display:"flex",alignItems:"center",gap:8}}>

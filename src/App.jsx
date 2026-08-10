@@ -1,5 +1,6 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, Component } from 'react'
 import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { APP_STATE_KEY } from './lib/appStateSync.js'
 
 // Wraps lazy(import) so a stale-chunk 404 (browser cached an old index.html
 // that points at hashed filenames a later deploy no longer serves) forces one
@@ -73,6 +74,18 @@ class RootErrorBoundary extends Component {
               Copy Error
             </button>
             <button
+              onClick={() => {
+                let raw = '';
+                try { raw = localStorage.getItem(APP_STATE_KEY) || ''; } catch {}
+                navigator.clipboard?.writeText(raw).catch(() => {});
+              }}
+              style={{
+                background: '#424242', color: '#fff', border: 'none', borderRadius: 6,
+                padding: '10px 24px', fontSize: 13, fontFamily: "'Lexend',sans-serif", cursor: 'pointer',
+              }}>
+              Copy App Data
+            </button>
+            <button
               onClick={() => { window.location.reload(); }}
               style={{
                 background: '#F37321', color: '#fff', border: 'none', borderRadius: 6,
@@ -80,6 +93,9 @@ class RootErrorBoundary extends Component {
               }}>
               Reload App
             </button>
+          </div>
+          <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: '#888', maxWidth: 500, textAlign: 'center' }}>
+            "Copy App Data" copies your saved chat history and app state (no passwords) — paste it when reporting this crash so it can be reproduced exactly.
           </div>
         </div>
       );
