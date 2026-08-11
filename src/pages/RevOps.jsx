@@ -256,6 +256,25 @@ setTimeout(()=>sendFn(`Email sent ✓ to ${action.to_name||action.to_email} — 
 }catch(e){ctx.toast(`Send error: ${e.message}`,"error");}
 setSE(null);
 }
+// Shared by ModDeals' Deal Manager and ModCRM's per-contact deal card — both
+// render a deal detail view but are separate top-level components. Returns
+// true if the deal was actually deleted, so each caller can clear its own
+// local selection state (setSel(null) etc.) without this needing to know
+// which component called it.
+async function sharedDeleteDeal(deal,ctx){
+if(!deal)return false;
+if(!window.confirm(`Delete "${deal.name}"? This removes it from RevOps${deal.zohoId?" and Zoho CRM":""}. This cannot be undone.`))return false;
+ctx.dispatch("REMOVE_DEALS",[deal.id]);
+ctx.dispatch("LOG",{msg:`${ctx.cu?.name||"Someone"} deleted deal: ${deal.name}`});
+if(deal.zohoId){
+try{
+await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({service:"crm",endpoint:`/Deals/${deal.zohoId}`,method:"DELETE"})});
+}catch(e){ctx.toast(`Deleted locally — Zoho delete failed: ${e.message}`,"info");return true;}
+}
+ctx.toast(`"${deal.name}" deleted`,"success");
+return true;
+}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 return {
@@ -1076,6 +1095,8 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
   .rv-sep{display:none!important}
   .rv-crm-split{flex-direction:column!important}
   .rv-crm-left{width:100%!important;max-height:220px!important;border-right:none!important;border-bottom:1px solid ${B.border}!important;flex-shrink:0!important}
+  .rv-deals-split{grid-template-columns:1fr!important}
+  .rv-deal-detail{position:static!important;max-height:none!important}
   .rv-kpi-grid{grid-template-columns:repeat(2,1fr)!important}
   .rv-info-grid{grid-template-columns:repeat(2,1fr)!important}
   .rv-2col-grid{grid-template-columns:1fr!important}
@@ -4680,7 +4701,8 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <div className="card" style={{padding:14,marginBottom:12,borderTop:`3px solid ${DSC[activeDeal.stage]||B.orange}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
 <div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{activeDeal.name}</div><div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{typeof activeDeal.school==="string"?activeDeal.school:activeDeal.school?.name||""}</div></div>
-<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><div style={{display:"flex",gap:4,alignItems:"center"}}><input type="number" value={dealValueInput} onChange={e=>{setDealValueInput(e.target.value);setDealValueSaved(false);}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>{dealValueSaved?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green}}>✓</span>:<OBtn sm onClick={()=>{const v=Number(dealValueInput||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});setDealValueSaved(true);setTimeout(()=>setDealValueSaved(false),2000);toast("Deal value updated","success");}}>SAVE</OBtn>}</div></div>
+<div><div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,textAlign:"right",marginBottom:2}}>VALUE ($)</div><div style={{display:"flex",gap:4,alignItems:"center"}}><input type="number" value={dealValueInput} onChange={e=>{setDealValueInput(e.target.value);setDealValueSaved(false);}} style={{width:90,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>{dealValueSaved?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green}}>✓</span>:<OBtn sm onClick={()=>{const v=Number(dealValueInput||0);dispatch("UPDATE_DEAL",{id:activeDeal.id,value:v});crmUpdate("Deals",activeDeal.zohoId,{Amount:v});setDealValueSaved(true);setTimeout(()=>setDealValueSaved(false),2000);toast("Deal value updated","success");}}>SAVE</OBtn>}
+<button onClick={()=>sharedDeleteDeal(activeDeal,{dispatch,toast,cu})} title="Delete this deal" style={{background:"none",border:`1px solid ${B.red}`,color:B.red,borderRadius:4,padding:"4px 7px",fontSize:11,cursor:"pointer",flexShrink:0}}>🗑</button></div></div>
 </div>
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
@@ -5445,7 +5467,7 @@ return (
 <div style={{display:"flex",gap:7,marginTop:10}}><OBtn onClick={addDeal}>SAVE</OBtn><GBtn onClick={()=>setAdding(false)}>CANCEL</GBtn></div>
 </div>
 )}
-<div style={{display:"grid",gridTemplateColumns:sel_d?"1fr 370px":"1fr",gap:13}}>
+<div className="rv-deals-split" style={{display:"grid",gridTemplateColumns:sel_d?"1fr 370px":"1fr",gap:13}}>
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {list.map(d=>{const ov=d.followUpDate&&dUntil(d.followUpDate)<0&&!["Closed Won","Closed Lost","PO Received","On Hold"].includes(d.stage);const dCamp=d.campaignId?(s.campaigns||[]).find(c=>c.id===d.campaignId):null;return(
 <div key={d.id} onClick={()=>setSel(sel===d.id?null:d.id)} className="card" style={{padding:"9px 12px",cursor:"pointer",borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,background:sel===d.id?B.surface:B.white}}>
@@ -5472,7 +5494,7 @@ return (
 {list.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,textAlign:"center",padding:"40px 0"}}>No deals in this filter</div>}
 </div>
 {sel_d&&(
-<div style={{display:"flex",flexDirection:"column",gap:11,position:"sticky",top:0,maxHeight:"calc(100vh - 155px)",overflowY:"auto"}}>
+<div className="rv-deal-detail" style={{display:"flex",flexDirection:"column",gap:11,position:"sticky",top:0,maxHeight:"calc(100vh - 155px)",overflowY:"auto"}}>
 <div className="card" style={{padding:13,borderTop:`3px solid ${DSC[sel_d.stage]||B.orange}`}}>
 <div style={{display:"flex",justifyContent:"space-between",marginBottom:9,alignItems:"flex-start"}}>
 <div style={{flex:1,minWidth:0}}>
@@ -5483,6 +5505,7 @@ return (
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>VALUE ($)</div>
 <input type="number" defaultValue={sel_d.value||0} onBlur={e=>{const _v=Number(e.target.value||0);dispatch("UPDATE_DEAL",{id:sel_d.id,value:_v});crmUpdate("Deals",sel_d.zohoId,{Amount:_v});}}
 style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.orange,borderRadius:4,padding:"4px 7px",fontSize:13,fontFamily:"'Russo One',sans-serif",textAlign:"right"}}/>
+<button onClick={async()=>{if(await sharedDeleteDeal(sel_d,{dispatch,toast,cu}))setSel(null);}} title="Delete this deal" style={{marginTop:6,background:"none",border:`1px solid ${B.red}`,color:B.red,borderRadius:4,padding:"4px 9px",fontSize:11,cursor:"pointer"}}>🗑 DELETE</button>
 </div>
 </div>
 <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
