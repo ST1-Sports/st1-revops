@@ -1246,9 +1246,17 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 </div>
 </header>
 <main style={{flex:1,overflowY:"auto",background:B.pageBg,display:"flex",flexDirection:"column"}}>
+{/* Home stays mounted permanently (visibility toggled via CSS) instead of
+    being torn down on every navigation away — unmounting it was crashing
+    the app with a "not a function" error somewhere in its effect cleanup
+    that neither manual review nor an AST-based scope-leak scanner could
+    pin down. Keeping it alive sidesteps the crash outright and, as a
+    bonus, its draft/scroll state now survives navigating away and back. */}
+<div style={{display:mod==="briefing"?"flex":"none",flexDirection:"column",flex:1,minHeight:0}}>
+<ErrBound key="briefing"><ModHome/></ErrBound>
+</div>
 <ErrBound key={mod}>
 {mod==="analytics"   && <ModAnalytics/>}
-{mod==="briefing"    && <ModHome/>}
 {mod==="crm"          && <ModCRM/>}
 {mod==="sponsorships" && <ModSponsorships/>}
 {mod==="deals"        && <ModDeals/>}
