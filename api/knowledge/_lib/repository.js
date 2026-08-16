@@ -1,5 +1,6 @@
 import { chunkText, cleanText, sha256 } from "./text.js";
 import { runKnowledgeAiIngestion } from "./ingestion.js";
+import { enrichIngestionForReview } from "./proposals.js";
 
 function toDate(value) {
   if (!value) return null;
@@ -33,6 +34,8 @@ export async function createKnowledgeSourceWithDocument(prisma, input, actor = {
     include: {
       documents: { include: { chunks: { orderBy: { chunkIndex: "asc" } } } },
       importJobs: { orderBy: { createdAt: "desc" } },
+      structuredRecords: { orderBy: { createdAt: "desc" } },
+      reviewEvents: { orderBy: { createdAt: "desc" }, take: 20 },
     },
   }).catch(() => null);
   if (existing) return { source: existing, duplicate: true };
@@ -97,6 +100,8 @@ export async function createKnowledgeSourceWithDocument(prisma, input, actor = {
       include: {
         documents: { include: { chunks: { orderBy: { chunkIndex: "asc" } } } },
         importJobs: { orderBy: { createdAt: "desc" } },
+        structuredRecords: { orderBy: { createdAt: "desc" } },
+        reviewEvents: { orderBy: { createdAt: "desc" }, take: 20 },
       },
     });
 
@@ -142,6 +147,14 @@ export async function listKnowledgeSources(prisma, { status, sourceType, q, limi
         orderBy: { createdAt: "desc" },
         take: 3,
       },
+      structuredRecords: {
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      },
+      reviewEvents: {
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      },
     },
   });
 }
@@ -155,6 +168,8 @@ export async function getKnowledgeSource(prisma, id) {
         include: { chunks: { orderBy: { chunkIndex: "asc" } } },
       },
       importJobs: { orderBy: { createdAt: "desc" } },
+      structuredRecords: { orderBy: { createdAt: "desc" } },
+      reviewEvents: { orderBy: { createdAt: "desc" }, take: 50 },
     },
   });
 }
@@ -181,6 +196,8 @@ export async function updateKnowledgeSourceStatus(prisma, id, status, actor = {}
     include: {
       documents: { include: { chunks: { orderBy: { chunkIndex: "asc" } } } },
       importJobs: { orderBy: { createdAt: "desc" } },
+      structuredRecords: { orderBy: { createdAt: "desc" } },
+      reviewEvents: { orderBy: { createdAt: "desc" }, take: 50 },
     },
   });
 }
@@ -224,7 +241,8 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
         data: { status: "PROCESSING" },
       });
 
-      const ingestion = await runKnowledgeAiIngestion({ source, document });
+      const ingestionRaw = await runKnowledgeAiIngestion({ source, document });
+      const ingestion = await enrichIngestionForReview(prisma, ingestionRaw);
       warnings.push(...(ingestion.warnings || []));
       if (ingestion.rows_needing_review?.length) {
         warnings.push(`${ingestion.rows_needing_review.length} rows or facts need human review`);

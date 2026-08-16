@@ -756,6 +756,8 @@ model KnowledgeSource {
 
   documents  KnowledgeDocument[]
   importJobs KnowledgeImportJob[]
+  structuredRecords KnowledgeStructuredRecord[]
+  reviewEvents      KnowledgeReviewEvent[]
 
   @@index([sourceType])
   @@index([status])
@@ -780,6 +782,7 @@ model KnowledgeDocument {
 
   source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   chunks KnowledgeChunk[]
+  structuredRecords KnowledgeStructuredRecord[]
 
   @@index([sourceId])
   @@index([status])
@@ -815,9 +818,64 @@ model KnowledgeImportJob {
   completedAt     DateTime?
 
   source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  structuredRecords KnowledgeStructuredRecord[]
+  reviewEvents      KnowledgeReviewEvent[]
 
   @@index([sourceId])
   @@index([importType])
   @@index([status])
+  @@index([createdAt])
+}
+
+model KnowledgeStructuredRecord {
+  id            String   @id @default(cuid())
+  sourceId      String
+  documentId    String?
+  importJobId   String?
+  recordType    String
+  action        String
+  status        String   @default("APPROVED")
+  sourceRow     String?
+  fields        Json     @default("{}")
+  existingValue Json?
+  proposedValue Json?
+  difference    Float?
+  flags         Json     @default("[]")
+  confidence    Float?
+  approvedBy    String?
+  approvedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  source    KnowledgeSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  document  KnowledgeDocument?  @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  importJob KnowledgeImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+
+  @@index([sourceId])
+  @@index([documentId])
+  @@index([importJobId])
+  @@index([recordType])
+  @@index([action])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model KnowledgeReviewEvent {
+  id               String   @id @default(cuid())
+  sourceId         String
+  importJobId      String?
+  action           String
+  userId           String?
+  selectedChanges  Json?
+  committedChanges Json?
+  note             String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  source    KnowledgeSource     @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  importJob KnowledgeImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
+
+  @@index([sourceId])
+  @@index([importJobId])
+  @@index([action])
   @@index([createdAt])
 }

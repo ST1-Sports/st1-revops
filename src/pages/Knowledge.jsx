@@ -190,6 +190,9 @@ export default function Knowledge() {
   const [form, setForm] = useState(emptyForm())
   const [screen, setScreen] = useState('inbox')
   const [selectedSource, setSelectedSource] = useState(null)
+  const [selectedIndexes, setSelectedIndexes] = useState([])
+  const [editingProposal, setEditingProposal] = useState(false)
+  const [proposalDraft, setProposalDraft] = useState('')
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -213,6 +216,12 @@ export default function Knowledge() {
   useEffect(() => {
     refresh().catch(err => setError(err.message))
   }, [])
+
+  useEffect(() => {
+    setSelectedIndexes([])
+    setEditingProposal(false)
+    setProposalDraft('')
+  }, [selectedSource?.id])
 
   function openAdd(mode = null) {
     setForm(emptyForm())
@@ -293,17 +302,22 @@ export default function Knowledge() {
     }
   }
 
-  async function updateStatus(status) {
+  async function reviewAction(action, extra = {}) {
     if (!selectedSource) return
     setLoading(true)
     setError('')
     try {
-      const data = await knowledgeFetch(`/api/knowledge/${selectedSource.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ status }),
+      const data = await knowledgeFetch('/api/knowledge/review', {
+        method: 'POST',
+        body: JSON.stringify({
+          sourceId: selectedSource.id,
+          importJobId: latestJob?.id,
+          action,
+          ...extra,
+        }),
       })
       setSelectedSource(data.source)
-      setMessage(status === 'APPROVED' ? 'Knowledge approved.' : status === 'REJECTED' ? 'Knowledge rejected.' : 'Status updated.')
+      setMessage(action === 'reject' ? 'Knowledge rejected.' : action === 'edit' ? 'Edited proposal saved.' : 'Approved changes committed to Knowledge records.')
       await refresh()
     } catch (err) {
       setError(err.message)
@@ -312,11 +326,33 @@ export default function Knowledge() {
     }
   }
 
+  function toggleSelected(index) {
+    setSelectedIndexes(prev => prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index])
+  }
+
+  function startEditProposal() {
+    setProposalDraft(JSON.stringify(latestJob?.proposedChanges || {}, null, 2))
+    setEditingProposal(true)
+  }
+
+  async function saveEditedProposal() {
+    let parsed
+    try {
+      parsed = JSON.parse(proposalDraft)
+    } catch {
+      setError('Edited proposal must be valid JSON')
+      return
+    }
+    await reviewAction('edit', { proposedChanges: parsed, warnings: latestJob?.warnings || [] })
+    setEditingProposal(false)
+  }
+
   const selectedDoc = selectedSource?.documents?.[0]
   const latestJob = selectedSource?.importJobs?.[0]
   const ingestion = latestJob?.proposedChanges?.documents?.[0]?.ingestion
-  const proposedActions = latestJob?.proposedChanges?.proposed_database_actions || ingestion?.proposed_database_actions || []
   const rowsNeedingReview = ingestion?.rows_needing_review || []
+  const reviewRows = ingestion?.review_table || []
+  const isSpreadsheetReview = ['pricing_list', 'product_catalog'].includes(ingestion?.detected_type) || reviewRows.length > 0
 
   return (
     <div style={{ minHeight: '100vh', background: B.page, color: B.text, fontFamily: "'Lexend',sans-serif" }}>
@@ -387,100 +423,172 @@ export default function Knowledge() {
         )}
 
         {screen === 'review' && selectedSource && (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 14, alignItems: 'start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <Card>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
                 <div>
-                  <Label>Review knowledge</Label>
+                  <Label>Source</Label>
                   <h2 style={{ fontFamily: "'Russo One',sans-serif", fontSize: 22, margin: 0 }}>{selectedSource.title}</h2>
-                  <div style={{ color: B.muted, fontSize: 12, marginTop: 4 }}>
-                    {sourceLabel(selectedSource.sourceType)} / {selectedDoc?.category || 'Other'} / uploaded {formatDate(selectedSource.createdAt)}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: 12, marginTop: 12 }}>
+                    <div><Label>Type</Label><div style={{ fontSize: 12 }}>{sourceLabel(selectedSource.sourceType)}</div></div>
+                    <div><Label>Uploaded by</Label><div style={{ fontSize: 12 }}>{selectedSource.uploadedBy || 'Unknown'}</div></div>
+                    <div><Label>Uploaded date</Label><div style={{ fontSize: 12 }}>{formatDate(selectedSource.createdAt)}</div></div>
+                    <div><Label>Status</Label><StatusPill status={selectedSource.status} /></div>
                   </div>
                 </div>
-                <StatusPill status={selectedSource.status} />
-              </div>
-
-              {selectedDoc?.summary && (
-                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 12 }}>
-                  <Label>Processing summary</Label>
-                  <div style={{ fontSize: 12, lineHeight: 1.6 }}>{selectedDoc.summary}</div>
-                </div>
-              )}
-
-              <Label>Content preview</Label>
-              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 14, fontSize: 12, lineHeight: 1.65, whiteSpace: 'pre-wrap', maxHeight: 460, overflow: 'auto' }}>
-                {(selectedDoc?.content || '').slice(0, 8000) || 'No content available.'}
               </div>
             </Card>
 
-            <Card>
-              <Label>Review status</Label>
-              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 20, color: statusColor(selectedSource.status), marginBottom: 4 }}>
-                {reviewLabel(selectedSource.status)}
-              </div>
-              <div style={{ color: B.muted, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
-                AI ingestion proposes changes only. Approving this item confirms the knowledge source; it does not overwrite product, pricing, customer, or vendor records.
-              </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: 14, alignItems: 'start' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <Card>
+                  <Label>AI detected</Label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(120px, 1fr))', gap: 12, marginBottom: 13 }}>
+                    <div><Label>Content type</Label><div style={{ fontSize: 12, fontWeight: 700 }}>{sourceLabel(ingestion?.detected_type || 'unknown')}</div></div>
+                    <div><Label>Category</Label><div style={{ fontSize: 12 }}>{ingestion?.category || selectedDoc?.category || 'Other'}</div></div>
+                    <div><Label>Confidence</Label><div style={{ fontSize: 12 }}>{Math.round((ingestion?.confidence || 0) * 100)}%</div></div>
+                    <div><Label>Job</Label><div style={{ fontSize: 12 }}>{latestJob?.status ? reviewLabel(latestJob.status) : 'Waiting'}</div></div>
+                  </div>
+                  <div style={{ fontSize: 12, lineHeight: 1.6, color: B.text }}>{ingestion?.summary || selectedDoc?.summary || 'No summary available.'}</div>
+                </Card>
 
-              <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
-                <Label>Import activity</Label>
-                <div style={{ fontSize: 12, color: B.text }}>{latestJob?.importType ? sourceLabel(latestJob.importType) : 'No job yet'}</div>
-                <div style={{ fontSize: 11, color: B.muted, marginTop: 3 }}>{latestJob?.status ? reviewLabel(latestJob.status) : 'Waiting'}</div>
-              </div>
+                <Card>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', marginBottom: 12 }}>
+                    <div>
+                      <Label>Proposed changes</Label>
+                      <div style={{ color: B.muted, fontSize: 12 }}>Review first. Nothing operational is written until approval.</div>
+                    </div>
+                    {isSpreadsheetReview && <div style={{ color: B.muted, fontSize: 11 }}>{selectedIndexes.length} selected</div>}
+                  </div>
 
-              {ingestion && (
-                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
-                  <Label>AI understanding</Label>
-                  <div style={{ fontSize: 12, color: B.text, marginBottom: 4 }}>{sourceLabel(ingestion.detected_type)}</div>
-                  <div style={{ fontSize: 11, color: B.muted }}>Confidence: {Math.round((ingestion.confidence || 0) * 100)}%</div>
-                  {!!ingestion.extracted_entities && (
-                    <div style={{ fontSize: 11, color: B.muted, marginTop: 8, lineHeight: 1.5 }}>
-                      Brands: {(ingestion.extracted_entities.brands || []).slice(0, 4).join(', ') || '-'}<br/>
-                      Vendors: {(ingestion.extracted_entities.vendors || []).slice(0, 4).join(', ') || '-'}<br/>
-                      Customers: {(ingestion.extracted_entities.customers || []).slice(0, 4).join(', ') || '-'}
+                  {isSpreadsheetReview ? (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                        <thead>
+                          <tr style={{ background: B.surface, color: B.muted, fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, letterSpacing: .5, textAlign: 'left' }}>
+                            {['', 'Action', 'SKU', 'Product', 'Existing Value', 'Proposed Value', 'Difference', 'Status'].map(h => (
+                              <th key={h} style={{ padding: '9px 8px', borderBottom: `1px solid ${B.border}`, whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reviewRows.map(row => {
+                            const major = Math.abs(row.difference || 0) > 10
+                            return (
+                              <tr key={row.index} style={{ borderBottom: `1px solid ${B.border}`, background: major ? '#fff1f0' : 'transparent' }}>
+                                <td style={{ padding: 8 }}><input type="checkbox" checked={selectedIndexes.includes(row.index)} onChange={() => toggleSelected(row.index)} /></td>
+                                <td style={{ padding: 8, fontWeight: 700 }}>{row.action}</td>
+                                <td style={{ padding: 8 }}>{row.sku || <span style={{ color: B.red }}>Missing</span>}</td>
+                                <td style={{ padding: 8, minWidth: 160 }}>{row.product || '-'}</td>
+                                <td style={{ padding: 8 }}>{row.existing_value?.price != null ? `$${row.existing_value.price}` : 'Not found'}</td>
+                                <td style={{ padding: 8 }}>{row.proposed_value?.amount != null ? `$${row.proposed_value.amount}` : <span style={{ color: B.red }}>Missing</span>}</td>
+                                <td style={{ padding: 8, color: major ? B.red : B.muted, fontWeight: major ? 700 : 400 }}>{row.difference != null ? `${row.difference.toFixed(1)}%` : '-'}</td>
+                                <td style={{ padding: 8 }}>
+                                  <div style={{ color: row.status === 'Needs Review' ? B.orange : B.green, fontWeight: 700 }}>{row.status}</div>
+                                  {!!row.flags?.length && <div style={{ color: B.muted, fontSize: 9, marginTop: 2 }}>{row.flags.map(sourceLabel).join(', ')}</div>}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          {!reviewRows.length && (
+                            <tr><td colSpan={8} style={{ padding: 20, textAlign: 'center', color: B.muted }}>No spreadsheet-style changes detected.</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 12 }}>
+                      <div>
+                        <Label>Extracted title</Label>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>{selectedDoc?.title || selectedSource.title}</div>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                        <div><Label>Effective date</Label><div style={{ fontSize: 12 }}>{ingestion?.effective_date || '-'}</div></div>
+                        <div><Label>Expiration date</Label><div style={{ fontSize: 12 }}>{ingestion?.expiration_date || '-'}</div></div>
+                      </div>
+                      <div>
+                        <Label>Related brands / vendors / customers</Label>
+                        <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+                          Brands: {(ingestion?.extracted_entities?.brands || []).join(', ') || '-'}<br/>
+                          Vendors: {(ingestion?.extracted_entities?.vendors || []).join(', ') || '-'}<br/>
+                          Customers: {(ingestion?.extracted_entities?.customers || []).join(', ') || '-'}
+                        </div>
+                      </div>
+                      <div>
+                        <Label>Extracted facts</Label>
+                        {(ingestion?.structured_facts || []).slice(0, 20).map((fact, idx) => (
+                          <div key={idx} style={{ borderBottom: `1px solid ${B.border}`, padding: '7px 0', fontSize: 12, lineHeight: 1.5 }}>
+                            <strong>{sourceLabel(fact.fact_type)}</strong>: {fact.fact}
+                          </div>
+                        ))}
+                        {!(ingestion?.structured_facts || []).length && <div style={{ color: B.muted, fontSize: 12 }}>No extracted facts found.</div>}
+                      </div>
+                      <div>
+                        <Label>Searchable document content</Label>
+                        <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 14, fontSize: 12, lineHeight: 1.65, whiteSpace: 'pre-wrap', maxHeight: 360, overflow: 'auto' }}>
+                          {(selectedDoc?.content || '').slice(0, 8000) || 'No content available.'}
+                        </div>
+                      </div>
                     </div>
                   )}
-                </div>
-              )}
+                </Card>
 
-              {!!latestJob?.warnings?.length && (
-                <div style={{ background: '#fff8e6', border: `1px solid ${B.yellow}55`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
-                  <Label>Needs attention</Label>
-                  {(latestJob.warnings || []).slice(0, 5).map((warning, idx) => (
-                    <div key={idx} style={{ color: B.yellow, fontSize: 11, lineHeight: 1.45, marginBottom: 4 }}>{warning}</div>
-                  ))}
-                </div>
-              )}
-
-              {!!proposedActions.length && (
-                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
-                  <Label>Proposed changes</Label>
-                  {proposedActions.slice(0, 5).map((action, idx) => (
-                    <div key={idx} style={{ borderBottom: idx < Math.min(proposedActions.length, 5) - 1 ? `1px solid ${B.border}` : 'none', padding: '7px 0' }}>
-                      <div style={{ fontSize: 11, fontWeight: 700 }}>{sourceLabel(action.action)} / {sourceLabel(action.target)}</div>
-                      <div style={{ color: B.muted, fontSize: 10, lineHeight: 1.4, marginTop: 2 }}>{action.rationale || 'Requires review before applying.'}</div>
+                {editingProposal && (
+                  <Card>
+                    <Label>Edit before approval</Label>
+                    <textarea value={proposalDraft} onChange={e => setProposalDraft(e.target.value)} rows={16} style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 11, resize: 'vertical' }} />
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+                      <button onClick={() => setEditingProposal(false)} style={{ background: B.white, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 6, padding: '9px 13px', cursor: 'pointer' }}>Cancel</button>
+                      <Button onClick={saveEditedProposal} disabled={loading}>SAVE EDITS</Button>
                     </div>
-                  ))}
-                </div>
-              )}
-
-              {!!rowsNeedingReview.length && (
-                <div style={{ background: '#fff1f0', border: `1px solid ${B.red}35`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
-                  <Label>Rows needing review</Label>
-                  {rowsNeedingReview.slice(0, 4).map((row, idx) => (
-                    <div key={idx} style={{ color: B.red, fontSize: 11, lineHeight: 1.45, marginBottom: 5 }}>
-                      {row.source_row ? `${row.source_row}: ` : ''}{row.reason}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Button tone="green" disabled={loading} onClick={() => updateStatus('APPROVED')}>APPROVE</Button>
-                <Button tone="red" disabled={loading} onClick={() => updateStatus('REJECTED')}>REJECT</Button>
-                <Button tone="blue" disabled={loading} onClick={() => updateStatus('NEEDS_REVIEW')}>MARK NEEDS REVIEW</Button>
+                  </Card>
+                )}
               </div>
-            </Card>
+
+              <Card>
+                <Label>Review status</Label>
+                <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 20, color: statusColor(selectedSource.status), marginBottom: 4 }}>
+                  {reviewLabel(selectedSource.status)}
+                </div>
+                <div style={{ color: B.muted, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
+                  Approvals commit records inside the Knowledge layer and audit what changed. Product, pricing, customer, and vendor tables are not overwritten here.
+                </div>
+
+                {!!latestJob?.warnings?.length && (
+                  <div style={{ background: '#fff8e6', border: `1px solid ${B.yellow}55`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                    <Label>Flags</Label>
+                    {(latestJob.warnings || []).slice(0, 8).map((warning, idx) => (
+                      <div key={idx} style={{ color: B.yellow, fontSize: 11, lineHeight: 1.45, marginBottom: 4 }}>{warning}</div>
+                    ))}
+                  </div>
+                )}
+
+                {!!rowsNeedingReview.length && (
+                  <div style={{ background: '#fff1f0', border: `1px solid ${B.red}35`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                    <Label>Needs review</Label>
+                    {rowsNeedingReview.slice(0, 6).map((row, idx) => (
+                      <div key={idx} style={{ color: B.red, fontSize: 11, lineHeight: 1.45, marginBottom: 5 }}>
+                        {row.source_row ? `${row.source_row}: ` : ''}{row.reason}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {!!selectedSource.structuredRecords?.length && (
+                  <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                    <Label>Committed records</Label>
+                    <div style={{ fontSize: 12 }}>{selectedSource.structuredRecords.length} approved Knowledge records</div>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <Button tone="green" disabled={loading} onClick={() => reviewAction('approve_all')}>APPROVE ALL</Button>
+                  <Button tone="green" disabled={loading || !selectedIndexes.length} onClick={() => reviewAction('approve_selected', { selectedIndexes })}>APPROVE SELECTED</Button>
+                  <Button tone="red" disabled={loading} onClick={() => reviewAction('reject')}>REJECT</Button>
+                  <Button tone="blue" disabled={loading || !latestJob} onClick={startEditProposal}>EDIT BEFORE APPROVAL</Button>
+                </div>
+              </Card>
+            </div>
           </div>
         )}
       </div>
