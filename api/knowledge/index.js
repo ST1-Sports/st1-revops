@@ -2,7 +2,7 @@ import { prisma } from "../_lib/prisma.js";
 import { setCors } from "../_lib/cors.js";
 import { requireKnowledgeActor } from "./_lib/auth.js";
 import { cleanText, decodeBase64Text, fetchUrlText, normalizeSourceType } from "./_lib/text.js";
-import { createKnowledgeSourceWithDocument, listKnowledgeSources, processKnowledgeImport } from "./_lib/repository.js";
+import { createKnowledgeSourceWithDocument, getKnowledgeSource, listKnowledgeSources, processKnowledgeImport } from "./_lib/repository.js";
 
 export const config = {
   api: { bodyParser: { sizeLimit: "24mb" } },
@@ -68,8 +68,9 @@ export default async function handler(req, res) {
         const processed = await processKnowledgeImport(prisma, result.source.id, actor);
         return res.status(201).json({ ...processed, duplicate: false });
       } catch (processingError) {
+        const failedSource = await getKnowledgeSource(prisma, result.source.id).catch(() => result.source);
         return res.status(201).json({
-          source: result.source,
+          source: failedSource,
           importJob: processingError.importJob || null,
           processingError: processingError.message,
           duplicate: false,

@@ -314,6 +314,9 @@ export default function Knowledge() {
 
   const selectedDoc = selectedSource?.documents?.[0]
   const latestJob = selectedSource?.importJobs?.[0]
+  const ingestion = latestJob?.proposedChanges?.documents?.[0]?.ingestion
+  const proposedActions = latestJob?.proposedChanges?.proposed_database_actions || ingestion?.proposed_database_actions || []
+  const rowsNeedingReview = ingestion?.rows_needing_review || []
 
   return (
     <div style={{ minHeight: '100vh', background: B.page, color: B.text, fontFamily: "'Lexend',sans-serif" }}>
@@ -416,7 +419,7 @@ export default function Knowledge() {
                 {reviewLabel(selectedSource.status)}
               </div>
               <div style={{ color: B.muted, fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>
-                Placeholder processing is complete when the source reaches Needs Review. AI extraction can attach to the import job service next.
+                AI ingestion proposes changes only. Approving this item confirms the knowledge source; it does not overwrite product, pricing, customer, or vendor records.
               </div>
 
               <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
@@ -424,6 +427,53 @@ export default function Knowledge() {
                 <div style={{ fontSize: 12, color: B.text }}>{latestJob?.importType ? sourceLabel(latestJob.importType) : 'No job yet'}</div>
                 <div style={{ fontSize: 11, color: B.muted, marginTop: 3 }}>{latestJob?.status ? reviewLabel(latestJob.status) : 'Waiting'}</div>
               </div>
+
+              {ingestion && (
+                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                  <Label>AI understanding</Label>
+                  <div style={{ fontSize: 12, color: B.text, marginBottom: 4 }}>{sourceLabel(ingestion.detected_type)}</div>
+                  <div style={{ fontSize: 11, color: B.muted }}>Confidence: {Math.round((ingestion.confidence || 0) * 100)}%</div>
+                  {!!ingestion.extracted_entities && (
+                    <div style={{ fontSize: 11, color: B.muted, marginTop: 8, lineHeight: 1.5 }}>
+                      Brands: {(ingestion.extracted_entities.brands || []).slice(0, 4).join(', ') || '-'}<br/>
+                      Vendors: {(ingestion.extracted_entities.vendors || []).slice(0, 4).join(', ') || '-'}<br/>
+                      Customers: {(ingestion.extracted_entities.customers || []).slice(0, 4).join(', ') || '-'}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {!!latestJob?.warnings?.length && (
+                <div style={{ background: '#fff8e6', border: `1px solid ${B.yellow}55`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                  <Label>Needs attention</Label>
+                  {(latestJob.warnings || []).slice(0, 5).map((warning, idx) => (
+                    <div key={idx} style={{ color: B.yellow, fontSize: 11, lineHeight: 1.45, marginBottom: 4 }}>{warning}</div>
+                  ))}
+                </div>
+              )}
+
+              {!!proposedActions.length && (
+                <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                  <Label>Proposed changes</Label>
+                  {proposedActions.slice(0, 5).map((action, idx) => (
+                    <div key={idx} style={{ borderBottom: idx < Math.min(proposedActions.length, 5) - 1 ? `1px solid ${B.border}` : 'none', padding: '7px 0' }}>
+                      <div style={{ fontSize: 11, fontWeight: 700 }}>{sourceLabel(action.action)} / {sourceLabel(action.target)}</div>
+                      <div style={{ color: B.muted, fontSize: 10, lineHeight: 1.4, marginTop: 2 }}>{action.rationale || 'Requires review before applying.'}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {!!rowsNeedingReview.length && (
+                <div style={{ background: '#fff1f0', border: `1px solid ${B.red}35`, borderRadius: 8, padding: 11, marginBottom: 14 }}>
+                  <Label>Rows needing review</Label>
+                  {rowsNeedingReview.slice(0, 4).map((row, idx) => (
+                    <div key={idx} style={{ color: B.red, fontSize: 11, lineHeight: 1.45, marginBottom: 5 }}>
+                      {row.source_row ? `${row.source_row}: ` : ''}{row.reason}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <Button tone="green" disabled={loading} onClick={() => updateStatus('APPROVED')}>APPROVE</Button>

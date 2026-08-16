@@ -1,4 +1,5 @@
 import { chunkText, cleanText, sha256 } from "./text.js";
+import { runKnowledgeAiIngestion } from "./ingestion.js";
 
 function toDate(value) {
   if (!value) return null;
@@ -10,6 +11,12 @@ function sourceImportType(sourceType) {
   if (sourceType === "URL") return "URL_FETCH";
   if (sourceType === "GOOGLE_DRIVE") return "GOOGLE_DRIVE_SYNC";
   return "AI_INGESTION";
+}
+
+function toOptionalDate(value) {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 export async function createKnowledgeSourceWithDocument(prisma, input, actor = {}) {
@@ -185,7 +192,7 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
   const started = await prisma.knowledgeImportJob.create({
     data: {
       sourceId,
-      importType: sourceImportType(source.sourceType),
+      importType: "AI_INGESTION",
       status: "PROCESSING",
       proposedChanges: {},
       warnings: [],
@@ -193,7 +200,13 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
   });
 
   try {
-    const documentUpdates = [];
+    await prisma.knowledgeSource.update({
+      where: { id: sourceId },
+      data: { status: "PROCESSING" },
+    });
+
+    const documentResults = [];
+    const warnings = [];
     for (const document of source.documents) {
       let chunks = document.chunks || [];
       if (!chunks.length) {
@@ -205,12 +218,38 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
           chunks = newChunks;
         }
       }
-      const summary = document.summary || cleanText(document.content).slice(0, 700);
+
       await prisma.knowledgeDocument.update({
         where: { id: document.id },
-        data: { status: "NEEDS_REVIEW", summary },
+        data: { status: "PROCESSING" },
       });
-      documentUpdates.push({ documentId: document.id, chunkCount: chunks.length, summary });
+
+      const ingestion = await runKnowledgeAiIngestion({ source, document });
+      warnings.push(...(ingestion.warnings || []));
+      if (ingestion.rows_needing_review?.length) {
+        warnings.push(`${ingestion.rows_needing_review.length} rows or facts need human review`);
+      }
+
+      await prisma.knowledgeDocument.update({
+        where: { id: document.id },
+        data: {
+          status: "NEEDS_REVIEW",
+          summary: ingestion.summary || document.summary || cleanText(document.content).slice(0, 700),
+          category: ingestion.category || document.category,
+          effectiveDate: toOptionalDate(ingestion.effective_date),
+          expirationDate: toOptionalDate(ingestion.expiration_date),
+          metadata: {
+            ...(document.metadata || {}),
+            detectedType: ingestion.detected_type,
+            ingestionConfidence: ingestion.confidence,
+          },
+        },
+      });
+      documentResults.push({
+        documentId: document.id,
+        chunkCount: chunks.length,
+        ingestion,
+      });
     }
 
     await prisma.knowledgeSource.update({
@@ -222,7 +261,12 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
       where: { id: started.id },
       data: {
         status: "NEEDS_REVIEW",
-        proposedChanges: { documents: documentUpdates },
+        proposedChanges: {
+          sourceId,
+          documents: documentResults,
+          proposed_database_actions: documentResults.flatMap(item => item.ingestion.proposed_database_actions || []),
+        },
+        warnings,
         completedAt: new Date(),
       },
     });
@@ -232,6 +276,10 @@ export async function processKnowledgeImport(prisma, sourceId, actor = {}) {
     await prisma.knowledgeSource.update({
       where: { id: sourceId },
       data: { status: "FAILED", processedAt: new Date() },
+    }).catch(() => null);
+    await prisma.knowledgeDocument.updateMany({
+      where: { sourceId },
+      data: { status: "FAILED" },
     }).catch(() => null);
     const failed = await prisma.knowledgeImportJob.update({
       where: { id: started.id },
