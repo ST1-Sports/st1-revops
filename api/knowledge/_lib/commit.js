@@ -1,6 +1,18 @@
 import { chunkText } from "./text.js";
 import { getKnowledgeSource } from "./repository.js";
 
+function money(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(String(value).replace(/[$,%\s,]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function dateOrNull(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function latestImportJob(source, importJobId) {
   if (importJobId) return (source.importJobs || []).find(job => job.id === importJobId) || null;
   return (source.importJobs || [])[0] || null;
@@ -78,6 +90,41 @@ export async function commitApprovedKnowledge(prisma, { sourceId, importJobId, m
         },
       });
       committed.push({ id: record.id, recordType: record.recordType, action: record.action });
+
+      const hasPricingValue = row.fields && [
+        row.fields.st1_cost,
+        row.fields.dealer_price,
+        row.fields.wholesale_price,
+        row.fields.map,
+        row.fields.msrp,
+      ].some(value => money(value) !== null);
+
+      if (row.action !== "No Change" && row.sku && row.fields && hasPricingValue) {
+        await tx.productPricing.create({
+          data: {
+            sku: String(row.sku),
+            styleNumber: row.fields.style_number || null,
+            brand: row.fields.brand || null,
+            productName: row.fields.product_name || row.product || null,
+            msrp: money(row.fields.msrp),
+            map: money(row.fields.map),
+            wholesaleCost: money(row.fields.wholesale_price),
+            dealerCost: money(row.fields.dealer_price),
+            st1Cost: money(row.fields.st1_cost),
+            effectiveDate: dateOrNull(row.fields.effective_date || ingestion.effective_date),
+            expirationDate: dateOrNull(row.fields.expiration_date || ingestion.expiration_date),
+            sourceId,
+            sourceTitle: source.title,
+            confidence: Number.isFinite(Number(row.confidence)) ? Number(row.confidence) : null,
+            metadata: {
+              knowledgeStructuredRecordId: record.id,
+              importJobId: job.id,
+              flags: row.flags || [],
+              approvedBy: actor.userId || null,
+            },
+          },
+        });
+      }
     }
 
     for (const fact of facts) {

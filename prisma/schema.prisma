@@ -34,6 +34,7 @@ model Product {
   copies           Copy[]
   assets           Asset[]
   campaignProducts CampaignProduct[]
+  pricingRecords   ProductPricing[]
 }
 
 // ── CAMPAIGNS ─────────────────────────────────────────────────────────────────
@@ -758,6 +759,9 @@ model KnowledgeSource {
   importJobs KnowledgeImportJob[]
   structuredRecords KnowledgeStructuredRecord[]
   reviewEvents      KnowledgeReviewEvent[]
+  productPricingRecords ProductPricing[]
+  customerPricingOverrides CustomerPricingOverride[]
+  programPricingAdjustments ProgramPricingAdjustment[]
 
   @@index([sourceType])
   @@index([status])
@@ -878,4 +882,114 @@ model KnowledgeReviewEvent {
   @@index([importJobId])
   @@index([action])
   @@index([createdAt])
+}
+
+// ── PRICING RESOLUTION ───────────────────────────────────────────────────────
+// Deterministic pricing layer for RevOps, proposals, purchasing, store builder,
+// and agents. AI may propose imported rows, but application code calculates.
+
+enum PricingAdjustmentType {
+  PERCENT_DISCOUNT
+  AMOUNT_DISCOUNT
+  FIXED_PRICE
+  REBATE
+  SPONSORSHIP
+  MARKUP_PERCENT
+  MARKUP_AMOUNT
+}
+
+model ProductPricing {
+  id              String   @id @default(cuid())
+  sku             String
+  styleNumber     String?
+  brand           String?
+  productName     String?
+  productId       Int?
+  msrp            Decimal? @db.Decimal(12, 2)
+  map             Decimal? @db.Decimal(12, 2)
+  wholesaleCost   Decimal? @db.Decimal(12, 2)
+  dealerCost      Decimal? @db.Decimal(12, 2)
+  st1Cost         Decimal? @db.Decimal(12, 2)
+  currency        String   @default("USD")
+  effectiveDate   DateTime?
+  expirationDate  DateTime?
+  sourceId        String?
+  sourceTitle     String?
+  confidence      Float?
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  product Product?         @relation(fields: [productId], references: [id])
+  source  KnowledgeSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([sku])
+  @@index([brand])
+  @@index([sku, brand])
+  @@index([productId])
+  @@index([sourceId])
+  @@index([effectiveDate])
+  @@index([expirationDate])
+}
+
+model CustomerPricingOverride {
+  id             String   @id @default(cuid())
+  customerId     String
+  customerName   String?
+  sku            String
+  brand          String?
+  overrideCost   Decimal? @db.Decimal(12, 2)
+  overrideMsrp   Decimal? @db.Decimal(12, 2)
+  discountPct    Decimal? @db.Decimal(8, 4)
+  adjustmentType PricingAdjustmentType @default(FIXED_PRICE)
+  effectiveDate  DateTime?
+  expirationDate DateTime?
+  sourceId       String?
+  sourceTitle    String?
+  notes          String?  @db.Text
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  source KnowledgeSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([sku])
+  @@index([brand])
+  @@index([customerId, sku, brand])
+  @@index([sourceId])
+  @@index([effectiveDate])
+  @@index([expirationDate])
+}
+
+model ProgramPricingAdjustment {
+  id             String   @id @default(cuid())
+  programId      String
+  programName    String?
+  customerId     String?
+  brand          String?
+  sku            String?
+  adjustmentType PricingAdjustmentType
+  amount         Decimal  @db.Decimal(12, 4)
+  priority       Int      @default(100)
+  effectiveDate  DateTime?
+  expirationDate DateTime?
+  sourceId       String?
+  sourceTitle    String?
+  notes          String?  @db.Text
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  source KnowledgeSource? @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+
+  @@index([programId])
+  @@index([customerId])
+  @@index([brand])
+  @@index([sku])
+  @@index([programId, sku, brand])
+  @@index([sourceId])
+  @@index([effectiveDate])
+  @@index([expirationDate])
+  @@index([priority])
 }
