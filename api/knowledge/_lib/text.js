@@ -1,10 +1,11 @@
 import crypto from "crypto";
 
-export const SOURCE_TYPES = new Set(["PASTE", "URL", "FILE", "EMAIL", "MANUAL"]);
+export const SOURCE_TYPES = new Set(["FILE", "PASTED_TEXT", "URL", "GOOGLE_DRIVE", "MANUAL"]);
 
 export function normalizeSourceType(value) {
-  const normalized = String(value || "PASTE").trim().toUpperCase();
-  return SOURCE_TYPES.has(normalized) ? normalized : "PASTE";
+  const normalized = String(value || "PASTED_TEXT").trim().toUpperCase();
+  if (normalized === "PASTE") return "PASTED_TEXT";
+  return SOURCE_TYPES.has(normalized) ? normalized : "PASTED_TEXT";
 }
 
 export function sha256(text) {
