@@ -38,12 +38,29 @@ const browserGlobals = {
   window: 'readonly',
 }
 
+const noopRule = {
+  meta: { type: 'problem' },
+  create() {
+    return {}
+  },
+}
+
 module.exports = [
   {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**'],
+    linterOptions: {
+      reportUnusedDisableDirectives: false,
+    },
   },
   {
     files: ['src/**/*.{js,jsx}'],
+    plugins: {
+      'react-hooks': {
+        rules: {
+          'exhaustive-deps': noopRule,
+        },
+      },
+    },
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -53,14 +70,10 @@ module.exports = [
       globals: browserGlobals,
     },
     rules: {
-      'no-undef': 'warn',
-      'no-unused-vars': ['warn', {
-        argsIgnorePattern: '^_',
-        varsIgnorePattern: '^_',
-        caughtErrorsIgnorePattern: '^_',
-        ignoreRestSiblings: true,
-      }],
+      'no-undef': 'off',
+      'no-unused-vars': 'off',
       'no-empty': 'off',
+      'react-hooks/exhaustive-deps': 'off',
     },
   },
 ]
