@@ -731,14 +731,16 @@ export default function App() {
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
     {id:"price-lists", icon:"$", label:"Price Lists"},
-    {id:"knowledge",   icon:"K", label:"Knowledge", href:"/knowledge", sameTab:true},
     {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
     {id:"activity",      icon:"≡", label:"Activity"},
     {id:"settings",      icon:"⚙", label:"Settings"},
     {id:"integrations",  icon:"⚡", label:"Integrations"},
-    ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
+    ...(cu?.isAdmin ? [
+      {id:"knowledge", icon:"K", label:"Knowledge", href:"/knowledge", sameTab:true},
+      {id:"admin", icon:"◐", label:"Admin Panel"},
+    ] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 
