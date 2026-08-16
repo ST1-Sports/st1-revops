@@ -731,6 +731,7 @@ export default function App() {
     {id:"reorder",     icon:"↺", label:"Reorder Engine", badge:(s.reorders||[]).filter(r=>r.status==="pending"&&(!r.snoozedUntil||new Date(r.snoozedUntil)<new Date())).length},
     {id:"compete",     icon:"⊗", label:"Competitors"},
     {id:"price-lists", icon:"$", label:"Price Lists"},
+    {id:"knowledge",   icon:"K", label:"Knowledge", href:"/knowledge", sameTab:true},
     {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
     // ── SYSTEM ─────────────────────────────────────────────────────────
     {id:"_s_system"},
@@ -822,11 +823,11 @@ export default function App() {
               }
               // External link (Zoho Quotes opens in admin portal)
               if(n.href) return (
-                <a key={n.id} href={n.href} target="_blank" rel="noreferrer" title={slim?n.label:undefined}
+                <a key={n.id} href={n.href} target={n.sameTab?undefined:"_blank"} rel={n.sameTab?undefined:"noreferrer"} title={slim?n.label:undefined}
                   style={{display:"flex",textDecoration:"none",width:"100%",background:"transparent",borderLeft:"3px solid transparent",color:"rgba(255,255,255,0.45)",padding:slim?"9px 0":"7px 11px 7px 10px",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:400}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
-                  {!slim&&<span style={{marginLeft:"auto",fontSize:9,color:"rgba(255,255,255,0.3)",flexShrink:0}}>↗</span>}
+                  {!slim&&!n.sameTab&&<span style={{marginLeft:"auto",fontSize:9,color:"rgba(255,255,255,0.3)",flexShrink:0}}>↗</span>}
                 </a>
               );
               // Normal nav item

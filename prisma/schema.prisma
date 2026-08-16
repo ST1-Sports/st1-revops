@@ -710,3 +710,147 @@ model alert_history {
   @@index([fired_at(sort: Desc)])
   @@map("alert_history")
 }
+
+// ── ST1 KNOWLEDGE SYSTEM ─────────────────────────────────────────────────────
+// Additive, DB-backed knowledge store for uploaded files, pasted content, URLs,
+// AI extraction, human review, and internal agent/search APIs.
+
+enum KnowledgeSourceType {
+  PASTE
+  URL
+  FILE
+  EMAIL
+  MANUAL
+}
+
+enum KnowledgeDocumentStatus {
+  INGESTED
+  PROCESSING
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  ERROR
+}
+
+enum KnowledgeExtractionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model KnowledgeDocument {
+  id               String                  @id @default(cuid())
+  title            String
+  sourceType       KnowledgeSourceType
+  sourceUrl        String?
+  fileName         String?
+  mimeType         String?
+  sha256           String?                 @unique
+  rawText          String                  @db.Text
+  summary          String?                 @db.Text
+  status           KnowledgeDocumentStatus @default(INGESTED)
+  error            String?                 @db.Text
+  metadata         Json                    @default("{}")
+  createdByUserId  String?
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  chunks       KnowledgeChunk[]
+  extractions  KnowledgeExtraction[]
+  facts        KnowledgeFact[]
+  reviewEvents KnowledgeReviewEvent[]
+
+  @@index([status])
+  @@index([sourceType])
+  @@index([createdAt])
+  @@index([createdByUserId])
+}
+
+model KnowledgeChunk {
+  id          String   @id @default(cuid())
+  documentId  String
+  chunkIndex  Int
+  content     String   @db.Text
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  document KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  facts    KnowledgeFact[]
+
+  @@unique([documentId, chunkIndex])
+  @@index([documentId])
+}
+
+model KnowledgeExtraction {
+  id               String                    @id @default(cuid())
+  documentId       String
+  entityType       String
+  entityName       String?
+  factType         String?
+  payload          Json                      @default("{}")
+  confidence       Float?
+  status           KnowledgeExtractionStatus @default(PENDING)
+  reviewNotes      String?                   @db.Text
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+  createdAt        DateTime                  @default(now())
+  updatedAt        DateTime                  @updatedAt
+
+  document     KnowledgeDocument      @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  facts        KnowledgeFact[]
+  reviewEvents KnowledgeReviewEvent[]
+
+  @@index([documentId])
+  @@index([status])
+  @@index([entityType])
+  @@index([entityName])
+}
+
+model KnowledgeFact {
+  id           String   @id @default(cuid())
+  documentId   String
+  chunkId      String?
+  extractionId String?
+  entityType   String
+  entityName   String
+  factType     String
+  value        Json     @default("{}")
+  sourceQuote  String?  @db.Text
+  confidence   Float?
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  document   KnowledgeDocument    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  chunk      KnowledgeChunk?      @relation(fields: [chunkId], references: [id], onDelete: SetNull)
+  extraction KnowledgeExtraction? @relation(fields: [extractionId], references: [id], onDelete: SetNull)
+
+  @@index([documentId])
+  @@index([chunkId])
+  @@index([extractionId])
+  @@index([entityType, entityName])
+  @@index([factType])
+  @@index([createdAt])
+}
+
+model KnowledgeReviewEvent {
+  id           String   @id @default(cuid())
+  documentId   String?
+  extractionId String?
+  action       String
+  userId       String?
+  note         String?  @db.Text
+  before       Json?
+  after        Json?
+  createdAt    DateTime @default(now())
+
+  document   KnowledgeDocument?   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  extraction KnowledgeExtraction? @relation(fields: [extractionId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([extractionId])
+  @@index([action])
+  @@index([createdAt])
+}
