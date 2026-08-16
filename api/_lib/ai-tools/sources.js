@@ -211,7 +211,7 @@ export async function fetchZohoItems({ query, sku, limit = 10 } = {}) {
   }
 
   const token = await getZohoToken();
-  const search = encodeURIComponent((sku || query || '').trim());
+  const search = (sku || query || '').trim();
   const params = new URLSearchParams({
     organization_id: orgId,
     per_page: String(safeLimit(limit, 10, 50)),
@@ -277,17 +277,19 @@ export async function searchZohoCrm(query, limit = 10) {
     return data.data || [];
   }
 
-  const [contactsByName, contactsByAccount, leadsByName, leadsByCompany] = await Promise.all([
+  const [contactsByName, contactsByAccount, contactsByEmail, leadsByName, leadsByCompany, leadsByEmail] = await Promise.all([
     search('Contacts', 'Full_Name'),
     search('Contacts', 'Account_Name'),
+    search('Contacts', 'Email'),
     search('Leads', 'Full_Name'),
     search('Leads', 'Company'),
+    search('Leads', 'Email'),
   ]);
 
   return {
     configured: true,
-    contacts: [...contactsByName, ...contactsByAccount],
-    leads: [...leadsByName, ...leadsByCompany],
+    contacts: [...contactsByName, ...contactsByAccount, ...contactsByEmail],
+    leads: [...leadsByName, ...leadsByCompany, ...leadsByEmail],
   };
 }
 
