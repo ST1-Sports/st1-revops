@@ -693,15 +693,9 @@ function ImageModule({ userRole }) {
 }
 
 // ─── SMART QUOTE BUILDER ─────────────────────────────────────────────────────
-function parseQuote(text) {
-  try { const p = JSON.parse(text.trim()); if (p?.items) return p } catch {}
-  try { const m = text.match(/\{[\s\S]*\}/); if (m) { const p = JSON.parse(m[0]); if (p?.items) return p } } catch {}
-  return null
-}
-
 const fmt$ = n => '$' + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
 
-function QuoteModule({ userRole }) {
+function QuoteModule() {
   const [query,      setQuery]      = useState(()=>{ const p=sessionStorage.getItem("st1_quote_prefill"); if(p){sessionStorage.removeItem("st1_quote_prefill");return p;} return ""; })
   const [loading,    setLoading]    = useState(false)
   const [items,      setItems]      = useState(null)   // [{vendor,sku,description,unitPrice,qty}]
@@ -711,8 +705,8 @@ function QuoteModule({ userRole }) {
   const [quoteText,  setQuoteText]  = useState(null)
   const [sendMsg,    setSendMsg]    = useState('')
 
-  function sellPrice(unitPrice) { return unitPrice * (1 + margin / 100) }
-  function lineTotal(item)      { return sellPrice(item.unitPrice) * item.qty }
+  function sellPrice(item)      { return item.lockedPrice != null ? item.lockedPrice : item.unitPrice * (1 + margin / 100) }
+  function lineTotal(item)      { return sellPrice(item) * item.qty }
   const runningTotal = items ? items.reduce((s, item) => s + lineTotal(item), 0) : 0
 
   function updateQty(i, val) {
@@ -725,49 +719,29 @@ function QuoteModule({ userRole }) {
     if (!q) return
     setLoading(true); setError(null); setItems(null); setNotes(''); setQuoteText(null)
 
-    // Fetch matching products first
-    let catalog = ''
     try {
-      const search = q.split(/\s+/).slice(0,4).join(' ')
-      const res    = await fetch(`/api/adengine/products?search=${encodeURIComponent(search)}&pageSize=60`)
-      const data   = await res.json()
-      const prods  = data.products || []
-      catalog = prods.length
-        ? 'Product catalog:\n' + prods.map(p =>
-            `- ${p.name} | Brand: ${p.brand||'—'} | SKU: ${p.slug} | Price: $${p.price||'0'} | Stock: ${p.stock_status}`
-          ).join('\n')
-        : 'No catalog data available — estimate based on typical ST1 Sports pricing.'
-    } catch { catalog = 'Catalog unavailable — estimate pricing.' }
-
-    const systemPrompt = [
-      'You are a sports equipment quoting specialist for ST1 Sports, a nationwide B2B athletic equipment supplier.',
-      'Customers are K-12 athletic directors, coaches, and administrators at tax-exempt institutions.',
-      catalog,
-      'Match products to the customer request. Return ONLY valid JSON in this exact format, no markdown, no explanation:',
-      '{"items":[{"vendor":"Brand Name","sku":"SKU-123","description":"Product description","unitPrice":0.00,"qty":1}],"notes":"Any notes or assumptions"}',
-    ].join('\n')
-
-    try {
-      const res = await fetch('/api/claude', {
+      const res = await fetch('/api/agents/edgar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: `Customer request: ${q}\n\nReturn JSON only.` }],
-        }),
+        body: JSON.stringify({ task: q, input: { customer: q } }),
       })
       if (!res.ok) {
         const err = await res.text().catch(() => '')
-        throw new Error(`AI error ${res.status}${err ? ': ' + err.slice(0, 120) : ''}`)
+        throw new Error(`Edgar error ${res.status}${err ? ': ' + err.slice(0, 120) : ''}`)
       }
       const d = await res.json()
-      const text = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
-      const parsed = parseQuote(text)
-      if (!parsed) throw new Error('Could not parse quote response — try rephrasing your request.')
-      setItems((parsed.items || []).map(item => ({ ...item, unitPrice: +item.unitPrice||0, qty: +item.qty||1 })))
-      setNotes(parsed.notes || '')
+      const quote = d.metadata?.quote
+      if (!quote?.lineItems?.length) throw new Error(d.output || 'Edgar could not match this request to the current price list.')
+      setMargin(0)
+      setItems((quote.lineItems || []).map(item => ({
+        vendor:      item.brand || 'ST1',
+        sku:         item.sku || '',
+        description: item.name || 'Item',
+        unitPrice:   Number(item.cost ?? item.quotedPrice ?? 0),
+        lockedPrice: Number(item.quotedPrice ?? item.ourPrice ?? 0),
+        qty:         Number(item.qty || 1),
+      })))
+      setNotes([d.output, ...(quote.warnings || [])].filter(Boolean).join(' '))
     } catch(e) {
       setError(e.message)
     } finally {
@@ -777,7 +751,7 @@ function QuoteModule({ userRole }) {
 
   function buildQuoteText() {
     const lines = items.map(item =>
-      `${item.description}\n  Vendor: ${item.vendor}  |  SKU: ${item.sku}  |  Qty: ${item.qty}  |  Unit: ${fmt$(sellPrice(item.unitPrice))}  |  Total: ${fmt$(lineTotal(item))}`
+      `${item.description}\n  Vendor: ${item.vendor}  |  SKU: ${item.sku}  |  Qty: ${item.qty}  |  Unit: ${fmt$(sellPrice(item))}  |  Total: ${fmt$(lineTotal(item))}`
     ).join('\n\n')
     return [
       'ST1 SPORTS — PRICE QUOTATION',
@@ -852,7 +826,7 @@ function QuoteModule({ userRole }) {
                       <td style={tdStyle}>{item.vendor}</td>
                       <td style={{ ...tdStyle, fontFamily:"'Lexend Zetta',sans-serif", fontSize:9, color:B.muted }}>{item.sku}</td>
                       <td style={tdStyle}>{item.description}</td>
-                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt$(sellPrice(item.unitPrice))}</td>
+                      <td style={{ ...tdStyle, textAlign:'right' }}>{fmt$(sellPrice(item))}</td>
                       <td style={{ ...tdStyle, textAlign:'center' }}>
                         <input
                           type="number" min={1} value={item.qty}

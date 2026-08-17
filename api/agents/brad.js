@@ -14,7 +14,7 @@
  */
 import { setCors }                                        from '../_lib/cors.js'
 import { prisma }                                         from '../_lib/prisma.js'
-import { logInteraction, countActions, recentOutcomes }   from '../_lib/memory.js'
+import { logInteraction, recentOutcomes }                 from '../_lib/memory.js'
 
 const API_KEY   = process.env.ANTHROPIC_KEY
 const _cap = parseInt(process.env.BRAD_DAILY_TOUCH_CAP || '25', 10)
@@ -35,11 +35,12 @@ const ST1_VOICE =
 // ── Contact loading ───────────────────────────────────────────────────────────
 
 async function loadContacts(input = {}) {
+  const limit = Math.max(1, Math.min(50, Number(input.limit || 30)))
   // Client can pass contacts directly (from Redux store) — no DB required
   if (Array.isArray(input.contacts) && input.contacts.length) {
     return input.contacts
       .filter(c => c.email && !c.optedOut && c.status !== 'unsubscribed')
-      .slice(0, 30)
+      .slice(0, limit)
       .map(c => ({
         id:          c.id || `local_${c.email}`,
         firstName:   c.firstName || (c.fullName || '').split(' ')[0] || '',
@@ -64,7 +65,7 @@ async function loadContacts(input = {}) {
   return prisma.salesContact.findMany({
     where,
     orderBy: [{ score: 'desc' }, { updatedAt: 'desc' }],
-    take:    30,
+    take:    limit,
     include: { activities: { orderBy: { createdAt: 'desc' }, take: 1 } },
   })
 }
@@ -75,11 +76,19 @@ async function applyGuardrails(contacts, isDryRun) {
   const cutoff = new Date(Date.now() - RETOUCH_MS)
 
   const [dailyUsed, recentRows] = await Promise.all([
-    countActions({ agentId: 'brad', action: 'outreach', sinceMs: 24 * 60 * 60 * 1000 }),
+    prisma.agentInteraction.count({
+      where: {
+        agentId:   'brad',
+        action:    { in: ['outreach', 'outreach_sent'] },
+        dryRun:    false,
+        blockedBy: null,
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+    }),
     prisma.agentInteraction.findMany({
       where: {
         agentId:   'brad',
-        action:    'outreach',
+        action:    { in: ['outreach', 'outreach_sent'] },
         entity:    { in: contacts.map(c => `contact:${c.id}`) },
         createdAt: { gte: cutoff },
         dryRun:    false,

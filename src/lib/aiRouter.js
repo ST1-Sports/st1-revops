@@ -16,7 +16,7 @@ const VALID_SLUGS = new Set([
   'copy', 'quote', 'finance', 'email', 'social', 'image',
   'research', 'web-search', 'competitor-intel', 'code-execution',
   'video-clips', 'database', 'workflow', 'general',
-  'invoice', 'reconcile', 'vendor-bill',
+  'prospecting', 'outreach', 'invoice', 'reconcile', 'vendor-bill', 'payments',
   'forecast', 'health', 'digest', 'ask',
 ])
 
@@ -28,12 +28,15 @@ const CLASSIFIER_SYSTEM =
   'You are a task classifier. Given a user task description, return ' +
   'ONLY a single capability slug from this list: copy, quote, finance, email, ' +
   'social, image, research, web-search, competitor-intel, code-execution, ' +
-  'video-clips, database, workflow, general, invoice, reconcile, vendor-bill, ' +
+  'video-clips, database, workflow, general, prospecting, outreach, invoice, reconcile, vendor-bill, payments, ' +
   'forecast, health, digest, ask. ' +
   'Return nothing else. ' +
+  'Use "prospecting" for finding leads, ranking contacts, or deciding who to contact next. ' +
+  'Use "outreach" for bulk outreach drafting or campaign-like sales development tasks. ' +
   'Use "invoice" for creating invoices from won deals or CRM deal-won events. ' +
   'Use "reconcile" for matching bank deposits, /reconcile commands, or deposit review. ' +
   'Use "vendor-bill" for processing vendor invoices, /bill commands, or mapping supplier bills. ' +
+  'Use "payments" for checking invoice payment status, overdue invoices, upcoming due dates, or payment reminders. ' +
   'Use "forecast" for revenue/cash projections ("what will revenue look like next quarter"). ' +
   'Use "digest" for weekly/monthly financial summary or rollup requests. ' +
   'Use "health" for a broad "how is the business/financials doing overall" question. ' +

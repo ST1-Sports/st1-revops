@@ -21,6 +21,13 @@ export default async function handler(req, res) {
   const { contactEmail, contactName, subject, body, contactId } = req.body || {}
   if (!contactEmail) return res.status(400).json({ error: 'contactEmail required' })
   if (!body)         return res.status(400).json({ error: 'body required' })
+  if (process.env.BRAD_SENDING_ENABLED !== 'true') {
+    return res.status(403).json({
+      ok: false,
+      sent: false,
+      error: 'Brad sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends.',
+    })
+  }
 
   const baseUrl = `https://${req.headers.host}`
 
@@ -48,7 +55,7 @@ export default async function handler(req, res) {
     // Log the confirmed send — creates accurate 14-day re-touch record
     logInteraction({
       agentId: 'brad',
-      action:  'outreach_sent',
+      action:  'outreach',
       entity:  contactId ? `contact:${contactId}` : null,
       input:   { contactEmail, subject },
       output:  { via: 'gmail' },

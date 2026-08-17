@@ -6406,7 +6406,7 @@ const runBrad=async(task)=>{
 setBradLoading(true);setBradResult(null);
 try{
 const r=await fetch('/api/agents/brad',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true}})});
+body:JSON.stringify({task:task||BRAD_AUTO_TASK,input:{limit:5,dryRun:true,contacts:(s.contacts||[]).slice(0,50)}})});
 const d=await r.json();
 setBradResult(d.metadata||d);
 }catch(e){toast('Brad error: '+e.message,'error');}
