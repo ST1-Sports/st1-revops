@@ -488,7 +488,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
               <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black, marginBottom: 4 }}>Connect Google Drive</div>
               <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, lineHeight: 1.45, marginBottom: 8 }}>
-                Paste a Google Drive file link. Requires GOOGLE_DRIVE_REFRESH_TOKEN and Google client credentials in Vercel. Start at <a href="/api/google-drive-setup" target="_blank" rel="noreferrer" style={{ color: B.blue }}>Google Drive setup</a>, then share files with the connected account if needed.
+                Paste a Google Drive file link. Use a service account JSON in Vercel, or start at <a href="/api/google-drive-setup" target="_blank" rel="noreferrer" style={{ color: B.blue }}>Google Drive setup</a> for OAuth. If OAuth is blocked, share files/folders with the service account email.
               </div>
               <div style={{ display: 'flex', gap: 7 }}>
                 <input value={driveUrl} onChange={e => setDriveUrl(e.target.value)} placeholder="https://drive.google.com/file/d/... or Google Doc URL" style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />

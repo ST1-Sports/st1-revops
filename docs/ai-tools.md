@@ -156,10 +156,24 @@ Content-Type: application/json
 Configure:
 
 ```bash
+# Preferred: service account
+GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON='{...}'
+
+# OAuth alternative
 GOOGLE_DRIVE_REFRESH_TOKEN=...
 GOOGLE_DRIVE_CLIENT_ID=...
 GOOGLE_DRIVE_CLIENT_SECRET=...
 ```
+
+Service account setup is usually easiest when OAuth consent is blocked:
+
+1. Google Cloud Console → IAM & Admin → Service Accounts.
+2. Create a service account.
+3. Create a JSON key.
+4. Add the JSON to Vercel as `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON`.
+   If multiline JSON is awkward, base64 encode it and use
+   `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64`.
+5. Share the Drive file or folder with the service account email.
 
 If `GOOGLE_DRIVE_CLIENT_ID` / `GOOGLE_DRIVE_CLIENT_SECRET` are omitted, the
 Drive importer falls back to `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`.

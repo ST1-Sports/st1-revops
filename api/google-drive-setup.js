@@ -118,6 +118,12 @@ export default async function handler(req, res) {
   }).toString();
 
   return res.status(200).send(page('Connect Google Drive', `
+    <div style="margin-bottom:20px;padding:14px;background:#EAF7EE;border:1px solid #1E8F4E40;border-radius:6px;font-size:13px;line-height:1.6">
+      <strong>Blocked by Google OAuth?</strong> Use the service account option instead:
+      create a Google Cloud service account, enable Drive API, create a JSON key,
+      add it to Vercel as <code>GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON</code>, then share
+      Drive files/folders with the service account email.
+    </div>
     <a href="${authUrl}" style="display:inline-block;background:#F37321;color:white;text-decoration:none;padding:14px 28px;border-radius:6px;font-weight:700;font-size:15px">Connect Google Drive →</a>
     <div style="margin-top:20px;padding:14px;background:#F8F7F5;border:1px solid #E2E0DB;border-radius:6px;font-size:13px;line-height:1.6">
       <strong>Permission requested:</strong> Drive read-only. ST1 RevOps imports selected documents into AI Knowledge when you paste a file URL; it does not modify Drive files.
