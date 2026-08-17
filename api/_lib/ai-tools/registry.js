@@ -9,6 +9,7 @@ import {
   ST1_BRAND_GUIDANCE,
   fetchZohoItems,
   findProducts,
+  getKnowledgeDocuments,
   mapSalesContact,
   mapZohoContact,
   retrievedAt,
@@ -424,7 +425,7 @@ async function getSt1Policy(input) {
 async function searchSt1Knowledge(input, auth) {
   const domains = input.domains?.length
     ? input.domains
-    : ['products', 'pricing', 'vendors', 'brands', 'policies'];
+    : ['products', 'pricing', 'vendors', 'brands', 'policies', 'documents'];
   const limit = safeLimit(input.limit, 10, 25);
   const results = {};
   const deniedDomains = [];
@@ -466,6 +467,10 @@ async function searchSt1Knowledge(input, auth) {
             .slice(0, limit),
           sources: [source('ST1 internal policy library')],
         }));
+      case 'documents':
+        return ifAllowed(domain, 'knowledge:read', async () => ({
+          items: await getKnowledgeDocuments({ query: input.query, limit }),
+        }));
       default:
         return Promise.resolve();
     }
@@ -494,10 +499,10 @@ export const AI_TOOLS = [
         query: { type: 'string', minLength: 2, maxLength: 200, description: 'Business question or search term.' },
         domains: {
           type: 'array',
-          maxItems: 6,
+          maxItems: 7,
           uniqueItems: true,
           description: 'Optional knowledge domains to search. Omit to search safe default domains.',
-          items: { type: 'string', enum: ['products', 'pricing', 'vendors', 'brands', 'customers', 'policies'] },
+          items: { type: 'string', enum: ['products', 'pricing', 'vendors', 'brands', 'customers', 'policies', 'documents'] },
         },
         limit: { type: 'integer', minimum: 1, maximum: 25, description: 'Maximum results per domain.' },
       },
@@ -649,7 +654,7 @@ export const TOOL_USE_GUIDANCE = {
       tool: 'get_st1_policy',
     },
     {
-      intent: 'Broad ST1 business search across multiple domains',
+      intent: 'Uploaded knowledge documents or broad ST1 business search across multiple domains',
       tool: 'search_st1_knowledge',
     },
   ],

@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'crypto';
 
 export const ALL_READ_SCOPES = [
   'knowledge:read',
+  'knowledge:write',
   'pricing:read',
   'product:read',
   'vendor:read',

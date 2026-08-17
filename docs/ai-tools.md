@@ -65,6 +65,7 @@ ST1_AI_TOOL_API_KEYS='{
 Available scopes:
 
 - `knowledge:read`
+- `knowledge:write` — for human-managed uploads in the AI Knowledge Hub
 - `pricing:read`
 - `product:read`
 - `vendor:read`
@@ -86,6 +87,41 @@ Tokens must stay server-side. Do not put them in browser code.
 - `get_st1_policy` — AI safety, pricing, brand, customer-data, sponsorship, or sales talk-track policy.
 
 Every tool is read-only and schema-validated. Unknown fields are rejected.
+
+## AI Knowledge Hub UI
+
+The non-technical UI lives at:
+
+```txt
+/ai-knowledge
+```
+
+It is also available inside RevOps from the sidebar as **AI Knowledge Hub**.
+
+The hub lets a human operator:
+
+- paste the AI tool bearer key;
+- see connected/readiness status;
+- inspect tool schemas;
+- test safe tool calls;
+- upload `.txt`, `.md`, `.csv`, or `.json` documents;
+- paste manual knowledge notes;
+- see uploaded server-side knowledge documents;
+- see clear "Connect Notion" and "Connect Google Drive" cards for the next connector workflows.
+
+Uploaded/pasted documents are stored server-side through:
+
+```http
+GET    /api/ai/knowledge-docs
+POST   /api/ai/knowledge-docs
+DELETE /api/ai/knowledge-docs?id=<document-id>
+Authorization: Bearer <key with knowledge scope>
+```
+
+`GET` requires `knowledge:read`. `POST` and `DELETE` require `knowledge:write`.
+These are human-managed content operations, not autonomous AI write tools.
+Uploaded documents become searchable through `search_st1_knowledge` using the
+`documents` domain.
 
 ## Tool-use policy for AI clients
 

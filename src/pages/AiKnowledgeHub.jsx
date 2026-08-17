@@ -152,6 +152,11 @@ export default function AiKnowledgeHub() {
   const [inputText, setInputText] = useState(JSON.stringify(TOOL_EXAMPLES.get_st1_pricing, null, 2))
   const [callResult, setCallResult] = useState(null)
   const [calling, setCalling] = useState(false)
+  const [documents, setDocuments] = useState([])
+  const [docsLoading, setDocsLoading] = useState(false)
+  const [docTitle, setDocTitle] = useState('')
+  const [docContent, setDocContent] = useState('')
+  const [docMessage, setDocMessage] = useState('')
 
   const localSummary = useMemo(() => readLocalSummary(), [])
   const tools = discovery?.tools || []
@@ -175,10 +180,100 @@ export default function AiKnowledgeHub() {
       const first = d.tools?.[0]?.name || selectedTool
       setSelectedTool(first)
       setInputText(JSON.stringify(TOOL_EXAMPLES[first] || {}, null, 2))
+      await loadDocuments(apiKey.trim())
     } catch (e) {
       setError(e.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function loadDocuments(key = apiKey.trim()) {
+    if (!key) return
+    setDocsLoading(true)
+    try {
+      const r = await fetch('/api/ai/knowledge-docs', {
+        headers: { Authorization: `Bearer ${key}` },
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
+      setDocuments(d.documents || [])
+    } catch (e) {
+      setDocMessage(`Could not load documents: ${e.message}`)
+    } finally {
+      setDocsLoading(false)
+    }
+  }
+
+  async function saveDocument({ title, sourceType, sourceName, content }) {
+    setDocMessage('')
+    const r = await fetch('/api/ai/knowledge-docs', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey.trim()}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title, sourceType, sourceName, content }),
+    })
+    const d = await r.json()
+    if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
+    setDocuments(prev => [d.document, ...prev.filter(doc => doc.id !== d.document.id)])
+    setDocMessage(`Added "${d.document.title}" to ST1 knowledge.`)
+  }
+
+  async function uploadManualDoc() {
+    if (!docTitle.trim() || !docContent.trim()) {
+      setDocMessage('Add a title and content first.')
+      return
+    }
+    try {
+      await saveDocument({
+        title: docTitle.trim(),
+        sourceType: 'manual',
+        sourceName: 'AI Knowledge Hub',
+        content: docContent.trim(),
+      })
+      setDocTitle('')
+      setDocContent('')
+    } catch (e) {
+      setDocMessage(e.message)
+    }
+  }
+
+  async function uploadFile(file) {
+    if (!file) return
+    setDocMessage('')
+    const allowed = /\.(txt|md|csv|json)$/i.test(file.name)
+    if (!allowed) {
+      setDocMessage('For now, upload .txt, .md, .csv, or .json files. PDF/Docx connectors are next.')
+      return
+    }
+    try {
+      const content = await file.text()
+      await saveDocument({
+        title: file.name.replace(/\.[^.]+$/, ''),
+        sourceType: 'upload',
+        sourceName: file.name,
+        content,
+      })
+    } catch (e) {
+      setDocMessage(e.message)
+    }
+  }
+
+  async function deleteDocument(id) {
+    setDocMessage('')
+    try {
+      const r = await fetch(`/api/ai/knowledge-docs?id=${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
+      setDocuments(prev => prev.filter(doc => doc.id !== id))
+      setDocMessage('Removed document from ST1 knowledge.')
+    } catch (e) {
+      setDocMessage(e.message)
     }
   }
 
@@ -268,6 +363,19 @@ export default function AiKnowledgeHub() {
           </Card>
 
           <Card>
+            <Label>SERVER KNOWLEDGE DOCS</Label>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 22, color: documents.length ? B.orange : B.muted }}>{documents.length}</div>
+              <button onClick={() => loadDocuments()} disabled={!apiKey.trim() || docsLoading} style={{ background: B.surface, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 5, padding: '5px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8 }}>
+                {docsLoading ? 'LOADING' : 'REFRESH'}
+              </button>
+            </div>
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted, lineHeight: 1.5 }}>
+              These are searchable by `search_st1_knowledge` in the `documents` domain.
+            </div>
+          </Card>
+
+          <Card>
             <Label>SAFETY BOUNDARIES</Label>
             {[
               ['Read-only tools', discovery?.safety?.readOnly !== false],
@@ -289,6 +397,52 @@ export default function AiKnowledgeHub() {
               {error}
             </div>
           )}
+
+          <Card>
+            <Label>ADD KNOWLEDGE - NO TECHNICAL SETUP</Label>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 9, marginBottom: 12 }}>
+              {[
+                ['Connect Notion', 'Paste pages and database docs into ST1 knowledge.', 'COMING NEXT'],
+                ['Connect Google Drive', 'Bring in docs, sheets, and shared-drive knowledge.', 'COMING NEXT'],
+                ['Upload a doc', 'Add text, markdown, CSV, or JSON now.', 'READY'],
+              ].map(([title, desc, status]) => (
+                <div key={title} style={{ background: status === 'READY' ? B.greenBg : B.surface, border: `1px solid ${status === 'READY' ? B.green : B.border}30`, borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black, marginBottom: 5 }}>{title}</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, lineHeight: 1.45, minHeight: 30 }}>{desc}</div>
+                  <div style={{ marginTop: 8, fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: status === 'READY' ? B.green : B.yellow, letterSpacing: 1 }}>{status}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black }}>Upload a doc</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Text, Markdown, CSV, and JSON files are available now.</div>
+                </div>
+                <label style={{ background: B.orange, color: B.white, borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8, cursor: apiKey.trim() ? 'pointer' : 'not-allowed', opacity: apiKey.trim() ? 1 : .45 }}>
+                  CHOOSE FILE
+                  <input type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json" disabled={!apiKey.trim()} onChange={e => uploadFile(e.target.files?.[0])} style={{ display: 'none' }} />
+                </label>
+              </div>
+              <input value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="Or paste a title..." style={{ width: '100%', background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, marginBottom: 7 }} />
+              <textarea value={docContent} onChange={e => setDocContent(e.target.value)} rows={5} placeholder="Paste policy notes, vendor terms, product notes, sales playbooks, etc." style={{ width: '100%', background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, resize: 'vertical', marginBottom: 8 }} />
+              <button onClick={uploadManualDoc} disabled={!apiKey.trim()} style={{ background: apiKey.trim() ? B.orange : B.muted, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+                ADD TO KNOWLEDGE
+              </button>
+              {docMessage && <div style={{ marginTop: 8, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: docMessage.startsWith('Added') || docMessage.startsWith('Removed') ? B.green : B.yellow, lineHeight: 1.45 }}>{docMessage}</div>}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {documents.slice(0, 8).map(doc => (
+                <div key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: 8, background: B.white, border: `1px solid ${B.border}`, borderRadius: 7, padding: '8px 10px' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>
+                    <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>{doc.sourceType} · {doc.charCount || 0} chars</div>
+                  </div>
+                  <button onClick={() => deleteDocument(doc.id)} disabled={!apiKey.trim()} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 14, padding: 2 }}>x</button>
+                </div>
+              ))}
+            </div>
+          </Card>
 
           <Card>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>

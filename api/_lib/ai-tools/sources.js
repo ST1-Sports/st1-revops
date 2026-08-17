@@ -62,6 +62,8 @@ export const POLICY_LIBRARY = [
   CUSTOMER_POLICY,
 ];
 
+export const KNOWLEDGE_DOCS_SETTING_KEY = 'ai_knowledge_documents_v1';
+
 export function retrievedAt() {
   return new Date().toISOString();
 }
@@ -326,4 +328,79 @@ export function mapSalesContact(contact, includeNotes = false) {
     notes: includeNotes ? (contact.notes || null) : undefined,
     source: source('ST1 sales contacts', { recordId: contact.id }),
   };
+}
+
+export async function getKnowledgeDocuments({ query = '', limit = 10 } = {}) {
+  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
+  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
+  const q = normalizeText(query);
+  return docs
+    .filter(doc => {
+      if (!q) return true;
+      return [doc.title, doc.sourceType, doc.sourceName, doc.content]
+        .some(value => normalizeText(value).includes(q));
+    })
+    .slice(0, safeLimit(limit, 10, 50))
+    .map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      sourceType: doc.sourceType,
+      sourceName: doc.sourceName || null,
+      uploadedAt: doc.uploadedAt,
+      charCount: doc.content?.length || 0,
+      snippet: doc.content ? doc.content.slice(0, 800) : '',
+      source: source('ST1 uploaded knowledge documents', { recordId: doc.id }),
+    }));
+}
+
+export async function listKnowledgeDocuments() {
+  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
+  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
+  return docs.map(doc => ({
+    id: doc.id,
+    title: doc.title,
+    sourceType: doc.sourceType,
+    sourceName: doc.sourceName || null,
+    uploadedAt: doc.uploadedAt,
+    charCount: doc.content?.length || 0,
+  }));
+}
+
+export async function saveKnowledgeDocument(doc) {
+  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
+  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
+  const nextDoc = {
+    id: doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    title: String(doc.title || 'Untitled document').trim().slice(0, 160),
+    sourceType: doc.sourceType,
+    sourceName: String(doc.sourceName || '').trim().slice(0, 200),
+    content: String(doc.content || '').slice(0, 200_000),
+    uploadedAt: new Date().toISOString(),
+  };
+  const nextDocs = [nextDoc, ...docs.filter(existing => existing.id !== nextDoc.id)].slice(0, 100);
+  await prisma.setting.upsert({
+    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
+    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
+    update: { value: { documents: nextDocs } },
+  });
+  return {
+    id: nextDoc.id,
+    title: nextDoc.title,
+    sourceType: nextDoc.sourceType,
+    sourceName: nextDoc.sourceName || null,
+    uploadedAt: nextDoc.uploadedAt,
+    charCount: nextDoc.content.length,
+  };
+}
+
+export async function deleteKnowledgeDocument(id) {
+  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
+  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
+  const nextDocs = docs.filter(doc => doc.id !== id);
+  await prisma.setting.upsert({
+    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
+    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
+    update: { value: { documents: nextDocs } },
+  });
+  return { deleted: docs.length !== nextDocs.length };
 }
