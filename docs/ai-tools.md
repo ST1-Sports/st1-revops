@@ -104,6 +104,7 @@ The hub lets a human operator:
 - see connected/readiness status;
 - inspect tool schemas;
 - test safe tool calls;
+- import a shared Notion page when `NOTION_API_KEY` or `NOTION_TOKEN` is configured;
 - upload `.txt`, `.md`, `.csv`, or `.json` documents;
 - paste manual knowledge notes;
 - see uploaded server-side knowledge documents;
@@ -122,6 +123,36 @@ Authorization: Bearer <key with knowledge scope>
 These are human-managed content operations, not autonomous AI write tools.
 Uploaded documents become searchable through `search_st1_knowledge` using the
 `documents` domain.
+
+### Notion import
+
+Configure:
+
+```bash
+NOTION_API_KEY=secret_...
+```
+
+or:
+
+```bash
+NOTION_TOKEN=secret_...
+```
+
+Then share the Notion page with that internal Notion integration and paste the
+page URL in **Integrations → AI Knowledge → Connect Notion**.
+
+The API endpoint is:
+
+```http
+POST /api/ai/connectors/notion
+Authorization: Bearer <key with knowledge:write>
+Content-Type: application/json
+
+{ "url": "https://www.notion.so/..." }
+```
+
+Google Drive needs a separate OAuth/service-account flow and is intentionally not
+faked as connected yet.
 
 ## Tool-use policy for AI clients
 

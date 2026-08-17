@@ -157,6 +157,8 @@ export default function AiKnowledgeHub({ embedded = false }) {
   const [docTitle, setDocTitle] = useState('')
   const [docContent, setDocContent] = useState('')
   const [docMessage, setDocMessage] = useState('')
+  const [notionUrl, setNotionUrl] = useState('')
+  const [notionImporting, setNotionImporting] = useState(false)
 
   const localSummary = useMemo(() => readLocalSummary(), [])
   const tools = discovery?.tools || []
@@ -274,6 +276,34 @@ export default function AiKnowledgeHub({ embedded = false }) {
       setDocMessage('Removed document from ST1 knowledge.')
     } catch (e) {
       setDocMessage(e.message)
+    }
+  }
+
+  async function importNotionPage() {
+    if (!notionUrl.trim()) {
+      setDocMessage('Paste a Notion page URL first.')
+      return
+    }
+    setNotionImporting(true)
+    setDocMessage('')
+    try {
+      const r = await fetch('/api/ai/connectors/notion', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: notionUrl.trim() }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
+      setDocuments(prev => [d.document, ...prev.filter(doc => doc.id !== d.document.id)])
+      setNotionUrl('')
+      setDocMessage(`Imported "${d.document.title}" from Notion.`)
+    } catch (e) {
+      setDocMessage(e.message)
+    } finally {
+      setNotionImporting(false)
     }
   }
 
@@ -402,7 +432,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <Label>ADD KNOWLEDGE - NO TECHNICAL SETUP</Label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 9, marginBottom: 12 }}>
               {[
-                ['Connect Notion', 'Paste pages and database docs into ST1 knowledge.', 'COMING NEXT'],
+                ['Connect Notion', 'Import a shared Notion page into ST1 knowledge.', 'READY'],
                 ['Connect Google Drive', 'Bring in docs, sheets, and shared-drive knowledge.', 'COMING NEXT'],
                 ['Upload a doc', 'Add text, markdown, CSV, or JSON now.', 'READY'],
               ].map(([title, desc, status]) => (
@@ -412,6 +442,18 @@ export default function AiKnowledgeHub({ embedded = false }) {
                   <div style={{ marginTop: 8, fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: status === 'READY' ? B.green : B.yellow, letterSpacing: 1 }}>{status}</div>
                 </div>
               ))}
+            </div>
+            <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black, marginBottom: 4 }}>Connect Notion</div>
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, lineHeight: 1.45, marginBottom: 8 }}>
+                Share a Notion page with your ST1 Notion integration, then paste the page URL here. Requires NOTION_API_KEY or NOTION_TOKEN in Vercel.
+              </div>
+              <div style={{ display: 'flex', gap: 7 }}>
+                <input value={notionUrl} onChange={e => setNotionUrl(e.target.value)} placeholder="https://www.notion.so/..." style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />
+                <button onClick={importNotionPage} disabled={!apiKey.trim() || notionImporting} style={{ background: !apiKey.trim() || notionImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+                  {notionImporting ? 'IMPORTING' : 'IMPORT'}
+                </button>
+              </div>
             </div>
             <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>

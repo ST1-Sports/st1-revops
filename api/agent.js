@@ -16,6 +16,8 @@
 
 import { getZohoToken } from './_lib/zoho-token.js';
 import { recall, remember, memoryBlock, logInteraction } from './_lib/memory.js';
+import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
+import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 
 export const config = { maxDuration: 120 };
 
@@ -49,6 +51,13 @@ KEY MESSAGES THAT WIN (competitors run zero ads like these):
 - "I'm Matt. I pick up the phone."
 - "One contact, every sport your school runs"
 - Drop-style graphic tees: named collections, limited runs, culture-driven`;
+
+const INTERNAL_TOOL_AUTH = {
+  subject: 'revops-home-chat',
+  scopes: new Set(ALL_READ_SCOPES),
+};
+
+const KNOWLEDGE_TOOL_NAMES = new Set(AI_TOOLS.map(tool => tool.name));
 
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
@@ -308,6 +317,11 @@ const TOOLS = [
       required: ["task"],
     },
   },
+  ...AI_TOOLS.map(tool => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.input_schema,
+  })),
 ];
 
 // ── ZOHO CONTEXT FETCH ───────────────────────────────────────────────────────
@@ -411,14 +425,21 @@ async function callEdgar(input, baseUrl) {
   }
 }
 
-async function callBrad(input, baseUrl) {
+async function callBrad(input, baseUrl, localCtx = {}) {
   try {
     const r = await fetchWithTimeout(
       `${baseUrl}/api/agents/brad`,
       {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ task: input.task, input: { contactId: input.contactId, minScore: input.minScore } }),
+        body:    JSON.stringify({
+          task: input.task,
+          input: {
+            contactId: input.contactId,
+            minScore: input.minScore,
+            contacts: Array.isArray(localCtx.contacts) ? localCtx.contacts.slice(0, 50) : undefined,
+          },
+        }),
       },
       20_000
     );
@@ -535,8 +556,16 @@ Every email draft, campaign sequence, and customer-facing response must reflect 
 === ROUTING — CHOOSE THE RIGHT ACTION ===
 For every message, first classify the intent, then act:
 
+AUTHORITATIVE ST1 KNOWLEDGE — DO NOT GUESS:
+- Use search_st1_knowledge for broad questions about uploaded docs, policies, products, pricing, vendors, brands, customers, or internal ST1 knowledge.
+- Use get_st1_pricing for cost, price, margin, SKU, MAP, or quote-rate lookups before answering.
+- Use get_st1_product for product details, availability, catalog fields, or product source questions.
+- Use get_st1_customer for customer/contact/school/lead lookups when the answer depends on internal data.
+- Use get_st1_policy for AI safety, pricing rules, brand voice, sponsorship config, customer-data rules, or sales talk track.
+- Use the tool result's sources and limitations in your answer. If a tool says not_found or unavailable, say the authoritative source did not have it.
+
 RESPOND DIRECTLY (no tools) when:
-- User asks a question answerable from the context above (pipeline status, deal details, contact lookup, AR balance, RFP status, pricing from price list)
+- User asks a question answerable from the context above and no authoritative ST1 tool is needed
 - User asks for analysis, prioritization, or strategy recommendations
 - User asks "what should I do next" or "what's my pipeline looking like"
 - Greeting or clarification
@@ -619,6 +648,8 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
+15. search_st1_knowledge — search uploaded docs and safe ST1 business knowledge
+16. get_st1_pricing / get_st1_product / get_st1_vendor / get_st1_brand / get_st1_customer / get_st1_policy — authoritative read-only lookups with sources
 
 IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
@@ -779,7 +810,7 @@ async function _handler(req, res) {
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
       if (t.name === "call_brad") {
-        const output = await callBrad(t.input, baseUrl);
+        const output = await callBrad(t.input, baseUrl, localContext);
         agentResults.push({ name: "call_brad", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
@@ -799,6 +830,14 @@ async function _handler(req, res) {
           });
         } catch { /* non-fatal */ }
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ ok: true, remembered: true }) };
+      }
+      if (KNOWLEDGE_TOOL_NAMES.has(t.name)) {
+        const tool = getTool(t.name);
+        const output = tool
+          ? await invokeTool(tool, t.input || {}, INTERNAL_TOOL_AUTH)
+          : { ok: false, error: { code: 'unknown_tool', message: `Unknown knowledge tool ${t.name}` } };
+        agentResults.push({ name: t.name, input: t.input, output });
+        return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
       return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ proposed: true, ...t.input }) };
     }));
@@ -849,7 +888,7 @@ async function _handler(req, res) {
     propose_create_campaign_sequence: "create_campaign_sequence",
   };
   const proposedActions = allToolCalls
-    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger" && t.name !== "remember_this")
+    .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger" && t.name !== "remember_this" && !KNOWLEDGE_TOOL_NAMES.has(t.name))
     .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
 
   const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
