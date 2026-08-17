@@ -17,6 +17,8 @@ Content-Type: application/json
 
 `GET` returns the tools permitted for the caller, their descriptions, strict input
 schemas, and optional provider-specific formats for Anthropic, OpenAI, and MCP.
+It also returns `toolUseGuidance`, a machine-readable policy telling AI clients
+when they must call an ST1 tool instead of answering from memory.
 
 `POST` invokes one named tool:
 
@@ -81,6 +83,34 @@ Tokens must stay server-side. Do not put them in browser code.
 - `get_st1_policy` — AI safety, pricing, brand, customer-data, sponsorship, or sales talk-track policy.
 
 Every tool is read-only and schema-validated. Unknown fields are rejected.
+
+## Tool-use policy for AI clients
+
+When an authoritative ST1 tool exists for a business question, the AI must call
+the tool instead of guessing.
+
+Use these routing rules:
+
+| User intent | Required tool |
+|-------------|---------------|
+| Product cost, price, margin, MAP, SKU, or quote-rate lookup | `get_st1_pricing` |
+| Product details, availability, catalog link, category, image, or brand field | `get_st1_product` |
+| Vendor, supplier, manufacturer, or source-of-supply context | `get_st1_vendor` |
+| ST1 brand voice, positioning, or brand-specific product context | `get_st1_brand` |
+| Customer, contact, school, lead, or CRM lookup | `get_st1_customer` |
+| Internal policy, AI safety rule, pricing rule, customer-data rule, sponsorship config, or sales talk track | `get_st1_policy` |
+| Broad ST1 business search across multiple domains | `search_st1_knowledge` |
+
+After receiving tool results, the AI should:
+
+- explain the answer in natural language;
+- cite returned sources when present;
+- state returned limitations instead of filling gaps with guesses;
+- ask a clarifying question or say the authoritative source does not contain the
+  answer if the tool returns `not_found` or `unavailable`;
+- never request or reveal SQL, credentials, tokens, raw upstream responses, or
+  hidden implementation details;
+- never perform writes through this tool layer.
 
 ## Example Claude flow
 

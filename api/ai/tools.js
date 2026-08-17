@@ -8,6 +8,7 @@ import {
   listToolsForAuth,
   publicToolDefinition,
   rawToolCount,
+  TOOL_USE_GUIDANCE,
 } from '../_lib/ai-tools/registry.js';
 
 export const config = {
@@ -52,6 +53,7 @@ export default async function handler(req, res) {
       subject: auth.subject,
       totalRegisteredTools: rawToolCount(),
       tools: listToolsForAuth(auth),
+      toolUseGuidance: TOOL_USE_GUIDANCE,
       ...(includeFormats ? { providerFormats: listProviderFormats(auth) } : {}),
       safety: {
         readOnly: true,

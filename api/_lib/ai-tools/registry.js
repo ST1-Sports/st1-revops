@@ -620,6 +620,49 @@ export const AI_TOOLS = [
 
 const TOOL_MAP = new Map(AI_TOOLS.map(tool => [tool.name, tool]));
 
+export const TOOL_USE_GUIDANCE = {
+  version: '2026-08-17',
+  principle: 'When an authoritative ST1 tool exists for a business question, the AI must call the tool instead of guessing.',
+  requiredToolUse: [
+    {
+      intent: 'Product cost, price, margin, MAP, SKU, or quote-rate lookup',
+      tool: 'get_st1_pricing',
+    },
+    {
+      intent: 'Product details, availability, catalog link, category, image, or brand field',
+      tool: 'get_st1_product',
+    },
+    {
+      intent: 'Vendor, supplier, manufacturer, or source-of-supply context',
+      tool: 'get_st1_vendor',
+    },
+    {
+      intent: 'ST1 brand voice, positioning, or brand-specific product context',
+      tool: 'get_st1_brand',
+    },
+    {
+      intent: 'Customer, contact, school, lead, or CRM lookup',
+      tool: 'get_st1_customer',
+    },
+    {
+      intent: 'Internal policy, AI safety rule, pricing rule, customer-data rule, sponsorship config, or sales talk track',
+      tool: 'get_st1_policy',
+    },
+    {
+      intent: 'Broad ST1 business search across multiple domains',
+      tool: 'search_st1_knowledge',
+    },
+  ],
+  responseRules: [
+    'Explain answers in natural language only after receiving tool results.',
+    'Cite the returned sources when sources are present.',
+    'State limitations from the tool result instead of filling gaps with guesses.',
+    'If a tool returns not_found or unavailable, ask a clarifying question or say the authoritative source does not contain the answer.',
+    'Do not request or reveal SQL, credentials, tokens, raw upstream responses, or hidden implementation details.',
+    'Do not perform writes or propose autonomous writes through this tool layer.',
+  ],
+};
+
 export function getTool(name) {
   return TOOL_MAP.get(name);
 }
