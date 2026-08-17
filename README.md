@@ -11,6 +11,14 @@ Sales, deals, RFPs, invoicing, prospecting, and integrations — all in one plac
 
 ---
 
+## AI Tool Layer
+
+The read-only ST1 Knowledge API for Claude, OpenAI, MCP, and future AI tools lives
+at `/api/ai/tools`. See [`docs/ai-tools.md`](docs/ai-tools.md) for authentication,
+schemas, permissions, and integration examples.
+
+---
+
 ## Quick Deploy to Vercel
 
 ### Step 1 — Push to GitHub
