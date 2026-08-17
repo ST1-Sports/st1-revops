@@ -143,7 +143,7 @@ function CopyButton({ text, label = 'COPY' }) {
   )
 }
 
-export default function AiKnowledgeHub() {
+export default function AiKnowledgeHub({ embedded = false }) {
   const [apiKey, setApiKey] = useState(() => sessionStorage.getItem('st1_ai_tool_key') || '')
   const [discovery, setDiscovery] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -311,7 +311,7 @@ export default function AiKnowledgeHub() {
   -H "Authorization: Bearer YOUR_KEY"`
 
   return (
-    <div style={{ minHeight: '100%', background: B.pageBg, padding: 28, overflowY: 'auto' }}>
+    <div style={{ minHeight: '100%', background: embedded ? 'transparent' : B.pageBg, padding: embedded ? 0 : 28, overflowY: 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18 }}>
         <div>
           <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange, letterSpacing: 2, marginBottom: 6 }}>COMMAND CENTER HUB</div>

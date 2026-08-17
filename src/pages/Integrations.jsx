@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import ToolManager from "../components/ToolManager.jsx";
 import { pushItemsToAppState, pushAppStateToServer, readAppState } from "../lib/appStateSync.js";
+import AiKnowledgeHub from "./AiKnowledgeHub.jsx";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -91,8 +92,8 @@ const DEMO_PRODUCTS = [
 ];
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function IntegrationsHub() {
-  const [tab, setTab]     = useState("overview");
+export default function IntegrationsHub({ initialTab = "overview" }) {
+  const [tab, setTab]     = useState(initialTab);
   const [creds, setCreds] = useState(loadCreds);
   const [status, setStatus] = useState(() => {
     const saved = loadStatus();
@@ -1139,8 +1140,8 @@ Channel: ${slackChannelName}`);
             <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.white,letterSpacing:-1}}>ST1</span>
           </div>
           <div>
-            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>INTEGRATIONS HUB</div>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>SLACK · ZOHO · CAMPAIGNS · SOCIAL · SHOPIFY</div>
+            <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.3}}>INTEGRATIONS + AI KNOWLEDGE HUB</div>
+            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,letterSpacing:2.5}}>CONNECTORS · UPLOADS · TOOLS · AGENT DATA</div>
           </div>
         </div>
         {/* Live connection status */}
@@ -1167,7 +1168,7 @@ Channel: ${slackChannelName}`);
 
       {/* NAV */}
       <div style={{background:B.white,borderBottom:`1px solid ${B.border}`,padding:"0 28px",display:"flex",gap:2}}>
-        {[["overview","Overview"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["shopify","Shopify"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
+        {[["overview","Overview"],["knowledge","AI Knowledge"],["slack","Slack"],["zoho","Zoho Books + CRM"],["marketing","Marketing"],["ads","Ad Platforms"],["email","Email Scanner"],["shopify","Shopify"],["tools","AI Tools"],["log","Activity Log"]].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"10px 14px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:tab===id?500:400}}>
             {label}
           </button>
@@ -1246,6 +1247,24 @@ Channel: ${slackChannelName}`);
                     {status.shopify?"Products and orders loaded.":"Add SHOPIFY_STORE_URL and SHOPIFY_ACCESS_TOKEN to Vercel env vars, then test connection."}
                   </div>
                   <OBtn sm onClick={()=>setTab("shopify")}>CONFIGURE →</OBtn>
+                </div>
+
+                {/* AI Knowledge */}
+                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${B.orange}`}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div style={{display:"flex",gap:9,alignItems:"center"}}>
+                      <span style={{fontSize:22}}>◈</span>
+                      <div>
+                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>AI Knowledge</div>
+                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Notion, Drive, uploads, ST1 tool schemas</div>
+                      </div>
+                    </div>
+                    <StatusBadge ok label="Ready"/>
+                  </div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:9,lineHeight:1.5}}>
+                    Add docs, see what is connected, test ST1 tools, and prepare knowledge for Claude/OpenAI/MCP agents.
+                  </div>
+                  <OBtn sm onClick={()=>setTab("knowledge")}>OPEN HUB →</OBtn>
                 </div>
 
                 {/* Ad platforms */}
@@ -2254,6 +2273,13 @@ Channel: ${slackChannelName}`);
                 <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
               </div>
               <ToolManager/>
+            </div>
+          )}
+
+          {/* ── AI KNOWLEDGE ── */}
+          {tab==="knowledge"&&(
+            <div className="fu">
+              <AiKnowledgeHub embedded />
             </div>
           )}
 
