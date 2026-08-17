@@ -211,6 +211,9 @@ export default function AiKnowledgeHub({ embedded = false }) {
 
   async function saveDocument({ title, sourceType, sourceName, content }) {
     setDocMessage('')
+    if (!apiKey.trim()) {
+      throw new Error('Paste your ST1 AI tool key at the top of this page before importing knowledge.')
+    }
     const r = await fetch('/api/ai/knowledge-docs', {
       method: 'POST',
       headers: {
@@ -247,6 +250,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
   async function uploadFile(file) {
     if (!file) return
     setDocMessage('')
+    if (!apiKey.trim()) {
+      setDocMessage('Paste your ST1 AI tool key at the top of this page before uploading a doc.')
+      return
+    }
     const allowed = /\.(txt|md|csv|json)$/i.test(file.name)
     if (!allowed) {
       setDocMessage('For now, upload .txt, .md, .csv, or .json files. PDF/Docx connectors are next.')
@@ -267,6 +274,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
 
   async function deleteDocument(id) {
     setDocMessage('')
+    if (!apiKey.trim()) {
+      setDocMessage('Paste your ST1 AI tool key at the top of this page before deleting knowledge docs.')
+      return
+    }
     try {
       const r = await fetch(`/api/ai/knowledge-docs?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
@@ -282,6 +293,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
   }
 
   async function importNotionPage() {
+    if (!apiKey.trim()) {
+      setDocMessage('Paste your ST1 AI tool key at the top of this page before importing from Notion.')
+      return
+    }
     if (!notionUrl.trim()) {
       setDocMessage('Paste a Notion page URL first.')
       return
@@ -310,6 +325,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
   }
 
   async function importDriveFile() {
+    if (!apiKey.trim()) {
+      setDocMessage('Paste your ST1 AI tool key at the top of this page before importing from Google Drive.')
+      return
+    }
     if (!driveUrl.trim()) {
       setDocMessage('Paste a Google Drive file URL first.')
       return
@@ -480,7 +499,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
               </div>
               <div style={{ display: 'flex', gap: 7 }}>
                 <input value={notionUrl} onChange={e => setNotionUrl(e.target.value)} placeholder="https://www.notion.so/..." style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />
-                <button onClick={importNotionPage} disabled={!apiKey.trim() || notionImporting} style={{ background: !apiKey.trim() || notionImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+                <button onClick={importNotionPage} disabled={notionImporting} style={{ background: notionImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
                   {notionImporting ? 'IMPORTING' : 'IMPORT'}
                 </button>
               </div>
@@ -492,7 +511,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
               </div>
               <div style={{ display: 'flex', gap: 7 }}>
                 <input value={driveUrl} onChange={e => setDriveUrl(e.target.value)} placeholder="https://drive.google.com/file/d/... or Google Doc URL" style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />
-                <button onClick={importDriveFile} disabled={!apiKey.trim() || driveImporting} style={{ background: !apiKey.trim() || driveImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+                <button onClick={importDriveFile} disabled={driveImporting} style={{ background: driveImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
                   {driveImporting ? 'IMPORTING' : 'IMPORT'}
                 </button>
               </div>
@@ -503,14 +522,14 @@ export default function AiKnowledgeHub({ embedded = false }) {
                   <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black }}>Upload a doc</div>
                   <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>Text, Markdown, CSV, and JSON files are available now.</div>
                 </div>
-                <label style={{ background: B.orange, color: B.white, borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8, cursor: apiKey.trim() ? 'pointer' : 'not-allowed', opacity: apiKey.trim() ? 1 : .45 }}>
+                <label style={{ background: B.orange, color: B.white, borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8, cursor: 'pointer' }}>
                   CHOOSE FILE
-                  <input type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json" disabled={!apiKey.trim()} onChange={e => uploadFile(e.target.files?.[0])} style={{ display: 'none' }} />
+                  <input type="file" accept=".txt,.md,.csv,.json,text/plain,text/markdown,text/csv,application/json" onChange={e => uploadFile(e.target.files?.[0])} style={{ display: 'none' }} />
                 </label>
               </div>
               <input value={docTitle} onChange={e => setDocTitle(e.target.value)} placeholder="Or paste a title..." style={{ width: '100%', background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, marginBottom: 7 }} />
               <textarea value={docContent} onChange={e => setDocContent(e.target.value)} rows={5} placeholder="Paste policy notes, vendor terms, product notes, sales playbooks, etc." style={{ width: '100%', background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, resize: 'vertical', marginBottom: 8 }} />
-              <button onClick={uploadManualDoc} disabled={!apiKey.trim()} style={{ background: apiKey.trim() ? B.orange : B.muted, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+              <button onClick={uploadManualDoc} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
                 ADD TO KNOWLEDGE
               </button>
               {docMessage && <div style={{ marginTop: 8, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: docMessage.startsWith('Added') || docMessage.startsWith('Removed') ? B.green : B.yellow, lineHeight: 1.45 }}>{docMessage}</div>}
@@ -522,7 +541,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
                     <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</div>
                     <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 9, color: B.muted }}>{doc.sourceType} · {doc.charCount || 0} chars</div>
                   </div>
-                  <button onClick={() => deleteDocument(doc.id)} disabled={!apiKey.trim()} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 14, padding: 2 }}>x</button>
+                  <button onClick={() => deleteDocument(doc.id)} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 14, padding: 2 }}>x</button>
                 </div>
               ))}
             </div>
