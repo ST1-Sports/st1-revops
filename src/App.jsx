@@ -31,6 +31,7 @@ const Integrations= lazyWithReload(() => import('./pages/Integrations.jsx'))
 const Reddit      = lazyWithReload(() => import('./pages/Reddit.jsx'))
 const CommandCenter = lazyWithReload(() => import('./pages/CommandCenter.jsx'))
 const SponsorshipReveal = lazyWithReload(() => import('./pages/SponsorshipReveal.jsx'))
+const AiKnowledgeHub = lazyWithReload(() => import('./pages/AiKnowledgeHub.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
 // (e.g. null access in nav/header, unexpected server state merge)
@@ -250,6 +251,7 @@ export default function App() {
           <Route path="/reddit"      element={<Reddit />} />
           <Route path="/command-center" element={<CommandCenter />} />
           <Route path="/sponsorship-reveal" element={<SponsorshipReveal />} />
+          <Route path="/ai-knowledge" element={<AiKnowledgeHub />} />
 
           {/* Catch-all */}
           <Route path="*"            element={<Navigate to="/" replace />} />

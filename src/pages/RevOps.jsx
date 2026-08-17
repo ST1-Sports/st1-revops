@@ -7,9 +7,11 @@ const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
+const AiKnowledgeHubPage = lazy(() => import('./AiKnowledgeHub.jsx'))
 function usePrefetchPanels() {
 useEffect(() => {
 import('./CommandCenter.jsx');
+import('./AiKnowledgeHub.jsx');
 }, []);
 }
 function PanelLoader() {
@@ -1045,6 +1047,7 @@ const NAV = useMemo(()=>[
 {id:"activity",      icon:"≡", label:"Activity"},
 {id:"settings",      icon:"⚙", label:"Settings"},
 {id:"integrations",  icon:"⚡", label:"Integrations"},
+{id:"ai-knowledge",  icon:"◈", label:"AI Knowledge Hub"},
 ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
 ],[s.reorders,s.deals,s.rfps,cu?.isAdmin]);
 usePrefetchPanels();
@@ -1291,6 +1294,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="admin"       && <ModAdmin/>}
 {/* ── Inline tools (formerly separate pages) ── */}
 {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
+{mod==="ai-knowledge"&&<Suspense fallback={<PanelLoader/>}><AiKnowledgeHubPage/></Suspense>}
 {mod==="finance"     && <ModFinance/>}
 {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
 {mod==="price-lists" &&<ModPriceLists/>}
