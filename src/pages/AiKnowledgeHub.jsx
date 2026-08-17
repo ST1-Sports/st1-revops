@@ -159,6 +159,8 @@ export default function AiKnowledgeHub({ embedded = false }) {
   const [docMessage, setDocMessage] = useState('')
   const [notionUrl, setNotionUrl] = useState('')
   const [notionImporting, setNotionImporting] = useState(false)
+  const [driveUrl, setDriveUrl] = useState('')
+  const [driveImporting, setDriveImporting] = useState(false)
 
   const localSummary = useMemo(() => readLocalSummary(), [])
   const tools = discovery?.tools || []
@@ -307,6 +309,34 @@ export default function AiKnowledgeHub({ embedded = false }) {
     }
   }
 
+  async function importDriveFile() {
+    if (!driveUrl.trim()) {
+      setDocMessage('Paste a Google Drive file URL first.')
+      return
+    }
+    setDriveImporting(true)
+    setDocMessage('')
+    try {
+      const r = await fetch('/api/ai/connectors/google-drive', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey.trim()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: driveUrl.trim() }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
+      setDocuments(prev => [d.document, ...prev.filter(doc => doc.id !== d.document.id)])
+      setDriveUrl('')
+      setDocMessage(`Imported "${d.document.title}" from Google Drive.`)
+    } catch (e) {
+      setDocMessage(e.message)
+    } finally {
+      setDriveImporting(false)
+    }
+  }
+
   async function callTool() {
     setCalling(true)
     setError('')
@@ -433,7 +463,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 9, marginBottom: 12 }}>
               {[
                 ['Connect Notion', 'Import a shared Notion page into ST1 knowledge.', 'READY'],
-                ['Connect Google Drive', 'Bring in docs, sheets, and shared-drive knowledge.', 'COMING NEXT'],
+                ['Connect Google Drive', 'Import Docs, Sheets, Slides, text, CSV, JSON, and Markdown.', 'READY'],
                 ['Upload a doc', 'Add text, markdown, CSV, or JSON now.', 'READY'],
               ].map(([title, desc, status]) => (
                 <div key={title} style={{ background: status === 'READY' ? B.greenBg : B.surface, border: `1px solid ${status === 'READY' ? B.green : B.border}30`, borderRadius: 8, padding: 12 }}>
@@ -452,6 +482,18 @@ export default function AiKnowledgeHub({ embedded = false }) {
                 <input value={notionUrl} onChange={e => setNotionUrl(e.target.value)} placeholder="https://www.notion.so/..." style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />
                 <button onClick={importNotionPage} disabled={!apiKey.trim() || notionImporting} style={{ background: !apiKey.trim() || notionImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
                   {notionImporting ? 'IMPORTING' : 'IMPORT'}
+                </button>
+              </div>
+            </div>
+            <div style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 8, padding: 12, marginBottom: 10 }}>
+              <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 14, color: B.black, marginBottom: 4 }}>Connect Google Drive</div>
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, lineHeight: 1.45, marginBottom: 8 }}>
+                Paste a Google Drive file link. Requires GOOGLE_DRIVE_REFRESH_TOKEN and Google client credentials in Vercel. Start at <a href="/api/google-drive-setup" target="_blank" rel="noreferrer" style={{ color: B.blue }}>Google Drive setup</a>, then share files with the connected account if needed.
+              </div>
+              <div style={{ display: 'flex', gap: 7 }}>
+                <input value={driveUrl} onChange={e => setDriveUrl(e.target.value)} placeholder="https://drive.google.com/file/d/... or Google Doc URL" style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text }} />
+                <button onClick={importDriveFile} disabled={!apiKey.trim() || driveImporting} style={{ background: !apiKey.trim() || driveImporting ? B.muted : B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>
+                  {driveImporting ? 'IMPORTING' : 'IMPORT'}
                 </button>
               </div>
             </div>

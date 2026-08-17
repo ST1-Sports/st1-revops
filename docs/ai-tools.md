@@ -108,7 +108,7 @@ The hub lets a human operator:
 - upload `.txt`, `.md`, `.csv`, or `.json` documents;
 - paste manual knowledge notes;
 - see uploaded server-side knowledge documents;
-- see clear "Connect Notion" and "Connect Google Drive" cards for the next connector workflows.
+- import Google Drive files when `GOOGLE_DRIVE_REFRESH_TOKEN` and Google client credentials are configured.
 
 Uploaded/pasted documents are stored server-side through:
 
@@ -151,8 +151,47 @@ Content-Type: application/json
 { "url": "https://www.notion.so/..." }
 ```
 
-Google Drive needs a separate OAuth/service-account flow and is intentionally not
-faked as connected yet.
+### Google Drive import
+
+Configure:
+
+```bash
+GOOGLE_DRIVE_REFRESH_TOKEN=...
+GOOGLE_DRIVE_CLIENT_ID=...
+GOOGLE_DRIVE_CLIENT_SECRET=...
+```
+
+If `GOOGLE_DRIVE_CLIENT_ID` / `GOOGLE_DRIVE_CLIENT_SECRET` are omitted, the
+Drive importer falls back to `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`.
+
+To generate the refresh token, visit:
+
+```txt
+/api/google-drive-setup
+```
+
+The refresh token must include Google Drive read-only access. Then paste a file
+URL in **Integrations → AI Knowledge → Connect Google Drive**.
+
+Supported imports:
+
+- Google Docs → text
+- Google Sheets → CSV
+- Google Slides → text
+- `.txt`, `.md`, `.csv`, `.json`, `.xml`, and other text-like Drive files
+
+The API endpoint is:
+
+```http
+POST /api/ai/connectors/google-drive
+Authorization: Bearer <key with knowledge:write>
+Content-Type: application/json
+
+{ "url": "https://drive.google.com/file/d/..." }
+```
+
+Imported Drive content is saved as a server-side knowledge document and becomes
+searchable through `search_st1_knowledge` in the `documents` domain.
 
 ## Tool-use policy for AI clients
 
