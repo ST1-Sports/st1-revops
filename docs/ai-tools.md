@@ -44,6 +44,9 @@ Configure at least one server-side key:
 ST1_AI_TOOL_API_KEY=st1_live_long_random_value
 ```
 
+If you already created the shorter `ST1_AI_TOOL_KEY` variable in Vercel, the API
+accepts that as an alias for the same all-read-scopes default key.
+
 For multiple scoped clients, use JSON:
 
 ```bash

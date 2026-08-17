@@ -21,6 +21,7 @@ function sendAuthError(res, auth) {
     error: {
       code: auth.status === 503 ? 'auth_not_configured' : 'unauthorized',
       message: auth.error,
+      ...(auth.details ? { details: auth.details } : {}),
     },
   });
 }

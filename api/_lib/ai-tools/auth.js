@@ -73,10 +73,11 @@ function parseCompactKeyConfig(raw) {
 
 export function getConfiguredToolKeys() {
   const configured = [];
+  const defaultKey = process.env.ST1_AI_TOOL_API_KEY || process.env.ST1_AI_TOOL_KEY;
 
-  if (process.env.ST1_AI_TOOL_API_KEY) {
+  if (defaultKey) {
     configured.push({
-      token: process.env.ST1_AI_TOOL_API_KEY,
+      token: defaultKey,
       subject: 'default-ai-tool-client',
       scopes: [...ALL_READ_SCOPES],
     });
@@ -106,6 +107,10 @@ export function authenticateToolRequest(req) {
       ok: false,
       status: 503,
       error: 'AI tool authentication is not configured',
+      details: {
+        expectedEnvVars: ['ST1_AI_TOOL_API_KEY', 'ST1_AI_TOOL_KEY', 'ST1_AI_TOOL_API_KEYS'],
+        note: 'Set one of these variables in the same Vercel environment you are calling, then redeploy.',
+      },
     };
   }
 
