@@ -246,8 +246,13 @@ export default async function handler(req, res) {
             continue;
           }
 
-          const subject = mergeTags(touch.subject, c) || `Following up — ${camp.product || camp.name}`;
-          const mergedBody = mergeTags(touch.body, c);
+          // Bulk-imported sequences (see src/pages/BulkOutreach.jsx) bake a
+          // per-contact subject/body straight into batchContacts instead of
+          // relying on one shared template + merge tags — every org already
+          // has bespoke, pre-written copy. Fall back to the campaign's
+          // shared touch template for every other (normal) campaign.
+          const subject = mergeTags(c.__subject || touch.subject, c) || `Following up — ${camp.product || camp.name}`;
+          const mergedBody = mergeTags(c.__body || touch.body, c);
           const plainBody = mergedBody.trim() ? mergedBody : "(No email body — edit this touch in the Assets tab)";
 
           const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -267,8 +272,13 @@ export default async function handler(req, res) {
                 subject,
                 body: plainBody,
                 htmlBody,
-                ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}),
-                ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}),
+                // Bulk-imported sequences send as Brad's own monitored inbox
+                // (matches api/agents/brad-send.js) instead of the campaign
+                // owner's — replies land where the reply-classifying cron
+                // already watches.
+                ...(camp.fromBrad
+                  ? { from_name: "Brad Hofer", from_email: "brad@shopst1sports.com", reply_to: "brad@shopst1sports.com", repEnvKey: "BRAD" }
+                  : { ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}), ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}) }),
               }),
             });
 
