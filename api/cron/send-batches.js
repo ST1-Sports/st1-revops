@@ -197,6 +197,15 @@ export default async function handler(req, res) {
           continue;
         }
 
+        // Same gate as api/agents/brad-send.js — a Brad-branded campaign
+        // (e.g. from Bulk Outreach) stays queued, unclaimed, until Brad
+        // sending is explicitly turned on, rather than firing real cold
+        // emails the moment a schedule is approved.
+        if (camp.fromBrad && process.env.BRAD_SENDING_ENABLED !== 'true') {
+          console.log(`[cron] Skipping Brad batch ${batchKey} for campaign ${camp.id} — BRAD_SENDING_ENABLED is not 'true'`);
+          break;
+        }
+
         // ── CLAIM the batch before sending anything ──────────────────────────
         // Removes from scheduledBatches and writes to DB immediately.
         // A timeout mid-send cannot cause the next cron tick to replay this batch.
