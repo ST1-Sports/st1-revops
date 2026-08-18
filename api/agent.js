@@ -59,6 +59,17 @@ const INTERNAL_TOOL_AUTH = {
 
 const KNOWLEDGE_TOOL_NAMES = new Set(AI_TOOLS.map(tool => tool.name));
 
+function anthropicSafeSchema(schema) {
+  const copy = JSON.parse(JSON.stringify(schema || { type: 'object', properties: {} }));
+  // Anthropic custom tool schemas reject top-level anyOf/oneOf/allOf. The ST1
+  // tool runtime still validates the strict schema before executing; this copy
+  // is only the model-facing schema used to collect arguments.
+  delete copy.anyOf;
+  delete copy.oneOf;
+  delete copy.allOf;
+  return copy;
+}
+
 
 // ── TOOLS ────────────────────────────────────────────────────────────────────
 const TOOLS = [
@@ -320,7 +331,7 @@ const TOOLS = [
   ...AI_TOOLS.map(tool => ({
     name: tool.name,
     description: tool.description,
-    input_schema: tool.input_schema,
+    input_schema: anthropicSafeSchema(tool.input_schema),
   })),
 ];
 
