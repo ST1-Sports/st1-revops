@@ -1817,7 +1817,15 @@ return{...camp,enrolled,sent,openR:sent>0?Math.round(opened/sent*100):0,replyR:s
 }
 function ModHome() {
 const {s,dispatch,toast,cu,setMod}=useApp();
-const history=s.agentHistory||[];
+const chatText=v=>{
+if(v==null)return"";
+if(typeof v==="string")return v;
+if(typeof v==="number"||typeof v==="boolean")return String(v);
+if(Array.isArray(v))return v.map(chatText).filter(Boolean).join("\n");
+if(typeof v==="object"){if(v.text||v.message||v.content)return chatText(v.text||v.message||v.content);try{return JSON.stringify(v);}catch{return"[object]";}}
+return String(v);
+};
+const history=(Array.isArray(s.agentHistory)?s.agentHistory:[]).map(m=>({...m,content:chatText(m.content),raw:chatText(m.raw||m.content),actions:Array.isArray(m.actions)?m.actions:[],suggestions:Array.isArray(m.suggestions)?m.suggestions:[]}));
 const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",typeof fn==="function"?fn(history):fn);
 const [input,setInput]=useState("");
 const [running,setRunning]=useState(false);
@@ -1865,7 +1873,7 @@ setSessionsLoading(false);
 },[cu?.id]);
 const sessionTitle=(sess)=>{
 const first=(sess.messages||[]).find(m=>m.role==="user");
-const txt=first?.content||"Conversation";
+const txt=chatText(first?.content)||"Conversation";
 return txt.length>44?txt.slice(0,44)+"…":txt;
 };
 const relDate=(iso)=>{
@@ -1891,7 +1899,7 @@ setActiveSessionId(sess.id);
 sessionIdRef.current=sess.id;
 setInsights({});
 const msgs=(sess.messages||[]).map(m=>({
-id:m.id,role:m.role,content:m.content,
+id:m.id,role:m.role,content:chatText(m.content),
 actions:Array.isArray(m.actions)?m.actions:m.actions?[]:m.actions||[],
 suggestions:[],ts:new Date(m.ts).getTime(),
 }));
@@ -2172,7 +2180,7 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
 <div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
-<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{m.content}</div>
+<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{chatText(m.content)}</div>
 {/* Action buttons */}
 {m.actions?.length>0&&(
 <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
