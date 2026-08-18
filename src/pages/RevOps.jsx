@@ -1856,7 +1856,7 @@ const [insights,setInsights]=useState({});
 const sessionIdRef=useRef(null);
 const endRef=useRef(null);
 const inputRef=useRef(null);
-useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[history]);
+useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[history]);
 useEffect(()=>{
 if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
 },[s.agentDraft]);
