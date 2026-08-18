@@ -1314,10 +1314,12 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 </div>
 {searchQuery.trim().length>=2&&(()=>{
 const q=searchQuery.trim().toLowerCase();
-const contacts=(s.contacts||[]).filter(c=>(c.fullName||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase().includes(q)).slice(0,4);
-const deals=(s.deals||[]).filter(d=>(d.name||"").toLowerCase().includes(q)||(d.contact||"").toLowerCase().includes(q)||(d.school||"").toLowerCase().includes(q)).slice(0,4);
-const campaigns=(s.campaigns||[]).filter(c=>(c.name||"").toLowerCase().includes(q)).slice(0,4);
-const orders=(s.orders||[]).filter(o=>(o.name||"").toLowerCase().includes(q)||(o.contact||"").toLowerCase().includes(q)||(o.school||"").toLowerCase().includes(q)).slice(0,4);
+const txt=v=>v==null?"":typeof v==="string"?v:typeof v==="number"?String(v):v.name||v.fullName||v.label||v.email||v.id||"";
+const has=(obj,fields)=>fields.some(f=>txt(obj?.[f]).toLowerCase().includes(q));
+const contacts=(s.contacts||[]).filter(c=>has(c,["fullName","firstName","lastName","email","school","companyName"])).slice(0,4);
+const deals=(s.deals||[]).filter(d=>has(d,["name","contact","school","stage","product"])).slice(0,4);
+const campaigns=(s.campaigns||[]).filter(c=>has(c,["name","product","goal"])).slice(0,4);
+const orders=(s.orders||[]).filter(o=>has(o,["name","contact","school","stage"])).slice(0,4);
 const total=contacts.length+deals.length+campaigns.length+orders.length;
 if(!total) return <div style={{padding:"28px 16px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No results for "{searchQuery}"</div>;
 const Grp=({title,items,go,getLabel,getSub})=>items.length>0?(
@@ -1333,10 +1335,10 @@ const Grp=({title,items,go,getLabel,getSub})=>items.length>0?(
 ):null;
 return(
 <div style={{maxHeight:400,overflowY:"auto"}}>
-<Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>c.fullName||c.firstName||"Unnamed"} getSub={c=>`${typeof c.school==="string"?c.school:c.school?.name||""} · ${c.email||"no email"}`}/>
-<Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>d.name} getSub={d=>`${d.contact} · ${d.school} · ${d.stage}`}/>
-<Grp title="CAMPAIGNS" items={campaigns} go={()=>{dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");}} getLabel={c=>c.name} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
-<Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>o.name||o.contact} getSub={o=>`${o.school||""} · ${o.stage||""}`}/>
+<Grp title="CONTACTS" items={contacts} go={(c)=>{dispatch("SET_CRM_NAV",{id:c.id});setMod("crm");}} getLabel={c=>txt(c.fullName)||txt(c.firstName)||"Unnamed"} getSub={c=>`${txt(c.school)||txt(c.companyName)} · ${txt(c.email)||"no email"}`}/>
+<Grp title="DEALS" items={deals} go={()=>setMod("deals")} getLabel={d=>txt(d.name)} getSub={d=>`${txt(d.contact)} · ${txt(d.school)} · ${txt(d.stage)}`}/>
+<Grp title="CAMPAIGNS" items={campaigns} go={()=>{dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");}} getLabel={c=>txt(c.name)} getSub={c=>`${(c.enrollments||[]).length} enrolled`}/>
+<Grp title="ORDERS" items={orders} go={()=>setMod("orders")} getLabel={o=>txt(o.name)||txt(o.contact)} getSub={o=>`${txt(o.school)} · ${txt(o.stage)}`}/>
 </div>
 );
 })()}
