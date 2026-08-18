@@ -7,6 +7,7 @@ const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
+const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
 function usePrefetchPanels() {
 useEffect(() => {
 import('./CommandCenter.jsx');
@@ -1028,6 +1029,7 @@ const NAV = useMemo(()=>[
 {id:"sponsorships",  icon:"★", label:"Sponsorships",  badge:(s.contacts||[]).filter(c=>c.sponsorshipStatus==="proposed").length||0},
 {id:"_s_growth"},
 {id:"prospecting", icon:"⊕", label:"Prospecting"},
+{id:"bulk-outreach", icon:"📤", label:"Bulk Outreach"},
 {id:"social",      icon:"📱", label:"Social"},
 {id:"reddit",      icon:"💬", label:"Reddit Engagement"},
 {id:"cc-ad-hub",   icon:"📊", label:"Ad Hub"},
@@ -1296,6 +1298,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="price-lists" &&<ModPriceLists/>}
 {mod==="edgar"       &&<ModEdgar/>}
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
+{mod==="bulk-outreach" &&<Suspense fallback={<PanelLoader/>}><BulkOutreachPage s={s} dispatch={dispatch} toast={toast} cu={cu}/></Suspense>}
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
 {mod==="flagship-store" &&<Suspense fallback={<PanelLoader/>}><FlagshipStorePage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}
