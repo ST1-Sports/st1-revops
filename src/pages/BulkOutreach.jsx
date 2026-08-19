@@ -188,6 +188,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [loadingList, setLoadingList] = useState(true);
 
   const [batchId, setBatchId] = useState(null);
+  const [linkedCampaignId, setLinkedCampaignId] = useState(null);
   const [batchStatus, setBatchStatus] = useState("draft");
   const [phase, setPhase] = useState("upload"); // upload | parsing | ready
   const [fileName, setFileName] = useState("");
@@ -261,6 +262,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       skipNextSave.current = true;
       setBatchId(b.id);
       setBatchStatus(b.status);
+      setLinkedCampaignId(b.campaignId || null);
       setCampaignName(b.name);
       setFileName(b.fileName || "");
       setLeads(b.leads || []);
@@ -274,7 +276,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   };
 
   const startNewUpload = () => {
-    setBatchId(null); setBatchStatus("draft"); setLeads([]); setFileName("");
+    setBatchId(null); setBatchStatus("draft"); setLinkedCampaignId(null); setLeads([]); setFileName("");
     setCampaignName(`Bulk Outreach — ${today()}`);
     campIdRef.current = mkId();
     setPhase("upload");
@@ -513,11 +515,24 @@ Subject: <subject line, may include {{orgName}}>
     } catch (e) { toast(`Scheduled, but couldn't mark the batch approved: ${e.message}`, "info"); }
 
     setBatchStatus("approved");
+    setLinkedCampaignId(campId);
     setCommitting(false);
     toast(`Scheduled — ${sendableLeads.length} orgs, ${totalTouches} email(s)`, "success");
   };
 
-  const goToCampaigns = () => { if (setMod) setMod("prospecting"); };
+  // Lands on the exact campaign's Execute tab in Prospecting > Campaigns,
+  // not just the Prospecting tab in general — ModMarketing (the Campaigns
+  // view) is a separate component with its own local selCampId/campSubTab
+  // state, so getting there means going through the same global nav-signal
+  // pattern the rest of the app already uses for this (SET_PROSPECTING_NAV
+  // to switch ModProspecting's own view to "campaigns", SET_CAMPAIGN_NAV so
+  // ModMarketing picks the right campaign once it mounts).
+  const goToCampaigns = () => {
+    if (!setMod) return;
+    if (linkedCampaignId) dispatch("SET_CAMPAIGN_NAV", linkedCampaignId);
+    dispatch("SET_PROSPECTING_NAV", "campaigns");
+    setMod("prospecting");
+  };
 
   const isApproved = batchStatus === "approved";
 

@@ -145,6 +145,7 @@ appUsers: [],
 invoiceLastSync: null,
 crmNav: null,
 prospectingNav: null,
+campaignNavId: null,
 };
 const AppCtx = createContext(null);
 const useApp = () => useContext(AppCtx);
@@ -630,6 +631,7 @@ case "SET_BATTLECARD":      return {...prev, battlecards:{...(prev.battlecards||
 case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
 case "SET_CRM_NAV":         return {...prev, crmNav:payload};
 case "SET_PROSPECTING_NAV": return {...prev, prospectingNav:payload};
+case "SET_CAMPAIGN_NAV":    return {...prev, campaignNavId:payload};
 case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
 case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
 case "SET_EDGAR_DRAFT":     return {...prev, edgarDraft:payload};
@@ -8370,6 +8372,18 @@ const [campDraft,setCampDraft]=useState(null);
 const [campListUploading,setCampListUploading]=useState(false);
 const [campSubTab,setCampSubTab]=useState("strategy");
 const [campStep,setCampStep]=useState(1);
+// Deep-link target set by e.g. BulkOutreach.jsx's "View in Campaigns"
+// button (dispatch("SET_CAMPAIGN_NAV", campaignId) + setMod("prospecting")).
+// Cleared here rather than by whoever set it — ModMarketing only mounts
+// once ModProspecting's own nav effect has already switched view to
+// "campaigns", so clearing it any earlier would race that mount and the
+// selection would never land.
+useEffect(()=>{
+if(!s.campaignNavId) return;
+setSelCampId(s.campaignNavId);
+setCampSubTab("execute");
+dispatch("SET_CAMPAIGN_NAV",null);
+},[s.campaignNavId]);
 const [genRunning,setGenRunning]=useState(false);
 const [genSocialRunning,setGenSocialRunning]=useState(false);
 const [genAdRunning,setGenAdRunning]=useState(false);
