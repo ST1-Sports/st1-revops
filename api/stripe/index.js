@@ -34,10 +34,27 @@ async function stripeGet(path, params = {}) {
   return body;
 }
 
-// Paginate through all succeeded charges in a time window (up to 1000 to avoid timeout)
-async function fetchCharges(fromTs, toTs, maxCharges = 5000) {
+// How long the paging loop may run before it stops and returns what it has.
+// Comfortably inside this function's maxDuration (see vercel.json) so there's
+// always time left to aggregate and answer. Overrunning maxDuration meant
+// Vercel replied 504 with an HTML body, which the dashboard could only report
+// as a JSON parse error with no numbers on screen at all.
+const SCAN_BUDGET_MS = 40_000;
+
+/**
+ * Paginate through succeeded store charges in a time window.
+ *
+ * Bounded three ways — matched count, pages scanned, and wall clock — because
+ * "All time" has no upper bound on how many charges Stripe will hand back, and
+ * that grows every day the stores are open.
+ *
+ * @returns {{charges: Array, scanned: number, truncated: boolean, truncatedReason: 'limit'|'time'|null}}
+ */
+async function fetchCharges(fromTs, toTs, maxCharges = 5000, deadline = Date.now() + SCAN_BUDGET_MS) {
   const all = [];
+  let scanned = 0;
   let startingAfter = null;
+  let truncatedReason = null;
   const params = { limit: 100, 'expand[]': 'data.payment_intent' };
   if (fromTs) params['created[gte]'] = fromTs;
   if (toTs)   params['created[lte]'] = toTs;
@@ -45,15 +62,20 @@ async function fetchCharges(fromTs, toTs, maxCharges = 5000) {
   while (all.length < maxCharges) {
     if (startingAfter) params.starting_after = startingAfter;
     const page = await stripeGet('/charges', params);
+    scanned += page.data.length;
     // Only keep charges with the store order format: "#ST1-XXXXX / Store Name"
     const succeeded = page.data.filter(c =>
       c.status === 'succeeded' && !c.invoice && c.description && c.description.includes(' / ')
     );
     all.push(...succeeded);
     if (!page.has_more || page.data.length === 0) break;
+    // One more page averages ~1s round trip with payment_intent expanded.
+    if (Date.now() > deadline - 2000) { truncatedReason = 'time'; break; }
     startingAfter = page.data[page.data.length - 1].id;
   }
-  return all;
+  if (!truncatedReason && all.length >= maxCharges) truncatedReason = 'limit';
+
+  return { charges: all, scanned, truncated: Boolean(truncatedReason), truncatedReason };
 }
 
 // Parse description format "#ST1-26-00347 / ADM Tigers Cross Country"
@@ -126,7 +148,7 @@ export default async function handler(req, res) {
     const { fromTs, toTs } = tsRange(Number(days));
 
     if (action === 'stores') {
-      const charges = await fetchCharges(fromTs, toTs);
+      const { charges, scanned, truncated, truncatedReason } = await fetchCharges(fromTs, toTs);
 
       // Aggregate by store
       const storeMap = {};
@@ -167,15 +189,16 @@ export default async function handler(req, res) {
           totalRevenue,
           totalOrders,
           activeStores,
-          totalChargesScanned: charges.length,
-          truncated: charges.length >= 5000,
+          totalChargesScanned: scanned,
+          truncated,
+          truncatedReason,
           days: Number(days) || 'all-time',
         },
       });
     }
 
     if (action === 'top-sellers') {
-      const charges = await fetchCharges(fromTs, toTs);
+      const { charges, truncated, truncatedReason } = await fetchCharges(fromTs, toTs);
       const productMap = {};
       for (const charge of charges) {
         const product = productOf(charge);
@@ -193,11 +216,13 @@ export default async function handler(req, res) {
         .sort((a, b) => b.revenue - a.revenue)
         .slice(0, Number(limit));
 
-      return res.json({ ok: true, sellers });
+      return res.json({ ok: true, sellers, truncated, truncatedReason });
     }
 
     if (action === 'recent') {
-      const charges = await fetchCharges(fromTs, toTs, Number(limit));
+      // Only needs `limit` matches, but store charges are sparse among all
+      // charges, so this still pages — keep it on a short leash of its own.
+      const { charges } = await fetchCharges(fromTs, toTs, Number(limit), Date.now() + 12_000);
       const recent = charges.slice(0, Number(limit)).map(charge => ({
         id:          charge.id,
         date:        new Date(charge.created * 1000).toISOString().slice(0, 10),

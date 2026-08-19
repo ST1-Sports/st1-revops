@@ -10,6 +10,15 @@ import { setCors } from '../_lib/cors.js';
 
 const API_BASE = 'https://api.st1sports.com/admin';
 
+// Wall-clock budget for the multi-request crawls, kept inside this function's
+// maxDuration (see vercel.json) so there is always time left to aggregate and
+// answer with JSON instead of being cut off mid-flight.
+const SCAN_BUDGET_MS = 45_000;
+// Time held back from the order-listing pass for the per-order detail pass.
+const DETAIL_RESERVE_MS = 25_000;
+// Simultaneous detail requests against the admin API.
+const DETAIL_CONCURRENCY = 12;
+
 let _auth = null;
 let _sessionExpiry = 0;
 let _probeLog = [];
@@ -169,31 +178,57 @@ export default async function handler(req, res) {
     }
 
     if (action === 'top-sellers') {
-      // Fetch all pages — keep going until we get a partial page (no reliance on total metadata)
+      // This action reads every team-store order and then every order's detail
+      // record, so its cost grows with the business. Left unbounded it ran past
+      // the function's maxDuration, and Vercel's 504 (an HTML body) was all the
+      // dashboard got back — which it could only surface as a JSON parse error,
+      // wiping out the Stripe reports next to it. Everything below is bounded
+      // by a wall-clock budget and returns partial results rather than dying.
+      const deadline = Date.now() + SCAN_BUDGET_MS;
+      const timeLeft = () => deadline - Date.now();
+
+      // Fetch pages until we get a partial page (no reliance on total metadata)
       const PER_PAGE = 100;
       let allOrders = [];
       let page = 1;
+      let partialReason = null;
       while (page <= 50) { // safety cap at 5,000 orders
         const pageData = await adminGet(`team_store_order?page=${page}&perPage=${PER_PAGE}`);
         const pageOrders = extractList(pageData, 'data', 'team_store_orders', 'teamStoreOrders', 'orders');
         allOrders.push(...pageOrders);
         if (pageOrders.length < PER_PAGE) break; // last page
+        // Leave room for the detail pass, which is where most of the time goes.
+        if (timeLeft() < DETAIL_RESERVE_MS) { partialReason = 'time'; break; }
         page++;
       }
+      if (!partialReason && page > 50) partialReason = 'pages';
 
-      // Fetch individual order detail for every order in parallel (items array lives here)
+      // Fetch each order's detail record (the items array lives there), a
+      // bounded number at a time — mapping straight over every order fired
+      // thousands of simultaneous requests at the admin API, which made both
+      // ends slower and got connections dropped.
       const auth = _auth;
       const ah = { 'Accept': 'application/json', ...BROWSER_HEADERS, ...buildAuthHeaders(auth) };
-      const details = await Promise.all(
-        allOrders.map(async order => {
-          const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
-          try {
-            const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(8000) });
-            if (r.ok) return { storeName, detail: await r.json() };
-          } catch {}
-          return { storeName, detail: null };
-        })
-      );
+      const details = [];
+      let skipped = 0;
+      for (let i = 0; i < allOrders.length; i += DETAIL_CONCURRENCY) {
+        if (timeLeft() < 3000) {
+          skipped = allOrders.length - details.length;
+          partialReason = partialReason || 'time';
+          break;
+        }
+        const batch = allOrders.slice(i, i + DETAIL_CONCURRENCY);
+        details.push(...await Promise.all(
+          batch.map(async order => {
+            const storeName = order.teamStore?.name || order.storeName || order.store_name || 'Unknown Store';
+            try {
+              const r = await fetch(`${API_BASE}/team_store_order/${order.id}`, { headers: ah, signal: AbortSignal.timeout(8000) });
+              if (r.ok) return { storeName, detail: await r.json() };
+            } catch {}
+            return { storeName, detail: null };
+          })
+        ));
+      }
 
       // Aggregate by product name
       const productMap = {};
@@ -218,7 +253,17 @@ export default async function handler(req, res) {
       const sellers = Object.values(productMap)
         .map(p => ({ ...p, stores: p.stores.size }))
         .sort((a, b) => b.quantity - a.quantity);
-      return res.json({ ok: true, sellers, rawOrderCount: allOrders.length, ordersWithDetail: details.filter(d => d.detail).length, authEndpoint: _auth?.endpoint });
+      return res.json({
+        ok: true,
+        sellers,
+        rawOrderCount:    details.length,
+        ordersFound:      allOrders.length,
+        ordersWithDetail: details.filter(d => d.detail).length,
+        ordersSkipped:    skipped,
+        partial:          Boolean(partialReason),
+        partialReason,
+        authEndpoint:     _auth?.endpoint,
+      });
     }
 
     if (action === 'raw-sample') {

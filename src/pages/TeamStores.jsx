@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { postReport } from "../lib/reportFetch.js";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -25,6 +26,11 @@ const DAYS_OPTIONS = [
   { label: "All time", value: 0 },
 ];
 
+// Open on 90 days rather than all-time. All-time means Stripe pages through
+// every charge the account has ever taken, which is what pushed this endpoint
+// past its timeout as order volume grew — the range is still one click away.
+const DEFAULT_DAYS = 90;
+
 function Card({ label, value, sub, color = B.text }) {
   return (
     <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "18px 22px", flex: 1, minWidth: 150 }}>
@@ -40,10 +46,23 @@ function SortIcon({ col, sortCol, sortDir }) {
   return <span style={{ color: B.blue, marginLeft: 4 }}>{sortDir === "asc" ? "↑" : "↓"}</span>;
 }
 
+// One failing source shouldn't hide the ones that worked — each section says
+// what went wrong where the data would have been.
+function SectionError({ children, tone = "red" }) {
+  const bg = tone === "red" ? B.redBg : B.yellowBg;
+  const fg = tone === "red" ? B.red : B.yellow;
+  return (
+    <div style={{ background: bg, border: `1px solid ${fg}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: fg, lineHeight: 1.6 }}>
+      {children}
+    </div>
+  );
+}
+
 export default function TeamStores() {
-  const [days, setDays]             = useState(0);
+  const [days, setDays]             = useState(DEFAULT_DAYS);
   const [loading, setLoading]       = useState(false);
   const [configured, setConfigured] = useState(null);
+  const [statusError, setStatusError] = useState(null);
   const [stores, setStores]         = useState([]);
   const [sellers, setSellers]       = useState([]);
   const [recent, setRecent]         = useState([]);
@@ -52,45 +71,71 @@ export default function TeamStores() {
   const [sellersMeta, setSellersMeta] = useState(null);
   const [rawSample, setRawSample]   = useState(null);
   const [rawSampling, setRawSampling] = useState(false);
+  // One error slot per source — a failure in any one of them leaves the other
+  // three reports on screen instead of replacing the whole tab.
   const [error, setError]           = useState(null);
+  const [recentError, setRecentError] = useState(null);
+  const [sellersError, setSellersError] = useState(null);
+  const [adminError, setAdminError] = useState(null);
   const [sortCol, setSortCol]       = useState("revenue");
   const [sortDir, setSortDir]       = useState("desc");
   const [tab, setTab]               = useState("stores");
 
   const load = useCallback(async (d) => {
     setLoading(true);
-    setError(null);
-    try {
-      const [storesRes, recentRes, adminStoresRes, adminSellersRes] = await Promise.all([
-        fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores", days: d }) }),
-        fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "recent", days: d, limit: 20 }) }),
-        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stores" }) }),
-        fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "top-sellers" }) }),
-      ]);
-      const [sd, rd, ad, asd] = await Promise.all([storesRes.json(), recentRes.json(), adminStoresRes.json(), adminSellersRes.json()]);
-      if (!sd.ok) throw new Error(sd.error);
-      setStores(sd.stores || []);
-      setSummary(sd.summary || null);
-      setRecent(rd.recent || []);
-      if (ad.ok) setAdminStores(ad.stores || []);
-      if (asd.ok) {
-        setSellers(asd.sellers || []);
-        setSellersMeta({ rawOrderCount: asd.rawOrderCount, ordersWithDetail: asd.ordersWithDetail });
-      }
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    setError(null); setRecentError(null); setSellersError(null); setAdminError(null);
+
+    // Applied as each request lands, so the fast sources paint immediately
+    // instead of waiting on the slowest one.
+    const jobs = [
+      postReport("/api/stripe", { action: "stores", days: d }).then(r => {
+        if (r.ok) { setStores(r.data.stores || []); setSummary(r.data.summary || null); }
+        else { setStores([]); setSummary(null); setError(r.error); }
+      }),
+      postReport("/api/stripe", { action: "recent", days: d, limit: 20 }).then(r => {
+        if (r.ok) setRecent(r.data.recent || []);
+        else { setRecent([]); setRecentError(r.error); }
+      }),
+      postReport("/api/admin-stores", { action: "stores" }).then(r => {
+        if (r.ok) setAdminStores(r.data.stores || []);
+        else { setAdminStores([]); setAdminError(r.error); }
+      }),
+      postReport("/api/admin-stores", { action: "top-sellers" }).then(r => {
+        if (r.ok) {
+          setSellers(r.data.sellers || []);
+          setSellersMeta({
+            rawOrderCount:   r.data.rawOrderCount,
+            ordersWithDetail: r.data.ordersWithDetail,
+            partial:         r.data.partial,
+            partialReason:   r.data.partialReason,
+          });
+        } else {
+          setSellers([]); setSellersMeta(null); setSellersError(r.error);
+        }
+      }),
+    ];
+
+    await Promise.all(jobs);
+    setLoading(false);
   }, []);
 
-  useEffect(() => {
-    fetch("/api/stripe", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "status" }) })
-      .then(r => r.json())
-      .then(d => { setConfigured(d.configured); if (d.configured) load(days); })
-      .catch(() => setConfigured(false));
+  const checkStatus = useCallback(async () => {
+    setStatusError(null);
+    const r = await postReport("/api/stripe", { action: "status" });
+    if (!r.ok) {
+      // A failed status check is not the same thing as "no key configured" —
+      // saying so sent people off editing env vars that were already correct.
+      setConfigured(null);
+      setStatusError(r.error);
+      return;
+    }
+    setConfigured(r.data.configured);
+    if (r.data.configured) load(days);
+    else if (r.data.error) setStatusError(r.data.error);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [days, load]);
+
+  useEffect(() => { checkStatus(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   function matchAdminStore(stripeName) {
     if (!adminStores.length) return null;
@@ -126,6 +171,15 @@ export default function TeamStores() {
     borderBottom: `1px solid ${B.border}`, textAlign: align,
   });
 
+  const retryBtn = (label = "↻ Try again") => (
+    <button onClick={checkStatus} style={{
+      marginTop: 12, padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer",
+      border: `1px solid ${B.borderD}`, background: B.white, color: B.textMid,
+    }}>{label}</button>
+  );
+
+  // Only shown when the server actually reports no key — a status call that
+  // itself failed falls through to the dashboard with an error banner instead.
   if (configured === false) {
     return (
       <div style={{ padding: 40, maxWidth: 560 }}>
@@ -133,6 +187,8 @@ export default function TeamStores() {
         <div style={{ background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 10, padding: "20px 24px" }}>
           <div style={{ fontWeight: 700, color: B.yellow, marginBottom: 8 }}>Stripe Not Configured</div>
           <div style={{ fontSize: 13, color: B.textMid, lineHeight: 1.7 }}>Add <code style={{ background: B.border, padding: "1px 5px", borderRadius: 3 }}>STRIPE_SECRET_KEY</code> to your Vercel environment variables.</div>
+          {statusError && <div style={{ fontSize: 12, color: B.red, marginTop: 10, lineHeight: 1.6 }}>Stripe rejected the current key: {statusError}</div>}
+          {retryBtn("↻ Re-check")}
         </div>
       </div>
     );
@@ -161,11 +217,30 @@ export default function TeamStores() {
         </div>
       </div>
 
-      {error && <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: B.red }}>{error}</div>}
+      {statusError && configured === null && (
+        <SectionError>
+          Couldn't confirm the Stripe connection: {statusError}
+          <div>{retryBtn()}</div>
+        </SectionError>
+      )}
+
+      {error && (
+        <SectionError>
+          Stripe sales couldn't be loaded: {error}
+        </SectionError>
+      )}
+
+      {adminError && (
+        <SectionError tone="yellow">
+          Store status and links from admin.st1sports.com are unavailable: {adminError} Revenue figures below are unaffected.
+        </SectionError>
+      )}
 
       {summary?.truncated && (
         <div style={{ background: B.yellowBg, border: `1px solid ${B.yellow}`, borderRadius: 8, padding: "10px 16px", marginBottom: 16, fontSize: 12, color: B.yellow }}>
-          Showing first 5,000 charges — results may be incomplete.
+          {summary.truncatedReason === "time"
+            ? `Stopped after scanning ${fmtN(summary.totalChargesScanned)} charges to stay inside the request time limit — totals may be incomplete. Pick a shorter date range for exact numbers.`
+            : `Showing the first ${fmtN(summary.totalChargesScanned)} charges — totals may be incomplete. Pick a shorter date range for exact numbers.`}
         </div>
       )}
 
@@ -193,7 +268,7 @@ export default function TeamStores() {
       {tab === "stores" && (
         loading && !stores.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading store data…</div>
-        ) : stores.length === 0 ? (
+        ) : error && !stores.length ? null : stores.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>No charges found for this period.{days === 0 ? "" : " Try expanding the date range."}</div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
@@ -248,10 +323,26 @@ export default function TeamStores() {
         )
       )}
 
+      {tab === "sellers" && sellersError && (
+        <SectionError>
+          Top sellers couldn't be loaded: {sellersError}
+        </SectionError>
+      )}
+
+      {tab === "sellers" && sellersMeta?.partial && (
+        <SectionError tone="yellow">
+          Ranked from the first {fmtN(sellersMeta.rawOrderCount ?? 0)} orders only —
+          {sellersMeta.partialReason === "time"
+            ? " the store admin ran out of request time before every order was read."
+            : " the order scan hit its page limit."}
+          {" "}Units and revenue below are therefore a floor, not a total.
+        </SectionError>
+      )}
+
       {tab === "sellers" && (
         loading && !sellers.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
-        ) : sellers.length === 0 ? (
+        ) : sellersError && !sellers.length ? null : sellers.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>
             <div style={{ marginBottom: 16 }}>No product data found.</div>
             {sellersMeta && (
@@ -262,10 +353,9 @@ export default function TeamStores() {
             <button
               onClick={async () => {
                 setRawSampling(true);
-                try {
-                  const r = await fetch("/api/admin-stores", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "raw-sample" }) });
-                  setRawSample(await r.json());
-                } finally { setRawSampling(false); }
+                const r = await postReport("/api/admin-stores", { action: "raw-sample" });
+                setRawSample(r.ok ? r.data : { error: r.error });
+                setRawSampling(false);
               }}
               disabled={rawSampling}
               style={{ padding: "6px 16px", fontSize: 12, fontWeight: 600, cursor: rawSampling ? "default" : "pointer", border: `1px solid ${B.slate}`, borderRadius: 6, background: B.slateBg, color: B.slate }}
@@ -348,10 +438,16 @@ export default function TeamStores() {
         )
       )}
 
+      {tab === "recent" && recentError && (
+        <SectionError>
+          Recent orders couldn't be loaded: {recentError}
+        </SectionError>
+      )}
+
       {tab === "recent" && (
         loading && !recent.length ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>Loading…</div>
-        ) : recent.length === 0 ? (
+        ) : recentError && !recent.length ? null : recent.length === 0 ? (
           <div style={{ textAlign: "center", padding: 60, color: B.muted }}>No recent orders found.</div>
         ) : (
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>

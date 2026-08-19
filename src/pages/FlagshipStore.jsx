@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { fetchReport } from "../lib/reportFetch.js";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -79,16 +80,10 @@ export default function FlagshipStore() {
 
   const load = useCallback(async (d) => {
     setLoading(true); setError(null);
-    try {
-      const r = await fetch(`/api/analytics/store-overview?days=${d}`);
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || "Failed to load");
-      setData(j);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
+    const r = await fetchReport(`/api/analytics/store-overview?days=${d}`);
+    if (r.ok) setData(r.data);
+    else setError(r.error);   // keep the last good snapshot on screen
+    setLoading(false);
   }, []);
 
   useEffect(() => { load(days); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
@@ -122,9 +117,17 @@ export default function FlagshipStore() {
       </div>
 
       {loading && <div style={{ fontSize: 13, color: B.muted, padding: "40px 0", textAlign: "center" }}>Loading store performance…</div>}
-      {error && <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "14px 18px", color: B.red, fontSize: 13, marginBottom: 16 }}>{error}</div>}
+      {error && (
+        <div style={{ background: B.redBg, border: `1px solid ${B.red}`, borderRadius: 8, padding: "14px 18px", color: B.red, fontSize: 13, marginBottom: 16, lineHeight: 1.6 }}>
+          <div>{error}</div>
+          {data && <div style={{ color: B.textMid, marginTop: 4 }}>Showing the last snapshot that loaded successfully.</div>}
+          <button onClick={() => load(days)} style={{ marginTop: 10, padding: "5px 13px", borderRadius: 5, border: `1px solid ${B.red}`, background: B.white, color: B.red, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>↻ Try again</button>
+        </div>
+      )}
 
-      {!loading && !error && data && (
+      {/* Rendered whenever a snapshot exists — a failed refresh keeps the last
+          good numbers on screen instead of blanking the whole dashboard. */}
+      {!loading && data && (
         <>
           {/* ── TOP-LINE CARDS ── */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
