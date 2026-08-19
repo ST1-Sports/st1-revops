@@ -21,6 +21,12 @@
  *      separately as "needs a different channel."
  *   5. Lets the rep add a 2nd/3rd follow-up email per lead (typed or
  *      AI-drafted) before anything is scheduled.
+ *   5b. Every touch also gets its own "SEND NOW" button, right next to its
+ *      editable subject/body — the rep can trigger any single email exactly
+ *      when they want, from Brad's inbox, without ever leaving this page or
+ *      touching the Campaigns tab. Sent touches are marked so they're never
+ *      re-sent, whether the schedule below has been approved yet or not —
+ *      approving afterward simply skips whatever's already gone out.
  *   6. On approval, builds one real Campaign with a per-contact content
  *      override baked directly into each scheduledBatch (rather than one
  *      shared template) — nothing is generic, every send uses the exact
@@ -95,6 +101,9 @@ function findHeaderRow(aoa) {
 }
 
 const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
+// Same guard as api/cron/send-batches.js — belt-and-suspenders against ever
+// firing the literal unfilled-in placeholder copy as a real send.
+const isPlaceholderCopy = text => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
 
 // Resolves {{orgName}}/{{firstName}}/{{sport}} against one lead's fields —
 // used only for a bulk-applied follow-up template, so what lands in each
@@ -135,7 +144,9 @@ function buildOutreachSchedule(campId, leads, { startMs, batchSize, touchGapDays
   const perLeadDates = {};
   let currentMs = startMs;
   for (let t = 0; t < maxTouches; t++) {
-    const atThisTouch = sendable.filter(l => l.touches.length > t);
+    // A touch already fired via the per-lead "SEND NOW" button (l.touches[t].sentAt)
+    // is excluded here so approving afterward never schedules a duplicate send.
+    const atThisTouch = sendable.filter(l => l.touches.length > t && !l.touches[t].sentAt);
     if (!atThisTouch.length) continue;
     const touchStartMs = currentMs;
     for (let i = 0; i < atThisTouch.length; i += batchSize) {
@@ -210,6 +221,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [showSkipped, setShowSkipped] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
+  const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
   const fileRef = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(false);
@@ -375,6 +387,83 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     }
   };
 
+  // Whether touch i for this lead has already gone out — either manually
+  // (touch.sentAt, set right below) or automatically once this batch is
+  // approved and the send-batches cron has claimed it (enroll.sentSteps).
+  // Checked before showing SEND NOW so a touch the cron already fired can
+  // never be double-sent from here.
+  const touchSentInfo = (lead, i) => {
+    if (lead.touches[i]?.sentAt) return { sent: true, when: lead.touches[i].sentAt };
+    if (linkedCampaignId) {
+      const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+      const enroll = camp?.enrollments?.find(e => e.contactId === lead.id);
+      if (enroll?.sentSteps?.includes(i)) return { sent: true, when: null };
+    }
+    return { sent: false };
+  };
+
+  // Sends this exact touch right now, from Brad's inbox, bypassing the
+  // scheduled batch entirely — for when the rep wants to trigger a specific
+  // email themselves rather than wait on the cron. Goes through the same
+  // api/agents/brad-send endpoint (and its own BRAD_SENDING_ENABLED gate) as
+  // every other Brad send, so there's exactly one code path that can put an
+  // email in Brad's outbox as Brad.
+  const sendTouchNow = async (lead, touchIdx) => {
+    const touch = lead.touches[touchIdx];
+    if (!touch || touchSentInfo(lead, touchIdx).sent) return;
+    if (!lead.email) { toast("No email address for this contact", "error"); return; }
+    if (!touch.subject.trim() || !touch.body.trim() || isPlaceholderCopy(touch.body)) {
+      toast("Write a real subject and body for this email first", "error"); return;
+    }
+    if (!window.confirm(`Send this exact email now, from brad@shopst1sports.com?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
+
+    const key = `${lead.id}-${touchIdx}`;
+    setSendingKey(key);
+    try {
+      const r = await fetch("/api/agents/brad-send", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contactEmail: lead.email,
+          contactName: (lead.contactName && lead.contactName !== "-") ? lead.contactName : lead.orgName,
+          subject: touch.subject, body: touch.body, contactId: lead.id,
+        }),
+      });
+      const d = await r.json();
+      if (!d.ok || !d.sent) { toast(d.error || "Send failed", "error"); setSendingKey(null); return; }
+
+      const sentAt = new Date().toISOString();
+      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((t, i) => i === touchIdx ? { ...t, sentAt } : t) } : l));
+
+      // If this batch is already approved, the campaign this touch belongs
+      // to already exists with its own enrollment/scheduledBatches — advance
+      // that enrollment the same way the cron would have, so its next tick
+      // sees this step as done and skips it instead of sending it again.
+      if (linkedCampaignId) {
+        const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+        if (camp) {
+          const nextStep = touchIdx + 1;
+          const doneAllTouches = nextStep >= (camp.touches || []).length;
+          const dateStr = sentAt.slice(0, 10);
+          dispatch("UPDATE_CAMPAIGN", {
+            id: camp.id,
+            enrollments: (camp.enrollments || []).map(en => {
+              if (en.contactId !== lead.id) return en;
+              const sentSteps = [...new Set([...(en.sentSteps || []), touchIdx])];
+              return en.step === touchIdx
+                ? { ...en, sentSteps, step: nextStep, status: doneAllTouches ? "done" : en.status, lastContacted: dateStr, lastSentAt: dateStr }
+                : { ...en, sentSteps };
+            }),
+          });
+        }
+      }
+
+      toast(`Sent to ${lead.email}`, "success");
+    } catch (e) {
+      toast(`Send failed: ${e.message}`, "error");
+    }
+    setSendingKey(null);
+  };
+
   const addFollowup = (leadId, subject, body) => {
     if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, touches: [...l.touches, { subject: subject.trim(), body: body.trim() }] } : l));
@@ -457,7 +546,10 @@ Subject: <subject line, may include {{orgName}}>
 
   const approveAndSchedule = async () => {
     if (!sendableLeads.length) { toast("Nothing ready to schedule", "error"); return; }
-    const totalTouches = sendableLeads.reduce((a, l) => a + l.touches.length, 0);
+    // Excludes touches already fired via SEND NOW — those aren't being
+    // scheduled again, so they shouldn't count toward what this confirms.
+    const totalTouches = sendableLeads.reduce((a, l) => a + l.touches.filter(t => !t.sentAt).length, 0);
+    if (!totalTouches) { toast("Everything here has already been sent manually — nothing left to schedule", "error"); return; }
     if (!window.confirm(`Schedule ${totalTouches} email(s) across ${sendableLeads.length} organization(s), starting ${fmtWhen(new Date(startMs).toISOString())}?\n\nSends happen automatically from here via the existing send-batches cron — nothing further to do once approved.`)) return;
 
     setCommitting(true);
@@ -502,7 +594,15 @@ Subject: <subject line, may include {{orgName}}>
     // every field the cron needs, including __subject/__body) — they don't
     // depend on state.contacts at all, so this works whether or not the
     // /api/contacts/import call above succeeded.
-    const enrollments = sendableLeads.map(l => ({ contactId: l.id, step: 0, status: "active", enrolledAt: nowStr, nextDate: nowStr, sentSteps: [] }));
+    // A lead may already have one or more touches sent manually via SEND NOW
+    // before approval — start its enrollment past those steps (and record
+    // them in sentSteps) so the cron never re-sends what already went out.
+    const enrollments = sendableLeads.map(l => {
+      const sentSteps = l.touches.map((t, i) => t.sentAt ? i : -1).filter(i => i >= 0);
+      const firstUnsent = l.touches.findIndex(t => !t.sentAt);
+      const allSent = firstUnsent === -1;
+      return { contactId: l.id, step: allSent ? l.touches.length : firstUnsent, status: allSent ? "done" : "active", enrolledAt: nowStr, nextDate: nowStr, sentSteps };
+    });
 
     const campaign = {
       id: campId, name: campaignName.trim() || `Bulk Outreach — ${nowStr}`,
@@ -696,24 +796,37 @@ Subject: <subject line, may include {{orgName}}>
                   {isOpen && (
                     <div style={{ padding: "4px 16px 16px" }}>
                       {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
-                      {lead.touches.map((t, i) => (
+                      {lead.touches.map((t, i) => {
+                        const sentInfo = touchSentInfo(lead, i);
+                        const sendKey = `${lead.id}-${i}`;
+                        return (
                         <div key={i} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: 10, marginBottom: 8 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                             <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
-                              {i > 0 && !isApproved && (
+                              {i > 0 && !isApproved && !sentInfo.sent && (
                                 <button onClick={() => setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.filter((_, ti) => ti !== i) } : l))}
                                   title="Remove this email" style={{ background: "none", border: "none", color: B.red, fontSize: 11, cursor: "pointer", padding: 0 }}>✕</button>
                               )}
                             </div>
                           </div>
-                          <input value={t.subject} disabled={isApproved} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
+                          <input value={t.subject} disabled={isApproved || sentInfo.sent} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
                             style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                          <textarea value={t.body} disabled={isApproved} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, body: v } : tt) } : l)); }}
+                          <textarea value={t.body} disabled={isApproved || sentInfo.sent} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, body: v } : tt) } : l)); }}
                             rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box" }} />
+                          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 7 }}>
+                            {sentInfo.sent ? (
+                              <span style={{ fontSize: 10, color: B.green, fontWeight: 600 }}>✓ Sent{sentInfo.when ? ` ${fmtWhen(sentInfo.when)}` : ""}</span>
+                            ) : (
+                              <OBtn onClick={() => sendTouchNow(lead, i)} disabled={sendingKey === sendKey || !t.subject.trim() || !t.body.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>
+                                {sendingKey === sendKey ? "SENDING…" : "✉ SEND NOW — FROM BRAD"}
+                              </OBtn>
+                            )}
+                          </div>
                         </div>
-                      ))}
+                        );
+                      })}
                       {draftHere ? (
                         <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
                           <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>NEW FOLLOW-UP — EMAIL {lead.touches.length + 1}</div>
