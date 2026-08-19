@@ -16,7 +16,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
-import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
+import { classifyEmailIntent, pickRep, notifyBradSlack, notifyBradEmail, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
@@ -142,7 +142,10 @@ async function pollInbox(host) {
   // reply being handed to a rep) and notify Slack, all in parallel.
   await Promise.all(postActions.map(async pa => {
     if (!pa.contact.pushedToZoho) await promoteContactToZoho(host, pa.contact.id)
-    await notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText)
+    await Promise.all([
+      notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
+      notifyBradEmail(host, pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
+    ])
   }))
 
   return { checked, intents }

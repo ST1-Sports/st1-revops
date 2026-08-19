@@ -63,6 +63,36 @@ export async function notifyBradSlack(assigned, contactName, fromEmail, subject,
   }).catch(() => {})
 }
 
+export async function notifyBradEmail(host, assigned, contactName, fromEmail, subject, bodyText) {
+  const notifyEmail = process.env.BRAD_REPLY_NOTIFY_EMAIL || 'matt@st1sports.com'
+  if (!host || !notifyEmail) return
+  const body = [
+    `Brad received a positive reply.`,
+    ``,
+    `Assigned to: ${assigned.name || assigned.email || 'Matt Stone'} <${assigned.email || notifyEmail}>`,
+    `From: ${contactName} <${fromEmail}>`,
+    `Subject: ${subject}`,
+    ``,
+    `Reply snippet:`,
+    (bodyText || '').slice(0, 800),
+    ``,
+    `Open RevOps -> Prospecting -> Brad to handle this reply.`,
+  ].join('\n')
+  await fetch(`https://${host}/api/gmail`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'send',
+      to_email: notifyEmail,
+      to_name: 'Matt Stone',
+      subject: `Brad reply needs follow-up: ${contactName}`,
+      body,
+      reply_to: 'brad@shopst1sports.com',
+      from_name: 'ST1 RevOps',
+    }),
+  }).catch(() => {})
+}
+
 export function parseAddr(raw = '') {
   const m = raw.match(/^(.+?)\s*<([^>]+)>/)
   if (m) return { name: m[1].trim() || null, email: m[2].trim().toLowerCase() }
