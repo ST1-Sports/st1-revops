@@ -6857,13 +6857,17 @@ Column headers: ${headers.slice(0,50).join(", ")}
 First row values: ${JSON.stringify(samp)}
 
 Map each header to ONE of these field names (only include confident mappings):
-firstName, lastName, email, phone, title, companyName, city, state, sport, linkedIn, notes, location
+firstName, lastName, email, phone, title, companyName, city, state, sport, linkedIn, notes, location, emailSubject, emailBody, campaignName, personalization
 
 Rules:
 - "location" = a single column that has combined city+state like "Des Moines, Iowa" or "Des Moines, IA"
 - state variants: "Mailing State", "State/Province", "Province", "State Name" → state
 - city variants: "Mailing City", "City/Town" → city
 - company variants: "School", "Organization", "District", "Employer", "Account Name" → companyName
+- emailSubject variants: "Subject", "Email Subject", "Brad Subject", "Message Subject" → emailSubject
+- emailBody variants: "Email Body", "Body", "Message", "Email Copy", "Brad Email", "Sequence Email 1" → emailBody
+- campaignName variants: "Campaign", "Campaign Name", "Sequence", "Sequence Name" → campaignName
+- personalization variants: "Personalization", "Personalized Line", "Context", "Info", "Why", "Hook" → personalization
 - If a column clearly maps to a field, include it. Skip ambiguous columns.
 
 Return JSON: {"fieldName": "Exact Column Header As Written"}`,
@@ -6909,6 +6913,10 @@ const phone=res(row,"phone","Phone","Phone Number","PhoneNumber","Mobile","Cell"
 const title=res(row,"title","Title","Job Title","JobTitle","Position","Role","job_title","Seniority");
 const school=res(row,"companyName","Company","School","Organization","Org","Institution","District","Club","Employer","Account Name","Company Name");
 const notes=res(row,"notes","Notes","Note","Comments","Comment","Description","Bio");
+const personalization=res(row,"personalization","Personalization","Personalized Line","Context","Info","Why","Hook","Angle");
+const bradSubject=res(row,"emailSubject","Subject","Email Subject","Brad Subject","Message Subject","Sequence Subject","Touch 1 Subject");
+const bradBody=res(row,"emailBody","Email Body","Body","Message","Email Copy","Brad Email","Sequence Email 1","Touch 1 Body","Email 1 Body");
+const rowCampaignName=res(row,"campaignName","Campaign","Campaign Name","Sequence","Sequence Name","List","List Name");
 const linkedIn=res(row,"linkedIn","LinkedIn URL","LinkedIn","LinkedInURL","linkedin_url","LinkedIn Profile","Profile URL");
 let city=res(row,"city","City","Town","Mailing City","MailingCity");
 let state=res(row,"state","State","Province","Mailing State","MailingState","State/Province","StateName","State Name");
@@ -6933,6 +6941,7 @@ return {
 id:mkId(), firstName, lastName,
 fullName:fullName||email||"Unknown",
 email, phone, title, school, city, state, linkedIn, notes,
+personalization, bradSubject, bradBody, campaignName:rowCampaignName,
 orgType:"school", sport,
 priority:inferPriority(title),
 tags:[], outreachWindow:outreachByS[sport]||"Oct–Dec",
@@ -6971,15 +6980,53 @@ totalAdded+=d.added||0;totalUpdated+=d.updated||0;
 setImportProgress(100);setImportStatus("Done!");
 const listName=(importListName||"Imported List").trim();
 const newList={id:mkId(),name:listName,contactIds:selected.map(c=>c.id),createdAt:Date.now(),source:"import"};
+const existingLocalEmails=new Set((s.contacts||[]).map(c=>(c.email||"").toLowerCase()).filter(Boolean));
+const localAdds=selected.filter(c=>c.email&&!existingLocalEmails.has(c.email.toLowerCase()));
+if(localAdds.length) dispatch("ADD_CONTACTS",localAdds);
 dispatch("ADD_CONTACT_LIST",newList);
+const copyRows=selected.filter(c=>(c.bradSubject||"").trim()||(c.bradBody||"").trim());
+let createdCampaign=null;
+if(copyRows.length){
+const firstCopy=copyRows[0];
+const subject=(firstCopy.bradSubject||"ST1 Sports").trim();
+const body=(firstCopy.bradBody||"").trim();
+createdCampaign={
+id:mkId(),
+name:firstCopy.campaignName||`${listName} — Brad Outreach`,
+product:importSport||"Outreach",
+audience:listName,
+channels:["email"],
+status:"draft",
+createdAt:today(),
+sender:"brad",
+source:"list-import",
+listId:newList.id,
+uploadedCopy:true,
+notes:[importNotes,`Imported from ${importFile?.name||importFile?._fileObj?.name||"uploaded file"}`].filter(Boolean).join("\n"),
+touches:[{id:mkId(),step:0,subject,body,delay:0,dayOffset:0,channel:"email",source:"uploaded"}],
+enrollments:selected.filter(c=>c.email).map(c=>({
+contactId:c.id,
+email:c.email,
+name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
+status:"active",
+step:0,
+enrolledAt:today(),
+nextDate:today(),
+sentSteps:[],
+customCopy:(c.bradSubject||c.bradBody)?{subject:c.bradSubject||subject,body:c.bradBody||body}:null,
+personalization:c.personalization||"",
+})),
+};
+dispatch("ADD_CAMPAIGN",createdCampaign);
+}
 const toastMsg=totalUpdated>0
 ?`"${listName}" · ${totalAdded} new · ${totalUpdated} enriched with missing fields`
 :`"${listName}" · ${totalAdded} new contacts added`;
-toast(toastMsg,"success");
+toast(createdCampaign?`${toastMsg} · draft Brad campaign created with ${createdCampaign.enrollments.length} enrolled`:toastMsg,"success");
 setTimeout(()=>{
 setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportState("");setImportFile(null);
 setDbTotal(t=>totalAdded>0?t+totalAdded:t);
-setView("contacts");loadDbContacts(1,"");
+setView(createdCampaign?"brad":"contacts");if(createdCampaign)setBradTab("campaigns");loadDbContacts(1,"");
 },800);
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
@@ -7509,18 +7556,18 @@ disabled={importPhase==="parsing"}/>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:10}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{importListName||"Imported List"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts found · {importSel.size} selected to save</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{importRows.length} contacts found · {importSel.size} selected to save · {importRows.filter(c=>c.bradSubject||c.bradBody).length} with uploaded email copy</div>
 </div>
 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-<OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ UPLOAD TO DB ({importSel.size})</OBtn>
+<OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ {importRows.some(c=>c.bradSubject||c.bradBody)?"UPLOAD + CREATE BRAD CAMPAIGN":"UPLOAD TO DB"} ({importSel.size})</OBtn>
 </div>
 </div>
 <div style={{overflowX:"auto"}}>
 <table style={{width:"100%",borderCollapse:"collapse",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
 <thead>
 <tr style={{borderBottom:`2px solid ${B.border}`}}>
-{["","Name","Title / Org","Email","Sport","Outreach Window","Priority","Tags"].map(h=>(
+{["","Name","Title / Org","Email","Uploaded Email","Sport","Outreach Window","Priority","Tags"].map(h=>(
 <th key={h} style={{padding:"7px 10px",textAlign:"left",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,fontWeight:700,whiteSpace:"nowrap"}}>{h}</th>
 ))}
 </tr>
@@ -7540,6 +7587,9 @@ disabled={importPhase==="parsing"}/>
 <div style={{color:B.muted,fontSize:10}}>{typeof c.school==="string"?c.school:c.school?.name||""}</div>
 </td>
 <td style={{padding:"6px 10px",color:c.email?B.green:B.muted}}>{c.email||"—"}</td>
+<td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
+{(c.bradSubject||c.bradBody)?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}} title={c.bradSubject||""}>COPY ✓</span>:<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>—</span>}
+</td>
 <td style={{padding:"6px 10px",whiteSpace:"nowrap"}}>
 {c.sport&&c.sport!=="Unknown"&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{typeof c.sport==="string"?c.sport:c.sport?.name||""}</span>}
 </td>
@@ -8941,6 +8991,7 @@ const c = contactMap[enroll.contactId];
 if(!c?.email) return {ok:false,reason:"no email"};
 const touch = (camp.touches||[])[enroll.step];
 if(!touch) return {ok:false,reason:"no touch"};
+const customCopy=enroll.customCopy||{};
 const co = s.company||{};
 // fromBrad campaigns (Bulk Outreach) carry fully personalized copy per
 // contact directly on the batch data (c.__subject/__body) instead of one
@@ -8957,15 +9008,29 @@ const sigParts=useBrad
 ? [rep.name,rep.title,rep.email,rep.phone,co.website].filter(Boolean)
 : [co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
 const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
-const subject=mergeTags(c.__subject||touch.subject,c)||`Following up — ${camp.product||camp.name}`;
-const mergedBody=mergeTags(c.__body||touch.body,c);
-const plainBody=(mergedBody.trim()?mergedBody:"(No email body — edit this touch in the Assets tab)")+sigText;
+const subject=mergeTags(customCopy.subject||c.__subject||touch.subject,c)||`Following up — ${camp.product||camp.name}`;
+const mergedBody=mergeTags(customCopy.body||c.__body||touch.body,c);
+if(!mergedBody.trim()) return {ok:false,reason:"no email body — edit this touch before sending"};
+const plainBody=mergedBody+sigText;
 const eid=`${camp.id}~${enroll.contactId}~${enroll.step}`;
 const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;
 const esc=t=>t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 const htmlLines=plainBody.split("\n").map(l=>l.trim()?`<p style="margin:0 0 10px 0">${esc(l)}</p>`:"<br>").join("");
 const htmlBody=`<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;line-height:1.7;max-width:600px;margin:0 auto;padding:20px 24px">${htmlLines}<img src="${trackUrl}" width="1" height="1" style="display:none" alt=""></body></html>`;
 try{
+if(useBrad||camp.sender==="brad"){
+const r=await fetch("/api/agents/brad-send",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({
+contactEmail:c.email,
+contactName:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
+subject,
+body:plainBody,
+contactId:c.id,
+})});
+const d=await r.json();
+if(d.sent) return {ok:true};
+return {ok:false,reason:d.error||"Brad send failed"};
+}
 const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},
 body:JSON.stringify({
 action:"send",
