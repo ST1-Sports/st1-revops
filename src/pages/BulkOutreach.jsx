@@ -411,10 +411,13 @@ Subject: <subject line>
   // don't.
   const applyBulkFollowup = (subject, body) => {
     if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
-    let applied = 0;
+    // Count from bulkEligible (already known) rather than inside the
+    // setLeads updater — that callback runs during React's next render,
+    // not synchronously here, so a counter incremented inside it would
+    // still read 0 by the time the toast below fires.
+    const applied = bulkEligible.length;
     setLeads(prev => prev.map(l => {
       if (!(l.sendable && l.email) || l.touches.length >= 3) return l;
-      applied++;
       return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() }] };
     }));
     setBulkDraft(null);
