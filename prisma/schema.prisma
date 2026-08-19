@@ -1003,3 +1003,31 @@ model SmsMessage {
   createdAt DateTime @default(now())
   @@index([phone])
 }
+
+// ── BULK OUTREACH (Brad) ──────────────────────────────────────────────────────
+// A durable draft of an uploaded cold-outreach sheet (see BulkOutreach.jsx) —
+// survives navigation/reload so a rep can leave and come back to review the
+// column mapping, edit a drafted email, or add a follow-up before approving.
+// Once approved it's converted into a real Campaign (in app_state.campaigns)
+// for actual sending/tracking; this row just gets tagged with that
+// campaignId and left around as a record of what was uploaded and how it
+// was mapped.
+model OutreachBatch {
+  id            String   @id @default(cuid())
+  name          String
+  fileName      String?
+  status        String   @default("draft")        // draft | approved
+  columnMap     Json?                              // detected field -> source header, for display/edit
+  leads         Json                               // full parsed rows incl. per-lead touches[{subject,body}]
+  totalCount    Int      @default(0)
+  sendableCount Int      @default(0)
+  touchCount    Int      @default(0)
+  startDt       String?
+  batchSize     Int      @default(25)
+  touchGapDays  Int      @default(5)
+  campaignId    String?                            // set once approved
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  @@index([status])
+}

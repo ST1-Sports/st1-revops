@@ -1298,7 +1298,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {mod==="price-lists" &&<ModPriceLists/>}
 {mod==="edgar"       &&<ModEdgar/>}
 {mod==="expansion"   &&<Suspense fallback={<PanelLoader/>}><ExpansionPage s={s} dispatch={dispatch} toast={toast}/></Suspense>}
-{mod==="bulk-outreach" &&<Suspense fallback={<PanelLoader/>}><BulkOutreachPage s={s} dispatch={dispatch} toast={toast} cu={cu}/></Suspense>}
+{mod==="bulk-outreach" &&<Suspense fallback={<PanelLoader/>}><BulkOutreachPage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
 {mod==="team-stores" &&<Suspense fallback={<PanelLoader/>}><TeamStoresPage/></Suspense>}
 {mod==="flagship-store" &&<Suspense fallback={<PanelLoader/>}><FlagshipStorePage/></Suspense>}
 {/* ── AI Tools (Command Center modules embedded) ── */}

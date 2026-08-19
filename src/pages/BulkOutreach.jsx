@@ -10,22 +10,28 @@
  *      generous header-name matching, falling back to a cheap AI column-map
  *      call (same pattern as the contact-list importer) if that's not
  *      confident enough.
- *   3. Skips anything explicitly suppressed/do-not-work. Only rows with
+ *   3. Persists the upload as a durable OutreachBatch (api/outreach/batches)
+ *      the moment it's parsed, and autosaves every edit — it's a real record
+ *      you can leave and come back to, not client-only state that vanishes
+ *      on reload. The landing view lists every past/current batch.
+ *   4. Skips anything explicitly suppressed/do-not-work. Only rows with
  *      Channel=Email + a valid address + a written subject/body become an
  *      actual scheduled send — everything else still gets imported as a
  *      contact (so nothing from the sheet disappears) but is shown
  *      separately as "needs a different channel."
- *   4. Lets the rep add a 2nd/3rd follow-up email per lead (typed or
+ *   5. Lets the rep add a 2nd/3rd follow-up email per lead (typed or
  *      AI-drafted) before anything is scheduled.
- *   5. On approval, builds one Campaign with a per-contact content
+ *   6. On approval, builds one real Campaign with a per-contact content
  *      override baked directly into each scheduledBatch (rather than one
  *      shared template) — nothing is generic, every send uses the exact
  *      subject/body written for that org — and schedules it via the same
- *      MT-business-hours-aware batching the Campaigns tab uses. Actual
- *      sending stays on the existing api/cron/send-batches.js cron; this
- *      page only ever writes a schedule, it never sends anything itself.
+ *      MT-business-hours-aware batching the Campaigns tab uses, so it shows
+ *      up there for tracking like any other campaign. Actual sending stays
+ *      on the existing api/cron/send-batches.js cron; this page only ever
+ *      writes a schedule, it never sends anything itself. The batch record
+ *      is marked approved + linked to the campaign and kept around as history.
  */
-import { useState, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -152,15 +158,29 @@ function fmtWhen(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("en-US", { timeZone: "America/Denver", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) + " MT";
 }
+function fmtDT(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 function Lbl({ children, c, s: sty }) { return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 1, ...sty }}>{children}</div>; }
 function OBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : B.orange, color: disabled ? B.muted : B.white, border: "none", borderRadius: 5, padding: "8px 16px", fontSize: 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? "not-allowed" : "pointer", ...sty }}>{children}</button>; }
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
 
 const CHANNEL_COLOR = { email: B.green, "contact form": B.blue, "social dm": B.purple, phone: B.yellow, "research needed": B.muted, suppressed: B.red };
+const STATUS_BADGE = {
+  draft:    { bg: B.yellowBg, c: B.yellow, label: "DRAFT" },
+  approved: { bg: B.greenBg,  c: B.green,  label: "APPROVED" },
+};
 
-export default function BulkOutreach({ s, dispatch, toast, cu }) {
-  const [phase, setPhase] = useState("upload"); // upload | parsing | review | done
+export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
+  const [screen, setScreen] = useState("list"); // list | review
+  const [batches, setBatches] = useState([]);
+  const [loadingList, setLoadingList] = useState(true);
+
+  const [batchId, setBatchId] = useState(null);
+  const [batchStatus, setBatchStatus] = useState("draft");
+  const [phase, setPhase] = useState("upload"); // upload | parsing | ready
   const [fileName, setFileName] = useState("");
   const [leads, setLeads] = useState([]); // sendable + non-sendable, suppressed excluded
   const [campaignName, setCampaignName] = useState(`Bulk Outreach — ${today()}`);
@@ -172,7 +192,21 @@ export default function BulkOutreach({ s, dispatch, toast, cu }) {
   const [drafting, setDrafting] = useState(null); // leadId currently AI-drafting
   const [showSkipped, setShowSkipped] = useState(false);
   const [committing, setCommitting] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const fileRef = useRef(null);
+  const saveTimer = useRef(null);
+  const skipNextSave = useRef(false);
+
+  const loadList = async () => {
+    setLoadingList(true);
+    try {
+      const r = await fetch("/api/outreach/batches");
+      const d = await r.json();
+      setBatches(d.batches || []);
+    } catch (e) { toast(`Couldn't load outreach batches: ${e.message}`, "error"); }
+    setLoadingList(false);
+  };
+  useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
   const skippedLeads = useMemo(() => leads.filter(l => !(l.sendable && l.email)), [leads]);
@@ -183,6 +217,59 @@ export default function BulkOutreach({ s, dispatch, toast, cu }) {
     () => buildOutreachSchedule(campIdRef.current, sendableLeads, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5) }),
     [sendableLeads, startMs, batchSize, touchGapDays]
   );
+
+  // Autosave — any edit to leads or the schedule settings PATCHes the
+  // durable batch record after a short pause, so nothing is lost on
+  // navigation/reload and the mapping/edits are there next time this batch
+  // is opened. Skipped for approved batches (their schedule is already
+  // built and locked in) and right after loading/creating a batch (so
+  // populating state from the server doesn't immediately re-save it).
+  useEffect(() => {
+    if (screen !== "review" || !batchId || batchStatus === "approved") return;
+    if (skipNextSave.current) { skipNextSave.current = false; return; }
+    setSaveStatus("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, name: campaignName, leads, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 }) });
+        setSaveStatus("saved");
+      } catch (e) { setSaveStatus(null); toast(`Autosave failed: ${e.message}`, "error"); }
+    }, 900);
+    return () => clearTimeout(saveTimer.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, campaignName, startDt, batchSize, touchGapDays]);
+
+  const openBatch = async (id) => {
+    try {
+      const r = await fetch(`/api/outreach/batches?id=${encodeURIComponent(id)}`);
+      const d = await r.json();
+      if (!d.ok) { toast(d.error || "Couldn't load that batch", "error"); return; }
+      const b = d.batch;
+      skipNextSave.current = true;
+      setBatchId(b.id);
+      setBatchStatus(b.status);
+      setCampaignName(b.name);
+      setFileName(b.fileName || "");
+      setLeads(b.leads || []);
+      setStartDt(b.startDt || startDt);
+      setBatchSize(b.batchSize || 25);
+      setTouchGapDays(b.touchGapDays || 5);
+      setPhase("ready");
+      setExpandedId(null);
+      setScreen("review");
+    } catch (e) { toast(`Couldn't load batch: ${e.message}`, "error"); }
+  };
+
+  const startNewUpload = () => {
+    setBatchId(null); setBatchStatus("draft"); setLeads([]); setFileName("");
+    setCampaignName(`Bulk Outreach — ${today()}`);
+    campIdRef.current = mkId();
+    setPhase("upload");
+    setScreen("review");
+  };
+
+  const backToList = () => { setScreen("list"); loadList(); };
 
   const handleFile = async (e) => {
     const file = e.target.files[0]; if (!file) return;
@@ -249,8 +336,20 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
       }).filter(Boolean);
 
       if (!parsed.length) { toast("No usable rows found in this file", "error"); setPhase("upload"); return; }
+
+      const autoName = file.name.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const nm = autoName || `Bulk Outreach — ${today()}`;
+      const createRes = await fetch("/api/outreach/batches", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: nm, fileName: file.name, columnMap: colMap, leads: parsed, startDt, batchSize, touchGapDays, createdBy: cu?.name || "" }) });
+      const created = await createRes.json();
+      if (!created.ok) { toast(created.error || "Couldn't save this upload", "error"); setPhase("upload"); return; }
+
+      skipNextSave.current = true;
+      setBatchId(created.batch.id);
+      setBatchStatus("draft");
+      setCampaignName(nm);
       setLeads(parsed);
-      setPhase("review");
+      setPhase("ready");
     } catch (err) {
       toast(`Import error: ${err.message}`, "error");
       setPhase("upload");
@@ -309,10 +408,9 @@ Subject: <subject line>
     // table, not the app_state JSON blob), so anything added only via
     // dispatch would be silently wiped by the very next unrelated action.
     // Leads with no usable email at all (pure contact-form/DM/call rows)
-    // can't go through this table (it dedupes by email) and aren't
-    // persisted anywhere past this session — they're still shown in the
-    // "needs another channel" list below so nothing is silently lost while
-    // reviewing, just not carried forward automatically.
+    // can't go through this table (it dedupes by email) — they're durable
+    // in this batch record either way (that's the whole point of storing
+    // it), they just don't get a Prospecting contact created for them.
     const emailLeads = leads.filter(l => l.email);
     const IMPORT_BATCH = 500;
     let importErr = null;
@@ -350,158 +448,207 @@ Subject: <subject line>
     dispatch("ADD_CAMPAIGN", campaign);
     dispatch("LOG", { msg: `${cu?.name || "Someone"} scheduled bulk outreach "${campaign.name}" — ${sendableLeads.length} orgs, ${totalTouches} email(s) total` });
 
+    // Lock the batch record in as approved and link it to the campaign, so
+    // it shows up as history rather than an editable draft from here on.
+    try {
+      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: batchId, status: "approved", campaignId: campId, leads, name: campaignName, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 }) });
+    } catch (e) { toast(`Scheduled, but couldn't mark the batch approved: ${e.message}`, "info"); }
+
+    setBatchStatus("approved");
     setCommitting(false);
-    setPhase("done");
     toast(`Scheduled — ${sendableLeads.length} orgs, ${totalTouches} email(s)`, "success");
   };
 
+  const goToCampaigns = () => { if (setMod) setMod("prospecting"); };
+
+  const isApproved = batchStatus === "approved";
+
   return (
     <div style={{ padding: "26px 34px", maxWidth: 1100, margin: "0 auto" }}>
-      <div style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 22, fontWeight: 700, color: B.text }}>Bulk Outreach — for Brad</div>
-        <div style={{ fontSize: 12, color: B.muted, marginTop: 2 }}>Upload a cold-outreach spreadsheet, review the schedule, approve — Brad sends it from here.</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: B.text }}>Bulk Outreach — for Brad</div>
+          <div style={{ fontSize: 12, color: B.muted, marginTop: 2 }}>Upload a cold-outreach spreadsheet, review the schedule, approve — Brad sends it from here.</div>
+        </div>
+        {screen === "review" && <GBtn onClick={backToList}>← Back to all uploads</GBtn>}
       </div>
 
-      {phase === "upload" && (
+      {screen === "list" && (
+        <>
+          <div style={{ marginBottom: 16 }}>
+            <OBtn onClick={startNewUpload} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
+          </div>
+          {loadingList ? (
+            <div style={{ textAlign: "center", padding: "50px 0", color: B.muted, fontSize: 13 }}>Loading…</div>
+          ) : batches.length === 0 ? (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "48px 32px", textAlign: "center" }}>
+              <div style={{ fontSize: 13, color: B.textMid, lineHeight: 1.6 }}>No uploads yet. Upload a research sheet like <b>ST1 Colorado Youth Sports Outreach</b> — one row per organization, with a written subject/message already drafted — and Brad takes it from there.</div>
+            </div>
+          ) : (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
+              {batches.map(b => {
+                const badge = STATUS_BADGE[b.status] || STATUS_BADGE.draft;
+                return (
+                  <div key={b.id} onClick={() => openBatch(b.id)} style={{ padding: "13px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", borderBottom: `1px solid ${B.border}` }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{b.name}</span>
+                        <span style={{ fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", color: badge.c, background: badge.bg, padding: "2px 7px", borderRadius: 8, letterSpacing: .5 }}>{badge.label}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}</div>
+                    </div>
+                    <span style={{ color: B.muted, fontSize: 13, flexShrink: 0 }}>→</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {screen === "review" && phase === "upload" && (
         <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "48px 32px", textAlign: "center" }}>
           <div style={{ fontSize: 13, color: B.textMid, marginBottom: 18, lineHeight: 1.6 }}>
             Upload a research sheet like <b>ST1 Colorado Youth Sports Outreach</b> — one row per organization, with a written subject/message already drafted.<br/>
-            Rows with a confirmed email get scheduled automatically. Anything needing a call, DM, or contact form is still imported as a contact but left for a human. Anything marked suppressed/do-not-work is skipped entirely.
+            Rows with a confirmed email get scheduled automatically. Anything needing a call, DM, or contact form is still saved but left for a human. Anything marked suppressed/do-not-work is skipped entirely.
           </div>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFile} style={{ display: "none" }} />
           <OBtn onClick={() => fileRef.current?.click()} style={{ padding: "12px 28px", fontSize: 12 }}>⬆ UPLOAD SPREADSHEET</OBtn>
         </div>
       )}
 
-      {phase === "parsing" && (
+      {screen === "review" && phase === "parsing" && (
         <div style={{ textAlign: "center", padding: "60px 0", color: B.muted, fontSize: 13 }}>Reading {fileName}…</div>
       )}
 
-      {(phase === "review" || phase === "done") && (
+      {screen === "review" && phase === "ready" && (
         <>
-          {phase === "done" ? (
-            <div style={{ background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 10, padding: "28px 24px", textAlign: "center" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: B.green, marginBottom: 8 }}>✓ Scheduled</div>
-              <div style={{ fontSize: 13, color: B.textMid, marginBottom: 16 }}>"{campaignName}" is live in Campaigns — sends will go out automatically starting {fmtWhen(new Date(startMs).toISOString())}.</div>
-              <GBtn onClick={() => { setPhase("upload"); setLeads([]); setFileName(""); campIdRef.current = mkId(); setExpandedId(null); }}>Upload another sheet</GBtn>
+          {isApproved && (
+            <div style={{ background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div style={{ fontSize: 12, color: B.textMid }}><b style={{ color: B.green }}>✓ Approved</b> — this schedule is locked in and running. Editing here won't change what's already scheduled.</div>
+              {setMod && <GBtn onClick={goToCampaigns} style={{ fontSize: 10 }}>View in Campaigns →</GBtn>}
             </div>
-          ) : (
-            <>
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-                <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
-                  <Lbl>READY TO EMAIL</Lbl>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: B.green, marginTop: 4 }}>{sendableLeads.length}</div>
-                  <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{sendableLeads.reduce((a, l) => a + l.touches.length, 0)} email(s) total</div>
-                </div>
-                <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
-                  <Lbl>NEEDS ANOTHER CHANNEL</Lbl>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: B.yellow, marginTop: 4 }}>{skippedLeads.length}</div>
-                  <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>imported as contacts, not auto-sent</div>
-                </div>
-                <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 220 }}>
-                  <Lbl s={{ marginBottom: 5 }}>CAMPAIGN NAME</Lbl>
-                  <input value={campaignName} onChange={e => setCampaignName(e.target.value)} style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 12, boxSizing: "border-box" }} />
-                </div>
-              </div>
+          )}
 
-              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 18, background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px" }}>
-                <div>
-                  <Lbl s={{ marginBottom: 4 }}>START (MOUNTAIN TIME)</Lbl>
-                  <input type="datetime-local" value={startDt} onChange={e => setStartDt(e.target.value)} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
-                </div>
-                <div>
-                  <Lbl s={{ marginBottom: 4 }}>MAX PER DAY</Lbl>
-                  <input type="number" min={1} value={batchSize} onChange={e => setBatchSize(e.target.value)} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
-                </div>
-                <div>
-                  <Lbl s={{ marginBottom: 4 }}>DAYS BETWEEN FOLLOW-UPS</Lbl>
-                  <input type="number" min={1} value={touchGapDays} onChange={e => setTouchGapDays(e.target.value)} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
-                </div>
-                <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically.</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl>READY TO EMAIL</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.green, marginTop: 4 }}>{sendableLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{sendableLeads.reduce((a, l) => a + l.touches.length, 0)} email(s) total</div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl>NEEDS ANOTHER CHANNEL</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.yellow, marginTop: 4 }}>{skippedLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>saved here, not auto-sent</div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 220 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                <Lbl>CAMPAIGN NAME</Lbl>
+                {!isApproved && saveStatus && <span style={{ fontSize: 9, color: saveStatus === "saving" ? B.muted : B.green, fontFamily: "'Lexend',sans-serif" }}>{saveStatus === "saving" ? "Saving…" : "✓ Saved"}</span>}
               </div>
+              <input value={campaignName} onChange={e => setCampaignName(e.target.value)} disabled={isApproved} style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 12, boxSizing: "border-box" }} />
+            </div>
+          </div>
 
-              <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
-                {sendableLeads.map(lead => {
-                  const isOpen = expandedId === lead.id;
-                  const dates = preview.perLeadDates[lead.id] || [];
-                  const canAddMore = lead.touches.length < 3;
-                  const draftHere = followupDraft?.leadId === lead.id;
-                  return (
-                    <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}` }}>
-                      <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : B.white }}>
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{lead.orgName}</div>
-                          <div style={{ fontSize: 11, color: B.muted, marginTop: 1 }}>{lead.contactName && lead.contactName !== "-" ? lead.contactName + " · " : ""}{lead.email}{lead.sport ? ` · ${lead.sport}` : ""}</div>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 18, background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px" }}>
+            <div>
+              <Lbl s={{ marginBottom: 4 }}>START (MOUNTAIN TIME)</Lbl>
+              <input type="datetime-local" value={startDt} onChange={e => setStartDt(e.target.value)} disabled={isApproved} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
+            </div>
+            <div>
+              <Lbl s={{ marginBottom: 4 }}>MAX PER DAY</Lbl>
+              <input type="number" min={1} value={batchSize} onChange={e => setBatchSize(e.target.value)} disabled={isApproved} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
+            </div>
+            <div>
+              <Lbl s={{ marginBottom: 4 }}>DAYS BETWEEN FOLLOW-UPS</Lbl>
+              <input type="number" min={1} value={touchGapDays} onChange={e => setTouchGapDays(e.target.value)} disabled={isApproved} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
+            </div>
+            <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically.</div>
+          </div>
+
+          <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
+            {sendableLeads.map(lead => {
+              const isOpen = expandedId === lead.id;
+              const dates = preview.perLeadDates[lead.id] || [];
+              const canAddMore = lead.touches.length < 3 && !isApproved;
+              const draftHere = followupDraft?.leadId === lead.id;
+              return (
+                <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}` }}>
+                  <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : B.white }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{lead.orgName}</div>
+                      <div style={{ fontSize: 11, color: B.muted, marginTop: 1 }}>{lead.contactName && lead.contactName !== "-" ? lead.contactName + " · " : ""}{lead.email}{lead.sport ? ` · ${lead.sport}` : ""}</div>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+                      {lead.angle && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.purple, background: B.purpleBg, padding: "3px 8px", borderRadius: 10 }}>{lead.angle}</span>}
+                      <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{lead.touches.length} email{lead.touches.length !== 1 ? "s" : ""}</span>
+                      <span style={{ color: B.muted, fontSize: 11 }}>{isOpen ? "▾" : "▸"}</span>
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <div style={{ padding: "4px 16px 16px" }}>
+                      {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
+                      {lead.touches.map((t, i) => (
+                        <div key={i} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: 10, marginBottom: 8 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                            <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}</span>
+                            <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
+                          </div>
+                          <input value={t.subject} disabled={isApproved} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
+                            style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
+                          <textarea value={t.body} disabled={isApproved} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, body: v } : tt) } : l)); }}
+                            rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box" }} />
                         </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                          {lead.angle && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.purple, background: B.purpleBg, padding: "3px 8px", borderRadius: 10 }}>{lead.angle}</span>}
-                          <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{lead.touches.length} email{lead.touches.length !== 1 ? "s" : ""}</span>
-                          <span style={{ color: B.muted, fontSize: 11 }}>{isOpen ? "▾" : "▸"}</span>
+                      ))}
+                      {draftHere ? (
+                        <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
+                          <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>NEW FOLLOW-UP — EMAIL {lead.touches.length + 1}</div>
+                          <input value={followupDraft.subject} onChange={e => setFollowupDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
+                          <textarea value={followupDraft.body} onChange={e => setFollowupDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <OBtn onClick={() => addFollowup(lead.id, followupDraft.subject, followupDraft.body)} style={{ fontSize: 9, padding: "6px 12px" }}>ADD</OBtn>
+                            <GBtn onClick={() => setFollowupDraft(null)} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL</GBtn>
+                          </div>
                         </div>
-                      </div>
-                      {isOpen && (
-                        <div style={{ padding: "4px 16px 16px" }}>
-                          {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
-                          {lead.touches.map((t, i) => (
-                            <div key={i} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: 10, marginBottom: 8 }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                                <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}</span>
-                                <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
-                              </div>
-                              <input value={t.subject} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
-                                style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                              <textarea value={t.body} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, body: v } : tt) } : l)); }}
-                                rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box" }} />
-                            </div>
-                          ))}
-                          {draftHere ? (
-                            <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
-                              <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>NEW FOLLOW-UP — EMAIL {lead.touches.length + 1}</div>
-                              <input value={followupDraft.subject} onChange={e => setFollowupDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                              <textarea value={followupDraft.body} onChange={e => setFollowupDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
-                              <div style={{ display: "flex", gap: 6 }}>
-                                <OBtn onClick={() => addFollowup(lead.id, followupDraft.subject, followupDraft.body)} style={{ fontSize: 9, padding: "6px 12px" }}>ADD</OBtn>
-                                <GBtn onClick={() => setFollowupDraft(null)} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL</GBtn>
-                              </div>
-                            </div>
-                          ) : canAddMore && (
-                            <div style={{ display: "flex", gap: 6 }}>
-                              <GBtn onClick={() => setFollowupDraft({ leadId: lead.id, subject: "", body: "" })} style={{ fontSize: 9, padding: "6px 12px" }}>+ ADD FOLLOW-UP EMAIL</GBtn>
-                              <GBtn onClick={() => draftFollowupWithAI(lead)} disabled={drafting === lead.id} style={{ fontSize: 9, padding: "6px 12px" }}>{drafting === lead.id ? "DRAFTING…" : "✦ AI DRAFT FOLLOW-UP"}</GBtn>
-                            </div>
-                          )}
+                      ) : canAddMore && (
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <GBtn onClick={() => setFollowupDraft({ leadId: lead.id, subject: "", body: "" })} style={{ fontSize: 9, padding: "6px 12px" }}>+ ADD FOLLOW-UP EMAIL</GBtn>
+                          <GBtn onClick={() => draftFollowupWithAI(lead)} disabled={drafting === lead.id} style={{ fontSize: 9, padding: "6px 12px" }}>{drafting === lead.id ? "DRAFTING…" : "✦ AI DRAFT FOLLOW-UP"}</GBtn>
                         </div>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-
-              {skippedLeads.length > 0 && (
-                <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
-                  <button onClick={() => setShowSkipped(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.textMid, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
-                    {skippedLeads.length} organization{skippedLeads.length !== 1 ? "s" : ""} need a different channel — {showSkipped ? "hide" : "show"}
-                  </button>
-                  {showSkipped && (
-                    <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
-                      {skippedLeads.map(l => (
-                        <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${B.border}` }}>
-                          <div style={{ fontSize: 11, color: B.text }}>{l.orgName}</div>
-                          <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: CHANNEL_COLOR[l.channel?.toLowerCase()] || B.muted }}>{l.action || l.channel}</span>
-                        </div>
-                      ))}
-                    </div>
                   )}
                 </div>
-              )}
+              );
+            })}
+          </div>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-                <GBtn onClick={() => { setPhase("upload"); setLeads([]); setFileName(""); }}>Cancel</GBtn>
-                <OBtn onClick={approveAndSchedule} disabled={committing || !sendableLeads.length} style={{ padding: "10px 22px", fontSize: 12 }}>
-                  {committing ? "SCHEDULING…" : "✓ APPROVE & SCHEDULE"}
-                </OBtn>
-              </div>
-            </>
+          {skippedLeads.length > 0 && (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
+              <button onClick={() => setShowSkipped(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.textMid, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                {skippedLeads.length} organization{skippedLeads.length !== 1 ? "s" : ""} need a different channel — {showSkipped ? "hide" : "show"}
+              </button>
+              {showSkipped && (
+                <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
+                  {skippedLeads.map(l => (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${B.border}` }}>
+                      <div style={{ fontSize: 11, color: B.text }}>{l.orgName}</div>
+                      <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: CHANNEL_COLOR[l.channel?.toLowerCase()] || B.muted }}>{l.action || l.channel}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {!isApproved && (
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <GBtn onClick={backToList}>Save for later</GBtn>
+              <OBtn onClick={approveAndSchedule} disabled={committing || !sendableLeads.length} style={{ padding: "10px 22px", fontSize: 12 }}>
+                {committing ? "SCHEDULING…" : "✓ APPROVE & SCHEDULE"}
+              </OBtn>
+            </div>
           )}
         </>
       )}
