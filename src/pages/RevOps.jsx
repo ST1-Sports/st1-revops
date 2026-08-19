@@ -6984,50 +6984,14 @@ const existingLocalEmails=new Set((s.contacts||[]).map(c=>(c.email||"").toLowerC
 const localAdds=selected.filter(c=>c.email&&!existingLocalEmails.has(c.email.toLowerCase()));
 if(localAdds.length) dispatch("ADD_CONTACTS",localAdds);
 dispatch("ADD_CONTACT_LIST",newList);
-const copyRows=selected.filter(c=>(c.bradSubject||"").trim()||(c.bradBody||"").trim());
-let createdCampaign=null;
-if(copyRows.length){
-const firstCopy=copyRows[0];
-const subject=(firstCopy.bradSubject||"ST1 Sports").trim();
-const body=(firstCopy.bradBody||"").trim();
-createdCampaign={
-id:mkId(),
-name:firstCopy.campaignName||`${listName} — Brad Outreach`,
-product:importSport||"Outreach",
-audience:listName,
-channels:["email"],
-status:"draft",
-createdAt:today(),
-sender:"brad",
-fromBrad:true,
-source:"list-import",
-listId:newList.id,
-uploadedCopy:true,
-notes:[importNotes,`Imported from ${importFile?.name||importFile?._fileObj?.name||"uploaded file"}`].filter(Boolean).join("\n"),
-touches:[{id:mkId(),step:0,subject,body,delay:0,dayOffset:0,channel:"email",source:"uploaded"}],
-enrollments:selected.filter(c=>c.email).map(c=>({
-contactId:c.id,
-email:c.email,
-name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
-status:"active",
-step:0,
-enrolledAt:today(),
-nextDate:today(),
-sentSteps:[],
-customCopy:(c.bradSubject||c.bradBody)?{subject:c.bradSubject||subject,body:c.bradBody||body}:null,
-personalization:c.personalization||"",
-})),
-};
-dispatch("ADD_CAMPAIGN",createdCampaign);
-}
 const toastMsg=totalUpdated>0
 ?`"${listName}" · ${totalAdded} new · ${totalUpdated} enriched with missing fields`
 :`"${listName}" · ${totalAdded} new contacts added`;
-toast(createdCampaign?`${toastMsg} · draft Brad campaign created with ${createdCampaign.enrollments.length} enrolled`:toastMsg,"success");
+toast(toastMsg,"success");
 setTimeout(()=>{
 setImportPhase("idle");setImportRows([]);setImportSel(new Set());setImportListName("");setImportSport("");setImportNotes("");setImportState("");setImportFile(null);
 setDbTotal(t=>totalAdded>0?t+totalAdded:t);
-setView(createdCampaign?"brad":"contacts");if(createdCampaign)setBradTab("campaigns");loadDbContacts(1,"");
+setView("contacts");loadDbContacts(1,"");
 },800);
 };
 const logC={success:B.green,warn:B.yellow,error:B.red,info:B.muted,muted:B.muted};
@@ -7561,7 +7525,7 @@ disabled={importPhase==="parsing"}/>
 </div>
 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 <button onClick={()=>setImportSel(importSel.size===importRows.length?new Set():new Set(importRows.map(c=>c.id)))} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",color:B.muted}}>{importSel.size===importRows.length?"DESELECT ALL":"SELECT ALL"}</button>
-<OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ {importRows.some(c=>c.bradSubject||c.bradBody)?"UPLOAD + CREATE BRAD CAMPAIGN":"UPLOAD TO DB"} ({importSel.size})</OBtn>
+<OBtn sm onClick={commitListImport} disabled={importSel.size===0}>⊕ UPLOAD TO DB ({importSel.size})</OBtn>
 </div>
 </div>
 <div style={{overflowX:"auto"}}>
