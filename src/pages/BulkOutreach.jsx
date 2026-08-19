@@ -478,6 +478,11 @@ Subject: <subject line, may include {{orgName}}>
         email: l.email, firstName: l.firstName, lastName: l.lastName,
         school: l.orgName, sport: l.sport || "General", city: l.city,
         source: "brad", notes: l.whyNow || "", score: l.sendable ? 40 : 20,
+        channel: l.channel, priority: l.priority, angle: l.angle, action: l.action,
+        whyNow: l.whyNow, campaignName,
+        bradSubject: l.touches?.[0]?.subject || "",
+        bradBody: l.touches?.[0]?.body || "",
+        allTouches: l.touches || [],
       }));
       try {
         await fetch("/api/contacts/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contacts: batch }) });

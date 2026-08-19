@@ -9,7 +9,9 @@
  *
  * Body: { contacts: [{ email, firstName, lastName, title, school,
  *                      phone, linkedIn, sport, state, city,
- *                      score, segment, notes, source }] }
+ *                      score, segment, notes, source,
+ *                      campaignName, channel, angle, whyNow,
+ *                      bradSubject, bradBody, allTouches }] }
  * Returns: { added, updated, total } — "updated" counts records that already
  * existed by email (whether or not any of their blank fields actually got
  * filled in by this call).
@@ -20,6 +22,28 @@ import { normalizeStateForStorage } from '../_lib/stateUtils.js'
 import { upsertAccountForContact } from '../_lib/accountUtils.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
+
+function addLine(lines, label, value) {
+  const text = typeof value === 'string' ? value.trim() : value == null ? '' : JSON.stringify(value)
+  if (text) lines.push(`${label}: ${text}`)
+}
+
+function buildNotes(c) {
+  const lines = []
+  addLine(lines, 'Notes', c.notes)
+  addLine(lines, 'Campaign', c.campaignName)
+  addLine(lines, 'Channel', c.channel)
+  addLine(lines, 'Priority', c.priority)
+  addLine(lines, 'Angle', c.angle)
+  addLine(lines, 'Action', c.action)
+  addLine(lines, 'Why now', c.whyNow || c.personalization)
+  addLine(lines, 'Uploaded subject', c.bradSubject || c.emailSubject)
+  addLine(lines, 'Uploaded body', c.bradBody || c.emailBody)
+  if (Array.isArray(c.allTouches) && c.allTouches.length > 1) {
+    addLine(lines, 'Uploaded follow-ups', c.allTouches.slice(1).map((t, i) => `#${i + 2} ${t.subject || ''}\n${t.body || ''}`).join('\n\n'))
+  }
+  return lines.join('\n').slice(0, 4000)
+}
 
 export default async function handler(req, res) {
   setCors(res)
@@ -42,6 +66,7 @@ export default async function handler(req, res) {
       const sport   = typeof c.sport === 'string' ? c.sport.trim() : (c.sport?.name || '')
       const state   = normalizeStateForStorage(c.state || '')
       const city    = (c.city   || '').trim()
+      const notes   = buildNotes(c)
       return {
         email:       c.email.trim().toLowerCase().slice(0, 255),
         firstName:   ((c.firstName || '').trim() || null)?.slice(0, 100),
@@ -56,7 +81,7 @@ export default async function handler(req, res) {
         source:      (c.source || 'csv-import').slice(0, 50),
         score,
         segment,
-        notes:       ((c.notes || '').trim() || null)?.slice(0, 500),
+        notes:       (notes || null),
         status:      'new',
       }
     })
