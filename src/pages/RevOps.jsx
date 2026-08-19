@@ -721,11 +721,19 @@ return(
 </div>
 );
 }
+const tagText=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
+const tagContactName=c=>c?.fullName||[c?.firstName,c?.lastName].filter(Boolean).join(" ")||"";
+const tagOrgName=c=>c?.orgName||c?.organization||c?.companyName||tagText(c?.school)||"your organization";
+const isPlaceholderCopy=text=>/^\s*\(?personalized per organization\)?\s*$/i.test(String(text||""));
 const mergeTags=(text,c)=>(text||"")
-.replace(/\{\{firstName\}\}/gi,c?.firstName||(c?.fullName||"").split(" ")[0]||"there")
-.replace(/\{\{orgName\}\}/gi,(typeof c?.school==="string"?c.school:c?.school?.name)||"your school")
-.replace(/\{\{lastName\}\}/gi,c?.lastName||"")
-.replace(/\{\{sport\}\}/gi,(typeof c?.sport==="string"?c.sport:c?.sport?.name)||"athletics");
+.replace(/\{\{\s*firstName\s*\}\}/gi,c?.firstName||tagContactName(c).split(" ")[0]||"there")
+.replace(/\{\{\s*lastName\s*\}\}/gi,c?.lastName||"")
+.replace(/\{\{\s*(orgName|organization|company|school)\s*\}\}/gi,tagOrgName(c))
+.replace(/\{\{\s*contactName\s*\}\}/gi,tagContactName(c)||"there")
+.replace(/\{\{\s*email\s*\}\}/gi,c?.email||"")
+.replace(/\{\{\s*city\s*\}\}/gi,c?.city||"")
+.replace(/\{\{\s*state\s*\}\}/gi,c?.state||"")
+.replace(/\{\{\s*sport\s*\}\}/gi,tagText(c?.sport)||"athletics");
 const DEAL_STAGES = ["Quoted","Follow-Up 1","Follow-Up 2","Negotiating","PO Received","Closed Won","Closed Lost","On Hold"];
 const DSC ={Quoted:B.blue,"Follow-Up 1":B.purple,"Follow-Up 2":B.orange,Negotiating:B.yellow,"PO Received":B.teal,"Closed Won":B.green,"Closed Lost":B.red,"On Hold":B.muted};
 const DBG = {Quoted:B.blueBg,"Follow-Up 1":B.purpleBg,"Follow-Up 2":B.orangeBg,Negotiating:B.yellowBg,"PO Received":B.tealBg,"Closed Won":B.greenBg,"Closed Lost":B.redBg,"On Hold":B.surface};
@@ -8975,7 +8983,7 @@ const sigParts=useBrad
 const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
 const subject=mergeTags(customCopy.subject||c.__subject||touch.subject,c)||`Following up — ${camp.product||camp.name}`;
 const mergedBody=mergeTags(customCopy.body||c.__body||touch.body,c);
-if(!mergedBody.trim()) return {ok:false,reason:"no email body — edit this touch before sending"};
+if(!mergedBody.trim()||isPlaceholderCopy(mergedBody)) return {ok:false,reason:"no personalized email body — edit this touch before sending"};
 const plainBody=mergedBody+sigText;
 const eid=`${camp.id}~${enroll.contactId}~${enroll.step}`;
 const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;

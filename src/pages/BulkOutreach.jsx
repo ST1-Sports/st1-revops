@@ -101,8 +101,13 @@ const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim
 // lead's touches is already the real, personalized text (same as every
 // other touch in this tool), not a token that resolves later.
 const mergeLeadTags = (text, lead) => (text || "")
-  .replace(/\{\{\s*orgName\s*\}\}/gi, lead.orgName || "your organization")
+  .replace(/\{\{\s*(orgName|organization|company|school)\s*\}\}/gi, lead.orgName || "your organization")
   .replace(/\{\{\s*firstName\s*\}\}/gi, (lead.contactName && lead.contactName !== "-") ? (lead.firstName || lead.contactName.split(" ")[0]) : "there")
+  .replace(/\{\{\s*lastName\s*\}\}/gi, lead.lastName || "")
+  .replace(/\{\{\s*contactName\s*\}\}/gi, (lead.contactName && lead.contactName !== "-") ? lead.contactName : "there")
+  .replace(/\{\{\s*email\s*\}\}/gi, lead.email || "")
+  .replace(/\{\{\s*city\s*\}\}/gi, lead.city || "")
+  .replace(/\{\{\s*state\s*\}\}/gi, lead.state || "")
   .replace(/\{\{\s*sport\s*\}\}/gi, lead.sport || "sports");
 
 async function aiCall(prompt, opts = {}) {

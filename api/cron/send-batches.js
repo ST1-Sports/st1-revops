@@ -25,11 +25,19 @@ const SEND_PAUSE_MS   = 30_000;  // 30s between emails
 const MAX_DURATION_MS = 300_000; // must match vercel.json maxDuration for this function
 const TIMEOUT_BUFFER  = 45_000;  // stop this many ms before the hard timeout
 
+const textField = (v) => typeof v === "string" ? v : v?.name || v?.display_value || "";
+const contactName = (c) => c?.fullName || [c?.firstName, c?.lastName].filter(Boolean).join(" ") || "";
+const orgName = (c) => c?.orgName || c?.organization || c?.companyName || textField(c?.school) || "your organization";
+const isPlaceholderCopy = (text) => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
 const mergeTags = (text, c) => (text || "")
-  .replace(/\{\{firstName\}\}/gi, c?.firstName || (c?.fullName || "").split(" ")[0] || "there")
-  .replace(/\{\{orgName\}\}/gi, (typeof c?.school === "string" ? c.school : c?.school?.name) || "your school")
-  .replace(/\{\{lastName\}\}/gi, c?.lastName || "")
-  .replace(/\{\{sport\}\}/gi, (typeof c?.sport === "string" ? c.sport : c?.sport?.name) || "athletics");
+  .replace(/\{\{\s*firstName\s*\}\}/gi, c?.firstName || contactName(c).split(" ")[0] || "there")
+  .replace(/\{\{\s*lastName\s*\}\}/gi, c?.lastName || "")
+  .replace(/\{\{\s*(orgName|organization|company|school)\s*\}\}/gi, orgName(c))
+  .replace(/\{\{\s*contactName\s*\}\}/gi, contactName(c) || "there")
+  .replace(/\{\{\s*email\s*\}\}/gi, c?.email || "")
+  .replace(/\{\{\s*city\s*\}\}/gi, c?.city || "")
+  .replace(/\{\{\s*state\s*\}\}/gi, c?.state || "")
+  .replace(/\{\{\s*sport\s*\}\}/gi, textField(c?.sport) || "athletics");
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
@@ -262,7 +270,7 @@ export default async function handler(req, res) {
           // shared touch template for every other (normal) campaign.
           const subject = mergeTags(c.__subject || touch.subject, c) || `Following up — ${camp.product || camp.name}`;
           const mergedBody = mergeTags(c.__body || touch.body, c);
-          if (!mergedBody.trim()) {
+          if (!mergedBody.trim() || isPlaceholderCopy(mergedBody)) {
             console.error(`[cron] Refusing to send empty email body to ${c.email} in campaign ${camp.id}, batch ${batchKey}`);
             failed++;
             continue;
