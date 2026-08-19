@@ -96,6 +96,15 @@ function findHeaderRow(aoa) {
 
 const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
 
+// Resolves {{orgName}}/{{firstName}}/{{sport}} against one lead's fields —
+// used only for a bulk-applied follow-up template, so what lands in each
+// lead's touches is already the real, personalized text (same as every
+// other touch in this tool), not a token that resolves later.
+const mergeLeadTags = (text, lead) => (text || "")
+  .replace(/\{\{\s*orgName\s*\}\}/gi, lead.orgName || "your organization")
+  .replace(/\{\{\s*firstName\s*\}\}/gi, (lead.contactName && lead.contactName !== "-") ? (lead.firstName || lead.contactName.split(" ")[0]) : "there")
+  .replace(/\{\{\s*sport\s*\}\}/gi, lead.sport || "sports");
+
 async function aiCall(prompt, opts = {}) {
   const r = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: opts.model || "claude-haiku-4-5-20251001", max_tokens: opts.tokens || 500, messages: [{ role: "user", content: prompt }] }) });
@@ -190,6 +199,8 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [expandedId, setExpandedId] = useState(null);
   const [followupDraft, setFollowupDraft] = useState(null); // {leadId, subject, body}
   const [drafting, setDrafting] = useState(null); // leadId currently AI-drafting
+  const [bulkDraft, setBulkDraft] = useState(null); // {subject, body} — template applied to every eligible lead at once
+  const [bulkDrafting, setBulkDrafting] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
@@ -210,6 +221,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
 
   const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
   const skippedLeads = useMemo(() => leads.filter(l => !(l.sendable && l.email)), [leads]);
+  const bulkEligible = useMemo(() => sendableLeads.filter(l => l.touches.length < 3), [sendableLeads]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const campIdRef = useRef(mkId());
@@ -391,6 +403,48 @@ Subject: <subject line>
     setDrafting(null);
   };
 
+  // Adds the same follow-up (with {{orgName}}/{{firstName}}/{{sport}}
+  // resolved per lead) to every sendable lead that has room for one more —
+  // one click instead of opening all 67 leads one by one. Leads already at
+  // the 3-email cap are skipped; everyone else gets it as their next touch,
+  // so this works even if some leads already have a 2nd email and others
+  // don't.
+  const applyBulkFollowup = (subject, body) => {
+    if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
+    let applied = 0;
+    setLeads(prev => prev.map(l => {
+      if (!(l.sendable && l.email) || l.touches.length >= 3) return l;
+      applied++;
+      return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() }] };
+    }));
+    setBulkDraft(null);
+    toast(`Follow-up added to ${applied} organization${applied !== 1 ? "s" : ""}`, "success");
+  };
+
+  const draftBulkFollowupWithAI = async () => {
+    setBulkDrafting(true);
+    try {
+      const text = await aiCall(
+`Write a follow-up email template for email #2 (or later) in a cold outreach sequence from Brad at ST1 Sports, pitching branded team stores to youth sports clubs. This follows an earlier, unanswered first email — reference that briefly without repeating it, and give one new, general reason to reply (not tied to one specific club).
+Use the literal token {{orgName}} wherever the organization's name belongs, and {{firstName}} for the contact's name if there's a natural spot for it — leave both exactly as written, they get filled in per-recipient after this is applied.
+Under 60 words. Brand voice: direct, warm, athlete-aware, no "just checking in" filler. Reply as exactly:
+Subject: <subject line, may include {{orgName}}>
+
+<body>`,
+        { tokens: 350 }
+      );
+      const lines = text.split("\n");
+      const subjLine = lines.find(l => /^subject:/i.test(l)) || "";
+      const subject = subjLine.replace(/^subject:\s*/i, "").trim();
+      const body = lines.slice(lines.indexOf(subjLine) + 1).join("\n").replace(/^\s+/, "").trim();
+      setBulkDraft({ subject: subject || "Following up — {{orgName}}", body: body || text.trim() });
+    } catch (e) {
+      toast(`AI draft failed: ${e.message}`, "error");
+      setBulkDraft({ subject: "", body: "" });
+    }
+    setBulkDrafting(false);
+  };
+
   const approveAndSchedule = async () => {
     if (!sendableLeads.length) { toast("Nothing ready to schedule", "error"); return; }
     const totalTouches = sendableLeads.reduce((a, l) => a + l.touches.length, 0);
@@ -567,6 +621,31 @@ Subject: <subject line>
             <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically.</div>
           </div>
 
+          {!isApproved && bulkEligible.length > 0 && (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              {bulkDraft ? (
+                <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
+                  <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>FOLLOW-UP FOR ALL {bulkEligible.length} ELIGIBLE ORGANIZATIONS</div>
+                  <div style={{ fontSize: 10, color: B.muted, marginBottom: 6 }}>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — each gets filled in per organization before it's added.</div>
+                  <input value={bulkDraft.subject} onChange={e => setBulkDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
+                  <textarea value={bulkDraft.body} onChange={e => setBulkDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <OBtn onClick={() => applyBulkFollowup(bulkDraft.subject, bulkDraft.body)} style={{ fontSize: 9, padding: "6px 12px" }}>ADD TO ALL {bulkEligible.length}</OBtn>
+                    <GBtn onClick={() => setBulkDraft(null)} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL</GBtn>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                  <div style={{ fontSize: 11, color: B.textMid }}>Add one follow-up email to all {bulkEligible.length} organization{bulkEligible.length !== 1 ? "s" : ""} at once, instead of one by one.</div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <GBtn onClick={() => setBulkDraft({ subject: "", body: "" })} style={{ fontSize: 9, padding: "6px 12px" }}>+ ADD FOLLOW-UP TO ALL</GBtn>
+                    <GBtn onClick={draftBulkFollowupWithAI} disabled={bulkDrafting} style={{ fontSize: 9, padding: "6px 12px" }}>{bulkDrafting ? "DRAFTING…" : "✦ AI DRAFT FOR ALL"}</GBtn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
             {sendableLeads.map(lead => {
               const isOpen = expandedId === lead.id;
@@ -593,7 +672,13 @@ Subject: <subject line>
                         <div key={i} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: 10, marginBottom: 8 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                             <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}</span>
-                            <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
+                              {i > 0 && !isApproved && (
+                                <button onClick={() => setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.filter((_, ti) => ti !== i) } : l))}
+                                  title="Remove this email" style={{ background: "none", border: "none", color: B.red, fontSize: 11, cursor: "pointer", padding: 0 }}>✕</button>
+                              )}
+                            </div>
                           </div>
                           <input value={t.subject} disabled={isApproved} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
                             style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
