@@ -17,6 +17,11 @@ const LIST_SELECT = {
   totalCount: true, sendableCount: true, touchCount: true,
   campaignId: true, createdAt: true, updatedAt: true,
 };
+const FALLBACK_KEY = 'outreach_batches_v1';
+
+function isMissingTable(e) {
+  return e?.code === 'P2021' || e?.message?.includes('does not exist') || e?.message?.includes('outreachBatch');
+}
 
 function countsFrom(leads) {
   const sendable = leads.filter(l => l?.sendable && l?.email);
@@ -29,6 +34,63 @@ function countsFrom(leads) {
 
 const PATCHABLE = ['name', 'status', 'columnMap', 'startDt', 'batchSize', 'touchGapDays', 'campaignId'];
 
+function listShape(batch) {
+  const { leads, columnMap, ...rest } = batch;
+  return rest;
+}
+
+async function loadFallbackBatches() {
+  const row = await prisma.setting.findUnique({ where: { key: FALLBACK_KEY } });
+  return Array.isArray(row?.value?.batches) ? row.value.batches : [];
+}
+
+async function saveFallbackBatches(batches) {
+  await prisma.setting.upsert({
+    where: { key: FALLBACK_KEY },
+    create: { key: FALLBACK_KEY, value: { batches } },
+    update: { value: { batches } },
+  });
+}
+
+async function fallbackList(id) {
+  const batches = await loadFallbackBatches();
+  if (id) return batches.find(batch => batch.id === id) || null;
+  return [...batches].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(listShape);
+}
+
+async function fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy }) {
+  const now = new Date().toISOString();
+  const batch = {
+    id: `outreach_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    name: (name || 'Bulk Outreach').slice(0, 200),
+    fileName: fileName ? String(fileName).slice(0, 300) : null,
+    status: 'draft',
+    columnMap: columnMap || {},
+    leads,
+    startDt: startDt || null,
+    batchSize: Number(batchSize) || 25,
+    touchGapDays: Number(touchGapDays) || 5,
+    campaignId: null,
+    createdBy: createdBy || null,
+    createdAt: now,
+    updatedAt: now,
+    ...countsFrom(leads),
+  };
+  const batches = await loadFallbackBatches();
+  await saveFallbackBatches([batch, ...batches.filter(b => b.id !== batch.id)].slice(0, 200));
+  return batch;
+}
+
+async function fallbackPatch(id, data) {
+  const batches = await loadFallbackBatches();
+  const idx = batches.findIndex(batch => batch.id === id);
+  if (idx < 0) return null;
+  const next = { ...batches[idx], ...data, updatedAt: new Date().toISOString() };
+  batches[idx] = next;
+  await saveFallbackBatches(batches);
+  return next;
+}
+
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, PATCH, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
@@ -37,11 +99,27 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       const { id } = req.query || {};
       if (id) {
-        const batch = await prisma.outreachBatch.findUnique({ where: { id: String(id) } });
+        let batch;
+        try {
+          batch = prisma.outreachBatch
+            ? await prisma.outreachBatch.findUnique({ where: { id: String(id) } })
+            : await fallbackList(String(id));
+        } catch (e) {
+          if (!isMissingTable(e)) throw e;
+          batch = await fallbackList(String(id));
+        }
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
         return res.json({ ok: true, batch });
       }
-      const batches = await prisma.outreachBatch.findMany({ select: LIST_SELECT, orderBy: { createdAt: 'desc' } });
+      let batches;
+      try {
+        batches = prisma.outreachBatch
+          ? await prisma.outreachBatch.findMany({ select: LIST_SELECT, orderBy: { createdAt: 'desc' } })
+          : await fallbackList();
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+        batches = await fallbackList();
+      }
       return res.json({ ok: true, batches });
     }
 
@@ -50,19 +128,25 @@ export default async function handler(req, res) {
       if (!Array.isArray(leads) || leads.length === 0) {
         return res.status(400).json({ error: 'leads array required' });
       }
-      const batch = await prisma.outreachBatch.create({
-        data: {
-          name: (name || 'Bulk Outreach').slice(0, 200),
-          fileName: fileName ? String(fileName).slice(0, 300) : null,
-          columnMap: columnMap || {},
-          leads,
-          startDt: startDt || null,
-          batchSize: Number(batchSize) || 25,
-          touchGapDays: Number(touchGapDays) || 5,
-          createdBy: createdBy || null,
-          ...countsFrom(leads),
-        },
-      });
+      let batch;
+      try {
+        batch = prisma.outreachBatch ? await prisma.outreachBatch.create({
+          data: {
+            name: (name || 'Bulk Outreach').slice(0, 200),
+            fileName: fileName ? String(fileName).slice(0, 300) : null,
+            columnMap: columnMap || {},
+            leads,
+            startDt: startDt || null,
+            batchSize: Number(batchSize) || 25,
+            touchGapDays: Number(touchGapDays) || 5,
+            createdBy: createdBy || null,
+            ...countsFrom(leads),
+          },
+        }) : await fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy });
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+        batch = await fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy });
+      }
       return res.json({ ok: true, batch });
     }
 
@@ -73,7 +157,16 @@ export default async function handler(req, res) {
       for (const k of PATCHABLE) if (fields[k] !== undefined) data[k] = fields[k];
       if (Array.isArray(leads)) { data.leads = leads; Object.assign(data, countsFrom(leads)); }
       if (Object.keys(data).length === 0) return res.status(400).json({ error: 'no updatable fields provided' });
-      const batch = await prisma.outreachBatch.update({ where: { id: String(id) }, data });
+      let batch;
+      try {
+        batch = prisma.outreachBatch
+          ? await prisma.outreachBatch.update({ where: { id: String(id) }, data })
+          : await fallbackPatch(String(id), data);
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+        batch = await fallbackPatch(String(id), data);
+      }
+      if (!batch) return res.status(404).json({ error: 'Batch not found' });
       return res.json({ ok: true, batch });
     }
 
