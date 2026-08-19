@@ -213,6 +213,15 @@ export default async function handler(req, res) {
 
     // ── SEND: compose and send email via Gmail ────────────────────────────────
     if (action === "send") {
+      // Hard backstop for Brad-branded sends, enforced here regardless of
+      // caller — api/agents/brad-send.js already checks this, but the
+      // Campaigns UI's manual "SEND" button (RevOps.jsx's sendOneEmail) and
+      // api/cron/send-batches.js both also reach this endpoint with
+      // repEnvKey:"BRAD" for fromBrad campaigns, and duplicating this check
+      // in every caller is exactly how it got missed once already.
+      if (repEnvKey === "BRAD" && process.env.BRAD_SENDING_ENABLED !== "true") {
+        return res.status(403).json({ ok: false, sent: false, error: "Brad sending is disabled. Set BRAD_SENDING_ENABLED=true to allow approved sends." });
+      }
       if (!to_email) return res.status(400).json({ error: "to_email required" });
       if (!subject)  return res.status(400).json({ error: "subject required" });
       if (!emailBody) return res.status(400).json({ error: "body required" });

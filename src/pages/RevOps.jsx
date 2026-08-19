@@ -8942,13 +8942,23 @@ if(!c?.email) return {ok:false,reason:"no email"};
 const touch = (camp.touches||[])[enroll.step];
 if(!touch) return {ok:false,reason:"no touch"};
 const co = s.company||{};
-const rep = camp.repId ? (s.reps||[]).find(r=>r.id===camp.repId) : null;
-const sigParts=rep
+// fromBrad campaigns (Bulk Outreach) carry fully personalized copy per
+// contact directly on the batch data (c.__subject/__body) instead of one
+// shared template — same override api/cron/send-batches.js prefers.
+// Without this, a manual send here would go out with the campaign's
+// generic touch placeholder ("(personalized per organization)") instead
+// of the real, written email — this is exactly what happened before this
+// fix shipped.
+const useBrad = camp.fromBrad === true;
+const rep = !useBrad && camp.repId ? (s.reps||[]).find(r=>r.id===camp.repId) : null;
+const sigParts=useBrad
+? []  // Brad's own send format (matches api/agents/brad-send.js) signs inline in the body, not a separate signature block
+: rep
 ? [rep.name,rep.title,rep.email,rep.phone,co.website].filter(Boolean)
 : [co.ownerName||co.name,co.email,co.phone,co.website].filter(Boolean);
 const sigText=sigParts.length?"\n\n—\n"+sigParts.join("\n"):"";
-const subject=mergeTags(touch.subject,c)||`Following up — ${camp.product||camp.name}`;
-const mergedBody=mergeTags(touch.body,c);
+const subject=mergeTags(c.__subject||touch.subject,c)||`Following up — ${camp.product||camp.name}`;
+const mergedBody=mergeTags(c.__body||touch.body,c);
 const plainBody=(mergedBody.trim()?mergedBody:"(No email body — edit this touch in the Assets tab)")+sigText;
 const eid=`${camp.id}~${enroll.contactId}~${enroll.step}`;
 const trackUrl=`${window.location.origin}/api/track/open?eid=${encodeURIComponent(eid)}`;
@@ -8964,8 +8974,9 @@ to_name:c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim(),
 subject,
 body:plainBody,
 htmlBody,
-...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}),
-...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {}),
+...(useBrad
+? {from_name:"Brad Hofer", from_email:"brad@shopst1sports.com", reply_to:"brad@shopst1sports.com", repEnvKey:"BRAD"}
+: {...(rep?.gmailEnvKey ? {repEnvKey:rep.gmailEnvKey} : {}), ...(rep?.email ? {reply_to:rep.email, from_name:rep.name} : {})}),
 ...(touch.isQuote && co.quoteTrackEmail ? {bcc:co.quoteTrackEmail} : {}),
 })});
 const d=await r.json();
@@ -10271,6 +10282,13 @@ const pending=allActive.filter(e=>contactMap[e.contactId]?.email);
 const noEmail=allActive.filter(e=>!contactMap[e.contactId]?.email);
 const receivedCount=enrs.filter(e=>e.step>ti||(e.step===ti&&["done","replied","interested","not_interested","unsubscribed"].includes(e.status))).length;
 const campBatchSz=selCamp.batchSize||25;
+// Bulk Outreach (fromBrad) campaigns are meant to be hands-off after
+// approval — actual sending happens only via api/cron/send-batches.js.
+// Manual send here is disabled entirely rather than just fixed, since a
+// stray click could race the cron for the same batch (and a rep clicking
+// "SEND" on a Brad campaign almost certainly means one of these buttons,
+// not this one).
+const brSendBlocked=selCamp.fromBrad===true;
 const touchBatches=[];
 for(let i=0;i<pending.length;i+=campBatchSz) touchBatches.push(pending.slice(i,i+campBatchSz));
 const allDone=pending.length===0&&noEmail.length===0;
@@ -10483,8 +10501,9 @@ dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
 }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
 ↺ RETRY AT 9AM MT
 </button>
-<button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
-style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+<button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending||brSendBlocked}
+title={brSendBlocked?"This is a Brad campaign — it sends automatically via the scheduled cron, not manually":undefined}
+style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:(sending||brSendBlocked)?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:brSendBlocked?.5:1}}>
 ▶ SEND NOW
 </button>
 </div>
@@ -10513,16 +10532,18 @@ const fc=campaignsRef.current.find(c=>c.id===selCamp.id)||selCamp;
 const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
 dispatch("UPDATE_CAMPAIGN",{...fc,sentBatches:ns2});
 sendOneBatch(batch,batchKey,bi===0?noEmail:[],true);
-}} disabled={sending}
-style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+}} disabled={sending||brSendBlocked}
+title={brSendBlocked?"This is a Brad campaign — it sends automatically via the scheduled cron, not manually":undefined}
+style={{background:B.surface,color:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:(sending||brSendBlocked)?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:brSendBlocked?.5:1}}>
 ▶ RESEND NOW
 </button>
 </div>
 )}
 {!wasSent&&!totalFailed&&!wasSkipped&&(
 <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center",flexWrap:"wrap"}}>
-<button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending}
-style={{background:sending?B.muted:isFirst?B.orange:B.surface,color:sending?B.white:isFirst?B.white:B.text,border:`1px solid ${isFirst?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:sending?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+<button onClick={()=>sendOneBatch(batch,batchKey,bi===0?noEmail:[])} disabled={sending||brSendBlocked}
+title={brSendBlocked?"This is a Brad campaign — it sends automatically via the scheduled cron, not manually":undefined}
+style={{background:sending?B.muted:isFirst&&!brSendBlocked?B.orange:B.surface,color:sending?B.white:isFirst&&!brSendBlocked?B.white:B.text,border:`1px solid ${isFirst&&!brSendBlocked?B.orange:B.border}`,borderRadius:4,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:(sending||brSendBlocked)?"not-allowed":"pointer",whiteSpace:"nowrap",opacity:brSendBlocked?.5:1}}>
 {sending&&isFirst?"SENDING...":"▶ SEND ("+batch.length+")"}
 </button>
 <button onClick={()=>markBatchSent(batch,batchKey)} disabled={sending}
@@ -10765,7 +10786,7 @@ return (
 {c.email&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green,marginTop:2}}>✉ {c.email}</div>}
 {touch&&e.status==="active"&&(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange,marginTop:3}}>
-Next: Touch {touch.step} · {e.nextDate||"today"}{touch.subject?` — "${touch.subject}"`:""}</div>
+Next: Touch {touch.step} · {e.nextDate||"today"}{(c.__subject||touch.subject)?` — "${c.__subject||touch.subject}"`:""}</div>
 )}
 </div>
 {e.status==="active"&&(
@@ -11197,11 +11218,11 @@ To: {previewModal.contact.fullName||`${previewModal.contact.firstName||""} ${pre
 </div>
 <div style={{padding:"14px 16px",borderBottom:`1px solid ${B.border}`,background:B.surface}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:3}}>SUBJECT</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{mergeTags(previewModal.touch.subject,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No subject</span>}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,fontWeight:600}}>{mergeTags(previewModal.contact.__subject||previewModal.touch.subject,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No subject</span>}</div>
 </div>
 <div style={{padding:"16px",overflowY:"auto",flex:1}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.8,whiteSpace:"pre-wrap"}}>
-{mergeTags(previewModal.touch.body,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No body text</span>}
+{mergeTags(previewModal.contact.__body||previewModal.touch.body,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No body text</span>}
 </div>
 </div>
 <div style={{padding:"10px 16px",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
