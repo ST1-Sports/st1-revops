@@ -8987,6 +8987,36 @@ return {ok:false,reason};
 return {ok:false,reason:err.message};
 }
 };
+// Sends to exactly one contact, only ever triggered from the preview modal
+// after a rep has explicitly seen the resolved subject/body — the deliberate
+// per-person alternative to the batch SEND buttons (which stay disabled for
+// fromBrad campaigns; see brSendBlocked). Mirrors executeBatch's per-contact
+// bookkeeping (advance step, score, Zoho activity, quote-deal) for just the
+// one enrollment instead of a whole batch.
+const sendSingleEmail = async (camp, enroll) => {
+setSending(true);
+const res = await sendOneEmail(camp,enroll);
+if(res.ok){
+const todayStr=today();
+const nextStep=enroll.step+1;
+const done=nextStep>=(camp.touches||[]).length;
+const nextTouch=(camp.touches||[])[nextStep];
+const nextDate=nextTouch?new Date(Date.now()+nextTouch.dayOffset*86400000).toISOString().slice(0,10):null;
+const updatedEnrollments=(camp.enrollments||[]).map(e=>e.contactId===enroll.contactId?{...e,step:nextStep,status:done?"done":"active",nextDate:nextDate||e.nextDate,lastContacted:todayStr,lastSentAt:todayStr}:e);
+dispatch("UPDATE_CAMPAIGN",{...camp,enrollments:updatedEnrollments});
+dispatch("SCORE_CONTACT",{contactId:enroll.contactId,type:"sent",campaignId:camp.id,note:`Touch ${enroll.step+1} sent`});
+const _zc=contactMap[enroll.contactId];if(_zc?.zohoId) pushActivityToZoho(_zc,`Campaign email sent: ${camp.name} - Touch ${enroll.step+1}`);
+const _touch=(camp.touches||[])[enroll.step];
+if(_touch?.isQuote){
+const _c=contactMap[enroll.contactId];
+const _school=typeof _c?.school==="string"?_c.school:_c?.school?.name||"";
+const _name=_c?.fullName||`${_c?.firstName||""} ${_c?.lastName||""}`.trim();
+dispatch("ADD_DEAL",{id:mkId(),name:`${_name} — ${camp.product||camp.name}`,school:_school,contact:_name,value:0,stage:"Quoted",product:camp.product||camp.name,priority:"medium",createdAt:todayStr,followUpDate:new Date(Date.now()+7*86400000).toISOString().slice(0,10),notes:`Auto-created: campaign "${camp.name}" touch ${enroll.step+1}`});
+}
+}
+setSending(false);
+return res;
+};
 const BATCH_SIZE = 25;
 const BETWEEN_EMAILS = 3000;
 const executeBatch = async ({campId, queue, batchNum, sentSoFar, failedSoFar, firstErr: prevErr}) => {
@@ -10791,7 +10821,7 @@ Next: Touch {touch.step} · {e.nextDate||"today"}{(c.__subject||touch.subject)?`
 </div>
 {e.status==="active"&&(
 <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end"}}>
-{touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
+{touch&&<button onClick={()=>setPreviewModal({contact:c,touch,camp:selCamp,enroll:e})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW EMAIL</button>}
 <div style={{display:"flex",gap:4}}>
 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED +10</button>
 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED +25</button>
@@ -11176,7 +11206,7 @@ style={{display:"flex",alignItems:"center",gap:3}}>
 </div>
 {e.status==="active"&&(
 <div style={{display:"flex",gap:4,flexShrink:0,flexDirection:"column",alignItems:"flex-end",marginLeft:10}}>
-{touch&&<button onClick={()=>setPreviewModal({contact:c,touch})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW</button>}
+{touch&&<button onClick={()=>setPreviewModal({contact:c,touch,camp:selCamp,enroll:e})} style={{background:`${B.orange}14`,color:B.orange,border:`1px solid ${B.orange}40`,borderRadius:4,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer",whiteSpace:"nowrap"}}>✉ PREVIEW</button>}
 <div style={{display:"flex",gap:4}}>
 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"opened",campaignId:selCamp.id,note:"Opened email"})} style={{background:B.blueBg,color:B.blue,border:`1px solid ${B.blue}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>OPENED</button>
 <button onClick={()=>dispatch("SCORE_CONTACT",{contactId:e.contactId,type:"clicked",campaignId:selCamp.id,note:"Clicked link"})} style={{background:B.purpleBg,color:B.purple,border:`1px solid ${B.purple}30`,borderRadius:4,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLICKED</button>
@@ -11225,9 +11255,21 @@ To: {previewModal.contact.fullName||`${previewModal.contact.firstName||""} ${pre
 {mergeTags(previewModal.contact.__body||previewModal.touch.body,previewModal.contact)||<span style={{color:B.muted,fontStyle:"italic"}}>No body text</span>}
 </div>
 </div>
-<div style={{padding:"10px 16px",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div style={{padding:"10px 16px",borderTop:`1px solid ${B.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Touch {previewModal.touch.step} · Day {previewModal.touch.dayOffset} · merge tags applied</div>
+<div style={{display:"flex",gap:8}}>
 <button onClick={()=>setPreviewModal(null)} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"5px 14px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>CLOSE</button>
+{previewModal.camp&&previewModal.enroll&&(
+<button onClick={async()=>{
+if(!window.confirm(`Send this exact email to ${previewModal.contact.email}? This sends immediately.`))return;
+const res=await sendSingleEmail(previewModal.camp,previewModal.enroll);
+if(res.ok){toast(`Sent to ${previewModal.contact.email}`,"success");setPreviewModal(null);}
+else toast(`Send failed: ${res.reason}`,"error");
+}} disabled={sending} style={{background:sending?B.muted:B.orange,border:"none",color:B.white,borderRadius:5,padding:"5px 14px",fontSize:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:sending?"not-allowed":"pointer"}}>
+{sending?"SENDING…":"✓ SEND THIS EMAIL NOW"}
+</button>
+)}
+</div>
 </div>
 </div>
 </div>
