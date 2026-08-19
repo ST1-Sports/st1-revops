@@ -262,7 +262,12 @@ export default async function handler(req, res) {
           // shared touch template for every other (normal) campaign.
           const subject = mergeTags(c.__subject || touch.subject, c) || `Following up — ${camp.product || camp.name}`;
           const mergedBody = mergeTags(c.__body || touch.body, c);
-          const plainBody = mergedBody.trim() ? mergedBody : "(No email body — edit this touch in the Assets tab)";
+          if (!mergedBody.trim()) {
+            console.error(`[cron] Refusing to send empty email body to ${c.email} in campaign ${camp.id}, batch ${batchKey}`);
+            failed++;
+            continue;
+          }
+          const plainBody = mergedBody;
 
           const esc = t => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           const htmlLines = plainBody.split("\n").map(l => l.trim() ? `<p style="margin:0 0 10px 0">${esc(l)}</p>` : "<br>").join("");
