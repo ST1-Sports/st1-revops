@@ -222,6 +222,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
+  const [syncingGmail, setSyncingGmail] = useState(false);
   const fileRef = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(false);
@@ -248,27 +249,31 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     [sendableLeads, startMs, batchSize, touchGapDays]
   );
 
-  // Autosave — any edit to leads or the schedule settings PATCHes the
-  // durable batch record after a short pause, so nothing is lost on
-  // navigation/reload and the mapping/edits are there next time this batch
-  // is opened. Skipped for approved batches (their schedule is already
-  // built and locked in) and right after loading/creating a batch (so
-  // populating state from the server doesn't immediately re-save it).
+  // Autosave — any edit PATCHes the durable batch record after a short
+  // pause, so nothing is lost on navigation/reload and the edits are there
+  // next time this batch is opened. Once approved, the schedule itself
+  // (start time/batch size/gap/name) is locked and no longer saved here —
+  // but touch copy (and sentAt markers) keeps saving regardless of approval,
+  // since the rep can still edit language and manually send after approval.
+  // Skipped right after loading/creating a batch (so populating state from
+  // the server doesn't immediately re-save it).
   useEffect(() => {
-    if (screen !== "review" || !batchId || batchStatus === "approved") return;
+    if (screen !== "review" || !batchId) return;
     if (skipNextSave.current) { skipNextSave.current = false; return; }
     setSaveStatus("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
-        await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: batchId, name: campaignName, leads, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 }) });
+        const payload = batchStatus === "approved"
+          ? { id: batchId, leads }
+          : { id: batchId, name: campaignName, leads, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 };
+        await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         setSaveStatus("saved");
       } catch (e) { setSaveStatus(null); toast(`Autosave failed: ${e.message}`, "error"); }
     }, 900);
     return () => clearTimeout(saveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, campaignName, startDt, batchSize, touchGapDays]);
+  }, [leads, campaignName, startDt, batchSize, touchGapDays, batchStatus]);
 
   const openBatch = async (id) => {
     try {
@@ -402,6 +407,53 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     return { sent: false };
   };
 
+  // Marks one or more touches sent (pairs: [{leadId, touchIdx, sentAt}]) and
+  // makes that durable everywhere it matters: the leads array (local state +
+  // an immediate PATCH, independent of the approval-gated autosave below),
+  // and — if this batch is already approved and running — the linked
+  // campaign's enrollments, advanced exactly the way the cron would so a
+  // touch confirmed sent here is never re-sent automatically. Shared by a
+  // single manual SEND NOW and by the bulk Gmail reconciliation below.
+  const markTouchesSent = async (pairs) => {
+    if (!pairs.length) return;
+    const byLead = new Map();
+    for (const p of pairs) (byLead.get(p.leadId) || byLead.set(p.leadId, new Map()).get(p.leadId)).set(p.touchIdx, p.sentAt);
+    const updatedLeads = leads.map(l => {
+      const touchMap = byLead.get(l.id);
+      if (!touchMap) return l;
+      return { ...l, touches: l.touches.map((t, i) => touchMap.has(i) ? { ...t, sentAt: touchMap.get(i) } : t) };
+    });
+    setLeads(updatedLeads);
+
+    try {
+      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
+    } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
+
+    if (linkedCampaignId) {
+      const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+      if (camp) {
+        const byContact = new Map();
+        for (const p of pairs) (byContact.get(p.leadId) || byContact.set(p.leadId, []).get(p.leadId)).push(p);
+        dispatch("UPDATE_CAMPAIGN", {
+          id: camp.id,
+          enrollments: (camp.enrollments || []).map(en => {
+            const mine = byContact.get(en.contactId);
+            if (!mine) return en;
+            const touchIdxs = mine.map(p => p.touchIdx);
+            const sentSteps = [...new Set([...(en.sentSteps || []), ...touchIdxs])];
+            const maxIdx = Math.max(...touchIdxs);
+            const latest = mine.reduce((a, p) => p.sentAt > a ? p.sentAt : a, mine[0].sentAt).slice(0, 10);
+            if (en.step > maxIdx) return { ...en, sentSteps, lastContacted: latest, lastSentAt: latest };
+            const nextStep = maxIdx + 1;
+            const doneAllTouches = nextStep >= (camp.touches || []).length;
+            return { ...en, sentSteps, step: nextStep, status: doneAllTouches ? "done" : en.status, lastContacted: latest, lastSentAt: latest };
+          }),
+        });
+      }
+    }
+  };
+
   // Sends this exact touch right now, from Brad's inbox, bypassing the
   // scheduled batch entirely — for when the rep wants to trigger a specific
   // email themselves rather than wait on the cron. Goes through the same
@@ -431,48 +483,75 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
       const d = await r.json();
       if (!d.ok || !d.sent) { toast(d.error || "Send failed", "error"); setSendingKey(null); return; }
 
-      const sentAt = new Date().toISOString();
-      const updatedLeads = leads.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((t, i) => i === touchIdx ? { ...t, sentAt } : t) } : l);
-      setLeads(updatedLeads);
-
-      // Persist the sentAt marker to the durable batch record right away —
-      // the debounced autosave effect above deliberately skips approved
-      // batches (their schedule is locked), so without this explicit PATCH
-      // a manual send after approval would only mark "sent" in this one
-      // browser's local state and vanish on reload or from another device.
-      try {
-        await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
-      } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
-
-      // If this batch is already approved, the campaign this touch belongs
-      // to already exists with its own enrollment/scheduledBatches — advance
-      // that enrollment the same way the cron would have, so its next tick
-      // sees this step as done and skips it instead of sending it again.
-      if (linkedCampaignId) {
-        const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
-        if (camp) {
-          const nextStep = touchIdx + 1;
-          const doneAllTouches = nextStep >= (camp.touches || []).length;
-          const dateStr = sentAt.slice(0, 10);
-          dispatch("UPDATE_CAMPAIGN", {
-            id: camp.id,
-            enrollments: (camp.enrollments || []).map(en => {
-              if (en.contactId !== lead.id) return en;
-              const sentSteps = [...new Set([...(en.sentSteps || []), touchIdx])];
-              return en.step === touchIdx
-                ? { ...en, sentSteps, step: nextStep, status: doneAllTouches ? "done" : en.status, lastContacted: dateStr, lastSentAt: dateStr }
-                : { ...en, sentSteps };
-            }),
-          });
-        }
-      }
-
+      await markTouchesSent([{ leadId: lead.id, touchIdx, sentAt: new Date().toISOString() }]);
       toast(`Sent to ${lead.email}`, "success");
     } catch (e) {
       toast(`Send failed: ${e.message}`, "error");
     }
     setSendingKey(null);
+  };
+
+  // Cross-checks every touch this page doesn't already know is sent against
+  // Brad's actual Gmail Sent folder — the real record of what went out.
+  // Exists because a manual send's sentAt marker only started persisting
+  // reliably once markTouchesSent's explicit PATCH shipped (see the earlier
+  // approved-batch autosave gap); anything sent before that fix looks
+  // unsent here even though it really went out. Matches by recipient email
+  // + exact subject, since each touch's subject is unique per org.
+  const syncSentFromGmail = async () => {
+    const targets = [];
+    for (const l of sendableLeads) {
+      l.touches.forEach((t, i) => { if (!touchSentInfo(l, i).sent && t.subject?.trim()) targets.push({ lead: l, touchIdx: i }); });
+    }
+    if (!targets.length) { toast("Nothing unsent to check", "info"); return; }
+    setSyncingGmail(true);
+    try {
+      const emails = [...new Set(targets.map(t => t.lead.email))];
+      const CHUNK = 20;
+      const found = [];
+      for (let i = 0; i < emails.length; i += CHUNK) {
+        const chunk = emails.slice(i, i + CHUNK);
+        const query = `in:sent to:(${chunk.map(e => `"${e}"`).join(" OR ")})`;
+        const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query, maxResults: 100 }) });
+        const d = await r.json();
+        if (!r.ok || d.error) continue;
+        for (const msg of d.messages || []) {
+          const toEmail = (String(msg.to || "").match(/[^<\s,]+@[^>\s,]+/) || [])[0]?.toLowerCase();
+          if (!toEmail) continue;
+          const match = targets.find(t => t.lead.email.toLowerCase() === toEmail
+            && t.lead.touches[t.touchIdx].subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
+          if (match) found.push({ leadId: match.lead.id, touchIdx: match.touchIdx, sentAt: msg.date ? new Date(msg.date).toISOString() : new Date().toISOString() });
+        }
+      }
+      const dedup = Array.from(new Map(found.map(f => [`${f.leadId}-${f.touchIdx}`, f])).values());
+      if (dedup.length) { await markTouchesSent(dedup); toast(`Found and marked ${dedup.length} already-sent email(s) from Brad's Sent folder`, "success"); }
+      else toast("No additional sent emails found in Brad's inbox — everything shown here is accurate", "info");
+    } catch (e) {
+      toast(`Couldn't check Brad's inbox: ${e.message}`, "error");
+    }
+    setSyncingGmail(false);
+  };
+
+  // Edits a touch's subject/body. If this batch is already approved, the
+  // cron sends whatever's frozen into the campaign's scheduledBatches
+  // (batchContacts[...].{__subject,__body}) — a separate copy from this
+  // page's own leads — so an edit here also has to land there, or the
+  // automatic send would go out with the old wording the rep just changed.
+  const updateTouchField = (leadId, touchIdx, field, value) => {
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, touches: l.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value } : tt) } : l));
+    if (!linkedCampaignId) return;
+    const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+    if (!camp?.scheduledBatches) return;
+    const contentKey = field === "subject" ? "__subject" : "__body";
+    let changed = false;
+    const nextSched = { ...camp.scheduledBatches };
+    for (const [bk, info] of Object.entries(nextSched)) {
+      if (info.touchIdx !== touchIdx || !info.batchContacts?.[leadId]) continue;
+      nextSched[bk] = { ...info, batchContacts: { ...info.batchContacts, [leadId]: { ...info.batchContacts[leadId], [contentKey]: value } } };
+      changed = true;
+    }
+    if (changed) dispatch("UPDATE_CAMPAIGN", { id: camp.id, scheduledBatches: nextSched });
   };
 
   const addFollowup = (leadId, subject, body) => {
@@ -656,6 +735,8 @@ Subject: <subject line, may include {{orgName}}>
   };
 
   const isApproved = batchStatus === "approved";
+  const sentTouchCount = sendableLeads.reduce((a, l) => a + l.touches.filter((t, i) => touchSentInfo(l, i).sent).length, 0);
+  const totalTouchCount = sendableLeads.reduce((a, l) => a + l.touches.length, 0);
 
   return (
     <div style={{ padding: "26px 34px", maxWidth: 1100, margin: "0 auto" }}>
@@ -719,10 +800,17 @@ Subject: <subject line, may include {{orgName}}>
         <>
           {isApproved && (
             <div style={{ background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-              <div style={{ fontSize: 12, color: B.textMid }}><b style={{ color: B.green }}>✓ Approved</b> — this schedule is locked in and running. Editing here won't change what's already scheduled.</div>
+              <div style={{ fontSize: 12, color: B.textMid }}><b style={{ color: B.green }}>✓ Approved</b> — start time/batch size are locked in, but you can still edit copy below and send any email manually; edits sync to whatever's still queued.</div>
               {setMod && <GBtn onClick={goToCampaigns} style={{ fontSize: 10 }}>View in Campaigns →</GBtn>}
             </div>
           )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
+            <div style={{ fontSize: 11, color: B.muted }}>{sentTouchCount} of {totalTouchCount} email{totalTouchCount !== 1 ? "s" : ""} sent so far.</div>
+            <GBtn onClick={syncSentFromGmail} disabled={syncingGmail} style={{ fontSize: 10 }}>
+              {syncingGmail ? "CHECKING BRAD'S INBOX…" : "🔄 CHECK BRAD'S SENT FOLDER"}
+            </GBtn>
+          </div>
 
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
@@ -836,9 +924,9 @@ Subject: <subject line, may include {{orgName}}>
                               )}
                             </div>
                           </div>
-                          <input value={t.subject} disabled={isApproved || sentInfo.sent} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, subject: v } : tt) } : l)); }}
+                          <input value={t.subject} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "subject", e.target.value)}
                             style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                          <textarea value={t.body} disabled={isApproved || sentInfo.sent} onChange={e => { const v = e.target.value; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((tt, ti) => ti === i ? { ...tt, body: v } : tt) } : l)); }}
+                          <textarea value={t.body} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "body", e.target.value)}
                             rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box" }} />
                           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 7 }}>
                             {sentInfo.sent ? (

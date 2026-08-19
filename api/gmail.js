@@ -171,7 +171,7 @@ export default async function handler(req, res) {
         messages.slice(0, 30).map(async m => {
           try {
             const msgRes = await fetch(
-              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+              `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`,
               { headers: auth }
             );
             const msg = await msgRes.json();
@@ -180,6 +180,7 @@ export default async function handler(req, res) {
               id:      msg.id,
               subject: extractHeader(hdrs, "Subject") || "(no subject)",
               from:    extractHeader(hdrs, "From") || "",
+              to:      extractHeader(hdrs, "To") || "",
               date:    extractHeader(hdrs, "Date") || "",
               snippet: msg.snippet || "",
             };
