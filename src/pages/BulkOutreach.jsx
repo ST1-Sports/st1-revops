@@ -789,6 +789,20 @@ Subject: <subject line, may include {{orgName}}>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                       {lead.angle && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.purple, background: B.purpleBg, padding: "3px 8px", borderRadius: 10 }}>{lead.angle}</span>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 5 }} onClick={e => e.stopPropagation()}>
+                        {lead.touches.map((t, i) => {
+                          const sentInfo = touchSentInfo(lead, i);
+                          const sendKey = `${lead.id}-${i}`;
+                          if (sentInfo.sent) return <span key={i} title={sentInfo.when ? `Sent ${fmtWhen(sentInfo.when)}` : "Sent"} style={{ fontSize: 9, color: B.green, fontWeight: 700 }}>✓{i + 1}</span>;
+                          return (
+                            <button key={i} onClick={() => sendTouchNow(lead, i)} disabled={sendingKey === sendKey || !t.subject.trim() || !t.body.trim()}
+                              title={`Send email ${i + 1} now, from Brad`}
+                              style={{ background: sendingKey === sendKey ? B.border : B.orangeBg, color: sendingKey === sendKey ? B.muted : B.orange, border: `1px solid ${B.orange}30`, borderRadius: 4, padding: "3px 8px", fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: sendingKey === sendKey ? "wait" : "pointer" }}>
+                              {sendingKey === sendKey ? "…" : `SEND ${i + 1}`}
+                            </button>
+                          );
+                        })}
+                      </div>
                       <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{lead.touches.length} email{lead.touches.length !== 1 ? "s" : ""}</span>
                       <span style={{ color: B.muted, fontSize: 11 }}>{isOpen ? "▾" : "▸"}</span>
                     </div>
