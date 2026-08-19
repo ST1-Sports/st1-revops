@@ -432,7 +432,18 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
       if (!d.ok || !d.sent) { toast(d.error || "Send failed", "error"); setSendingKey(null); return; }
 
       const sentAt = new Date().toISOString();
-      setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((t, i) => i === touchIdx ? { ...t, sentAt } : t) } : l));
+      const updatedLeads = leads.map(l => l.id === lead.id ? { ...l, touches: l.touches.map((t, i) => i === touchIdx ? { ...t, sentAt } : t) } : l);
+      setLeads(updatedLeads);
+
+      // Persist the sentAt marker to the durable batch record right away —
+      // the debounced autosave effect above deliberately skips approved
+      // batches (their schedule is locked), so without this explicit PATCH
+      // a manual send after approval would only mark "sent" in this one
+      // browser's local state and vanish on reload or from another device.
+      try {
+        await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
+      } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
 
       // If this batch is already approved, the campaign this touch belongs
       // to already exists with its own enrollment/scheduledBatches — advance
