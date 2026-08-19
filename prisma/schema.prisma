@@ -1018,7 +1018,8 @@ model OutreachBatch {
   fileName      String?
   status        String   @default("draft")        // draft | approved
   columnMap     Json?                              // detected field -> source header, for display/edit
-  leads         Json                               // full parsed rows incl. per-lead touches[{subject,body}]
+  leads         Json                               // full parsed rows incl. per-lead touches[{subject,body,tplId?,sentAt?}]
+  templates     Json?                              // shared bulk-applied templates: { [tplId]: {subject,body,label} }
   totalCount    Int      @default(0)
   sendableCount Int      @default(0)
   touchCount    Int      @default(0)

@@ -35,7 +35,7 @@ function countsFrom(leads) {
 const PATCHABLE = ['name', 'status', 'columnMap', 'startDt', 'batchSize', 'touchGapDays', 'campaignId'];
 
 function listShape(batch) {
-  const { leads, columnMap, ...rest } = batch;
+  const { leads, columnMap, templates, ...rest } = batch;
   return rest;
 }
 
@@ -58,7 +58,7 @@ async function fallbackList(id) {
   return [...batches].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(listShape);
 }
 
-async function fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy }) {
+async function fallbackCreate({ name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy }) {
   const now = new Date().toISOString();
   const batch = {
     id: `outreach_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -67,6 +67,7 @@ async function fallbackCreate({ name, fileName, columnMap, leads, startDt, batch
     status: 'draft',
     columnMap: columnMap || {},
     leads,
+    templates: templates || {},
     startDt: startDt || null,
     batchSize: Number(batchSize) || 25,
     touchGapDays: Number(touchGapDays) || 5,
@@ -124,7 +125,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
-      const { name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy } = req.body || {};
+      const { name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy } = req.body || {};
       if (!Array.isArray(leads) || leads.length === 0) {
         return res.status(400).json({ error: 'leads array required' });
       }
@@ -136,26 +137,28 @@ export default async function handler(req, res) {
             fileName: fileName ? String(fileName).slice(0, 300) : null,
             columnMap: columnMap || {},
             leads,
+            templates: templates || {},
             startDt: startDt || null,
             batchSize: Number(batchSize) || 25,
             touchGapDays: Number(touchGapDays) || 5,
             createdBy: createdBy || null,
             ...countsFrom(leads),
           },
-        }) : await fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy });
+        }) : await fallbackCreate({ name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy });
       } catch (e) {
         if (!isMissingTable(e)) throw e;
-        batch = await fallbackCreate({ name, fileName, columnMap, leads, startDt, batchSize, touchGapDays, createdBy });
+        batch = await fallbackCreate({ name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy });
       }
       return res.json({ ok: true, batch });
     }
 
     if (req.method === 'PATCH') {
-      const { id, leads, ...fields } = req.body || {};
+      const { id, leads, templates, ...fields } = req.body || {};
       if (!id) return res.status(400).json({ error: 'id required' });
       const data = {};
       for (const k of PATCHABLE) if (fields[k] !== undefined) data[k] = fields[k];
       if (Array.isArray(leads)) { data.leads = leads; Object.assign(data, countsFrom(leads)); }
+      if (templates && typeof templates === 'object') data.templates = templates;
       if (Object.keys(data).length === 0) return res.status(400).json({ error: 'no updatable fields provided' });
       let batch;
       try {

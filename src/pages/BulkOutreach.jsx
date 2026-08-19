@@ -209,6 +209,8 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [phase, setPhase] = useState("upload"); // upload | parsing | ready
   const [fileName, setFileName] = useState("");
   const [leads, setLeads] = useState([]); // sendable + non-sendable, suppressed excluded
+  const [templates, setTemplates] = useState({}); // { [tplId]: {subject,body,label} } — shared bulk-applied follow-up templates
+  const [expandedTplId, setExpandedTplId] = useState(null);
   const [campaignName, setCampaignName] = useState(`Bulk Outreach — ${today()}`);
   const [startDt, setStartDt] = useState(() => { const c = getMTComp(nextMTBizStart(Date.now())); return `${c.y}-${String(c.mo+1).padStart(2,"0")}-${String(c.d).padStart(2,"0")}T09:00`; });
   const [batchSize, setBatchSize] = useState(25);
@@ -265,15 +267,15 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     saveTimer.current = setTimeout(async () => {
       try {
         const payload = batchStatus === "approved"
-          ? { id: batchId, leads }
-          : { id: batchId, name: campaignName, leads, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 };
+          ? { id: batchId, leads, templates }
+          : { id: batchId, name: campaignName, leads, templates, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 };
         await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         setSaveStatus("saved");
       } catch (e) { setSaveStatus(null); toast(`Autosave failed: ${e.message}`, "error"); }
     }, 900);
     return () => clearTimeout(saveTimer.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, campaignName, startDt, batchSize, touchGapDays, batchStatus]);
+  }, [leads, templates, campaignName, startDt, batchSize, touchGapDays, batchStatus]);
 
   const openBatch = async (id) => {
     try {
@@ -288,17 +290,19 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       setCampaignName(b.name);
       setFileName(b.fileName || "");
       setLeads(b.leads || []);
+      setTemplates(b.templates || {});
       setStartDt(b.startDt || startDt);
       setBatchSize(b.batchSize || 25);
       setTouchGapDays(b.touchGapDays || 5);
       setPhase("ready");
       setExpandedId(null);
+      setExpandedTplId(null);
       setScreen("review");
     } catch (e) { toast(`Couldn't load batch: ${e.message}`, "error"); }
   };
 
   const startNewUpload = () => {
-    setBatchId(null); setBatchStatus("draft"); setLinkedCampaignId(null); setLeads([]); setFileName("");
+    setBatchId(null); setBatchStatus("draft"); setLinkedCampaignId(null); setLeads([]); setTemplates({}); setFileName("");
     setCampaignName(`Bulk Outreach — ${today()}`);
     campIdRef.current = mkId();
     setPhase("upload");
@@ -533,25 +537,46 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     setSyncingGmail(false);
   };
 
-  // Edits a touch's subject/body. If this batch is already approved, the
-  // cron sends whatever's frozen into the campaign's scheduledBatches
-  // (batchContacts[...].{__subject,__body}) — a separate copy from this
-  // page's own leads — so an edit here also has to land there, or the
-  // automatic send would go out with the old wording the rep just changed.
-  const updateTouchField = (leadId, touchIdx, field, value) => {
-    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, touches: l.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value } : tt) } : l));
-    if (!linkedCampaignId) return;
+  // Keeps the campaign's frozen per-contact copy (scheduledBatches[...].
+  // batchContacts[...].{__subject,__body}) in sync with edits made here
+  // after approval — the cron sends whatever's embedded there, a separate
+  // copy from this page's own leads, so an edit (single or bulk-templated)
+  // has to land there too or a still-pending automatic send goes out with
+  // stale wording. pairs: [{leadId, touchIdx, subject, body}]. Computes one
+  // combined scheduledBatches update and dispatches it once — looping
+  // dispatch() calls per-pair would each read the same stale campaign from
+  // this render's closure and clobber each other's updates.
+  const syncScheduledContent = (pairs) => {
+    if (!linkedCampaignId || !pairs.length) return;
     const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
     if (!camp?.scheduledBatches) return;
-    const contentKey = field === "subject" ? "__subject" : "__body";
+    const byKey = new Map(pairs.map(p => [`${p.leadId}-${p.touchIdx}`, p]));
     let changed = false;
     const nextSched = { ...camp.scheduledBatches };
     for (const [bk, info] of Object.entries(nextSched)) {
-      if (info.touchIdx !== touchIdx || !info.batchContacts?.[leadId]) continue;
-      nextSched[bk] = { ...info, batchContacts: { ...info.batchContacts, [leadId]: { ...info.batchContacts[leadId], [contentKey]: value } } };
-      changed = true;
+      let infoChanged = false;
+      const nextContacts = { ...info.batchContacts };
+      for (const contactId of info.contactIds || []) {
+        const p = byKey.get(`${contactId}-${info.touchIdx}`);
+        if (!p || !nextContacts[contactId]) continue;
+        nextContacts[contactId] = { ...nextContacts[contactId], __subject: p.subject, __body: p.body };
+        infoChanged = true;
+      }
+      if (infoChanged) { nextSched[bk] = { ...info, batchContacts: nextContacts }; changed = true; }
     }
     if (changed) dispatch("UPDATE_CAMPAIGN", { id: camp.id, scheduledBatches: nextSched });
+  };
+
+  // Edits a single touch's subject/body by hand — this detaches it from any
+  // shared template (tplId cleared) since it's now individually customized,
+  // so a later "apply to all" on that template won't blow the edit away.
+  const updateTouchField = (leadId, touchIdx, field, value) => {
+    const lead = leads.find(l => l.id === leadId);
+    if (!lead) return;
+    const updatedTouches = lead.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value, tplId: undefined } : tt);
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, touches: updatedTouches } : l));
+    const nt = updatedTouches[touchIdx];
+    syncScheduledContent([{ leadId, touchIdx, subject: nt.subject, body: nt.body }]);
   };
 
   const addFollowup = (leadId, subject, body) => {
@@ -602,12 +627,54 @@ Subject: <subject line>
     // not synchronously here, so a counter incremented inside it would
     // still read 0 by the time the toast below fires.
     const applied = bulkEligible.length;
+    // Tagging every touch this creates with a shared tplId — and saving the
+    // raw (token-form) text under `templates` — is what lets the rep come
+    // back later, open this exact template up top, tweak wording they don't
+    // like, and push that change out to everyone still on it in one click,
+    // instead of re-typing the same edit into every organization by hand.
+    const tplId = mkId();
     setLeads(prev => prev.map(l => {
       if (!(l.sendable && l.email) || l.touches.length >= 3) return l;
-      return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() }] };
+      return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim(), tplId }] };
     }));
+    setTemplates(prev => ({ ...prev, [tplId]: { subject: subject.trim(), body: body.trim(), label: `Follow-up Template ${Object.keys(prev).length + 1}` } }));
     setBulkDraft(null);
     toast(`Follow-up added to ${applied} organization${applied !== 1 ? "s" : ""}`, "success");
+  };
+
+  const updateTemplateField = (tplId, field, value) => setTemplates(prev => ({ ...prev, [tplId]: { ...prev[tplId], [field]: value } }));
+
+  // Re-merges this template's current (possibly just-edited) text into
+  // every touch still tagged with tplId that hasn't been sent yet — anyone
+  // who's had that specific touch hand-edited already lost their tplId (see
+  // updateTouchField) so they're left alone, and anyone already sent is
+  // immutable regardless. subject/body are passed in directly rather than
+  // read back from `templates` state, since setTemplates above wouldn't be
+  // visible yet if this were called in the same tick.
+  const applyTemplateToAll = (tplId, subject, body) => {
+    if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
+    const targets = [];
+    leads.forEach(l => l.touches.forEach((t, i) => { if (t.tplId === tplId && !t.sentAt) targets.push({ leadId: l.id, touchIdx: i }); }));
+    if (!targets.length) { toast("No organizations left using this template", "error"); return; }
+    if (!window.confirm(`Update this template for ${targets.length} organization(s)? This overwrites their current copy for that email.`)) return;
+
+    const byLeadTouch = new Set(targets.map(t => `${t.leadId}-${t.touchIdx}`));
+    const updatedLeads = leads.map(l => ({
+      ...l,
+      touches: l.touches.map((tt, ti) => byLeadTouch.has(`${l.id}-${ti}`)
+        ? { ...tt, subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim(), tplId }
+        : tt),
+    }));
+    setLeads(updatedLeads);
+    setTemplates(prev => ({ ...prev, [tplId]: { ...prev[tplId], subject: subject.trim(), body: body.trim() } }));
+
+    const syncPairs = targets.map(({ leadId, touchIdx }) => {
+      const tt = updatedLeads.find(l => l.id === leadId).touches[touchIdx];
+      return { leadId, touchIdx, subject: tt.subject, body: tt.body };
+    });
+    syncScheduledContent(syncPairs);
+
+    toast(`Updated ${targets.length} organization${targets.length !== 1 ? "s" : ""}`, "success");
   };
 
   const draftBulkFollowupWithAI = async () => {
@@ -805,6 +872,42 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
+          {Object.keys(templates).length > 0 && (
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
+              <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
+                EMAIL TEMPLATES — edit once, apply to everyone still on it
+              </div>
+              {Object.entries(templates).map(([tplId, tpl]) => {
+                const usedBy = sendableLeads.filter(l => l.touches.some(t => t.tplId === tplId));
+                const pending = usedBy.filter(l => l.touches.some(t => t.tplId === tplId && !t.sentAt)).length;
+                const tplOpen = expandedTplId === tplId;
+                return (
+                  <div key={tplId} style={{ borderBottom: `1px solid ${B.border}` }}>
+                    <div onClick={() => setExpandedTplId(tplOpen ? null : tplId)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: tplOpen ? B.surface : B.white }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{tpl.label || "Follow-up Template"}</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{usedBy.length} organization{usedBy.length !== 1 ? "s" : ""}{pending < usedBy.length ? ` · ${pending} pending` : ""}</span>
+                        <span style={{ color: B.muted, fontSize: 11 }}>{tplOpen ? "▾" : "▸"}</span>
+                      </div>
+                    </div>
+                    {tplOpen && (
+                      <div style={{ padding: "4px 16px 16px" }}>
+                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 8 }}>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied. Organizations whose copy here has already been hand-edited, or already sent, aren't touched by APPLY.</div>
+                        <input value={tpl.subject} onChange={e => updateTemplateField(tplId, "subject", e.target.value)} placeholder="Subject"
+                          style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
+                        <textarea value={tpl.body} onChange={e => updateTemplateField(tplId, "body", e.target.value)} placeholder="Body" rows={10}
+                          style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", marginBottom: 8 }} />
+                        <OBtn onClick={() => applyTemplateToAll(tplId, tpl.subject, tpl.body)} disabled={pending === 0} style={{ fontSize: 9, padding: "7px 16px" }}>
+                          APPLY TO ALL {pending} PENDING
+                        </OBtn>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
             <div style={{ fontSize: 11, color: B.muted }}>{sentTouchCount} of {totalTouchCount} email{totalTouchCount !== 1 ? "s" : ""} sent so far.</div>
             <GBtn onClick={syncSentFromGmail} disabled={syncingGmail} style={{ fontSize: 10 }}>
@@ -854,8 +957,8 @@ Subject: <subject line, may include {{orgName}}>
                 <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
                   <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>FOLLOW-UP FOR ALL {bulkEligible.length} ELIGIBLE ORGANIZATIONS</div>
                   <div style={{ fontSize: 10, color: B.muted, marginBottom: 6 }}>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — each gets filled in per organization before it's added.</div>
-                  <input value={bulkDraft.subject} onChange={e => setBulkDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                  <textarea value={bulkDraft.body} onChange={e => setBulkDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
+                  <input value={bulkDraft.subject} onChange={e => setBulkDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
+                  <textarea value={bulkDraft.body} onChange={e => setBulkDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={10} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
                   <div style={{ display: "flex", gap: 6 }}>
                     <OBtn onClick={() => applyBulkFollowup(bulkDraft.subject, bulkDraft.body)} style={{ fontSize: 9, padding: "6px 12px" }}>ADD TO ALL {bulkEligible.length}</OBtn>
                     <GBtn onClick={() => setBulkDraft(null)} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL</GBtn>
@@ -925,9 +1028,9 @@ Subject: <subject line, may include {{orgName}}>
                             </div>
                           </div>
                           <input value={t.subject} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "subject", e.target.value)}
-                            style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
+                            style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
                           <textarea value={t.body} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "body", e.target.value)}
-                            rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", boxSizing: "border-box" }} />
+                            rows={10} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box" }} />
                           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 7 }}>
                             {sentInfo.sent ? (
                               <span style={{ fontSize: 10, color: B.green, fontWeight: 600 }}>✓ Sent{sentInfo.when ? ` ${fmtWhen(sentInfo.when)}` : ""}</span>
@@ -943,8 +1046,8 @@ Subject: <subject line, may include {{orgName}}>
                       {draftHere ? (
                         <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
                           <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>NEW FOLLOW-UP — EMAIL {lead.touches.length + 1}</div>
-                          <input value={followupDraft.subject} onChange={e => setFollowupDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, fontWeight: 600, marginBottom: 5, boxSizing: "border-box" }} />
-                          <textarea value={followupDraft.body} onChange={e => setFollowupDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={4} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11, lineHeight: 1.6, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
+                          <input value={followupDraft.subject} onChange={e => setFollowupDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
+                          <textarea value={followupDraft.body} onChange={e => setFollowupDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={10} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
                           <div style={{ display: "flex", gap: 6 }}>
                             <OBtn onClick={() => addFollowup(lead.id, followupDraft.subject, followupDraft.body)} style={{ fontSize: 9, padding: "6px 12px" }}>ADD</OBtn>
                             <GBtn onClick={() => setFollowupDraft(null)} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL</GBtn>
