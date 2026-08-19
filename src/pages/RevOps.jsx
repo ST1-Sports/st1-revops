@@ -8486,7 +8486,28 @@ const [showAddPost,setShowAddPost]=useState(false);
 const [postDraft,setPostDraft]=useState({date:"",time:"09:00",platforms:[],caption:"",imageUrl:"",type:"post"});
 const [matchingContacts,setMatchingContacts]=useState(null);
 const campaigns = s.campaigns || [];
-const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
+// Falls back to contact data embedded directly in a campaign's own
+// scheduled/sent batches for any enrolled contact not found in s.contacts —
+// e.g. Bulk Outreach leads (see BulkOutreach.jsx), which are deliberately
+// kept out of the app_state contacts blob since that field is stripped
+// from most state autosaves and isn't durable for cold-import data. Without
+// this, those enrollments show as "no email" here even though the send
+// itself works fine (the cron reads batch-embedded contacts directly).
+const contactMap = useMemo(()=>{
+const map = Object.fromEntries((s.contacts||[]).map(c=>[c.id,c]));
+for(const camp of campaigns){
+for(const batches of [camp.scheduledBatches,camp.sentBatches]){
+if(!batches) continue;
+for(const info of Object.values(batches)){
+if(!info?.batchContacts) continue;
+for(const[cid,c]of Object.entries(info.batchContacts)){
+if(!map[cid]) map[cid]=c;
+}
+}
+}
+}
+return map;
+},[s.contacts,campaigns]);
 const selCamp = selCampId ? campaigns.find(c=>c.id===selCampId) : null;
 selCampIdRef.current = selCamp?.id || null;
 campaignsRef.current = campaigns;
