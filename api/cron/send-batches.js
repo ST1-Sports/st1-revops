@@ -340,12 +340,16 @@ export default async function handler(req, res) {
 
         // Persist the updated enrollments + sentBatches record immediately after each campaign.
         // campaigns[ci] already has the claimed (batch-removed) scheduledBatches from above.
+        // batchContacts carries forward into the sent record too — once a
+        // batch is claimed it's gone from scheduledBatches, so without this
+        // the Campaigns UI's contactMap fallback (RevOps.jsx's ModMarketing)
+        // would stop resolving these contacts the moment they're sent.
         campaigns[ci] = {
           ...campaigns[ci],
           enrollments: updEnr,
           sentBatches: {
             ...(camp.sentBatches || {}),
-            [batchKey]: { sent, failed, batchSize: contactIds.length, sentAt: new Date().toISOString(), sends },
+            [batchKey]: { sent, failed, batchSize: contactIds.length, sentAt: new Date().toISOString(), sends, batchContacts },
           },
         };
         await saveState({ ...state, campaigns });
