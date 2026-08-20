@@ -250,6 +250,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !(l.sendable && l.email)), [leads]);
   const bouncedLeads = useMemo(() => leads.filter(l => l.bounced), [leads]);
   const bulkEligible = useMemo(() => sendableLeads.filter(l => l.touches.length < 3), [sendableLeads]);
+  // Bounced leads still show in the main org list below (so the record
+  // reflects every org that was ever in play, not just the currently-active
+  // ones) — every bounced lead already satisfies sendable+email by
+  // construction (that's the only kind of lead that can bounce), so this is
+  // sendableLeads plus bounced ones, in one pass.
+  const visibleLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const campIdRef = useRef(mkId());
@@ -474,6 +480,7 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
   const sendTouchNow = async (lead, touchIdx) => {
     const touch = lead.touches[touchIdx];
     if (!touch || touchSentInfo(lead, touchIdx).sent) return;
+    if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
     if (!lead.email) { toast("No email address for this contact", "error"); return; }
     if (!touch.subject.trim() || !touch.body.trim() || isPlaceholderCopy(touch.body)) {
       toast("Write a real subject and body for this email first", "error"); return;
@@ -1134,22 +1141,31 @@ Subject: <subject line, may include {{orgName}}>
           )}
 
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
-            {sendableLeads.map(lead => {
+            {visibleLeads.map(lead => {
               const isOpen = expandedId === lead.id;
               const dates = preview.perLeadDates[lead.id] || [];
               const canAddMore = lead.touches.length < 3 && !isApproved;
               const draftHere = followupDraft?.leadId === lead.id;
               return (
-                <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}` }}>
-                  <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : B.white }}>
+                <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}`, background: lead.bounced ? B.redBg : "transparent" }}>
+                  <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : (lead.bounced ? B.redBg : B.white) }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{lead.orgName}</div>
-                      <div style={{ fontSize: 11, color: B.muted, marginTop: 1 }}>{lead.contactName && lead.contactName !== "-" ? lead.contactName + " · " : ""}{lead.email}{lead.sport ? ` · ${lead.sport}` : ""}</div>
+                      <div style={{ fontSize: 11, color: lead.bounced ? B.red : B.muted, marginTop: 1 }}>
+                        {lead.contactName && lead.contactName !== "-" ? lead.contactName + " · " : ""}
+                        <span style={lead.bounced ? { textDecoration: "line-through" } : undefined}>{lead.email}</span>
+                        {lead.sport ? ` · ${lead.sport}` : ""}
+                      </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                       {lead.angle && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.purple, background: B.purpleBg, padding: "3px 8px", borderRadius: 10 }}>{lead.angle}</span>}
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }} onClick={e => e.stopPropagation()}>
-                        {lead.touches.map((t, i) => {
+                        {lead.bounced ? (
+                          <button onClick={() => setExpandedId(isOpen ? null : lead.id)}
+                            style={{ background: B.red, color: B.white, border: "none", borderRadius: 4, padding: "4px 9px", fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: "pointer" }}>
+                            ⚠ BAD EMAIL — UPDATE
+                          </button>
+                        ) : lead.touches.map((t, i) => {
                           const sentInfo = touchSentInfo(lead, i);
                           const sendKey = `${lead.id}-${i}`;
                           if (sentInfo.sent) return <span key={i} title={sentInfo.when ? `Sent ${fmtWhen(sentInfo.when)}` : "Sent"} style={{ fontSize: 9, color: B.green, fontWeight: 700 }}>✓{i + 1}</span>;
@@ -1168,6 +1184,24 @@ Subject: <subject line, may include {{orgName}}>
                   </div>
                   {isOpen && (
                     <div style={{ padding: "4px 16px 16px" }}>
+                      {lead.bounced && (
+                        <div style={{ background: B.white, border: `1px solid ${B.red}40`, borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                          <div style={{ fontSize: 11, color: B.red, fontWeight: 600, marginBottom: 6 }}>
+                            ⚠ This address bounced: <span style={{ textDecoration: "line-through" }}>{lead.email}</span> — opted out and removed from sends until fixed.
+                          </div>
+                          {suggestedEmails[lead.id] && (
+                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
+                              ✓ Found a different email on file: <b>{suggestedEmails[lead.id]}</b>
+                              <OBtn onClick={() => fixLeadEmail(lead.id, suggestedEmails[lead.id])} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+                            </div>
+                          )}
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <input value={emailFixDraft[lead.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [lead.id]: e.target.value }))}
+                              placeholder="Corrected email address" style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px", fontSize: 11, boxSizing: "border-box" }} />
+                            <GBtn onClick={() => fixLeadEmail(lead.id, emailFixDraft[lead.id])} disabled={!emailFixDraft[lead.id]?.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>FIX & RE-ACTIVATE</GBtn>
+                          </div>
+                        </div>
+                      )}
                       {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
                       {lead.touches.map((t, i) => {
                         const sentInfo = touchSentInfo(lead, i);
@@ -1191,6 +1225,8 @@ Subject: <subject line, may include {{orgName}}>
                           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 7 }}>
                             {sentInfo.sent ? (
                               <span style={{ fontSize: 10, color: B.green, fontWeight: 600 }}>✓ Sent{sentInfo.when ? ` ${fmtWhen(sentInfo.when)}` : ""}</span>
+                            ) : lead.bounced ? (
+                              <span style={{ fontSize: 10, color: B.red, fontWeight: 600 }}>⚠ Bad email — fix it above before sending</span>
                             ) : (
                               <OBtn onClick={() => sendTouchNow(lead, i)} disabled={sendingKey === sendKey || !t.subject.trim() || !t.body.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>
                                 {sendingKey === sendKey ? "SENDING…" : "✉ SEND NOW — FROM BRAD"}
