@@ -221,7 +221,6 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [bulkDraft, setBulkDraft] = useState(null); // {subject, body} — template applied to every eligible lead at once
   const [bulkDrafting, setBulkDrafting] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
-  const [showBounced, setShowBounced] = useState(false);
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
   const [committing, setCommitting] = useState(false);
@@ -983,6 +982,41 @@ Subject: <subject line, may include {{orgName}}>
 
       {screen === "review" && phase === "ready" && (
         <>
+          {bouncedLeads.length > 0 && (
+            <div style={{ background: B.redBg, border: `2px solid ${B.red}`, borderLeft: `6px solid ${B.red}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: B.red, marginBottom: 2 }}>
+                ⚠ {bouncedLeads.length} EMAIL{bouncedLeads.length !== 1 ? "S" : ""} BOUNCED
+              </div>
+              <div style={{ fontSize: 11, color: B.textMid, marginBottom: 10 }}>
+                Opted out and removed from every future send — fix the address below to bring one back.
+              </div>
+              <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                {bouncedLeads.map(l => (
+                  <div key={l.id} style={{ background: B.white, border: `1px solid ${B.red}40`, borderRadius: 6, padding: "10px 12px", marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: B.text }}>{l.orgName}</div>
+                      <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.white, background: B.red, padding: "2px 8px", borderRadius: 8, letterSpacing: .5 }}>BOUNCED</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: B.red, marginTop: 4 }}>
+                      <span style={{ textDecoration: "line-through" }}>{l.email}</span> — no longer sendable
+                    </div>
+                    {suggestedEmails[l.id] && (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
+                        ✓ Found a different email on file: <b>{suggestedEmails[l.id]}</b>
+                        <OBtn onClick={() => fixLeadEmail(l.id, suggestedEmails[l.id])} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+                      </div>
+                    )}
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <input value={emailFixDraft[l.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [l.id]: e.target.value }))}
+                        placeholder="Corrected email address" style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px", fontSize: 11, boxSizing: "border-box" }} />
+                      <GBtn onClick={() => fixLeadEmail(l.id, emailFixDraft[l.id])} disabled={!emailFixDraft[l.id]?.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>FIX & RE-ACTIVATE</GBtn>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {isApproved && (
             <div style={{ background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div style={{ fontSize: 12, color: B.textMid }}><b style={{ color: B.green }}>✓ Approved</b> — start time/batch size are locked in, but you can still edit copy below and send any email manually; edits sync to whatever's still queued.</div>
@@ -1188,37 +1222,6 @@ Subject: <subject line, may include {{orgName}}>
               );
             })}
           </div>
-
-          {bouncedLeads.length > 0 && (
-            <div style={{ background: B.redBg, border: `1px solid ${B.red}30`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
-              <button onClick={() => setShowBounced(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.red, fontWeight: 600, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
-                ⚠ {bouncedLeads.length} organization{bouncedLeads.length !== 1 ? "s" : ""} bounced — opted out, removed from future sends — {showBounced ? "hide" : "show"}
-              </button>
-              {showBounced && (
-                <div style={{ marginTop: 10, maxHeight: 360, overflowY: "auto" }}>
-                  {bouncedLeads.map(l => (
-                    <div key={l.id} style={{ padding: "9px 0", borderBottom: `1px solid ${B.red}20` }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: B.text }}>{l.orgName}</div>
-                        <span style={{ fontSize: 10, color: B.red }}>bad email: {l.email}</span>
-                      </div>
-                      {suggestedEmails[l.id] && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, fontSize: 10, color: B.textMid }}>
-                          Found a different email on file: <b>{suggestedEmails[l.id]}</b>
-                          <OBtn onClick={() => fixLeadEmail(l.id, suggestedEmails[l.id])} style={{ fontSize: 8, padding: "4px 9px" }}>USE THIS</OBtn>
-                        </div>
-                      )}
-                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                        <input value={emailFixDraft[l.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [l.id]: e.target.value }))}
-                          placeholder="Corrected email address" style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, boxSizing: "border-box" }} />
-                        <GBtn onClick={() => fixLeadEmail(l.id, emailFixDraft[l.id])} disabled={!emailFixDraft[l.id]?.trim()} style={{ fontSize: 9, padding: "5px 12px" }}>FIX & RE-ACTIVATE</GBtn>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           {skippedLeads.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
