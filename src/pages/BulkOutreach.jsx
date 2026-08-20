@@ -203,6 +203,42 @@ function OBtn({ children, onClick, disabled, style: sty }) { return <button onCl
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
 
 const CHANNEL_COLOR = { email: B.green, "contact form": B.blue, "social dm": B.purple, phone: B.yellow, "research needed": B.muted, suppressed: B.red };
+// Ways to clear a bounce alert without a replacement email — each moves the
+// lead into the "needs a different channel" bucket (same as a non-email row
+// from the original sheet) instead of leaving it stuck flagged forever.
+const BOUNCE_RESOLUTIONS = {
+  no_email:     { channel: "Research Needed", action: "No email found",              label: "No email found" },
+  contact_form: { channel: "Contact Form",    action: "Handled via contact form",     label: "Used contact form" },
+  no_action:    { channel: "Unknown",         action: "No further action possible",  label: "Couldn't do anything" },
+};
+
+// Shared by the top bounce banner and each row's expanded view — a
+// suggested replacement email (if the CRM lookup found one), a plain field
+// to type a corrected one, and a way to clear the alert with no email at
+// all when there just isn't a good address to use.
+function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onResolve }) {
+  return (
+    <>
+      {suggestedEmail && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
+          ✓ Found a different email on file: <b>{suggestedEmail}</b>
+          <OBtn onClick={() => onFix(suggestedEmail)} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <input value={draftEmail ?? ""} onChange={e => onDraftChange(e.target.value)}
+          placeholder="Corrected email address" style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px", fontSize: 11, boxSizing: "border-box" }} />
+        <GBtn onClick={() => onFix(draftEmail)} disabled={!draftEmail?.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>FIX & RE-ACTIVATE</GBtn>
+      </div>
+      <div style={{ fontSize: 10, color: B.muted, marginBottom: 4 }}>Or clear this alert without an email:</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <GBtn onClick={() => onResolve("no_email")} style={{ fontSize: 9, padding: "5px 10px" }}>CAN'T FIND EMAIL</GBtn>
+        <GBtn onClick={() => onResolve("contact_form")} style={{ fontSize: 9, padding: "5px 10px" }}>USED CONTACT FORM</GBtn>
+        <GBtn onClick={() => onResolve("no_action")} style={{ fontSize: 9, padding: "5px 10px" }}>COULDN'T DO ANYTHING</GBtn>
+      </div>
+    </>
+  );
+}
 const STATUS_BADGE = {
   draft:    { bg: B.yellowBg, c: B.yellow, label: "DRAFT" },
   approved: { bg: B.greenBg,  c: B.green,  label: "APPROVED" },
@@ -589,6 +625,22 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast("Email updated — back in the active list", "success");
+  };
+
+  // Clears a bounce alert with no replacement email in hand — the org isn't
+  // reactivated for email (sendable:false, since there's still no working
+  // address), it just moves into "needs a different channel" like any other
+  // non-email row from the original sheet, so it stops showing as an open
+  // alert but isn't lost or silently re-emailed later either.
+  const resolveBounce = (leadId, reason) => {
+    const res = BOUNCE_RESOLUTIONS[reason];
+    if (!res) return;
+    setLeads(prev => prev.map(l => l.id === leadId
+      ? { ...l, bounced: false, bouncedAt: null, bounceNote: null, sendable: false, channel: res.channel, action: res.action }
+      : l));
+    setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    toast(`Cleared — ${res.label}`, "success");
   };
 
   // Cross-checks Brad's actual Gmail against what this page knows in two
@@ -1014,20 +1066,16 @@ Subject: <subject line, may include {{orgName}}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: B.text }}>{l.orgName}</div>
                       <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.white, background: B.red, padding: "2px 8px", borderRadius: 8, letterSpacing: .5 }}>BOUNCED</span>
                     </div>
-                    <div style={{ fontSize: 11, color: B.red, marginTop: 4 }}>
+                    <div style={{ fontSize: 11, color: B.red, marginTop: 4, marginBottom: 8 }}>
                       <span style={{ textDecoration: "line-through" }}>{l.email}</span> — no longer sendable
                     </div>
-                    {suggestedEmails[l.id] && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
-                        ✓ Found a different email on file: <b>{suggestedEmails[l.id]}</b>
-                        <OBtn onClick={() => fixLeadEmail(l.id, suggestedEmails[l.id])} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                      <input value={emailFixDraft[l.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [l.id]: e.target.value }))}
-                        placeholder="Corrected email address" style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px", fontSize: 11, boxSizing: "border-box" }} />
-                      <GBtn onClick={() => fixLeadEmail(l.id, emailFixDraft[l.id])} disabled={!emailFixDraft[l.id]?.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>FIX & RE-ACTIVATE</GBtn>
-                    </div>
+                    <BounceFixBox
+                      suggestedEmail={suggestedEmails[l.id]}
+                      draftEmail={emailFixDraft[l.id]}
+                      onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [l.id]: v }))}
+                      onFix={email => fixLeadEmail(l.id, email)}
+                      onResolve={reason => resolveBounce(l.id, reason)}
+                    />
                   </div>
                 ))}
               </div>
@@ -1203,17 +1251,13 @@ Subject: <subject line, may include {{orgName}}>
                           <div style={{ fontSize: 11, color: B.red, fontWeight: 600, marginBottom: 6 }}>
                             ⚠ This address bounced: <span style={{ textDecoration: "line-through" }}>{lead.email}</span> — opted out and removed from sends until fixed.
                           </div>
-                          {suggestedEmails[lead.id] && (
-                            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
-                              ✓ Found a different email on file: <b>{suggestedEmails[lead.id]}</b>
-                              <OBtn onClick={() => fixLeadEmail(lead.id, suggestedEmails[lead.id])} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
-                            </div>
-                          )}
-                          <div style={{ display: "flex", gap: 6 }}>
-                            <input value={emailFixDraft[lead.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [lead.id]: e.target.value }))}
-                              placeholder="Corrected email address" style={{ flex: 1, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px", fontSize: 11, boxSizing: "border-box" }} />
-                            <GBtn onClick={() => fixLeadEmail(lead.id, emailFixDraft[lead.id])} disabled={!emailFixDraft[lead.id]?.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>FIX & RE-ACTIVATE</GBtn>
-                          </div>
+                          <BounceFixBox
+                            suggestedEmail={suggestedEmails[lead.id]}
+                            draftEmail={emailFixDraft[lead.id]}
+                            onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [lead.id]: v }))}
+                            onFix={email => fixLeadEmail(lead.id, email)}
+                            onResolve={reason => resolveBounce(lead.id, reason)}
+                          />
                         </div>
                       )}
                       {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
