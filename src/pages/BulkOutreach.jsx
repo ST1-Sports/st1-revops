@@ -209,8 +209,8 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [phase, setPhase] = useState("upload"); // upload | parsing | ready
   const [fileName, setFileName] = useState("");
   const [leads, setLeads] = useState([]); // sendable + non-sendable, suppressed excluded
-  const [templates, setTemplates] = useState({}); // { [tplId]: {subject,body,label} } — shared bulk-applied follow-up templates
-  const [expandedTplId, setExpandedTplId] = useState(null);
+  const [templates, setTemplates] = useState({}); // { [stepKey]: {subject,body,label} } — stepKey is "step0"/"step1"/"step2" (Email 1/2/3)
+  const [expandedStepKey, setExpandedStepKey] = useState(null);
   const [campaignName, setCampaignName] = useState(`Bulk Outreach — ${today()}`);
   const [startDt, setStartDt] = useState(() => { const c = getMTComp(nextMTBizStart(Date.now())); return `${c.y}-${String(c.mo+1).padStart(2,"0")}-${String(c.d).padStart(2,"0")}T09:00`; });
   const [batchSize, setBatchSize] = useState(25);
@@ -256,6 +256,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // construction (that's the only kind of lead that can bounce), so this is
   // sendableLeads plus bounced ones, in one pass.
   const visibleLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
+  // Every touch position that exists across sendableLeads right now — [0],
+  // [0,1], or [0,1,2] — drives the EMAIL STEPS panel below (EMAIL 1/2/3).
+  const stepIndices = useMemo(() => {
+    const maxIdx = sendableLeads.reduce((a, l) => Math.max(a, l.touches.length - 1), -1);
+    return maxIdx < 0 ? [] : Array.from({ length: maxIdx + 1 }, (_, i) => i);
+  }, [sendableLeads]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const campIdRef = useRef(mkId());
@@ -309,7 +315,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       setTouchGapDays(b.touchGapDays || 5);
       setPhase("ready");
       setExpandedId(null);
-      setExpandedTplId(null);
+      setExpandedStepKey(null);
       setScreen("review");
     } catch (e) { toast(`Couldn't load batch: ${e.message}`, "error"); }
   };
@@ -691,13 +697,11 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     if (changed) dispatch("UPDATE_CAMPAIGN", { id: camp.id, scheduledBatches: nextSched });
   };
 
-  // Edits a single touch's subject/body by hand — this detaches it from any
-  // shared template (tplId cleared) since it's now individually customized,
-  // so a later "apply to all" on that template won't blow the edit away.
+  // Edits a single touch's subject/body by hand.
   const updateTouchField = (leadId, touchIdx, field, value) => {
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
-    const updatedTouches = lead.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value, tplId: undefined } : tt);
+    const updatedTouches = lead.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value } : tt);
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, touches: updatedTouches } : l));
     const nt = updatedTouches[touchIdx];
     syncScheduledContent([{ leadId, touchIdx, subject: nt.subject, body: nt.body }]);
@@ -751,54 +755,50 @@ Subject: <subject line>
     // not synchronously here, so a counter incremented inside it would
     // still read 0 by the time the toast below fires.
     const applied = bulkEligible.length;
-    // Tagging every touch this creates with a shared tplId — and saving the
-    // raw (token-form) text under `templates` — is what lets the rep come
-    // back later, open this exact template up top, tweak wording they don't
-    // like, and push that change out to everyone still on it in one click,
-    // instead of re-typing the same edit into every organization by hand.
-    const tplId = mkId();
     setLeads(prev => prev.map(l => {
       if (!(l.sendable && l.email) || l.touches.length >= 3) return l;
-      return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim(), tplId }] };
+      return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() }] };
     }));
-    setTemplates(prev => ({ ...prev, [tplId]: { subject: subject.trim(), body: body.trim(), label: `Follow-up Template ${Object.keys(prev).length + 1}` } }));
     setBulkDraft(null);
     toast(`Follow-up added to ${applied} organization${applied !== 1 ? "s" : ""}`, "success");
   };
 
-  const updateTemplateField = (tplId, field, value) => setTemplates(prev => ({ ...prev, [tplId]: { ...prev[tplId], [field]: value } }));
+  // Draft text for the "EMAIL STEPS" panel below — keyed by position
+  // ("step0"/"step1"/"step2" = Email 1/2/3), not by who created it, so it
+  // covers every email in the sequence uniformly, including Email 1 (which
+  // otherwise only ever comes from the spreadsheet's per-org text). Stored
+  // in the same `templates` batch field (autosaves the same way).
+  const updateTemplateField = (stepKey, field, value) => setTemplates(prev => ({ ...prev, [stepKey]: { ...prev[stepKey], [field]: value } }));
 
-  // Re-merges this template's current (possibly just-edited) text into
-  // every touch still tagged with tplId that hasn't been sent yet — anyone
-  // who's had that specific touch hand-edited already lost their tplId (see
-  // updateTouchField) so they're left alone, and anyone already sent is
-  // immutable regardless. subject/body are passed in directly rather than
-  // read back from `templates` state, since setTemplates above wouldn't be
-  // visible yet if this were called in the same tick.
-  const applyTemplateToAll = (tplId, subject, body) => {
+  // Overwrites Email {stepIdx+1} for every sendable, not-yet-sent
+  // organization at that position — deliberately unconditional (not scoped
+  // to "only ones still on some earlier shared draft"): this is a mass
+  // update, so it replaces whatever's currently there, including anything
+  // already hand-edited per org. subject/body are passed in directly
+  // rather than read back from `templates` state, since setTemplates
+  // wouldn't be visible yet if this were called in the same tick.
+  const applyStepToAll = (stepIdx, subject, body) => {
     if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
-    const targets = [];
-    leads.forEach(l => l.touches.forEach((t, i) => { if (t.tplId === tplId && !t.sentAt) targets.push({ leadId: l.id, touchIdx: i }); }));
-    if (!targets.length) { toast("No organizations left using this template", "error"); return; }
-    if (!window.confirm(`Update this template for ${targets.length} organization(s)? This overwrites their current copy for that email.`)) return;
+    const targets = sendableLeads.filter(l => l.touches[stepIdx] && !l.touches[stepIdx].sentAt);
+    if (!targets.length) { toast(`No organizations left to update for Email ${stepIdx + 1}`, "error"); return; }
+    if (!window.confirm(`Overwrite Email ${stepIdx + 1} for ${targets.length} organization(s) with this text?\n\nThis replaces whatever's currently written for each one — including any already-personalized or hand-edited copy.`)) return;
 
-    const byLeadTouch = new Set(targets.map(t => `${t.leadId}-${t.touchIdx}`));
-    const updatedLeads = leads.map(l => ({
-      ...l,
-      touches: l.touches.map((tt, ti) => byLeadTouch.has(`${l.id}-${ti}`)
-        ? { ...tt, subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim(), tplId }
-        : tt),
-    }));
+    const stepKey = `step${stepIdx}`;
+    const targetIds = new Set(targets.map(l => l.id));
+    const updatedLeads = leads.map(l => {
+      if (!targetIds.has(l.id)) return l;
+      return { ...l, touches: l.touches.map((tt, ti) => ti === stepIdx ? { ...tt, subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() } : tt) };
+    });
     setLeads(updatedLeads);
-    setTemplates(prev => ({ ...prev, [tplId]: { ...prev[tplId], subject: subject.trim(), body: body.trim() } }));
+    setTemplates(prev => ({ ...prev, [stepKey]: { subject: subject.trim(), body: body.trim(), label: `Email ${stepIdx + 1}` } }));
 
-    const syncPairs = targets.map(({ leadId, touchIdx }) => {
-      const tt = updatedLeads.find(l => l.id === leadId).touches[touchIdx];
-      return { leadId, touchIdx, subject: tt.subject, body: tt.body };
+    const syncPairs = targets.map(l => {
+      const tt = updatedLeads.find(x => x.id === l.id).touches[stepIdx];
+      return { leadId: l.id, touchIdx: stepIdx, subject: tt.subject, body: tt.body };
     });
     syncScheduledContent(syncPairs);
 
-    toast(`Updated ${targets.length} organization${targets.length !== 1 ? "s" : ""}`, "success");
+    toast(`Updated Email ${stepIdx + 1} for ${targets.length} organization${targets.length !== 1 ? "s" : ""}`, "success");
   };
 
   const draftBulkFollowupWithAI = async () => {
@@ -1031,33 +1031,37 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          {Object.keys(templates).length > 0 && (
+          {stepIndices.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
               <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
-                EMAIL TEMPLATES — edit once, apply to everyone still on it
+                EMAIL STEPS — edit once, push to every organization at that step
               </div>
-              {Object.entries(templates).map(([tplId, tpl]) => {
-                const usedBy = sendableLeads.filter(l => l.touches.some(t => t.tplId === tplId));
-                const pending = usedBy.filter(l => l.touches.some(t => t.tplId === tplId && !t.sentAt)).length;
-                const tplOpen = expandedTplId === tplId;
+              {stepIndices.map(i => {
+                const stepKey = `step${i}`;
+                const atStep = sendableLeads.filter(l => l.touches[i]);
+                const pendingAtStep = atStep.filter(l => !l.touches[i].sentAt);
+                const draft = templates[stepKey] || { subject: "", body: "" };
+                const stepOpen = expandedStepKey === stepKey;
                 return (
-                  <div key={tplId} style={{ borderBottom: `1px solid ${B.border}` }}>
-                    <div onClick={() => setExpandedTplId(tplOpen ? null : tplId)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: tplOpen ? B.surface : B.white }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{tpl.label || "Follow-up Template"}</div>
+                  <div key={stepKey} style={{ borderBottom: `1px solid ${B.border}` }}>
+                    <div onClick={() => setExpandedStepKey(stepOpen ? null : stepKey)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: stepOpen ? B.surface : B.white }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>EMAIL {i + 1}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{usedBy.length} organization{usedBy.length !== 1 ? "s" : ""}{pending < usedBy.length ? ` · ${pending} pending` : ""}</span>
-                        <span style={{ color: B.muted, fontSize: 11 }}>{tplOpen ? "▾" : "▸"}</span>
+                        <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{atStep.length} organization{atStep.length !== 1 ? "s" : ""}{pendingAtStep.length < atStep.length ? ` · ${pendingAtStep.length} pending` : ""}</span>
+                        <span style={{ color: B.muted, fontSize: 11 }}>{stepOpen ? "▾" : "▸"}</span>
                       </div>
                     </div>
-                    {tplOpen && (
+                    {stepOpen && (
                       <div style={{ padding: "4px 16px 16px" }}>
-                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 8 }}>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied. Organizations whose copy here has already been hand-edited, or already sent, aren't touched by APPLY.</div>
-                        <input value={tpl.subject} onChange={e => updateTemplateField(tplId, "subject", e.target.value)} placeholder="Subject"
+                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 8 }}>
+                          Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied. <b>APPLY overwrites Email {i + 1} for every organization still pending at this step</b> — including anything already personalized or hand-edited.
+                        </div>
+                        <input value={draft.subject} onChange={e => updateTemplateField(stepKey, "subject", e.target.value)} placeholder="Subject"
                           style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
-                        <textarea value={tpl.body} onChange={e => updateTemplateField(tplId, "body", e.target.value)} placeholder="Body" rows={10}
+                        <textarea value={draft.body} onChange={e => updateTemplateField(stepKey, "body", e.target.value)} placeholder="Body" rows={10}
                           style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", marginBottom: 8 }} />
-                        <OBtn onClick={() => applyTemplateToAll(tplId, tpl.subject, tpl.body)} disabled={pending === 0} style={{ fontSize: 9, padding: "7px 16px" }}>
-                          APPLY TO ALL {pending} PENDING
+                        <OBtn onClick={() => applyStepToAll(i, draft.subject, draft.body)} disabled={pendingAtStep.length === 0} style={{ fontSize: 9, padding: "7px 16px" }}>
+                          APPLY TO ALL {pendingAtStep.length} PENDING
                         </OBtn>
                       </div>
                     )}
