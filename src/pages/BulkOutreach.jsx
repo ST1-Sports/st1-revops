@@ -221,6 +221,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [bulkDraft, setBulkDraft] = useState(null); // {subject, body} — template applied to every eligible lead at once
   const [bulkDrafting, setBulkDrafting] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showBounced, setShowBounced] = useState(false);
+  const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
+  const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
@@ -240,8 +243,13 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   };
   useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
-  const skippedLeads = useMemo(() => leads.filter(l => !(l.sendable && l.email)), [leads]);
+  // Bounced leads are excluded from sendableLeads entirely — same
+  // treatment as "needs a different channel" leads — so a bounced address
+  // can never be picked up again by a bulk template apply, a manual SEND
+  // NOW, or a future approve-and-schedule pass.
+  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced), [leads]);
+  const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !(l.sendable && l.email)), [leads]);
+  const bouncedLeads = useMemo(() => leads.filter(l => l.bounced), [leads]);
   const bulkEligible = useMemo(() => sendableLeads.filter(l => l.touches.length < 3), [sendableLeads]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
@@ -495,42 +503,152 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     setSendingKey(null);
   };
 
-  // Cross-checks every touch this page doesn't already know is sent against
-  // Brad's actual Gmail Sent folder — the real record of what went out.
-  // Exists because a manual send's sentAt marker only started persisting
-  // reliably once markTouchesSent's explicit PATCH shipped (see the earlier
-  // approved-batch autosave gap); anything sent before that fix looks
-  // unsent here even though it really went out. Matches by recipient email
-  // + exact subject, since each touch's subject is unique per org.
-  const syncSentFromGmail = async () => {
-    const targets = [];
-    for (const l of sendableLeads) {
-      l.touches.forEach((t, i) => { if (!touchSentInfo(l, i).sent && t.subject?.trim()) targets.push({ lead: l, touchIdx: i }); });
-    }
-    if (!targets.length) { toast("Nothing unsent to check", "info"); return; }
-    setSyncingGmail(true);
+  // Flags a batch of bounced leads everywhere it matters: this batch's
+  // leads (bounced:true — excluded from sendableLeads from then on),
+  // anything still pending for them in a linked/approved campaign's
+  // scheduledBatches (removed outright, so the cron can't fire a bounced
+  // address's next touch), the enrollment status (for visibility in
+  // Campaigns), and — server-side, since Zoho creds live there — the
+  // shared SalesContact record + its mirrored Zoho Email_Opt_Out, plus a
+  // lookup for a different, still-good email on file for the same company.
+  // bounces: [{leadId, email, snippet}].
+  const markLeadsBounced = async (bounces) => {
+    if (!bounces.length) return;
+    const bouncedAt = new Date().toISOString();
+    const byLeadId = new Map(bounces.map(b => [b.leadId, b]));
+    const updatedLeads = leads.map(l => {
+      const b = byLeadId.get(l.id);
+      if (!b) return l;
+      return { ...l, bounced: true, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) };
+    });
+    setLeads(updatedLeads);
     try {
-      const emails = [...new Set(targets.map(t => t.lead.email))];
-      const CHUNK = 20;
-      const found = [];
-      for (let i = 0; i < emails.length; i += CHUNK) {
-        const chunk = emails.slice(i, i + CHUNK);
-        const query = `in:sent to:(${chunk.map(e => `"${e}"`).join(" OR ")})`;
-        const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query, maxResults: 100 }) });
-        const d = await r.json();
-        if (!r.ok || d.error) continue;
-        for (const msg of d.messages || []) {
-          const toEmail = (String(msg.to || "").match(/[^<\s,]+@[^>\s,]+/) || [])[0]?.toLowerCase();
-          if (!toEmail) continue;
-          const match = targets.find(t => t.lead.email.toLowerCase() === toEmail
-            && t.lead.touches[t.touchIdx].subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
-          if (match) found.push({ leadId: match.lead.id, touchIdx: match.touchIdx, sentAt: msg.date ? new Date(msg.date).toISOString() : new Date().toISOString() });
+      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
+    } catch (e) { toast(`Bounces flagged, but couldn't save it: ${e.message}`, "info"); }
+
+    if (linkedCampaignId) {
+      const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+      if (camp?.scheduledBatches) {
+        let changed = false;
+        const nextSched = { ...camp.scheduledBatches };
+        for (const [bk, info] of Object.entries(nextSched)) {
+          if (!info.contactIds?.some(id => byLeadId.has(id))) continue;
+          const batchContacts = { ...info.batchContacts };
+          info.contactIds.forEach(id => { if (byLeadId.has(id)) delete batchContacts[id]; });
+          nextSched[bk] = { ...info, contactIds: info.contactIds.filter(id => !byLeadId.has(id)), batchContacts };
+          changed = true;
         }
+        const enrollments = (camp.enrollments || []).map(en => byLeadId.has(en.contactId) ? { ...en, status: "bounced" } : en);
+        if (changed) dispatch("UPDATE_CAMPAIGN", { id: camp.id, scheduledBatches: nextSched, enrollments });
+        else dispatch("UPDATE_CAMPAIGN", { id: camp.id, enrollments });
       }
-      const dedup = Array.from(new Map(found.map(f => [`${f.leadId}-${f.touchIdx}`, f])).values());
-      if (dedup.length) { await markTouchesSent(dedup); toast(`Found and marked ${dedup.length} already-sent email(s) from Brad's Sent folder`, "success"); }
-      else toast("No additional sent emails found in Brad's inbox — everything shown here is accurate", "info");
+    }
+
+    const results = await Promise.all(bounces.map(async b => {
+      try {
+        const r = await fetch("/api/contacts/mark-bounced", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: b.email }) });
+        return await r.json();
+      } catch { return null; }
+    }));
+    const suggestions = {};
+    bounces.forEach((b, i) => { if (results[i]?.suggestedEmail) suggestions[b.leadId] = results[i].suggestedEmail; });
+    if (Object.keys(suggestions).length) setSuggestedEmails(prev => ({ ...prev, ...suggestions }));
+  };
+
+  // Replaces a bounced lead's email and un-bounces it, putting it back into
+  // the active list — used both for a rep-typed correction and for
+  // accepting the CRM-suggested alternate email from markLeadsBounced.
+  const fixLeadEmail = (leadId, newEmail) => {
+    const trimmed = String(newEmail || "").trim();
+    if (!isValidEmail(trimmed)) { toast("Enter a valid email address", "error"); return; }
+    setLeads(prev => prev.map(l => l.id === leadId ? { ...l, email: trimmed, bounced: false, bouncedAt: null, bounceNote: null } : l));
+    setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    toast("Email updated — back in the active list", "success");
+  };
+
+  // Cross-checks Brad's actual Gmail against what this page knows in two
+  // directions: (1) sent mail it doesn't already have a sentAt for — see
+  // markTouchesSent's approved-batch autosave gap, anything sent before
+  // that fix looks unsent here even though it went out — matched by
+  // recipient + exact subject; (2) bounce/delivery-failure notifications
+  // sitting in Brad's inbox, matched by whether the bounce message mentions
+  // one of this batch's own email addresses. A "ton of bounces" landing in
+  // Brad's inbox with nothing here reflecting it was the actual complaint.
+  const syncWithBradInbox = async () => {
+    setSyncingGmail(true);
+    let sentFound = 0, bouncesFound = 0;
+    try {
+      const targets = [];
+      for (const l of sendableLeads) {
+        l.touches.forEach((t, i) => { if (!touchSentInfo(l, i).sent && t.subject?.trim()) targets.push({ lead: l, touchIdx: i }); });
+      }
+      if (targets.length) {
+        const emails = [...new Set(targets.map(t => t.lead.email))];
+        const CHUNK = 20;
+        const found = [];
+        for (let i = 0; i < emails.length; i += CHUNK) {
+          const chunk = emails.slice(i, i + CHUNK);
+          const query = `in:sent to:(${chunk.map(e => `"${e}"`).join(" OR ")})`;
+          const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query, maxResults: 100 }) });
+          const d = await r.json();
+          if (!r.ok || d.error) continue;
+          for (const msg of d.messages || []) {
+            const toEmail = (String(msg.to || "").match(/[^<\s,]+@[^>\s,]+/) || [])[0]?.toLowerCase();
+            if (!toEmail) continue;
+            const match = targets.find(t => t.lead.email.toLowerCase() === toEmail
+              && t.lead.touches[t.touchIdx].subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
+            if (match) found.push({ leadId: match.lead.id, touchIdx: match.touchIdx, sentAt: msg.date ? new Date(msg.date).toISOString() : new Date().toISOString() });
+          }
+        }
+        const dedup = Array.from(new Map(found.map(f => [`${f.leadId}-${f.touchIdx}`, f])).values());
+        if (dedup.length) { await markTouchesSent(dedup); sentFound = dedup.length; }
+      }
+
+      // Every currently-active email on this batch (not just unsent ones —
+      // a bounce can arrive for a touch already sent from either this page
+      // or the cron) is a candidate the bounce scan checks for.
+      const activeLeads = sendableLeads.filter(l => l.email);
+      if (activeLeads.length) {
+        const byEmail = new Map(activeLeads.map(l => [l.email.toLowerCase(), l]));
+        const bounceQuery = 'in:inbox (from:mailer-daemon OR from:postmaster OR subject:"Delivery Status Notification" OR subject:"Undelivered Mail" OR subject:"Mail delivery failed" OR subject:"failure notice" OR subject:"Returned mail")';
+        const r = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "list", repEnvKey: "BRAD", query: bounceQuery, maxResults: 200 }) });
+        const d = await r.json();
+        const bounceMsgs = (!r.ok || d.error) ? [] : (d.messages || []);
+        const newlyBounced = [];
+        let getCallsUsed = 0;
+        const GET_CAP = 40; // bounds the full-body fallback fetches below
+        for (const msg of bounceMsgs) {
+          const haystack = `${msg.subject || ""} ${msg.snippet || ""}`.toLowerCase();
+          let matched = [...byEmail.entries()].find(([email]) => haystack.includes(email))?.[1];
+          if (!matched && getCallsUsed < GET_CAP) {
+            getCallsUsed++;
+            try {
+              const gr = await fetch("/api/gmail", { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "get", repEnvKey: "BRAD", messageId: msg.id }) });
+              const gd = await gr.json();
+              const fullText = `${gd.subject || ""} ${gd.body || ""}`.toLowerCase();
+              matched = [...byEmail.entries()].find(([email]) => fullText.includes(email))?.[1];
+            } catch { /* best-effort — snippet-only match still covers most bounces */ }
+          }
+          if (matched) newlyBounced.push({ leadId: matched.id, email: matched.email, snippet: msg.snippet || "" });
+        }
+        const dedupBounced = Array.from(new Map(newlyBounced.map(b => [b.leadId, b])).values());
+        if (dedupBounced.length) { await markLeadsBounced(dedupBounced); bouncesFound = dedupBounced.length; }
+      }
+
+      if (sentFound || bouncesFound) {
+        const parts = [];
+        if (sentFound) parts.push(`${sentFound} already-sent email(s) recovered`);
+        if (bouncesFound) parts.push(`${bouncesFound} bounce(s) flagged and removed from future sends`);
+        toast(parts.join(" · "), "success");
+      } else {
+        toast("Nothing new found in Brad's inbox — everything shown here is accurate", "info");
+      }
     } catch (e) {
       toast(`Couldn't check Brad's inbox: ${e.message}`, "error");
     }
@@ -910,8 +1028,8 @@ Subject: <subject line, may include {{orgName}}>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
             <div style={{ fontSize: 11, color: B.muted }}>{sentTouchCount} of {totalTouchCount} email{totalTouchCount !== 1 ? "s" : ""} sent so far.</div>
-            <GBtn onClick={syncSentFromGmail} disabled={syncingGmail} style={{ fontSize: 10 }}>
-              {syncingGmail ? "CHECKING BRAD'S INBOX…" : "🔄 CHECK BRAD'S SENT FOLDER"}
+            <GBtn onClick={syncWithBradInbox} disabled={syncingGmail} style={{ fontSize: 10 }}>
+              {syncingGmail ? "CHECKING BRAD'S INBOX…" : "🔄 CHECK BRAD'S INBOX (sent + bounces)"}
             </GBtn>
           </div>
 
@@ -925,6 +1043,11 @@ Subject: <subject line, may include {{orgName}}>
               <Lbl>NEEDS ANOTHER CHANNEL</Lbl>
               <div style={{ fontSize: 24, fontWeight: 700, color: B.yellow, marginTop: 4 }}>{skippedLeads.length}</div>
               <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>saved here, not auto-sent</div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl c={B.red}>BOUNCED</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.red, marginTop: 4 }}>{bouncedLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>flagged, opted out, removed from sends</div>
             </div>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 220 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
@@ -1065,6 +1188,37 @@ Subject: <subject line, may include {{orgName}}>
               );
             })}
           </div>
+
+          {bouncedLeads.length > 0 && (
+            <div style={{ background: B.redBg, border: `1px solid ${B.red}30`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
+              <button onClick={() => setShowBounced(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.red, fontWeight: 600, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                ⚠ {bouncedLeads.length} organization{bouncedLeads.length !== 1 ? "s" : ""} bounced — opted out, removed from future sends — {showBounced ? "hide" : "show"}
+              </button>
+              {showBounced && (
+                <div style={{ marginTop: 10, maxHeight: 360, overflowY: "auto" }}>
+                  {bouncedLeads.map(l => (
+                    <div key={l.id} style={{ padding: "9px 0", borderBottom: `1px solid ${B.red}20` }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: B.text }}>{l.orgName}</div>
+                        <span style={{ fontSize: 10, color: B.red }}>bad email: {l.email}</span>
+                      </div>
+                      {suggestedEmails[l.id] && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 5, fontSize: 10, color: B.textMid }}>
+                          Found a different email on file: <b>{suggestedEmails[l.id]}</b>
+                          <OBtn onClick={() => fixLeadEmail(l.id, suggestedEmails[l.id])} style={{ fontSize: 8, padding: "4px 9px" }}>USE THIS</OBtn>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                        <input value={emailFixDraft[l.id] ?? ""} onChange={e => setEmailFixDraft(prev => ({ ...prev, [l.id]: e.target.value }))}
+                          placeholder="Corrected email address" style={{ flex: 1, background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "5px 8px", fontSize: 11, boxSizing: "border-box" }} />
+                        <GBtn onClick={() => fixLeadEmail(l.id, emailFixDraft[l.id])} disabled={!emailFixDraft[l.id]?.trim()} style={{ fontSize: 9, padding: "5px 12px" }}>FIX & RE-ACTIVATE</GBtn>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {skippedLeads.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
