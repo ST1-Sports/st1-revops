@@ -27,6 +27,15 @@
  *      touching the Campaigns tab. Sent touches are marked so they're never
  *      re-sent, whether the schedule below has been approved yet or not —
  *      approving afterward simply skips whatever's already gone out.
+ *   5c. An EMAIL STEPS panel at the top (Email 1/2/3) lets the rep edit one
+ *      step's copy once and push it to every organization still pending at
+ *      that step in one click — a deliberate mass overwrite, not a
+ *      fill-the-gaps template, so it also covers already-personalized or
+ *      hand-edited copy. "CHECK BRAD'S INBOX" cross-checks Brad's real
+ *      Gmail: recovers sends this page doesn't already know about, and
+ *      scans for bounce notifications — a bounced lead is flagged, opted
+ *      out (mirrored into the shared contacts table + Zoho), and pulled
+ *      from every future send until its email is fixed.
  *   6. On approval, builds one real Campaign with a per-contact content
  *      override baked directly into each scheduledBatch (rather than one
  *      shared template) — nothing is generic, every send uses the exact
@@ -106,7 +115,8 @@ const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim
 const isPlaceholderCopy = text => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
 
 // Resolves {{orgName}}/{{firstName}}/{{sport}} against one lead's fields —
-// used only for a bulk-applied follow-up template, so what lands in each
+// used wherever a mass-applied draft (a bulk-added follow-up, or an EMAIL
+// STEPS overwrite) gets pushed into individual leads, so what lands in each
 // lead's touches is already the real, personalized text (same as every
 // other touch in this tool), not a token that resolves later.
 const mergeLeadTags = (text, lead) => (text || "")
