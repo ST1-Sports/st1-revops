@@ -6,6 +6,9 @@
  * POST           → create a new batch (client already parsed the sheet)
  * PATCH          → update an existing batch — edits, settings, or approval
  *                  (approving sets { status:'approved', campaignId })
+ * DELETE ?id=X   → remove a bad upload — refused once approved (the linked
+ *                  campaign is the real record at that point; unlink/pause
+ *                  it there instead of deleting its history here)
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
@@ -92,8 +95,21 @@ async function fallbackPatch(id, data) {
   return next;
 }
 
+async function fallbackGetRaw(id) {
+  const batches = await loadFallbackBatches();
+  return batches.find(batch => batch.id === id) || null;
+}
+
+async function fallbackDelete(id) {
+  const batches = await loadFallbackBatches();
+  const next = batches.filter(batch => batch.id !== id);
+  if (next.length === batches.length) return false;
+  await saveFallbackBatches(next);
+  return true;
+}
+
 export default async function handler(req, res) {
-  setCors(res, 'GET, POST, PATCH, OPTIONS');
+  setCors(res, 'GET, POST, PATCH, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   try {
@@ -171,6 +187,32 @@ export default async function handler(req, res) {
       }
       if (!batch) return res.status(404).json({ error: 'Batch not found' });
       return res.json({ ok: true, batch });
+    }
+
+    if (req.method === 'DELETE') {
+      const { id } = req.query || {};
+      if (!id) return res.status(400).json({ error: 'id required' });
+      let existing;
+      try {
+        existing = prisma.outreachBatch
+          ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true } })
+          : await fallbackGetRaw(String(id));
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+        existing = await fallbackGetRaw(String(id));
+      }
+      if (!existing) return res.status(404).json({ error: 'Batch not found' });
+      if (existing.status === 'approved') {
+        return res.status(409).json({ error: 'This upload is already approved and linked to a running campaign — manage it from Campaigns instead of deleting it here.' });
+      }
+      try {
+        if (prisma.outreachBatch) await prisma.outreachBatch.delete({ where: { id: String(id) } });
+        else await fallbackDelete(String(id));
+      } catch (e) {
+        if (!isMissingTable(e)) throw e;
+        await fallbackDelete(String(id));
+      }
+      return res.json({ ok: true });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });

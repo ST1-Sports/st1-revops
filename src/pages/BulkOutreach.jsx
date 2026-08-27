@@ -109,13 +109,20 @@ function detectColumns(headers) {
 // when found, these take over from the single bare subject/body columns
 // FIELD_SYNONYMS looks for, since a full 3-touch sequence is already
 // written into the sheet rather than needing to be authored afterward.
-function detectTouchColumns(headers) {
+// bareSubject/bareBody (from the plain FIELD_SYNONYMS match, if any) cover
+// a very common mixed style: the first email sits in an unnumbered
+// "Subject"/"Body" pair (it's the one that was actually researched) while
+// only the follow-ups get numbered headers — without this, a sheet like
+// that would only ever match starting at "2", find no "1", and return
+// nothing at all.
+function detectTouchColumns(headers, bareSubject, bareBody) {
   const normed = headers.map(h => ({ raw: h, n: normHeader(h) }));
   const find = patterns => normed.find(h => patterns.includes(h.n))?.raw;
   const touches = [];
   for (let i = 1; i <= 3; i++) {
-    const subject = find([`email${i}subject`, `subject${i}`, `${i}subject`, `touch${i}subject`, `followup${i}subject`, `email${i}subjectline`]);
-    const body = find([`email${i}body`, `body${i}`, `${i}body`, `touch${i}body`, `followup${i}body`, `email${i}message`, `message${i}`, `${i}message`]);
+    let subject = find([`email${i}subject`, `subject${i}`, `${i}subject`, `touch${i}subject`, `followup${i}subject`, `email${i}subjectline`]);
+    let body = find([`email${i}body`, `body${i}`, `${i}body`, `touch${i}body`, `followup${i}body`, `email${i}message`, `message${i}`, `${i}message`]);
+    if (i === 1) { subject = subject || bareSubject; body = body || bareBody; }
     if (!subject || !body) break;
     touches.push({ subject, body });
   }
@@ -309,6 +316,35 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   };
   useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
+  // Removes a bad upload entirely — refused server-side once approved
+  // (that upload is now a real running campaign; nothing here to fix by
+  // deleting the batch record). Confirmed up front since there's no undo.
+  const deleteBatch = async (batch, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete the upload "${batch.name}"? This can't be undone.`)) return;
+    try {
+      const r = await fetch(`/api/outreach/batches?id=${encodeURIComponent(batch.id)}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok || !d.ok) { toast(d.error || "Couldn't delete this upload", "error"); return; }
+      setBatches(prev => prev.filter(b => b.id !== batch.id));
+      toast("Upload deleted", "success");
+    } catch (err) { toast(`Couldn't delete this upload: ${err.message}`, "error"); }
+  };
+
+  // Same delete, reachable from inside a batch already open (in case it's
+  // only obvious it's bad once reviewing it) rather than only from the list.
+  const deleteCurrentBatch = async () => {
+    if (!batchId) return;
+    if (!window.confirm(`Delete the upload "${campaignName}"? This can't be undone.`)) return;
+    try {
+      const r = await fetch(`/api/outreach/batches?id=${encodeURIComponent(batchId)}`, { method: "DELETE" });
+      const d = await r.json();
+      if (!r.ok || !d.ok) { toast(d.error || "Couldn't delete this upload", "error"); return; }
+      toast("Upload deleted", "success");
+      backToList();
+    } catch (err) { toast(`Couldn't delete this upload: ${err.message}`, "error"); }
+  };
+
   // Bounced leads are excluded from sendableLeads entirely — same
   // treatment as "needs a different channel" leads — so a bounced address
   // can never be picked up again by a bulk template apply, a manual SEND
@@ -425,25 +461,39 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       if (headerRowIdx < 0) { toast("Could not find a header row (looking for columns like Organization, Email, Subject, Message) — check the file", "error"); setPhase("upload"); return; }
       const headers = (aoa[headerRowIdx] || []).map(h => String(h || "").trim());
       let colMap = detectColumns(headers);
-      const touchCols = detectTouchColumns(headers);
+      let touchCols = detectTouchColumns(headers, colMap.subject, colMap.body);
 
-      // Heuristic mapping missed something required — fall back to a cheap
-      // AI header-map call rather than fail outright. Not needed for
-      // subject/body specifically when the sheet already has numbered
-      // per-touch columns (touchCols) instead of one bare pair.
-      if (!colMap.orgName || !colMap.email || (!touchCols.length && (!colMap.subject || !colMap.body))) {
+      // Heuristic mapping missed something required, or the sheet still has
+      // subject/body-looking headers the heuristic didn't claim (unusual
+      // naming it doesn't recognize) — fall back to a cheap AI pass rather
+      // than silently importing only some of the pre-written emails.
+      const claimedHeaders = new Set([colMap.subject, colMap.body, ...touchCols.flatMap(t => [t.subject, t.body])].filter(Boolean));
+      const mightHaveMoreTouches = touchCols.length < 3 && headers.some(h => !claimedHeaders.has(h) && /subject|body|message/i.test(h));
+      if (!colMap.orgName || !colMap.email || (!touchCols.length && (!colMap.subject || !colMap.body)) || mightHaveMoreTouches) {
         try {
           const sampleRow = aoa[headerRowIdx + 1] || [];
           const sample = Object.fromEntries(headers.map((h, i) => [h, sampleRow[i]]));
           const ai = await aiCall(
-`Map these spreadsheet column headers to fields for a cold-outreach import. Return ONLY JSON.
+`Map these spreadsheet column headers for a cold-outreach import. Return ONLY JSON.
 Headers: ${headers.join(" | ")}
 Sample row: ${JSON.stringify(sample).slice(0, 1500)}
-Map each header to one of: orgName, sport, city, contactName, email, channel, subject, body, whyNow, priority, angle, action
-Return JSON: {"fieldName":"Exact Header As Written"}`,
-            { json: true, tokens: 400 }
+
+Map single-value fields to one of: orgName, sport, city, contactName, email, channel, whyNow, priority, angle, action — using the EXACT header text as written. Omit any you can't find.
+
+Separately, list every subject/body column PAIR that holds pre-written outreach email copy, in send order — there may be 1, 2, or 3 (e.g. a first email in plain "Subject"/"Body" columns plus numbered follow-ups like "Email 2 Subject"/"Email 2 Body", or all three numbered from the start). Use the EXACT header text.
+
+Return JSON exactly as:
+{"orgName":"Exact Header","email":"Exact Header","touches":[{"subject":"Exact Header","body":"Exact Header"}]}`,
+            { json: true, tokens: 500 }
           );
-          if (ai && typeof ai === "object") colMap = { ...ai, ...colMap };
+          if (ai && typeof ai === "object") {
+            const { touches: aiTouches, ...aiFields } = ai;
+            colMap = { ...aiFields, ...colMap };
+            if (Array.isArray(aiTouches)) {
+              const validAiTouches = aiTouches.filter(t => t?.subject && t?.body && headers.includes(t.subject) && headers.includes(t.body));
+              if (validAiTouches.length > touchCols.length) touchCols = validAiTouches;
+            }
+          }
         } catch {}
       }
       if (!colMap.orgName || !colMap.email) { toast("Couldn't find organization/email columns in this file", "error"); setPhase("upload"); return; }
@@ -1071,7 +1121,12 @@ Subject: <subject line, may include {{orgName}}>
           <div style={{ fontSize: 22, fontWeight: 700, color: B.text }}>Bulk Outreach — for Brad</div>
           <div style={{ fontSize: 12, color: B.muted, marginTop: 2 }}>Upload a cold-outreach spreadsheet, review the schedule, approve — Brad sends it from here.</div>
         </div>
-        {screen === "review" && <GBtn onClick={backToList}>← Back to all uploads</GBtn>}
+        <div style={{ display: "flex", gap: 8 }}>
+          {screen === "review" && phase === "ready" && batchId && !isApproved && (
+            <GBtn onClick={deleteCurrentBatch} style={{ color: B.red, borderColor: `${B.red}60` }}>DELETE THIS UPLOAD</GBtn>
+          )}
+          {screen === "review" && <GBtn onClick={backToList}>← Back to all uploads</GBtn>}
+        </div>
       </div>
 
       {screen === "list" && (
@@ -1098,7 +1153,15 @@ Subject: <subject line, may include {{orgName}}>
                       </div>
                       <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}</div>
                     </div>
-                    <span style={{ color: B.muted, fontSize: 13, flexShrink: 0 }}>→</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                      {b.status !== "approved" && (
+                        <button onClick={e => deleteBatch(b, e)} title="Delete this upload"
+                          style={{ background: "none", border: "none", color: B.red, fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", cursor: "pointer", padding: "4px 6px" }}>
+                          DELETE
+                        </button>
+                      )}
+                      <span style={{ color: B.muted, fontSize: 13 }}>→</span>
+                    </div>
                   </div>
                 );
               })}
