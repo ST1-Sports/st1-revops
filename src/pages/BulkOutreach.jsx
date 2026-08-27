@@ -100,6 +100,27 @@ function detectColumns(headers) {
   }
   return map;
 }
+// Some sheets carry all three emails per row instead of one — separate
+// numbered columns like "Email 1 Subject"/"Email 1 Body", "Email 2
+// Subject"/"Email 2 Body", "Email 3 Subject"/"Email 3 Body" (also matches
+// "Subject 1"/"Body 1", "Touch 2 Subject", "Follow-up 3 Body", etc., after
+// header normalization strips spaces/punctuation). Returns up to 3
+// {subject, body} header-name pairs in order, stopping at the first gap —
+// when found, these take over from the single bare subject/body columns
+// FIELD_SYNONYMS looks for, since a full 3-touch sequence is already
+// written into the sheet rather than needing to be authored afterward.
+function detectTouchColumns(headers) {
+  const normed = headers.map(h => ({ raw: h, n: normHeader(h) }));
+  const find = patterns => normed.find(h => patterns.includes(h.n))?.raw;
+  const touches = [];
+  for (let i = 1; i <= 3; i++) {
+    const subject = find([`email${i}subject`, `subject${i}`, `${i}subject`, `touch${i}subject`, `followup${i}subject`, `email${i}subjectline`]);
+    const body = find([`email${i}body`, `body${i}`, `${i}body`, `touch${i}body`, `followup${i}body`, `email${i}message`, `message${i}`, `${i}message`]);
+    if (!subject || !body) break;
+    touches.push({ subject, body });
+  }
+  return touches;
+}
 function findHeaderRow(aoa) {
   for (let i = 0; i < Math.min(aoa.length, 15); i++) {
     const row = aoa[i] || [];
@@ -294,6 +315,17 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // NOW, or a future approve-and-schedule pass.
   const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced), [leads]);
   const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !(l.sendable && l.email)), [leads]);
+  // A skipped lead still has a real, valid email whenever the sheet had one
+  // (the parser always keeps it if valid, regardless of sendable) — this is
+  // the recovery path for a batch parsed before sendable stopped requiring
+  // an explicit "Email" channel + pre-written subject/body: an
+  // already-uploaded plain contact list stuck here can be reclassified
+  // without re-uploading. Only a blank/"Unknown" channel qualifies — a row
+  // that explicitly said Phone/Contact Form/etc. was correctly routed
+  // there by the sheet itself and shouldn't be swept into email regardless
+  // of whether a fallback address happens to be on file.
+  const canReclassifyToEmail = l => isValidEmail(l.email) && (!l.channel || l.channel.toLowerCase() === "unknown");
+  const reclassifiableSkipped = useMemo(() => skippedLeads.filter(canReclassifyToEmail), [skippedLeads]);
   const bouncedLeads = useMemo(() => leads.filter(l => l.bounced), [leads]);
   const bulkEligible = useMemo(() => sendableLeads.filter(l => l.touches.length < 3), [sendableLeads]);
   // Bounced leads still show in the main org list below (so the record
@@ -393,10 +425,13 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       if (headerRowIdx < 0) { toast("Could not find a header row (looking for columns like Organization, Email, Subject, Message) — check the file", "error"); setPhase("upload"); return; }
       const headers = (aoa[headerRowIdx] || []).map(h => String(h || "").trim());
       let colMap = detectColumns(headers);
+      const touchCols = detectTouchColumns(headers);
 
       // Heuristic mapping missed something required — fall back to a cheap
-      // AI header-map call rather than fail outright.
-      if (!colMap.orgName || !colMap.email || !colMap.subject || !colMap.body) {
+      // AI header-map call rather than fail outright. Not needed for
+      // subject/body specifically when the sheet already has numbered
+      // per-touch columns (touchCols) instead of one bare pair.
+      if (!colMap.orgName || !colMap.email || (!touchCols.length && (!colMap.subject || !colMap.body))) {
         try {
           const sampleRow = aoa[headerRowIdx + 1] || [];
           const sample = Object.fromEntries(headers.map((h, i) => [h, sampleRow[i]]));
@@ -416,6 +451,8 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
       const idxOf = f => headers.indexOf(colMap[f]);
       const rows = aoa.slice(headerRowIdx + 1).filter(r => r.some(c => String(c || "").trim()));
       const get = (r, f) => { const i = idxOf(f); return i >= 0 ? String(r[i] ?? "").trim() : ""; };
+      const touchColIdxs = touchCols.map(tc => ({ subjectIdx: headers.indexOf(tc.subject), bodyIdx: headers.indexOf(tc.body) }));
+      const getAt = (r, idx) => idx >= 0 ? String(r[idx] ?? "").trim() : "";
 
       const parsed = rows.map(r => {
         const orgName = get(r, "orgName");
@@ -423,19 +460,41 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
         const action = get(r, "action");
         const priority = get(r, "priority");
         if (/suppress/i.test(action) || /^skip$/i.test(priority)) return null; // Do Not Work — excluded entirely
-        const channel = get(r, "channel") || "Unknown";
+        const explicitChannel = get(r, "channel");
         const email = get(r, "email");
         const subject = get(r, "subject");
         const body = get(r, "body");
         const contactName = get(r, "contactName");
         const [firstName, ...lastParts] = (contactName && contactName !== "-") ? contactName.split(" ") : [""];
-        const sendable = /email/i.test(channel) && isValidEmail(email) && !!subject.trim() && !!body.trim();
+        const hasValidEmail = isValidEmail(email);
+        // A row is sendable via email whenever there's a valid address and
+        // nothing on the sheet explicitly routes it elsewhere (Phone,
+        // Contact Form, etc.) — a blank Channel column defaults to email,
+        // it doesn't fall back to "needs another channel". Pre-written
+        // subject/body are no longer required either: a plain contact list
+        // (already-known contacts, just org + email, no drafted copy) is a
+        // normal case now, not just a research sheet with a message
+        // written per row — content can always be authored for the whole
+        // batch afterward via "+ ADD FOLLOW-UP TO ALL" or the EMAIL STEPS
+        // panel, so an empty touches[] here just means "write it there".
+        const sendable = hasValidEmail && (!explicitChannel || /email/i.test(explicitChannel));
+        const channel = explicitChannel || (hasValidEmail ? "Email" : "Unknown");
+        // Numbered per-touch columns (Email 1/2/3 Subject/Body) take over
+        // from the single bare subject/body pair when the sheet has them —
+        // a full sequence written per org, not just a first email.
+        const rowTouches = sendable
+          ? (touchColIdxs.length
+              ? touchColIdxs
+                  .map(({ subjectIdx, bodyIdx }) => ({ subject: getAt(r, subjectIdx), body: getAt(r, bodyIdx) }))
+                  .filter(t => t.subject.trim() && t.body.trim())
+              : (subject.trim() && body.trim() ? [{ subject, body }] : []))
+          : [];
         return {
           id: mkId(), orgName, sport: get(r, "sport"), city: get(r, "city"),
           contactName, firstName: firstName || "", lastName: lastParts.join(" "),
-          email: isValidEmail(email) ? email : "", channel, angle: get(r, "angle"), priority,
+          email: hasValidEmail ? email : "", channel, angle: get(r, "angle"), priority,
           action, whyNow: get(r, "whyNow"),
-          touches: sendable ? [{ subject, body }] : [],
+          touches: rowTouches,
           sendable,
         };
       }).filter(Boolean);
@@ -641,6 +700,20 @@ Return JSON: {"fieldName":"Exact Header As Written"}`,
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast(`Cleared — ${res.label}`, "success");
+  };
+
+  // Recovers a batch that was parsed before sendable stopped requiring an
+  // explicit "Email" channel + pre-written subject/body — moves every
+  // skipped lead that already has a real, valid email into the active
+  // list. Content (if the sheet didn't have it, or it wasn't captured the
+  // first time) can be authored for everyone at once afterward via "+ ADD
+  // FOLLOW-UP TO ALL" or the EMAIL STEPS panel.
+  const reclassifyAsEmail = () => {
+    if (!reclassifiableSkipped.length) { toast("None of the skipped organizations have a usable email address", "error"); return; }
+    if (!window.confirm(`Move ${reclassifiableSkipped.length} organization(s) with a usable email address into the active email list?`)) return;
+    const ids = new Set(reclassifiableSkipped.map(l => l.id));
+    setLeads(prev => prev.map(l => ids.has(l.id) ? { ...l, sendable: true, channel: "Email" } : l));
+    toast(`Moved ${reclassifiableSkipped.length} organization${reclassifiableSkipped.length !== 1 ? "s" : ""} into the active email list`, "success");
   };
 
   // Cross-checks Brad's actual Gmail against what this page knows in two
@@ -1319,17 +1392,37 @@ Subject: <subject line, may include {{orgName}}>
 
           {skippedLeads.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
-              <button onClick={() => setShowSkipped(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.textMid, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
-                {skippedLeads.length} organization{skippedLeads.length !== 1 ? "s" : ""} need a different channel — {showSkipped ? "hide" : "show"}
-              </button>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <button onClick={() => setShowSkipped(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.textMid, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                  {skippedLeads.length} organization{skippedLeads.length !== 1 ? "s" : ""} need a different channel — {showSkipped ? "hide" : "show"}
+                </button>
+                {reclassifiableSkipped.length > 0 && (
+                  <GBtn onClick={reclassifyAsEmail} style={{ fontSize: 9, padding: "5px 12px" }}>
+                    → MOVE {reclassifiableSkipped.length} WITH A VALID EMAIL TO ACTIVE LIST
+                  </GBtn>
+                )}
+              </div>
               {showSkipped && (
                 <div style={{ marginTop: 10, maxHeight: 260, overflowY: "auto" }}>
-                  {skippedLeads.map(l => (
-                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${B.border}` }}>
-                      <div style={{ fontSize: 11, color: B.text }}>{l.orgName}</div>
-                      <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: CHANNEL_COLOR[l.channel?.toLowerCase()] || B.muted }}>{l.action || l.channel}</span>
-                    </div>
-                  ))}
+                  {skippedLeads.map(l => {
+                    const canReclassify = canReclassifyToEmail(l);
+                    return (
+                      <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: `1px solid ${B.border}`, gap: 8 }}>
+                        <div style={{ fontSize: 11, color: B.text, minWidth: 0 }}>
+                          {l.orgName}{canReclassify && <span style={{ color: B.muted, marginLeft: 6 }}>{l.email}</span>}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                          <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: CHANNEL_COLOR[l.channel?.toLowerCase()] || B.muted }}>{l.action || l.channel}</span>
+                          {canReclassify && (
+                            <button onClick={() => setLeads(prev => prev.map(x => x.id === l.id ? { ...x, sendable: true, channel: "Email" } : x))}
+                              style={{ background: "none", border: "none", color: B.blue, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", cursor: "pointer", textDecoration: "underline", padding: 0 }}>
+                              → EMAIL
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
