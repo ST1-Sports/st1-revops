@@ -267,6 +267,30 @@ function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onReso
     </>
   );
 }
+
+// Above this many distinct versions at one step, listing each one out stops
+// being useful — the panel falls back to a summary + a single "write one
+// new version" override instead.
+const EMAIL_VARIANT_CAP = 25;
+
+// One subject/body editor, seeded from real content (a detected variant's
+// actual text, or blank for the "too many versions" override) rather than
+// starting empty — `templates[draftKey]` takes over once the rep actually
+// types something, same lazy-seed pattern as the rest of this file's
+// editors (never a render-time write to state).
+function StepEditor({ draftKey, seed, templates, updateTemplateField, onApply, applyLabel, hint }) {
+  const draft = templates[draftKey] || seed;
+  return (
+    <>
+      {hint && <div style={{ fontSize: 10, color: B.muted, marginBottom: 8 }}>{hint}</div>}
+      <input value={draft.subject} onChange={e => updateTemplateField(draftKey, "subject", e.target.value, draft)} placeholder="Subject"
+        style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
+      <textarea value={draft.body} onChange={e => updateTemplateField(draftKey, "body", e.target.value, draft)} placeholder="Body" rows={8}
+        style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", marginBottom: 8 }} />
+      <OBtn onClick={() => onApply(draft.subject, draft.body)} style={{ fontSize: 9, padding: "7px 16px" }}>{applyLabel}</OBtn>
+    </>
+  );
+}
 const STATUS_BADGE = {
   draft:    { bg: B.yellowBg, c: B.yellow, label: "DRAFT" },
   approved: { bg: B.greenBg,  c: B.green,  label: "APPROVED" },
@@ -285,6 +309,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [leads, setLeads] = useState([]); // sendable + non-sendable, suppressed excluded
   const [templates, setTemplates] = useState({}); // { [stepKey]: {subject,body,label} } — stepKey is "step0"/"step1"/"step2" (Email 1/2/3)
   const [expandedStepKey, setExpandedStepKey] = useState(null);
+  const [expandedVariantKey, setExpandedVariantKey] = useState(null);
   const [campaignName, setCampaignName] = useState(`Bulk Outreach — ${today()}`);
   const [startDt, setStartDt] = useState(() => { const c = getMTComp(nextMTBizStart(Date.now())); return `${c.y}-${String(c.mo+1).padStart(2,"0")}-${String(c.d).padStart(2,"0")}T09:00`; });
   const [batchSize, setBatchSize] = useState(25);
@@ -949,33 +974,42 @@ Subject: <subject line>
   };
 
   // Draft text for the "EMAIL STEPS" panel below — keyed by position
-  // ("step0"/"step1"/"step2" = Email 1/2/3), not by who created it, so it
-  // covers every email in the sequence uniformly, including Email 1 (which
-  // otherwise only ever comes from the spreadsheet's per-org text). Stored
-  // in the same `templates` batch field (autosaves the same way).
-  const updateTemplateField = (stepKey, field, value) => setTemplates(prev => ({ ...prev, [stepKey]: { ...prev[stepKey], [field]: value } }));
+  // ("step0"/"step1"/"step2", or "step{i}-v{n}" per detected variant) — not
+  // by who created it, so it covers every email in the sequence uniformly,
+  // including Email 1 (which otherwise only ever comes from the
+  // spreadsheet's per-org text). Stored in the same `templates` batch field
+  // (autosaves the same way). `base` must be the caller's already-resolved
+  // draft (real seed content merged with any prior edit) — falling back to
+  // prev[stepKey] alone would drop whichever field hadn't been typed into
+  // yet the first time either field is edited (e.g. editing body only,
+  // before subject was ever touched, would leave subject undefined).
+  const updateTemplateField = (stepKey, field, value, base) => setTemplates(prev => ({ ...prev, [stepKey]: { ...(base || prev[stepKey]), [field]: value } }));
 
-  // Overwrites Email {stepIdx+1} for every sendable, not-yet-sent
-  // organization at that position — deliberately unconditional (not scoped
-  // to "only ones still on some earlier shared draft"): this is a mass
-  // update, so it replaces whatever's currently there, including anything
-  // already hand-edited per org. subject/body are passed in directly
-  // rather than read back from `templates` state, since setTemplates
-  // wouldn't be visible yet if this were called in the same tick.
-  const applyStepToAll = (stepIdx, subject, body) => {
-    if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
-    const targets = sendableLeads.filter(l => l.touches[stepIdx] && !l.touches[stepIdx].sentAt);
+  // Overwrites Email {stepIdx+1} for a set of not-yet-sent organizations at
+  // that position — deliberately unconditional (not scoped to "only ones
+  // still on some earlier shared draft"): this is a mass update, so it
+  // replaces whatever's currently there, including anything already
+  // personalized or hand-edited. onlyLeadIds narrows the target to one
+  // detected variant group (see the EMAIL STEPS panel below); omitted, it
+  // targets every pending lead at that step. subject/body are passed in
+  // directly rather than read back from `templates` state, since
+  // setTemplates wouldn't be visible yet if this were called in the same
+  // tick. saveKey is where the draft persists (a whole-step key normally,
+  // or a per-variant key when editing one detected version).
+  const applyStepToAll = (stepIdx, subject, body, onlyLeadIds, saveKey) => {
+    if (!subject?.trim() || !body?.trim()) { toast("Write a subject and body first", "error"); return; }
+    const pool = onlyLeadIds ? new Set(onlyLeadIds) : null;
+    const targets = sendableLeads.filter(l => l.touches[stepIdx] && !l.touches[stepIdx].sentAt && (!pool || pool.has(l.id)));
     if (!targets.length) { toast(`No organizations left to update for Email ${stepIdx + 1}`, "error"); return; }
-    if (!window.confirm(`Overwrite Email ${stepIdx + 1} for ${targets.length} organization(s) with this text?\n\nThis replaces whatever's currently written for each one — including any already-personalized or hand-edited copy.`)) return;
+    if (!window.confirm(`Overwrite Email ${stepIdx + 1} for ${targets.length} organization(s) with this text?\n\nThis replaces whatever's currently written for each one.`)) return;
 
-    const stepKey = `step${stepIdx}`;
     const targetIds = new Set(targets.map(l => l.id));
     const updatedLeads = leads.map(l => {
       if (!targetIds.has(l.id)) return l;
       return { ...l, touches: l.touches.map((tt, ti) => ti === stepIdx ? { ...tt, subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() } : tt) };
     });
     setLeads(updatedLeads);
-    setTemplates(prev => ({ ...prev, [stepKey]: { subject: subject.trim(), body: body.trim(), label: `Email ${stepIdx + 1}` } }));
+    setTemplates(prev => ({ ...prev, [saveKey || `step${stepIdx}`]: { subject: subject.trim(), body: body.trim(), label: `Email ${stepIdx + 1}` } }));
 
     const syncPairs = targets.map(l => {
       const tt = updatedLeads.find(x => x.id === l.id).touches[stepIdx];
@@ -1228,35 +1262,106 @@ Subject: <subject line, may include {{orgName}}>
           {stepIndices.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
               <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
-                EMAIL STEPS — edit once, push to every organization at that step
+                EMAIL STEPS — shows what's already there; edit and push to everyone on that version
               </div>
               {stepIndices.map(i => {
                 const stepKey = `step${i}`;
                 const atStep = sendableLeads.filter(l => l.touches[i]);
                 const pendingAtStep = atStep.filter(l => !l.touches[i].sentAt);
-                const draft = templates[stepKey] || { subject: "", body: "" };
                 const stepOpen = expandedStepKey === stepKey;
+
+                // Groups pending touches by exact subject+body — reveals
+                // whether this step is one shared email (everyone matches,
+                // pre-fill it) or several distinct versions (e.g. per
+                // segment), so editing doesn't mean guessing which of 300
+                // rows is representative or touching each one by hand.
+                // Already-sent touches are immutable, so they're not grouped.
+                const groups = new Map();
+                pendingAtStep.forEach(l => {
+                  const t = l.touches[i];
+                  const key = `${t.subject} ${t.body}`;
+                  if (!groups.has(key)) groups.set(key, { subject: t.subject, body: t.body, leadIds: [], orgNames: [] });
+                  const g = groups.get(key);
+                  g.leadIds.push(l.id);
+                  g.orgNames.push(l.orgName);
+                });
+                const variants = [...groups.values()].sort((a, b) => b.leadIds.length - a.leadIds.length);
+
                 return (
                   <div key={stepKey} style={{ borderBottom: `1px solid ${B.border}` }}>
                     <div onClick={() => setExpandedStepKey(stepOpen ? null : stepKey)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: stepOpen ? B.surface : B.white }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>EMAIL {i + 1}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>{atStep.length} organization{atStep.length !== 1 ? "s" : ""}{pendingAtStep.length < atStep.length ? ` · ${pendingAtStep.length} pending` : ""}</span>
+                        <span style={{ fontSize: 10, color: B.textMid, fontWeight: 600 }}>
+                          {atStep.length} organization{atStep.length !== 1 ? "s" : ""}
+                          {pendingAtStep.length < atStep.length ? ` · ${pendingAtStep.length} pending` : ""}
+                          {variants.length > 1 ? ` · ${variants.length} versions` : ""}
+                        </span>
                         <span style={{ color: B.muted, fontSize: 11 }}>{stepOpen ? "▾" : "▸"}</span>
                       </div>
                     </div>
                     {stepOpen && (
                       <div style={{ padding: "4px 16px 16px" }}>
-                        <div style={{ fontSize: 10, color: B.muted, marginBottom: 8 }}>
-                          Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied. <b>APPLY overwrites Email {i + 1} for every organization still pending at this step</b> — including anything already personalized or hand-edited.
-                        </div>
-                        <input value={draft.subject} onChange={e => updateTemplateField(stepKey, "subject", e.target.value)} placeholder="Subject"
-                          style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
-                        <textarea value={draft.body} onChange={e => updateTemplateField(stepKey, "body", e.target.value)} placeholder="Body" rows={10}
-                          style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box", marginBottom: 8 }} />
-                        <OBtn onClick={() => applyStepToAll(i, draft.subject, draft.body)} disabled={pendingAtStep.length === 0} style={{ fontSize: 9, padding: "7px 16px" }}>
-                          APPLY TO ALL {pendingAtStep.length} PENDING
-                        </OBtn>
+                        {pendingAtStep.length === 0 ? (
+                          <div style={{ fontSize: 11, color: B.muted, padding: "8px 0" }}>Every organization at this step has already been sent — nothing left to edit.</div>
+                        ) : variants.length === 1 ? (
+                          <>
+                            <div style={{ fontSize: 10, color: B.green, marginBottom: 8 }}>
+                              ✓ Same email for all {variants[0].leadIds.length} organization{variants[0].leadIds.length !== 1 ? "s" : ""} pending at this step.
+                            </div>
+                            <StepEditor
+                              draftKey={stepKey} seed={variants[0]} templates={templates} updateTemplateField={updateTemplateField}
+                              onApply={(subject, body) => applyStepToAll(i, subject, body, variants[0].leadIds, stepKey)}
+                              applyLabel={`APPLY TO ALL ${variants[0].leadIds.length}`}
+                              hint={<>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied.</>}
+                            />
+                          </>
+                        ) : variants.length <= EMAIL_VARIANT_CAP ? (
+                          <>
+                            <div style={{ fontSize: 10, color: B.orange, marginBottom: 10 }}>
+                              {variants.length} different versions found across {pendingAtStep.length} organizations — edit and apply each one separately below.
+                            </div>
+                            {variants.map((v, vi) => {
+                              const variantKey = `${stepKey}-v${vi}`;
+                              const variantOpen = expandedVariantKey === variantKey;
+                              return (
+                                <div key={variantKey} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, marginBottom: 8, overflow: "hidden" }}>
+                                  <div onClick={() => setExpandedVariantKey(variantOpen ? null : variantKey)} style={{ padding: "9px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", gap: 10 }}>
+                                    <div style={{ fontSize: 11, color: B.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{v.subject}</div>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                                      <span style={{ fontSize: 9, color: B.muted }}>{v.leadIds.length} org{v.leadIds.length !== 1 ? "s" : ""}</span>
+                                      <span style={{ color: B.muted, fontSize: 10 }}>{variantOpen ? "▾" : "▸"}</span>
+                                    </div>
+                                  </div>
+                                  {variantOpen && (
+                                    <div style={{ padding: "0 12px 12px" }}>
+                                      <div style={{ fontSize: 9, color: B.muted, marginBottom: 8 }}>
+                                        {v.orgNames.slice(0, 8).join(", ")}{v.orgNames.length > 8 ? ` +${v.orgNames.length - 8} more` : ""}
+                                      </div>
+                                      <StepEditor
+                                        draftKey={variantKey} seed={v} templates={templates} updateTemplateField={updateTemplateField}
+                                        onApply={(subject, body) => applyStepToAll(i, subject, body, v.leadIds, variantKey)}
+                                        applyLabel={`APPLY TO THESE ${v.leadIds.length}`}
+                                      />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 10, color: B.muted, marginBottom: 10 }}>
+                              {variants.length} different versions found across {pendingAtStep.length} organizations — too many to show individually. Edit each organization's copy directly below, or write one new version to replace all of them.
+                            </div>
+                            <StepEditor
+                              draftKey={stepKey} seed={{ subject: "", body: "" }} templates={templates} updateTemplateField={updateTemplateField}
+                              onApply={(subject, body) => applyStepToAll(i, subject, body, null, stepKey)}
+                              applyLabel={`REPLACE ALL ${pendingAtStep.length} WITH ONE NEW VERSION`}
+                              hint={<>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — resolved per organization when applied.</>}
+                            />
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
