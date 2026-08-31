@@ -18,6 +18,8 @@
  * merge logic in three places.
  */
 
+import { filterLiveDeals, mergeIdLists } from './dealTombstone.js'
+
 export const APP_STATE_KEY = 'st1_revops_v2'
 
 // Mirrors RevOps.jsx's useStore() exactly: currentUserId is local-session
@@ -96,6 +98,11 @@ export async function pullAndMergeAppState(mergeFields = []) {
   for (const field of mergeFields) {
     merged[field] = mergeById(local[field], serverState[field])
   }
+  if (mergeFields.includes('deals')) {
+    merged.suppressedDealIds = mergeIdLists(local.suppressedDealIds, serverState.suppressedDealIds)
+    merged.suppressedDealZohoIds = mergeIdLists(local.suppressedDealZohoIds, serverState.suppressedDealZohoIds)
+    merged.deals = filterLiveDeals(merged.deals, merged)
+  }
   writeAppState(merged)
   return merged
 }
@@ -108,7 +115,10 @@ export function pushItemsToAppState(key, items) {
   const state = readAppState()
   const existing = Array.isArray(state[key]) ? state[key] : []
   const existingIds = new Set(existing.map(x => x.id))
-  const toAdd = (items || []).filter(x => x?.id && !existingIds.has(x.id))
+  let toAdd = (items || []).filter(x => x?.id && !existingIds.has(x.id))
+  if (key === 'deals') {
+    toAdd = filterLiveDeals(toAdd, state)
+  }
   if (!toAdd.length) return 0
   state[key] = [...toAdd, ...existing]
   writeAppState(state)

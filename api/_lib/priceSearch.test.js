@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { tokenizePriceQuery, rankPriceItems, scorePriceItem } from './priceSearch.js';
+import { tokenizePriceQuery, rankPriceItems, scorePriceItem, pickBestRate } from './priceSearch.js';
 
 describe('tokenizePriceQuery', () => {
   it('keeps TF-5000 as a model and does not search generic ball/soccer', () => {
@@ -17,6 +17,12 @@ describe('tokenizePriceQuery', () => {
     const t = tokenizePriceQuery('TF-5000 SZ5 SB NFHS');
     assert.ok(t.models.includes('tf-5000'));
     assert.ok(t.distinctive.includes('sz5') || t.models.includes('sz5'));
+  });
+
+  it('keeps 28.5 / 29.5 court sizes so girls and boys balls stay distinct', () => {
+    const t = tokenizePriceQuery('TF-1000 NFHS 28.5 girls basketball');
+    assert.ok(t.models.includes('tf-1000') || t.models.includes('tf1000'));
+    assert.ok(t.distinctive.includes('28.5') || t.distinctive.includes('285'));
   });
 
   it('falls back to generic words when that is all the user typed', () => {
@@ -52,6 +58,23 @@ describe('rankPriceItems', () => {
       { id: 's', name: 'TF-5000 SZ5 SB NFHS soccer ball', sku: 'AC-WC647929', brand: 'Wilson' },
     ], 'soccer ball');
     assert.equal(ranked[0].item.id, 's');
+  });
+
+  it('does not pick an Athletic Connection catalog ball when the query is TF-1000 28.5', () => {
+    const ranked = rankPriceItems([
+      { id: 'ac-wrong', name: 'Official Rubber Basketball', sku: 'AC-BALL-1', brand: 'Generic', cost: 12.5 },
+      { id: 'ac-tf', name: 'Spalding TF-1000 Classic', sku: 'AC-999', brand: 'Spalding', cost: 99.99 },
+      { id: 'book', name: 'Spalding TF-1000 NFHS 28.5" Girls Basketball (Booking Program)', sku: 'AC-1457055', brand: 'Spalding', cost: 58.0 },
+    ], 'TF-1000 NFHS 28.5 girls basketball booking');
+    assert.equal(ranked[0].item.id, 'book');
+  });
+
+  it('picks the lowest dealer cost among the same SKU', () => {
+    const ranked = pickBestRate([
+      { score: 400, item: { id: 'hi', sku: 'AC-1457055', name: 'TF-1000 28.5', cost: 99.99 } },
+      { score: 390, item: { id: 'lo', sku: 'AC-1457055', name: 'TF-1000 28.5 Booking', cost: 58 } },
+    ]);
+    assert.equal(ranked[0].item.id, 'lo');
   });
 
   it('scores a model hit well above a generic-only name', () => {

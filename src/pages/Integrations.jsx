@@ -546,6 +546,7 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
       const today = new Date().toISOString().slice(0,10);
       const deals = (res.data||[]).map(d=>({
         id: "zoho_d_"+d.id,
+        zohoId: d.id,
         name: d.Deal_Name||d.Account_Name||"Untitled Deal",
         school: d.Account_Name||"",
         contact: d.Contact_Name?.name||"",

@@ -71,6 +71,13 @@ export function tokenizePriceQuery(query) {
     push(m, models);
   }
 
+  // Keep court/ball sizes (28.5, 29.5) — stripping the dot used to turn
+  // them into "28" / "5" and drop them, so TF-1000 28.5 lost to a random AC ball.
+  for (const size of lower.match(/\d+\.\d+/g) || []) {
+    push(size, distinctive);
+    push(size.replace('.', ''), distinctive);
+  }
+
   const words = lower
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
@@ -146,12 +153,61 @@ export function scorePriceItem(item, tokens, skuHint) {
   return score;
 }
 
+export function itemHasModelHit(item, tokens) {
+  if (!tokens?.models?.length) return true;
+  const hay = `${normalizePriceText(item?.name)} ${normalizePriceText(item?.sku)}`;
+  return tokens.models.some(m => m && hay.includes(m));
+}
+
+export function dealerCostOf(item) {
+  const n = Number(item?.cost ?? item?.lastCost);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function productMatchKey(item) {
+  const sku = normalizePriceText(item?.sku);
+  if (sku) return `sku:${sku}`;
+  const name = normalizePriceText(item?.name);
+  const model = (name.match(/[a-z]{1,8}[-/][a-z0-9][-a-z0-9/]*/) || name.match(/[a-z]{1,6}\d{2,}[a-z0-9]*/))?.[0];
+  return model ? `model:${model}` : `name:${name.slice(0, 48)}`;
+}
+
+/**
+ * Among rows that are the same product, put the lowest dealer cost first.
+ * Relevance still wins across different products.
+ */
+export function pickBestRate(ranked) {
+  if (!Array.isArray(ranked) || ranked.length < 2) return ranked || [];
+  const topScore = ranked[0].score;
+  const relevant = ranked.filter(r => r.score >= topScore * 0.8 || r.score >= topScore - 50);
+  const winnerKey = productMatchKey(ranked[0].item);
+  const same = relevant.filter(r => productMatchKey(r.item) === winnerKey);
+  const pool = same.length ? same : relevant;
+  const priced = [...pool].sort((a, b) => {
+    const ca = dealerCostOf(a.item);
+    const cb = dealerCostOf(b.item);
+    if (ca != null && cb != null && ca !== cb) return ca - cb;
+    if (ca != null && cb == null) return -1;
+    if (ca == null && cb != null) return 1;
+    return b.score - a.score;
+  });
+  const best = priced[0];
+  if (!best) return ranked;
+  const rest = ranked.filter(r => (r.item.id || r.item) !== (best.item.id || best.item));
+  return [best, ...rest];
+}
+
 export function rankPriceItems(items, query, { sku } = {}) {
   const tokens = tokenizePriceQuery([query, sku].filter(Boolean).join(' '));
-  return [...(items || [])]
+  let ranked = [...(items || [])]
     .map(item => ({ item, score: scorePriceItem(item, tokens, sku) }))
-    .filter(row => row.score > 0)
-    .sort((a, b) => b.score - a.score || String(a.item.name || '').localeCompare(String(b.item.name || '')));
+    .filter(row => row.score > 0);
+  if (tokens.models.length) {
+    const hits = ranked.filter(row => itemHasModelHit(row.item, tokens));
+    if (hits.length) ranked = hits;
+  }
+  ranked.sort((a, b) => b.score - a.score || String(a.item.name || '').localeCompare(String(b.item.name || '')));
+  return pickBestRate(ranked);
 }
 
 export function minAcceptableScore(tokens) {

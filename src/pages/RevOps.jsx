@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo, createContext
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
+import { dealIsSuppressed, filterLiveDeals, mergeIdLists, suppressFromRemovedDeals } from "../lib/dealTombstone.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
@@ -145,6 +146,7 @@ battlecards: {},
 prospectAreas: [],
 agentHistory: [],
 suppressedDealZohoIds: [],
+suppressedDealIds: [],
 agentDraft: "",
 edgarDraft: "",
 lastBriefDate: null,
@@ -386,8 +388,12 @@ campaigns:    mergeById(base.campaigns,    server.campaigns),
 // outright (it's already the reconciled truth once any browser has synced).
 contacts:     Array.isArray(server.contacts) ? server.contacts : (base.contacts||[]),
 contactLists: mergeById(base.contactLists, server.contactLists),
-deals:        mergeById(base.deals,        server.deals),
-suppressedDealZohoIds: [...new Set([...(base.suppressedDealZohoIds||[]),...(Array.isArray(server.suppressedDealZohoIds)?server.suppressedDealZohoIds:[])])],
+suppressedDealIds: mergeIdLists(base.suppressedDealIds, server.suppressedDealIds),
+suppressedDealZohoIds: mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds),
+deals: filterLiveDeals(mergeById(base.deals, server.deals), {
+  suppressedDealIds: mergeIdLists(base.suppressedDealIds, server.suppressedDealIds),
+  suppressedDealZohoIds: mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds),
+}),
 rfps:         mergeById(base.rfps,         server.rfps),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
@@ -668,7 +674,10 @@ function reducer(prev, action, payload) {
 switch (action) {
 case "LOGIN":             return {...prev, currentUserId:payload};
 case "LOGOUT":            return {...prev, currentUserId:null};
-case "ADD_DEAL":          return {...prev, deals:[payload,...(prev.deals||[])]};
+case "ADD_DEAL": {
+if(dealIsSuppressed(payload,prev)) return prev;
+return {...prev, deals:[payload,...(prev.deals||[])]};
+}
 case "UPDATE_DEAL":       return {...prev, deals:(prev.deals||[]).map(d=>d.id===payload.id?{...d,...payload}:d)};
 case "ADD_INVOICE":       return {...prev, invoices:[payload,...(prev.invoices||[])]};
 case "UPDATE_INVOICE":    return {...prev, invoices:(prev.invoices||[]).map(i=>i.id===payload.id?{...i,...payload}:i)};
@@ -679,14 +688,15 @@ case "SET_REORDERS":      return {...prev, reorders:payload};
 case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
 case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
 case "SET_CONTACTS":      return {...prev, contacts:payload};
-case "SET_DEALS":         return {...prev, deals:payload};
+case "SET_DEALS":         return {...prev, deals:filterLiveDeals(payload,prev)};
 case "REMOVE_DEALS": {
 const gone=(prev.deals||[]).filter(d=>payload.includes(d.id));
-const extraZoho=gone.map(d=>d.zohoId).filter(Boolean);
+const tomb=suppressFromRemovedDeals(gone,payload);
 return {
 ...prev,
 deals:(prev.deals||[]).filter(d=>!payload.includes(d.id)),
-suppressedDealZohoIds:[...new Set([...(prev.suppressedDealZohoIds||[]),...extraZoho])],
+suppressedDealIds:mergeIdLists(prev.suppressedDealIds,tomb.suppressedDealIds),
+suppressedDealZohoIds:mergeIdLists(prev.suppressedDealZohoIds,tomb.suppressedDealZohoIds),
 };
 }
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
@@ -1070,7 +1080,7 @@ const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quo
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
 if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
-}else if(!(s.suppressedDealZohoIds||[]).includes(zd.id)){
+}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){
 dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
 dealsAdded++;
 }
@@ -6927,7 +6937,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!(s.suppressedDealZohoIds||[]).includes(zd.id)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
 return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
 };
 const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];
