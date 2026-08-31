@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
+const HOME_AGENT_NAME = "ST1";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
@@ -2124,7 +2125,7 @@ r=await fetch("/api/agent",{method:"POST",headers:{"Content-Type":"application/j
 }finally{clearTimeout(timeout);}
 if(!r.ok){let errMsg=`HTTP ${r.status}`;try{const e=await r.json();errMsg=e.error||errMsg;}catch{}throw new Error(errMsg);}
 const raw=await r.json();
-const message=raw?.message||"Sorry, something went wrong.";
+const message=(typeof raw?.message==="string"&&raw.message.trim())?raw.message.trim():(Array.isArray(raw?.actions)&&raw.actions.length?"Here's what I found.":"I couldn't complete that lookup. Try the product name or SKU again.");
 const actions=Array.isArray(raw?.actions)?raw.actions:[];
 const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
 const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
@@ -2219,8 +2220,8 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {/* Header */}
 <div style={{padding:"11px 18px 9px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
 <div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>RevOps Agent</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Full context · chats saved per user · team insights surfaced</div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>{HOME_AGENT_NAME}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Prices, pipeline, outreach · chats saved per user</div>
 </div>
 <div style={{display:"flex",gap:6,alignItems:"center"}}>
 {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
@@ -2877,7 +2878,7 @@ return(
 ))}
 </div>
 )}
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):"RevOps Agent"} · {new Date(m.ts).toLocaleTimeString()}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):HOME_AGENT_NAME} · {new Date(m.ts).toLocaleTimeString()}</div>
 </div>
 </MsgErrBound>
 ))}

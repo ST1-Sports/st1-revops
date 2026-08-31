@@ -67,7 +67,43 @@ function anthropicSafeSchema(schema) {
   delete copy.anyOf;
   delete copy.oneOf;
   delete copy.allOf;
+  // After stripping anyOf, pricing/product tools had no required fields and
+  // the model often called them with an empty body — then the home chat
+  // returned no text. Prefer a name/query so lookups always have a search.
+  if (!copy.required?.length && copy.properties) {
+    const fallback = ['productName', 'query', 'sku', 'brandName', 'vendorName'].find(k => copy.properties[k]);
+    if (fallback) copy.required = [fallback];
+  }
   return copy;
+}
+
+function usableChatMessage(parsed, finalText) {
+  const fromJson = typeof parsed?.message === 'string' ? parsed.message.trim() : '';
+  if (fromJson) return fromJson;
+  const fromText = String(finalText || '').trim();
+  if (fromText && !fromText.startsWith('{')) return fromText;
+  return '';
+}
+
+function messageFromToolResults(agentResults) {
+  const pricing = [...(agentResults || [])].reverse().find(r => r.name === 'get_st1_pricing');
+  if (pricing?.output) {
+    const p = pricing.output.result;
+    const asked = pricing.input?.productName || pricing.input?.query || pricing.input?.sku || 'that item';
+    if (pricing.output.status === 'not_found' || !p) {
+      const why = (pricing.output.limitations || []).filter(Boolean).join(' ');
+      return `I don't have a price on file for ${asked}.${why ? ` ${why}` : ''} Try a SKU or a more specific product name.`;
+    }
+    const price = p.customerPrice?.amount;
+    const name = p.name || asked;
+    const sku = p.sku ? ` [${p.sku}]` : '';
+    if (price != null) return `${name}${sku}: $${Number(price).toFixed(2)}.`;
+    return `${name}${sku} is in the catalog, but no customer price is on file.`;
+  }
+  const edgar = (agentResults || []).find(r => r.name === 'call_edgar');
+  if (edgar?.output?.error) return `I couldn't pull a quote just now (${edgar.output.error}).`;
+  if (edgar?.output?.message) return String(edgar.output.message);
+  return '';
 }
 
 
@@ -487,7 +523,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   let orgMemory = '';
   try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
 
-  return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist with full visibility into the pipeline, contacts, and business context.
+  return `You are ST1 — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. You are not named "RevOps Agent".
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
@@ -710,10 +746,23 @@ call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_recon
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
-async function callClaude(messages, system, tools, apiKey) {
+async function callClaude(messages, system, tools, apiKey, { forceText } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 28_000);
   try {
+    const body = {
+      model:       "claude-sonnet-4-6",
+      max_tokens:  2000,
+      system,
+      messages,
+    };
+    if (forceText) {
+      body.tool_choice = { type: "none" };
+      if (tools?.length) body.tools = tools;
+    } else if (tools?.length) {
+      body.tools = tools;
+      body.tool_choice = { type: "auto" };
+    }
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       signal: ctrl.signal,
@@ -722,14 +771,7 @@ async function callClaude(messages, system, tools, apiKey) {
         "x-api-key":         apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model:       "claude-sonnet-4-6",
-        max_tokens:  2000,
-        system,
-        tools,
-        tool_choice: { type: "auto" },
-        messages,
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const txt = await res.text();
@@ -786,8 +828,8 @@ async function _handler(req, res) {
     content: m.role === "user" ? m.content : (m.raw || m.content || ""),
   }));
 
-  // Tool call loop — max 2 iterations
-  const MAX_LOOPS   = 2;
+  // Tool call loop — enough room for a lookup + a follow-up + a written answer
+  const MAX_LOOPS   = 3;
   let allToolCalls  = [];   // all tool_use blocks across all loops
   let agentResults  = [];   // { name, input, output } for call_edgar / call_brad
   let loopCount     = 0;
@@ -856,12 +898,41 @@ async function _handler(req, res) {
     loopCount++;
   }
 
-  // Parse final response — should be JSON
+  // Parse final response — should be JSON. Pricing questions often end on a
+  // tool_use turn with no text; force one text-only pass, then fall back to
+  // a sentence built from the tool results so the chat never goes blank.
   let parsed = null;
   try {
     const m = finalText.match(/\{[\s\S]*\}/s);
     if (m) parsed = JSON.parse(m[0]);
   } catch { /* fallback to plain text */ }
+
+  let message = usableChatMessage(parsed, finalText);
+  if (!message) {
+    try {
+      const wrapUp = await callClaude(
+        [
+          ...messages,
+          { role: "user", content: "Answer the user now as JSON only: {\"message\":\"...\",\"actions\":[],\"suggestions\":[\"...\"]}. Use the tool results already in this conversation. Do not call tools." },
+        ],
+        system,
+        TOOLS,
+        apiKey,
+        { forceText: true }
+      );
+      const wrapText = (wrapUp.content || []).filter(b => b.type === "text").map(b => b.text).join("");
+      if (wrapText) {
+        finalText = wrapText;
+        try {
+          const m = wrapText.match(/\{[\s\S]*\}/s);
+          if (m) parsed = JSON.parse(m[0]);
+        } catch { /* keep wrapText */ }
+        message = usableChatMessage(parsed, wrapText);
+      }
+    } catch { /* fall through to tool-result summary */ }
+  }
+  if (!message) message = messageFromToolResults(agentResults);
+  if (!message) message = "I looked that up but did not get a readable answer. Try the product name or SKU again.";
 
   // Actions from Edgar/Brad executions (surfaced directly — no user confirm for edgar_quote shape;
   // brad_outreach drafts already carry requiresApproval: true from the agent)
@@ -904,14 +975,13 @@ async function _handler(req, res) {
 
   const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
   const suggestions = parsed?.suggestions || [];
-  const message     = parsed?.message || finalText;
 
   // Fire-and-forget: log this interaction to agent memory
   logInteraction({
     agentId: 'revops-agent',
     action: 'chat',
     input: { query: rawMessages[rawMessages.length - 1]?.content?.slice(0, 200) },
-    output: { actionCount: actions.length, message: message.slice(0, 200) },
+    output: { actionCount: actions.length, message: String(message || '').slice(0, 200) },
     dryRun: false,
   }).catch(() => {});
 

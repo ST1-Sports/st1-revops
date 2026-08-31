@@ -25,12 +25,14 @@ const PRODUCT_LOOKUP_SCHEMA = {
     productId: { type: 'integer', minimum: 1, description: 'ST1 product catalog ID.' },
     sku: { type: 'string', minLength: 1, maxLength: 80, description: 'SKU or vendor item code to look up.' },
     productName: { type: 'string', minLength: 2, maxLength: 160, description: 'Product name or partial name.' },
+    query: { type: 'string', minLength: 2, maxLength: 160, description: 'Search text when you do not have a SKU (e.g. basketball).' },
     brand: { type: 'string', minLength: 2, maxLength: 100, description: 'Optional brand filter.' },
   },
   anyOf: [
     { required: ['productId'] },
     { required: ['sku'] },
     { required: ['productName'] },
+    { required: ['query'] },
   ],
 };
 
@@ -54,7 +56,7 @@ function notFound(tool, query, sources = [], limitations = []) {
 }
 
 function queryFromProductInput(input) {
-  return input.sku || input.productName || (input.productId ? String(input.productId) : '');
+  return input.sku || input.productName || input.query || (input.productId ? String(input.productId) : '');
 }
 
 function marginPct(cost, price) {
@@ -64,6 +66,9 @@ function marginPct(cost, price) {
 
 async function getSt1Pricing(input) {
   const query = queryFromProductInput(input);
+  if (!query && !input.productId) {
+    return notFound('get_st1_pricing', input, [], ['Need a product name, SKU, or product ID.']);
+  }
   const [products, zoho] = await Promise.all([
     findProducts({
       query,
