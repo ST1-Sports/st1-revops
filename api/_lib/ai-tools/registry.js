@@ -1,6 +1,7 @@
 import { prisma } from '../prisma.js';
 import { hasScope, requireScope } from './auth.js';
 import { cloneJson } from './schema.js';
+import { minAcceptableScore, tokenizePriceQuery } from '../priceSearch.js';
 import {
   AI_TOOL_SAFETY_POLICY,
   CUSTOMER_POLICY,
@@ -92,7 +93,9 @@ async function getSt1Pricing(input) {
     })),
   ]);
 
-  const primaryList = listItems[0] || null;
+  const tokens = tokenizePriceQuery(query);
+  const floor = minAcceptableScore(tokens);
+  const primaryList = listItems.find(it => (it.searchScore || 0) >= floor) || null;
   if (primaryList) {
     const cost = numOrNull(primaryList.cost ?? primaryList.lastCost);
     const ourPrice = numOrNull(primaryList.ourPrice);
@@ -569,7 +572,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_pricing',
-    description: 'Return authoritative ST1 pricing from the dealer price-list database first (same lists Edgar quotes from), then Zoho Books / the product catalog. Returns null for missing cost fields instead of estimating.',
+    description: 'Return authoritative ST1 pricing from dealer price lists (ranked by model/SKU — same lists Edgar quotes from), then Zoho Books / the product catalog. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
     permission: 'pricing:read',
     readOnly: true,
     input_schema: {

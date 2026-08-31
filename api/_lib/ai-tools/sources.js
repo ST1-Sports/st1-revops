@@ -1,5 +1,12 @@
 import { prisma } from '../prisma.js';
 import { getZohoToken } from '../zoho-token.js';
+import {
+  minAcceptableScore,
+  prismaContainsOr,
+  prismaGenericAnd,
+  rankPriceItems,
+  tokenizePriceQuery,
+} from '../priceSearch.js';
 
 const CRM_BASE = 'https://www.zohoapis.com/crm/v3';
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3';
@@ -36,7 +43,8 @@ export const PRICING_POLICY = {
   name: 'ST1 pricing policy',
   summary: 'Use authoritative internal price and cost sources first; never invent missing pricing.',
   rules: [
-    'Use ST1 dealer price lists (PriceItem / uploaded supplier lists) first — same database Edgar quotes from.',
+    'Use ST1 dealer price lists (PriceItem / uploaded supplier lists) first — same database Edgar quotes from. Rank by model/SKU, not alphabetical generic words.',
+    'For a named product cost or quote, prefer Edgar (call_edgar) so GM floor and MAP are applied.',
     'Use Zoho Books item cost and price data when a list item is not on file.',
     'Use the synced product catalog for customer-facing list/sale prices only as a last fallback.',
     'When cost is not available, return null and explain the limitation.',
@@ -160,24 +168,55 @@ const PRODUCT_SELECT = {
 
 const COMP_PREFIX = '__COMPETITOR__:';
 
+const OWN_LIST = { active: true, NOT: { category: { startsWith: COMP_PREFIX } } };
+
+async function queryPriceItemCandidates(or, take) {
+  if (!or.length) return [];
+  return prisma.priceItem.findMany({
+    where: { supplier: OWN_LIST, OR: or },
+    include: { supplier: { select: { id: true, name: true } } },
+    take,
+  });
+}
+
+/**
+ * Ranked price-list lookup. Model/SKU tokens (TF-5000) are searched first so a
+ * 4,000-row Athletic Connection list does not return unrelated "ball" rows.
+ */
 export async function findPriceItems({ query, sku, limit = 10 } = {}) {
   const q = String(query || sku || '').trim();
-  if (q.length < 2) return [];
-  const words = q.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
-  return prisma.priceItem.findMany({
-    where: {
-      supplier: { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
-      OR: [
-        ...(sku ? [{ sku: { equals: sku, mode: 'insensitive' } }] : []),
-        { name: { contains: q, mode: 'insensitive' } },
-        { sku: { contains: q, mode: 'insensitive' } },
-        { brand: { contains: q, mode: 'insensitive' } },
-        ...words.map(kw => ({ name: { contains: kw, mode: 'insensitive' } })),
-      ],
-    },
-    include: { supplier: { select: { id: true, name: true } } },
-    orderBy: { name: 'asc' },
-    take: safeLimit(limit, 10, 25),
+  if (q.length < 2 && !sku) return [];
+  const tokens = tokenizePriceQuery([q, sku].filter(Boolean).join(' '));
+  const take = Math.min(120, Math.max(40, safeLimit(limit, 10, 25) * 8));
+
+  let rows = [];
+  if (tokens.models.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.models, sku), take);
+  }
+  if (!rows.length && tokens.distinctive.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.distinctive, sku), take);
+  }
+  if (!rows.length && !tokens.models.length && !tokens.distinctive.length && tokens.generic.length >= 2) {
+    const and = prismaGenericAnd(tokens.generic);
+    if (and.length) {
+      rows = await prisma.priceItem.findMany({
+        where: { supplier: OWN_LIST, AND: and },
+        include: { supplier: { select: { id: true, name: true } } },
+        take,
+      });
+    }
+  }
+  if (!rows.length) {
+    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.searchNeedles, sku), take);
+  }
+
+  const ranked = rankPriceItems(rows, q, { sku });
+  const floor = minAcceptableScore(tokens);
+  const good = ranked.filter(r => r.score >= floor);
+  const picked = (good.length ? good : ranked).slice(0, safeLimit(limit, 10, 25));
+  return picked.map(({ item, score }) => {
+    item.searchScore = score;
+    return item;
   });
 }
 

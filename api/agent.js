@@ -85,7 +85,44 @@ function usableChatMessage(parsed, finalText) {
   return '';
 }
 
+function lastUserText(messages) {
+  for (let i = (messages || []).length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') return String(messages[i].content || '');
+  }
+  return '';
+}
+
+function isProductPriceAsk(text) {
+  const t = String(text || '').toLowerCase();
+  if (t.length < 3) return false;
+  return (
+    /\b(price|pricing|cost|quote|how much|map|margin|dealer cost|list price|what(?:'s| is) our)\b/.test(t)
+    || /\b(?:tf|wth|ac)[- ]?\d{2,}/.test(t)
+  );
+}
+
+function messageFromEdgar(edgar) {
+  if (!edgar) return '';
+  if (edgar.output?.error) return `I couldn't pull a quote just now (${edgar.output.error}).`;
+  const summary = edgar.output?.output || edgar.output?.message;
+  if (summary) return String(summary);
+  const items = edgar.output?.metadata?.quote?.lineItems;
+  if (Array.isArray(items) && items.length) {
+    const lines = items.map(li => {
+      const sku = li.sku ? ` [${li.sku}]` : '';
+      const cost = li.cost != null ? `cost $${Number(li.cost).toFixed(2)}` : 'cost n/a';
+      const sell = li.quotedPrice != null ? `quote $${Number(li.quotedPrice).toFixed(2)}` : '';
+      return `${li.name}${sku}: ${cost}${sell ? ` · ${sell}` : ''}`;
+    });
+    return `Edgar pulled this from the dealer price lists:\n${lines.join('\n')}`;
+  }
+  return '';
+}
+
 function messageFromToolResults(agentResults) {
+  const edgar = [...(agentResults || [])].reverse().find(r => r.name === 'call_edgar');
+  const fromEdgar = messageFromEdgar(edgar);
+  if (fromEdgar) return fromEdgar;
   const pricing = [...(agentResults || [])].reverse().find(r => r.name === 'get_st1_pricing');
   if (pricing?.output) {
     const p = pricing.output.result;
@@ -101,9 +138,6 @@ function messageFromToolResults(agentResults) {
     if (price != null) return `${name}${sku}${from}: $${Number(price).toFixed(2)}.`;
     return `${name}${sku} is in the price lists, but no customer price is on file.`;
   }
-  const edgar = (agentResults || []).find(r => r.name === 'call_edgar');
-  if (edgar?.output?.error) return `I couldn't pull a quote just now (${edgar.output.error}).`;
-  if (edgar?.output?.message) return String(edgar.output.message);
   return '';
 }
 
@@ -297,7 +331,7 @@ const TOOLS = [
   },
   {
     name: "call_edgar",
-    description: "Build an accurate quote using ST1's live dealer price database. Edgar reads real costs, enforces GM floor and MAP minimums, and returns verified line-item pricing. Always prefer this over propose_create_quote whenever the user asks for a quote, estimate, or 'how much would X cost' for specific products.",
+    description: "REQUIRED for any product cost, price, or quote question. Edgar searches the full dealer price lists by model and SKU (e.g. TF-5000), reads live cost / our price / MAP, enforces GM floor, and returns verified line items. Always call this instead of get_st1_pricing or propose_create_quote when the user names a product. Pass the user's product text in task — do not ask for a SKU first.",
     input_schema: {
       type: "object",
       properties: {
@@ -464,7 +498,7 @@ async function callEdgar(input, baseUrl) {
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ task: input.task, input: { customer: input.customer, items: input.items } }),
       },
-      20_000
+      50_000
     );
     if (!r.ok) return { error: `Edgar returned HTTP ${r.status}` };
     return r.json();
@@ -524,7 +558,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   let orgMemory = '';
   try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
 
-  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. Price answers come from ST1's dealer price lists first (the same database Edgar quotes from). Do not invent prices.
+  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For any product cost, price, or quote, call call_edgar. Edgar searches the full dealer price lists (same database as Price Lists) by model and SKU, then applies GM floor and MAP. Do not invent prices. Do not ask for a SKU until Edgar has searched and returned no match.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
@@ -547,30 +581,19 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books) ===
-${inventory.slice(0, 35).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
-(Use these rates as the base cost when building quotes — apply margin on top)
+${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books — samples only) ===
+${inventory.slice(0, 12).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
+Do not quote a named product from this sample. Call call_edgar so it searches the full dealer lists.
 ` : ""}${(() => {
   const own = priceLists.filter(pl => pl.type === "own");
   const comp = priceLists.filter(pl => pl.type === "competitor");
   let out = "";
   if (own.length > 0) {
-    out += `\n=== OUR PRICE LISTS (${own.length} lists) ===\n`;
+    out += `\n=== OUR PRICE LISTS (${own.length} lists — names and counts only) ===\n`;
     for (const pl of own) {
       out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
-      const items = (pl.items || []).slice(0, 20);
-      for (const it of items) {
-        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}${it.category ? " ("+it.category+")" : ""}`;
-        if (it.cost > 0) out += ` — Our Cost: $${Number(it.cost).toFixed(2)}`;
-        if (it.price > 0) {
-          out += ` — Our Price: $${Number(it.price).toFixed(2)}`;
-          if (it.cost > 0) out += ` (${Math.round((it.price - it.cost) / it.price * 100)}% margin)`;
-        }
-        out += "\n";
-      }
-      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
     }
-    out += `Use these costs when answering pricing questions or building quotes. List price = what we charge customers.\n`;
+    out += `These lists can have thousands of SKUs. Never answer a product price from a sample. Always call call_edgar with the product name/model.\n`;
   }
   if (comp.length > 0) {
     out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
@@ -605,8 +628,9 @@ Every email draft, campaign sequence, and customer-facing response must reflect 
 For every message, first classify the intent, then act:
 
 AUTHORITATIVE ST1 KNOWLEDGE — DO NOT GUESS:
-- Use search_st1_knowledge for broad questions about uploaded docs, policies, products, pricing, vendors, brands, customers, or internal ST1 knowledge.
-- Use get_st1_pricing for cost, price, margin, SKU, MAP, or quote-rate lookups before answering.
+- Use search_st1_knowledge for broad questions about uploaded docs, policies, products, vendors, brands, customers, or internal ST1 knowledge.
+- For a named product cost, price, MAP, margin, or quote: call call_edgar. Do not use get_st1_pricing first and do not ask for a SKU first.
+- Use get_st1_pricing only if Edgar errors or the user wants a single catalog field with no quote.
 - Use get_st1_product for product details, availability, catalog fields, or product source questions.
 - Use get_st1_customer for customer/contact/school/lead lookups when the answer depends on internal data.
 - Use get_st1_policy for AI safety, pricing rules, brand voice, sponsorship config, customer-data rules, or sales talk track.
@@ -637,9 +661,10 @@ USE propose_create_campaign_sequence when:
 - User says "build a campaign", "send to a group", "email all [sport] coaches", "reach out to [segment]", or describes outbound to multiple people
 - Write COMPLETE email bodies for every touch in the sequence
 
-USE call_edgar (preferred for all quoting) when:
-- User asks to "build a quote", "price this out", "what would X cost", "create an estimate", or names specific products
-- Always prefer call_edgar over propose_create_quote — Edgar reads live dealer costs and enforces GM floor + MAP
+USE call_edgar (required for product prices and quotes) when:
+- User asks cost, price, MAP, "how much", "quote", "price this out", or names a model/SKU (TF-5000, basketball, etc.)
+- Always prefer call_edgar over get_st1_pricing and propose_create_quote
+- After Edgar returns, answer from Edgar's line items. If Edgar found the item, report cost + quote price. If not found, then ask for a SKU.
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
 
 USE call_ledger when:
@@ -692,7 +717,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 8. propose_create_quote — build and create a real Zoho CRM Quote (linked to the Account) for a customer; fallback for when call_edgar can't price the items
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
-11. call_edgar — build an accurate quote from live dealer prices (GM floor + MAP enforced server-side; returns edgar_quote action)
+11. call_edgar — REQUIRED for product cost/price/quote. Searches full dealer lists by model/SKU, applies GM floor + MAP, returns edgar_quote
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
@@ -719,7 +744,7 @@ COMPETITOR INTEL — ALWAYS DO THIS:
 - If new info about an already-stored competitor is found, update it with the combined/latest intel.
 
 PRICING & RFP STRATEGY:
-- When asked "how much should we charge", "what's our cost", or "what's the price" — reference OUR PRICE LISTS first, then fall back to the Zoho Books product catalog.
+- When asked "how much should we charge", "what's our cost", or "what's the price" — call call_edgar. Do not guess from list-name samples in this prompt.
 - For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
 - When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
 - Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
@@ -899,6 +924,20 @@ async function _handler(req, res) {
     loopCount++;
   }
 
+  // Price questions must go through Edgar even if Scout only called
+  // get_st1_pricing (that tool used to return unrelated "ball" rows).
+  const priceAsk = lastUserText(rawMessages);
+  let forceEdgarWrap = false;
+  if (isProductPriceAsk(priceAsk) && !agentResults.some(r => r.name === "call_edgar")) {
+    const output = await callEdgar({ task: priceAsk }, baseUrl);
+    agentResults.push({ name: "call_edgar", input: { task: priceAsk }, output });
+    messages.push({
+      role: "user",
+      content: `Edgar searched the dealer price lists for this request. Answer from Edgar — do not ask for a SKU if a matching line item is present.\n${JSON.stringify(output)}`,
+    });
+    forceEdgarWrap = true;
+  }
+
   // Parse final response — should be JSON. Pricing questions often end on a
   // tool_use turn with no text; force one text-only pass, then fall back to
   // a sentence built from the tool results so the chat never goes blank.
@@ -908,7 +947,7 @@ async function _handler(req, res) {
     if (m) parsed = JSON.parse(m[0]);
   } catch { /* fallback to plain text */ }
 
-  let message = usableChatMessage(parsed, finalText);
+  let message = forceEdgarWrap ? "" : usableChatMessage(parsed, finalText);
   if (!message) {
     try {
       const wrapUp = await callClaude(

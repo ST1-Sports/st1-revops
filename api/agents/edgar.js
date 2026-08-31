@@ -9,6 +9,7 @@
 import { setCors }             from '../_lib/cors.js'
 import { prisma }              from '../_lib/prisma.js'
 import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
+import { findPriceItems }      from '../_lib/ai-tools/sources.js'
 
 const COMP_PREFIX   = '__COMPETITOR__:'
 const API_KEY       = process.env.ANTHROPIC_KEY
@@ -18,33 +19,16 @@ function dec(v) { return v == null ? null : Number(v) }
 
 // ── Price data ────────────────────────────────────────────────────────────────
 
-async function fetchPriceData(task) {
-  // Targeted search: find items whose name matches keywords in the task
-  const stopWords = new Set([
-    'a','an','the','and','or','for','to','of','in','at','by','with',
-    'quote','price','cost','need','want','get','us','me','our','their',
-    'how','much','many','set','sets','some','please','can','we',
-  ])
-  const keywords = task.toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 2 && !stopWords.has(w))
+async function fetchPriceData(task, extraNames = []) {
+  const query = [task, ...extraNames].filter(Boolean).join(' ')
 
   const [ownSuppliers, matchedItems, competitors] = await Promise.all([
     prisma.supplier.findMany({
       where:   { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
-      include: { items: { orderBy: { name: 'asc' }, take: 30 } },
+      select:  { id: true, name: true },
       orderBy: { name: 'asc' },
     }),
-    keywords.length ? prisma.priceItem.findMany({
-      where: {
-        supplier: { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
-        OR: keywords.map(kw => ({ name: { contains: kw, mode: 'insensitive' } })),
-      },
-      include: { supplier: { select: { id: true, name: true } } },
-      orderBy: { name: 'asc' },
-      take: 60,
-    }) : Promise.resolve([]),
+    findPriceItems({ query, limit: 25 }).catch(() => []),
     prisma.supplier.findMany({
       where:   { active: true, category: { startsWith: COMP_PREFIX } },
       include: { items: { orderBy: { name: 'asc' }, take: 20 } },
@@ -103,26 +87,19 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
     'Quote only from the real price data below. If a product is not in the price list, say so — ' +
     'never invent a price.'
 
-  // Deduplicate matched items by id (may overlap with supplier context items)
-  const matchedIds = new Set(matchedItems.map(i => i.id))
-
-  let priceSection = '\n=== SEARCH RESULTS (items matching this request) ===\n'
+  let priceSection = '\n=== SEARCH RESULTS (ranked matches from dealer price lists) ===\n'
   if (matchedItems.length === 0) {
-    priceSection += '(no close matches found — see full catalog below)\n'
+    priceSection += '(no close matches in the dealer price lists — do not invent a price)\n'
   } else {
     for (const item of matchedItems) {
-      priceSection += formatItem(item, item.supplier.name)
+      priceSection += formatItem(item, item.supplier?.name)
     }
   }
 
-  priceSection += '\n=== FULL CATALOG (context — first 30 per supplier) ===\n'
-  for (const sup of ownSuppliers) {
-    if (!sup.items.length) continue
-    priceSection += `\n${sup.name}:\n`
-    for (const item of sup.items) {
-      if (matchedIds.has(item.id)) continue   // already shown above
-      priceSection += formatItem(item, null)
-    }
+  if (ownSuppliers.length) {
+    priceSection += `\n=== LISTS ON FILE (${ownSuppliers.length}) ===\n`
+    priceSection += ownSuppliers.map(s => s.name).join(', ') + '\n'
+    priceSection += 'Quote only from SEARCH RESULTS above. These list names are context, not a catalog dump.\n'
   }
 
   let compSection = ''
@@ -222,7 +199,6 @@ function buildItemLookup(ownSuppliers, matchedItems) {
     }
   }
   for (const item of matchedItems) register(item, item.supplier?.name)
-  for (const sup of ownSuppliers) for (const item of sup.items) register(item, sup.name)
   return lookup
 }
 
@@ -316,8 +292,9 @@ export default async function handler(req, res) {
   const contactEmail = input.contactEmail || null
 
   try {
+    const extraNames = Array.isArray(input.items) ? input.items.map(i => i.name).filter(Boolean) : []
     const [{ ownSuppliers, matchedItems, competitors }, memFacts, accountCtx] = await Promise.all([
-      fetchPriceData(task),
+      fetchPriceData(task, extraNames),
       customer
         ? recall({ entity: `customer:${customer}` }).catch(() => [])
         : Promise.resolve([]),
@@ -341,7 +318,7 @@ export default async function handler(req, res) {
 
     // Call Claude
     const ctrl  = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), 25_000)
+    const timer = setTimeout(() => ctrl.abort(), 35_000)
     let claudeData
     try {
       const r = await fetch('https://api.anthropic.com/v1/messages', {
