@@ -54,6 +54,19 @@ export async function memoryBlock(entity, scope = 'org') {
   return `What we already know about ${entity}:\n${lines}`
 }
 
+/** Org-scope facts across entities (skip the admin tool-plugin namespace). */
+export async function orgBrainBlock(limit = 30) {
+  const facts = await prisma.agentMemory.findMany({
+    where: { scope: 'org', NOT: { entity: 'tools' } },
+    orderBy: { updatedAt: 'desc' },
+    take: limit,
+  })
+  const usable = facts.filter(f => f.entity !== CHAT_FEEDBACK_ENTITY)
+  if (!usable.length) return ''
+  const lines = usable.map(f => `- [${f.entity || 'org'}] ${f.key}: ${f.value}`)
+  return `What we already know:\n${lines.join('\n')}`
+}
+
 export async function listMemory({ limit = 80 } = {}) {
   return prisma.agentMemory.findMany({
     orderBy: { updatedAt: 'desc' },

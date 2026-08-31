@@ -15,7 +15,8 @@
  */
 
 import { getZohoToken } from './_lib/zoho-token.js';
-import { remember, memoryBlock, logInteraction, feedbackBlock } from './_lib/memory.js';
+import { remember, orgBrainBlock, logInteraction, feedbackBlock } from './_lib/memory.js';
+import { listKnowledgeDocuments } from './_lib/ai-tools/sources.js';
 import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
@@ -543,17 +544,22 @@ async function buildSystemPrompt(localCtx, zoho) {
 
   let orgMemory = '';
   let ratedAnswers = '';
+  let knowledgeDocs = [];
   try {
-    [orgMemory, ratedAnswers] = await Promise.all([
-      memoryBlock('org', 'org'),
+    [orgMemory, ratedAnswers, knowledgeDocs] = await Promise.all([
+      orgBrainBlock(30),
       feedbackBlock(10),
+      listKnowledgeDocuments().catch(() => []),
     ]);
   } catch { /* non-fatal */ }
+  const docsBlock = knowledgeDocs.length
+    ? `\n=== KNOWLEDGE DOCS (${knowledgeDocs.length} — call search_st1_knowledge with domains:["documents"]) ===\n${knowledgeDocs.slice(0, 20).map(d => `- ${d.title}${d.sourceType ? ` [${d.sourceType}]` : ''}`).join('\n')}\n`
+    : '';
 
   return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For a cost, list, MAP, or "what's the price" question, call get_st1_pricing — that is the fast lookup on the same dealer lists Edgar uses. Only call call_edgar when the user explicitly wants a quote built (a school, qty, or the word quote). Do not invent prices. Do not ask for a SKU until a lookup has returned no match.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
-${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}${ratedAnswers ? `\n=== MATT'S RATED ANSWERS — FOLLOW THESE ===\n${ratedAnswers}\n` : ''}
+${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}${ratedAnswers ? `\n=== MATT'S RATED ANSWERS — FOLLOW THESE ===\n${ratedAnswers}\n` : ''}${docsBlock}
 ${zohoSection}
 === LOCAL PIPELINE ===
 ${open.length} open deals · $${Math.round(pipeline).toLocaleString()} total · ${overdue.length} overdue · ${hot.length} hot 🔥

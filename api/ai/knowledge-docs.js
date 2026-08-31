@@ -1,5 +1,5 @@
 import { setCors } from '../_lib/cors.js';
-import { authenticateToolRequest, requireScope } from '../_lib/ai-tools/auth.js';
+import { allowAppOrToolAuth, requireScope } from '../_lib/ai-tools/auth.js';
 import {
   deleteKnowledgeDocument,
   listKnowledgeDocuments,
@@ -54,7 +54,7 @@ export default async function handler(req, res) {
     return sendError(res, 405, 'method_not_allowed', 'Use GET, POST, or DELETE.');
   }
 
-  const auth = authenticateToolRequest(req);
+  const auth = allowAppOrToolAuth(req);
   if (!auth.ok) return sendAuthError(res, auth);
 
   const neededScope = req.method === 'GET' ? 'knowledge:read' : 'knowledge:write';

@@ -101,6 +101,23 @@ export function getBearerToken(req) {
   return match ? match[1].trim() : '';
 }
 
+/**
+ * Hub and Scout run inside the signed-in app. If no bearer is sent, treat
+ * the caller as the RevOps app with full tool scopes. External Claude/MCP
+ * clients still send a bearer and are checked as usual.
+ */
+export function allowAppOrToolAuth(req) {
+  const token = getBearerToken(req);
+  if (!token) {
+    return {
+      ok: true,
+      subject: 'revops-app',
+      scopes: new Set(ALL_READ_SCOPES),
+    };
+  }
+  return authenticateToolRequest(req);
+}
+
 export function authenticateToolRequest(req) {
   const configured = getConfiguredToolKeys();
   if (!configured.length) {

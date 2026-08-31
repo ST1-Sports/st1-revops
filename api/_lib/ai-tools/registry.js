@@ -11,6 +11,7 @@ import {
   fetchZohoItems,
   findPriceItems,
   findProducts,
+  findSuppliers,
   getKnowledgeDocuments,
   mapSalesContact,
   mapZohoContact,
@@ -258,7 +259,7 @@ async function getSt1Brand(input) {
 
 async function getSt1Vendor(input) {
   const query = input.vendorName || input.query || input.productSku || '';
-  const [products, zoho] = await Promise.all([
+  const [products, zoho, suppliers] = await Promise.all([
     findProducts({ query, brand: input.vendorName || input.query, limit: safeLimit(input.limit, 10, 25) }),
     fetchZohoItems({ query, sku: input.productSku, limit: safeLimit(input.limit, 10, 25) }).catch(error => ({
       configured: true,
@@ -266,12 +267,31 @@ async function getSt1Vendor(input) {
       warning: error.message,
       sources: [source('Zoho Books Items', { status: 'lookup_error' })],
     })),
+    findSuppliers({ query, limit: safeLimit(input.limit, 10, 25) }),
   ]);
 
   const vendors = new Map();
+  for (const supplier of suppliers) {
+    vendors.set(supplier.name, {
+      id: supplier.id,
+      name: supplier.name,
+      authority: 'st1_supplier_directory',
+      category: supplier.category,
+      rep: supplier.rep,
+      itemCount: supplier.itemCount,
+      notes: supplier.notes,
+      matchingItems: [],
+      source: supplier.source,
+    });
+  }
   for (const item of zoho.items || []) {
     const key = item.vendorId || item.vendorName || item.brand || item.name;
     if (!key) continue;
+    const existing = vendors.get(item.vendorName || item.brand) || vendors.get(key);
+    if (existing) {
+      existing.matchingItems.push({ id: item.id, name: item.name, sku: item.sku });
+      continue;
+    }
     vendors.set(key, {
       id: item.vendorId || null,
       name: item.vendorName || item.brand || null,
@@ -310,7 +330,7 @@ async function getSt1Vendor(input) {
   if (!result.length) {
     return notFound('get_st1_vendor', input, zoho.sources || [], [
       zoho.configured === false ? 'Zoho Books is not configured for vendor lookup.' : null,
-      'No dedicated vendor directory exists yet; current lookup uses Zoho item vendor fields and product catalog brand fields.',
+      'No matching supplier in the ST1 price-list directory, Zoho Books vendor fields, or product catalog brands.',
     ].filter(Boolean));
   }
 
@@ -320,7 +340,7 @@ async function getSt1Vendor(input) {
     result: result.length === 1 ? result[0] : result,
     sources: result.map(entry => entry.source).filter(Boolean),
     limitations: [
-      'Vendor lookup is read-only and limited to configured Zoho Books item vendor fields plus ST1 product catalog brand fields.',
+      'Vendor lookup is read-only: ST1 supplier directory first, then Zoho Books item vendor fields and product catalog brands.',
       zoho.warning || null,
     ].filter(Boolean),
   });
@@ -600,7 +620,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_vendor',
-    description: 'Return safe vendor or supplier context from configured item vendor fields and product catalog brand fields. Does not expose vendor credentials or arbitrary vendor database access.',
+    description: 'Return vendor or supplier context from the ST1 supplier directory (dealer lists), Zoho Books item vendor fields, and product catalog brands. Does not expose credentials.',
     permission: 'vendor:read',
     readOnly: true,
     input_schema: {

@@ -220,6 +220,41 @@ export async function findPriceItems({ query, sku, limit = 10 } = {}) {
   });
 }
 
+export async function findSuppliers({ query = '', limit = 10 } = {}) {
+  const q = String(query || '').trim();
+  if (q.length < 2) return [];
+  const rows = await prisma.supplier.findMany({
+    where: {
+      active: true,
+      NOT: { category: { startsWith: '__COMPETITOR__:' } },
+      OR: [
+        { name: { contains: q, mode: 'insensitive' } },
+        { category: { contains: q, mode: 'insensitive' } },
+        { notes: { contains: q, mode: 'insensitive' } },
+      ],
+    },
+    select: {
+      id: true,
+      name: true,
+      category: true,
+      rep: true,
+      notes: true,
+      _count: { select: { items: true } },
+    },
+    take: safeLimit(limit, 10, 25),
+    orderBy: { name: 'asc' },
+  }).catch(() => []);
+  return rows.map(s => ({
+    id: s.id,
+    name: s.name,
+    category: s.category || null,
+    rep: s.rep || null,
+    itemCount: s._count?.items || 0,
+    notes: s.notes ? String(s.notes).slice(0, 240) : null,
+    source: source('ST1 supplier directory', { recordId: s.id }),
+  }));
+}
+
 export async function findProducts({ query, productId, brand, limit = 10 } = {}) {
   const take = safeLimit(limit, 10, 50);
   const where = {};
@@ -432,15 +467,19 @@ export async function listKnowledgeDocuments() {
 export async function saveKnowledgeDocument(doc) {
   const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
   const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
+  const sourceName = String(doc.sourceName || '').trim().slice(0, 200);
+  const existing = doc.id
+    ? docs.find(d => d.id === doc.id)
+    : (sourceName ? docs.find(d => d.sourceType === doc.sourceType && d.sourceName === sourceName) : null);
   const nextDoc = {
-    id: doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    id: existing?.id || doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     title: String(doc.title || 'Untitled document').trim().slice(0, 160),
     sourceType: doc.sourceType,
-    sourceName: String(doc.sourceName || '').trim().slice(0, 200),
+    sourceName,
     content: String(doc.content || '').slice(0, 200_000),
     uploadedAt: new Date().toISOString(),
   };
-  const nextDocs = [nextDoc, ...docs.filter(existing => existing.id !== nextDoc.id)].slice(0, 100);
+  const nextDocs = [nextDoc, ...docs.filter(d => d.id !== nextDoc.id)].slice(0, 100);
   await prisma.setting.upsert({
     where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
     create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },

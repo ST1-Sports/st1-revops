@@ -1,5 +1,5 @@
 import { setCors } from '../../_lib/cors.js';
-import { authenticateToolRequest, requireScope } from '../../_lib/ai-tools/auth.js';
+import { allowAppOrToolAuth, requireScope } from '../../_lib/ai-tools/auth.js';
 import { saveKnowledgeDocument } from '../../_lib/ai-tools/sources.js';
 import { createSign } from 'crypto';
 
@@ -176,7 +176,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return sendError(res, 405, 'method_not_allowed', 'POST only');
 
-  const auth = authenticateToolRequest(req);
+  const auth = allowAppOrToolAuth(req);
   if (!auth.ok) {
     return sendError(res, auth.status || 401, auth.status === 503 ? 'auth_not_configured' : 'unauthorized', auth.error, auth.details);
   }

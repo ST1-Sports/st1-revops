@@ -172,6 +172,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
   const [memoryMsg, setMemoryMsg] = useState('')
   const [factKey, setFactKey] = useState('')
   const [factValue, setFactValue] = useState('')
+  const [status, setStatus] = useState(null)
 
   const localSummary = useMemo(() => readLocalSummary(), [])
   const tools = discovery?.tools || []
@@ -181,7 +182,18 @@ export default function AiKnowledgeHub({ embedded = false }) {
     if (apiKey) sessionStorage.setItem('st1_ai_tool_key', apiKey)
   }, [apiKey])
 
-  useEffect(() => { loadMemory() }, [])
+  useEffect(() => { loadMemory(); loadStatus(); loadDocuments() }, [])
+
+  async function loadStatus() {
+    try {
+      const r = await fetch('/api/ai/status')
+      const d = await r.json()
+      if (r.ok && d.ok !== false) {
+        setStatus(d)
+        if (Array.isArray(d.documents)) setDocuments(d.documents)
+      }
+    } catch { /* non-fatal */ }
+  }
 
   async function loadMemory() {
     setMemoryLoading(true)
@@ -251,7 +263,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
       const first = d.tools?.[0]?.name || selectedTool
       setSelectedTool(first)
       setInputText(JSON.stringify(TOOL_EXAMPLES[first] || {}, null, 2))
-      await loadDocuments(apiKey.trim())
+      await loadDocuments()
     } catch (e) {
       setError(e.message)
     } finally {
@@ -259,13 +271,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
     }
   }
 
-  async function loadDocuments(key = apiKey.trim()) {
-    if (!key) return
+  async function loadDocuments() {
     setDocsLoading(true)
     try {
-      const r = await fetch('/api/ai/knowledge-docs', {
-        headers: { Authorization: `Bearer ${key}` },
-      })
+      const r = await fetch('/api/ai/knowledge-docs')
       const d = await r.json()
       if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
       setDocuments(d.documents || [])
@@ -276,17 +285,17 @@ export default function AiKnowledgeHub({ embedded = false }) {
     }
   }
 
+  function authHeaders() {
+    const headers = { 'Content-Type': 'application/json' }
+    if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`
+    return headers
+  }
+
   async function saveDocument({ title, sourceType, sourceName, content }) {
     setDocMessage('')
-    if (!apiKey.trim()) {
-      throw new Error('Paste your ST1 AI tool key at the top of this page before importing knowledge.')
-    }
     const r = await fetch('/api/ai/knowledge-docs', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey.trim()}`,
-        'Content-Type': 'application/json',
-      },
+      headers: authHeaders(),
       body: JSON.stringify({ title, sourceType, sourceName, content }),
     })
     const d = await r.json()
@@ -317,10 +326,6 @@ export default function AiKnowledgeHub({ embedded = false }) {
   async function uploadFile(file) {
     if (!file) return
     setDocMessage('')
-    if (!apiKey.trim()) {
-      setDocMessage('Paste your ST1 AI tool key at the top of this page before uploading a doc.')
-      return
-    }
     const allowed = /\.(txt|md|csv|json)$/i.test(file.name)
     if (!allowed) {
       setDocMessage('For now, upload .txt, .md, .csv, or .json files. PDF/Docx connectors are next.')
@@ -341,14 +346,10 @@ export default function AiKnowledgeHub({ embedded = false }) {
 
   async function deleteDocument(id) {
     setDocMessage('')
-    if (!apiKey.trim()) {
-      setDocMessage('Paste your ST1 AI tool key at the top of this page before deleting knowledge docs.')
-      return
-    }
     try {
       const r = await fetch(`/api/ai/knowledge-docs?id=${encodeURIComponent(id)}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${apiKey.trim()}` },
+        headers: authHeaders(),
       })
       const d = await r.json()
       if (!r.ok || d.ok === false) throw new Error(d.error?.message || `HTTP ${r.status}`)
@@ -360,10 +361,6 @@ export default function AiKnowledgeHub({ embedded = false }) {
   }
 
   async function importNotionPage() {
-    if (!apiKey.trim()) {
-      setDocMessage('Paste your ST1 AI tool key at the top of this page before importing from Notion.')
-      return
-    }
     if (!notionUrl.trim()) {
       setDocMessage('Paste a Notion page URL first.')
       return
@@ -373,10 +370,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
     try {
       const r = await fetch('/api/ai/connectors/notion', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
+        headers: authHeaders(),
         body: JSON.stringify({ url: notionUrl.trim() }),
       })
       const d = await r.json()
@@ -392,10 +386,6 @@ export default function AiKnowledgeHub({ embedded = false }) {
   }
 
   async function importDriveFile() {
-    if (!apiKey.trim()) {
-      setDocMessage('Paste your ST1 AI tool key at the top of this page before importing from Google Drive.')
-      return
-    }
     if (!driveUrl.trim()) {
       setDocMessage('Paste a Google Drive file URL first.')
       return
@@ -405,10 +395,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
     try {
       const r = await fetch('/api/ai/connectors/google-drive', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey.trim()}`,
-          'Content-Type': 'application/json',
-        },
+        headers: authHeaders(),
         body: JSON.stringify({ url: driveUrl.trim() }),
       })
       const d = await r.json()
@@ -485,7 +472,23 @@ export default function AiKnowledgeHub({ embedded = false }) {
           <StatusPill ok={memory.facts?.length > 0} label={`${memory.facts?.length || 0} FACTS`} />
           <StatusPill ok={memory.feedback?.length > 0} label={`${memory.feedback?.length || 0} RATINGS`} />
           <StatusPill ok={memory.chatSessionCount > 0} label={`${memory.chatSessionCount} SAVED CHATS`} />
+          {status?.counts && (
+            <>
+              <StatusPill ok={status.counts.priceItems > 0} label={`${status.counts.priceItems} PRICE ROWS`} />
+              <StatusPill ok={status.counts.products > 0} label={`${status.counts.products} PRODUCTS`} />
+              <StatusPill ok={status.counts.suppliers > 0} label={`${status.counts.suppliers} SUPPLIERS`} />
+            </>
+          )}
         </div>
+        {status?.connectors && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+            <StatusPill ok={status.connectors.database} label={status.connectors.database ? 'DATABASE LIVE' : 'DATABASE DOWN'} />
+            <StatusPill ok={status.connectors.notion} label={status.connectors.notion ? 'NOTION TOKEN SET' : 'NOTION NOT SET'} />
+            <StatusPill ok={status.connectors.googleDrive} label={status.connectors.googleDrive ? 'DRIVE TOKEN SET' : 'DRIVE NOT SET'} />
+            <StatusPill ok={status.connectors.zoho} label={status.connectors.zoho ? 'ZOHO SET' : 'ZOHO NOT SET'} />
+            <StatusPill ok={status.connectors.toolAuth} label={status.connectors.toolAuth ? 'EXTERNAL TOOL KEY SET' : 'NO EXTERNAL TOOL KEY'} />
+          </div>
+        )}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 12, alignItems: 'start' }}>
           <div>
             <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black, marginBottom: 6 }}>Teach Scout</div>
@@ -554,7 +557,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <Label>SERVER KNOWLEDGE DOCS</Label>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 22, color: documents.length ? B.orange : B.muted }}>{documents.length}</div>
-              <button onClick={() => loadDocuments()} disabled={!apiKey.trim() || docsLoading} style={{ background: B.surface, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 5, padding: '5px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8 }}>
+              <button onClick={() => loadDocuments()} disabled={docsLoading} style={{ background: B.surface, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 5, padding: '5px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8 }}>
                 {docsLoading ? 'LOADING' : 'REFRESH'}
               </button>
             </div>
@@ -590,14 +593,14 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <Label>ADD KNOWLEDGE - NO TECHNICAL SETUP</Label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 9, marginBottom: 12 }}>
               {[
-                ['Connect Notion', 'Import a shared Notion page into ST1 knowledge.', 'READY'],
-                ['Connect Google Drive', 'Import Docs, Sheets, Slides, text, CSV, JSON, and Markdown.', 'READY'],
-                ['Upload a doc', 'Add text, markdown, CSV, or JSON now.', 'READY'],
-              ].map(([title, desc, status]) => (
-                <div key={title} style={{ background: status === 'READY' ? B.greenBg : B.surface, border: `1px solid ${status === 'READY' ? B.green : B.border}30`, borderRadius: 8, padding: 12 }}>
+                ['Connect Notion', 'Import a shared Notion page into ST1 knowledge.', status?.connectors?.notion ? 'CONNECTED' : 'NOT SET IN VERCEL'],
+                ['Connect Google Drive', 'Import Docs, Sheets, Slides, text, CSV, JSON, and Markdown.', status?.connectors?.googleDrive ? 'CONNECTED' : 'NOT SET IN VERCEL'],
+                ['Upload a doc', 'Add text, markdown, CSV, or JSON now.', status?.connectors?.database ? 'READY' : 'DATABASE DOWN'],
+              ].map(([title, desc, state]) => (
+                <div key={title} style={{ background: state === 'CONNECTED' || state === 'READY' ? B.greenBg : B.yellowBg, border: `1px solid ${state === 'CONNECTED' || state === 'READY' ? B.green : B.yellow}30`, borderRadius: 8, padding: 12 }}>
                   <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black, marginBottom: 5 }}>{title}</div>
                   <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted, lineHeight: 1.45, minHeight: 30 }}>{desc}</div>
-                  <div style={{ marginTop: 8, fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: status === 'READY' ? B.green : B.yellow, letterSpacing: 1 }}>{status}</div>
+                  <div style={{ marginTop: 8, fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: state === 'CONNECTED' || state === 'READY' ? B.green : B.yellow, letterSpacing: 1 }}>{state}</div>
                 </div>
               ))}
             </div>
