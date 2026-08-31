@@ -371,6 +371,8 @@ return true;
 }
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
+const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
+const suppressedDealZohoIds = mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds);
 return {
 ...base,
 ...server,
@@ -388,12 +390,9 @@ campaigns:    mergeById(base.campaigns,    server.campaigns),
 // outright (it's already the reconciled truth once any browser has synced).
 contacts:     Array.isArray(server.contacts) ? server.contacts : (base.contacts||[]),
 contactLists: mergeById(base.contactLists, server.contactLists),
-suppressedDealIds: mergeIdLists(base.suppressedDealIds, server.suppressedDealIds),
-suppressedDealZohoIds: mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds),
-deals: filterLiveDeals(mergeById(base.deals, server.deals), {
-  suppressedDealIds: mergeIdLists(base.suppressedDealIds, server.suppressedDealIds),
-  suppressedDealZohoIds: mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds),
-}),
+suppressedDealIds,
+suppressedDealZohoIds,
+deals: filterLiveDeals(mergeById(base.deals, server.deals), { suppressedDealIds, suppressedDealZohoIds }),
 rfps:         mergeById(base.rfps,         server.rfps),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
@@ -2220,8 +2219,11 @@ name:pl.name,
 type:pl.type,
 competitorName:pl.competitorName||"",
 source:pl.source||"",
+notes:pl.notes||"",
 itemCount:(pl.items||[]).length,
-items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
+items:pl.type==="competitor"
+?(pl.items||[]).slice(0,15).map(it=>({name:it.name,sku:it.sku||"",price:it.price||0,notes:it.notes||""}))
+:[],
 })),
 competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
 brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,

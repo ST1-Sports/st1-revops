@@ -24,12 +24,9 @@ import {
   lockedPricingToolResult,
   matchLockedItem,
   overlayLockedPricing,
-  parseQuoteRates,
   pricingQueryOf,
+  quoteIntent,
   resolveLockedQuote,
-  userWantsNewCostSource,
-  userWantsNewSellPrice,
-  userWantsReprice,
 } from '../src/lib/quoteLock.js';
 
 export const config = { maxDuration: 120 };
@@ -434,29 +431,6 @@ async function fetchZohoContext() {
   }
 }
 
-// ── ZOHO BOOKS INVENTORY ──────────────────────────────────────────────────────
-async function fetchZohoInventory() {
-  try {
-    const orgId = process.env.ZOHO_ORG_ID;
-    if (!orgId) return [];
-    const token = await getZohoToken();
-    const res = await fetchWithTimeout(
-      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
-      { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
-    );
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.items || []).map(i => ({
-      name: i.name,
-      rate: parseFloat(i.rate || i.selling_price || 0),
-      sku:  i.sku  || "",
-      unit: i.unit || "",
-    }));
-  } catch {
-    return [];
-  }
-}
-
 // ── AGENT CALLERS (server-to-server within the same deployment) ───────────────
 async function callLedger(input, baseUrl) {
   try {
@@ -504,7 +478,7 @@ async function callEdgar(input, baseUrl, lock = {}) {
             reprice: !!lock.reprice,
             lockSell: lock.lockSell !== false,
             lockCost: lock.lockCost !== false,
-            quoteRates: lock.quoteRates || null,
+            quoteRates: lock.quoteRates ?? null,
             preferredSupplier: lock.preferredSupplier || null,
           },
         }),
@@ -544,7 +518,7 @@ async function callBrad(input, baseUrl, localCtx = {}) {
 }
 
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-async function buildSystemPrompt(localCtx, zoho, inventory = []) {
+async function buildSystemPrompt(localCtx, zoho) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
@@ -593,10 +567,8 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books — samples only) ===
-${inventory.slice(0, 12).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
-Do not quote a named product from this sample. Call get_st1_pricing so it searches the full dealer lists.
-` : ""}${(() => {
+Product catalog lives on the dealer price lists. Call get_st1_pricing for a cost or list. Call call_edgar only for a formal quote.
+${(() => {
   const own = priceLists.filter(pl => pl.type === "own");
   const comp = priceLists.filter(pl => pl.type === "competitor");
   let out = "";
@@ -611,14 +583,17 @@ Do not quote a named product from this sample. Call get_st1_pricing so it search
     out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
     for (const pl of comp) {
       out += `${pl.competitorName || pl.name}${pl.source ? " ["+pl.source+"]" : ""}${pl.notes ? " — "+pl.notes : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
-      const items = (pl.items || []).slice(0, 20);
+      const items = (pl.items || []).slice(0, 15);
       for (const it of items) {
         out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}`;
         if (it.price > 0) out += ` — $${Number(it.price).toFixed(2)}`;
         if (it.notes) out += ` (${it.notes})`;
         out += "\n";
       }
-      if ((pl.items || []).length > 20) out += `  ... and ${(pl.items||[]).length - 20} more items\n`;
+      if ((pl.itemCount || (pl.items || []).length) > 15) {
+        const extra = (pl.itemCount || pl.items.length) - 15;
+        out += `  ... and ${extra} more items\n`;
+      }
     }
     out += `Use competitor pricing to position ST1 competitively. When responding to RFPs, reference how ST1's pricing compares to known competitors — highlight our advantages (service, speed, quality) even when we're not cheapest.\n`;
   }
@@ -872,16 +847,12 @@ async function _handler(req, res) {
 
   const lastUser = [...rawMessages].reverse().find(m => m.role === 'user')?.content || '';
   const lockedQuote = resolveLockedQuote(localContext, lastUser);
-  const reprice = userWantsReprice(lastUser);
-  const quoteRates = parseQuoteRates(lastUser);
-  const newCost = userWantsNewCostSource(lastUser) || !!quoteRates.preferredSupplier;
-  const lockSell = quoteRates.product == null && !userWantsNewSellPrice(lastUser);
-  const ctx = { ...localContext, lockedQuote, quoteRates };
+  const intent = quoteIntent(lastUser);
+  const ctx = { ...localContext, lockedQuote, quoteRates: intent.rates };
 
-  // Fetch fresh Zoho context + inventory in parallel
-  const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
+  const zoho = await fetchZohoContext();
 
-  const system  = await buildSystemPrompt(ctx, zoho, inventory);
+  const system  = await buildSystemPrompt(ctx, zoho);
   const baseUrl = `https://${req.headers.host}`;
 
   // Convert history to Anthropic format
@@ -922,11 +893,11 @@ async function _handler(req, res) {
       if (t.name === "call_edgar") {
         const output = await callEdgar(t.input, baseUrl, {
           items: lockedQuote?.items || [],
-          reprice: reprice || t.input?.reprice === true,
-          lockSell,
-          lockCost: !newCost && !reprice,
-          quoteRates,
-          preferredSupplier: quoteRates.preferredSupplier,
+          reprice: intent.reprice || t.input?.reprice === true,
+          lockSell: intent.lockSell,
+          lockCost: intent.lockCost,
+          quoteRates: intent.rates,
+          preferredSupplier: intent.preferredSupplier,
         });
         agentResults.push({ name: "call_edgar", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
@@ -954,7 +925,7 @@ async function _handler(req, res) {
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ ok: true, remembered: true }) };
       }
       if (KNOWLEDGE_TOOL_NAMES.has(t.name)) {
-        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !reprice) {
+        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !intent.reprice) {
           const lockHit = matchLockedItem({
             sku: t.input?.sku,
             name: t.input?.productName || t.input?.query || t.input?.sku,
@@ -970,7 +941,7 @@ async function _handler(req, res) {
         let output = tool
           ? await invokeTool(tool, t.input || {}, INTERNAL_TOOL_AUTH)
           : { ok: false, error: { code: 'unknown_tool', message: `Unknown knowledge tool ${t.name}` } };
-        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !reprice) {
+        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !intent.reprice) {
           output = overlayLockedPricing(output, lockedQuote.items);
         }
         agentResults.push({ name: t.name, input: t.input, output });

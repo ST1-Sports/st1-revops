@@ -17,6 +17,7 @@ import {
   hasNamedLineRates,
   matchLockedItem,
   mergeLockedItemsIntoRequest,
+  numOrNull,
   parseQuoteRates,
   userWantsNewCostSource,
   userWantsReprice,
@@ -27,6 +28,18 @@ const API_KEY       = process.env.ANTHROPIC_KEY
 const DEFAULT_FLOOR = 0.20   // 20% GM floor when item has no gmFloorPct
 
 function dec(v) { return v == null ? null : Number(v) }
+
+function normalizePassedRates(rates) {
+  if (!rates || typeof rates !== 'object') {
+    return { product: null, customization: null, shipping: null, preferredSupplier: null }
+  }
+  return {
+    product: numOrNull(rates.product),
+    customization: numOrNull(rates.customization),
+    shipping: numOrNull(rates.shipping),
+    preferredSupplier: rates.preferredSupplier || null,
+  }
+}
 
 function preferSupplierRows(items, name) {
   if (!name || !items?.length) return items || []
@@ -334,12 +347,16 @@ export default async function handler(req, res) {
   const customer     = input.customer || null
   const contactId    = input.contactId || null
   const contactEmail = input.contactEmail || null
-  const reprice      = input.reprice === true || userWantsReprice(task)
-  const quoteRates   = hasNamedLineRates(input.quoteRates) ? input.quoteRates : parseQuoteRates(task)
-  const newCost      = input.lockCost === false || userWantsNewCostSource(task) || !!quoteRates.preferredSupplier
+  // Scout already parsed the user's message. Do not re-parse `task` when those
+  // fields are present — Scout's rewritten task often mentions cost $ first.
+  const fromScout    = Object.prototype.hasOwnProperty.call(input, 'quoteRates')
+    || Object.prototype.hasOwnProperty.call(input, 'lockSell')
+  const quoteRates   = fromScout ? normalizePassedRates(input.quoteRates) : parseQuoteRates(task)
+  const reprice      = input.reprice === true || (!fromScout && userWantsReprice(task))
+  const preferredSupplier = input.preferredSupplier || quoteRates.preferredSupplier || null
+  const newCost      = input.lockCost === false || !!preferredSupplier || (!fromScout && userWantsNewCostSource(task))
   const lockSell     = input.lockSell !== false && quoteRates.product == null
   const lockCost     = !newCost && !reprice
-  const preferredSupplier = input.preferredSupplier || quoteRates.preferredSupplier || null
   const lockedItems  = (!reprice && Array.isArray(input.lockedItems)) ? input.lockedItems : []
   const requestItems = mergeLockedItemsIntoRequest(input.items, lockedItems)
 

@@ -15,6 +15,7 @@ import {
   mergeLockedItemsIntoRequest,
   overlayLockedPricing,
   parseQuoteRates,
+  quoteIntent,
   resolveLockedQuote,
   userWantsNewCostSource,
   userWantsNewSellPrice,
@@ -86,6 +87,35 @@ describe('parseQuoteRates', () => {
   it('does not pick a dealer cost out of Scout/Edgar prose as the sell price', () => {
     const r = parseQuoteRates('Held sell price. Cost $65.62 via Athletic Connection. Quote $81.95.');
     assert.equal(r.product, 81.95);
+  });
+});
+
+describe('quoteIntent', () => {
+  it('parses lock flags and line rates from one user message', () => {
+    const intent = quoteIntent('Quote Hudson 14 TF-1000s at $81.95 each, customization $5.95, shipping $3. Cost from Spalding.');
+    assert.equal(intent.rates.product, 81.95);
+    assert.equal(intent.rates.customization, 5.95);
+    assert.equal(intent.rates.shipping, 3);
+    assert.equal(intent.lockSell, false);
+    assert.equal(intent.lockCost, false);
+    assert.equal(intent.newCost, true);
+    assert.equal(intent.preferredSupplier, 'Spalding');
+    assert.equal(intent.hasNamedLineRates, true);
+  });
+
+  it('keeps sell and cost locked on a qty-only update', () => {
+    const intent = quoteIntent('update the quote to qty 10');
+    assert.equal(intent.lockSell, true);
+    assert.equal(intent.lockCost, true);
+    assert.equal(intent.reprice, false);
+    assert.equal(intent.hasNamedLineRates, false);
+  });
+
+  it('does not treat a cost $ in Scout/Edgar prose as a named sell price', () => {
+    const intent = quoteIntent('Held sell price. Cost $65.62 via Athletic Connection.');
+    assert.equal(intent.rates.product, null);
+    assert.equal(intent.lockSell, true);
+    assert.equal(intent.hasNamedLineRates, false);
   });
 });
 

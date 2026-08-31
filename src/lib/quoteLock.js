@@ -10,6 +10,14 @@ export function numOrNull(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Gross margin % from cost and sell. One formula for lock, stamp, and overlays. */
+export function gmPct(cost, quoted, fallback = null) {
+  const c = numOrNull(cost);
+  const q = numOrNull(quoted);
+  if (c > 0 && q > 0) return Math.round(((q - c) / q) * 1000) / 10;
+  return fallback;
+}
+
 export function normalizeSku(s) {
   return String(s || '').trim().toUpperCase();
 }
@@ -87,7 +95,7 @@ export function hasNamedLineRates(rates) {
   return !!(rates && (rates.product != null || rates.customization != null || rates.shipping != null));
 }
 
-export function userWantsNewSellPrice(text) {
+export function userWantsNewSellPrice(text, rates) {
   const t = String(text || '').toLowerCase();
   if (/\b(\d+\s*%\s*off|discount|lower the (?:price|quote)|raise the (?:price|quote)|drop the (?:price|quote)|match (?:map|their price))\b/.test(t)) {
     return true;
@@ -98,12 +106,31 @@ export function userWantsNewSellPrice(text) {
   if (/\b(what'?s|how much)\b/.test(t) && !/\b(keep|need|charge|set|use|hold|program|booking)\b/.test(t)) {
     return false;
   }
-  return hasNamedLineRates(parseQuoteRates(t));
+  return hasNamedLineRates(rates || parseQuoteRates(t));
 }
 
 export function userWantsNewCostSource(text) {
   const t = String(text || '').toLowerCase();
   return /\b(wrong cost|cost (?:is |are |was )?wrong|cost should|coming from|from spalding|spalding (?:cost|list|price)|use spalding|dealer cost from)\b/.test(t);
+}
+
+/**
+ * Parse quote intent once (Scout). Edgar should consume this object and not
+ * re-parse a rewritten task — that task often mentions cost $ first.
+ */
+export function quoteIntent(text = '') {
+  const rates = parseQuoteRates(text);
+  const reprice = userWantsReprice(text);
+  const newCost = userWantsNewCostSource(text) || !!rates.preferredSupplier;
+  return {
+    rates,
+    reprice,
+    newCost,
+    lockSell: rates.product == null && !userWantsNewSellPrice(text, rates),
+    lockCost: !reprice && !newCost,
+    preferredSupplier: rates.preferredSupplier || null,
+    hasNamedLineRates: hasNamedLineRates(rates),
+  };
 }
 
 export function lineKind(item) {
@@ -120,25 +147,18 @@ export function isAddOnLine(item) {
 }
 
 function stampSell(item, price) {
-  const cost = numOrNull(item.cost);
-  const gm = cost > 0 && price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : item.gmPct;
   return {
     ...item,
     quotedPrice: price,
     ourPrice: price,
-    gmPct: gm,
+    gmPct: gmPct(item.cost, price, item.gmPct),
     userPriced: true,
   };
 }
 
 /** Stamp one product $ on goods only. Add-ons / shipping stay as-is. */
 export function applyMattSellPrice(items, sellPrice) {
-  const price = numOrNull(sellPrice);
-  if (price == null || !Array.isArray(items) || !items.length) return items || [];
-  return items.map(item => {
-    if (!item || item.notFound || isAddOnLine(item)) return item;
-    return stampSell(item, price);
-  });
+  return applyQuoteRates(items, { product: sellPrice });
 }
 
 /** Apply per-line rates so customization cannot inherit the ball price. */
@@ -218,7 +238,6 @@ export function applyLockedPrices(items, lockedItems, { lockSell = true, lockCos
     const ourPrice = lockSell
       ? (lock.ourPrice != null ? Number(lock.ourPrice) : quoted)
       : (numOrNull(item.ourPrice) ?? quoted);
-    const gm = cost > 0 && quoted > 0 ? Math.round(((quoted - cost) / quoted) * 1000) / 10 : item.gmPct;
     return {
       ...item,
       sku: item.sku || lock.sku,
@@ -229,7 +248,7 @@ export function applyLockedPrices(items, lockedItems, { lockSell = true, lockCos
       map: lock.map != null ? Number(lock.map) : item.map,
       supplier: item.supplier || lock.supplier,
       brand: item.brand || lock.brand,
-      gmPct: gm,
+      gmPct: gmPct(cost, quoted, item.gmPct),
     };
   });
 }
