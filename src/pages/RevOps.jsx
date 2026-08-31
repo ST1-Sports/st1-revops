@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
-import { assistantBubbleText, ChatProse, EdgarQuoteCard } from "../components/ScoutChatBits.jsx";
+import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard } from "../components/ScoutChatBits.jsx";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -188,14 +188,46 @@ sent:false,
 }catch(e){ctx.toast(`Quote error: ${e.message}`,"error");}
 setSQ(null);
 }
-function sharedCreateEdgarQuoteInZoho(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
+function quoteFieldsFromForm(fields={}){
+return{
+customer_name:(fields.school||"").trim(),
+account_city:(fields.city||"").trim(),
+account_state:(fields.state||"").trim(),
+contact_person:(fields.contact||"").trim(),
+email:(fields.email||"").trim(),
+notes:(fields.notes||"").trim(),
+qty:Number(fields.qty),
+};
+}
+function sharedCreateEdgarQuoteInZoho(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx,fields={}){
 const q=action.quote||{};
 const items=(q.lineItems||[]).filter(li=>!li.notFound);
-const fallbackName=items[0]?.name?`Quote — ${items[0].name}`:"ST1 quote";
+const form=quoteFieldsFromForm(fields);
+if(!form.customer_name){ctx.toast("School or account name is required","error");return;}
+const qtyOverride=items.length===1&&Number.isFinite(form.qty)&&form.qty>0?form.qty:null;
 return sharedCreateQuoteNow({
-customer_name:q.customer||action.customer||fallbackName,
-line_items:items.map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
-notes:(q.warnings||[]).join("\n"),
+customer_name:form.customer_name,
+account_city:form.account_city,
+account_state:form.account_state,
+contact_person:form.contact_person,
+email:form.email,
+line_items:items.map(li=>({name:li.name,description:li.notes||"",quantity:qtyOverride||Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
+notes:[form.notes,...(q.warnings||[])].filter(Boolean).join("\n"),
+},key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx);
+}
+function sharedCreatePriceQuoteInZoho(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx,fields={}){
+const item=action.item||{};
+const form=quoteFieldsFromForm(fields);
+if(!form.customer_name){ctx.toast("School or account name is required","error");return;}
+const qty=Number.isFinite(form.qty)&&form.qty>0?form.qty:1;
+return sharedCreateQuoteNow({
+customer_name:form.customer_name,
+account_city:form.account_city,
+account_state:form.account_state,
+contact_person:form.contact_person,
+email:form.email,
+line_items:[{name:item.name||"ST1 item",description:[item.sku?`SKU ${item.sku}`:"",item.supplier].filter(Boolean).join(" · "),quantity:qty,rate:Number(item.list)||0,cost:Number(item.cost)||0}],
+notes:form.notes,
 },key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx);
 }
 function sharedDownloadQuotePdf(approvedQuotes,key){
@@ -2047,7 +2079,8 @@ if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExp
 };
 const quoteCtx={toast,dispatch,deals:s.deals,cu};
 const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
-const createEdgarQuoteInZoho=(action,key)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
+const createEdgarQuoteInZoho=(action,key,fields)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
+const createPriceQuoteInZoho=(action,key,fields)=>sharedCreatePriceQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
 const downloadQuotePdf=(key)=>sharedDownloadQuotePdf(approvedQuotes,key);
 const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,quoteCtx);
 const launchCampaignNow=async(action,key,matchedContacts)=>{
@@ -2185,8 +2218,8 @@ const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.foll
 const hotDeals=useMemo(()=>openDeals.filter(d=>d.priority==="hot").slice(0,3),[openDeals]);
 const topContacts=useMemo(()=>(s.contacts||[]).filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,4),[s.contacts]);
 const openRfps=useMemo(()=>(s.rfps||[]).filter(r=>!["No Bid","Lost","Won"].includes(r.stage)).slice(0,3),[s.rfps]);
-const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg},ledger_payments:{c:B.green,bg:B.greenBg}};
-const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD LEAD",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
+const ACTION_COLORS={create_deal:{c:B.orange,bg:B.orangeBg},flag_deal:{c:B.red,bg:B.redBg},schedule_followup:{c:B.blue,bg:B.blueBg},log_note:{c:B.teal,bg:B.tealBg},add_contact:{c:B.purple,bg:B.purpleBg},create_campaign:{c:B.blue,bg:B.blueBg},add_to_nurture:{c:B.green,bg:B.greenBg},create_quote:{c:B.blue,bg:B.blueBg},create_campaign_sequence:{c:B.purple,bg:B.purpleBg},store_competitor_intel:{c:B.orange,bg:B.orangeBg},edgar_quote:{c:B.teal,bg:B.tealBg},st1_price:{c:B.teal,bg:B.tealBg},brad_outreach:{c:B.green,bg:B.greenBg},ledger_reconcile:{c:B.blue,bg:B.blueBg},ledger_invoice:{c:B.purple,bg:B.purpleBg},ledger_vendor_bill:{c:B.orange,bg:B.orangeBg},ledger_payments:{c:B.green,bg:B.greenBg}};
+const ACTION_LABELS={create_deal:"◫ CREATE DEAL",flag_deal:"🔥 FLAG DEAL",schedule_followup:"📅 SET FOLLOW-UP",log_note:"📝 LOG NOTE",add_contact:"+ ADD LEAD",create_campaign:"✦ GO TO CAMPAIGNS",add_to_nurture:"✉ ADD TO NURTURE",navigate:"→ GO THERE",create_quote:"▤ CREATE QUOTE",create_campaign_sequence:"✦ LAUNCH CAMPAIGN",store_competitor_intel:"⊗ COMPETITOR INTEL SAVED",edgar_quote:"▤ EDGAR QUOTE",st1_price:"▤ PRICE",brad_outreach:"✉ BRAD DRAFTS",ledger_reconcile:"◎ RECONCILE",ledger_invoice:"◫ INVOICE",ledger_vendor_bill:"◉ VENDOR BILL",ledger_payments:"◎ PAYMENTS"};
 const STARTERS=[
 "Who should I call or email today?",
 "Draft outreach for my highest-priority contact",
@@ -2268,11 +2301,14 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
 <div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
-{m.role==="assistant"&&(m.actions||[]).some(a=>a.type==="edgar_quote")&&(
+{m.role==="assistant"&&(m.actions||[]).some(a=>a.type==="edgar_quote"||a.type==="st1_price")&&(
 <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:"88%",width:"88%",marginBottom:8}}>
-{(m.actions||[]).map((a,ai)=>a.type==="edgar_quote"?(
-<EdgarQuoteCard key={ai} B={B} action={a} creating={sendingQuote===`${msgIdx}_${ai}`} onCreate={()=>createEdgarQuoteInZoho(a,`${msgIdx}_${ai}`)}/>
-):null)}
+{(m.actions||[]).map((a,ai)=>{
+const key=`${msgIdx}_${ai}`;
+if(a.type==="edgar_quote")return <EdgarQuoteCard key={ai} B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onCreate={fields=>createEdgarQuoteInZoho(a,key,fields)}/>;
+if(a.type==="st1_price")return <ScoutPriceCard key={ai} B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onQuote={fields=>createPriceQuoteInZoho(a,key,fields)}/>;
+return null;
+})}
 </div>
 )}
 {(()=>{const body=m.role==="assistant"?assistantBubbleText(chatText(m.content),m.actions):chatText(m.content);if(!body)return null;return(
@@ -2284,7 +2320,7 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {m.actions?.length>0&&(
 <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
 {m.actions.map((a,ai)=>{
-if(a.type==="edgar_quote") return null;
+if(a.type==="edgar_quote"||a.type==="st1_price") return null;
 if(a.type==="draft_email"){
 const key=`${msgIdx}_${ai}`;const expanded=expandedEmail===key;
 return(

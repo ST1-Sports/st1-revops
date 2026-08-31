@@ -19,10 +19,10 @@ export function stripMarkdownTables(text) {
  * When an Edgar card is on screen, drop the SKU/cost dump Scout often repeats.
  * Keep the spoken follow-up (notes that are not already on the card, questions).
  */
-export function chatFollowUp(text, { hasQuoteCard } = {}) {
+export function chatFollowUp(text, { hasQuoteCard, hasPriceCard } = {}) {
   let t = stripMarkdownTables(text);
   t = t.replace(/^#{1,6}\s+/gm, '');
-  if (!hasQuoteCard) return t.trim();
+  if (!hasQuoteCard && !hasPriceCard) return t.trim();
 
   t = t.replace(/^here'?s what (?:edgar|i) pulled:?\s*/gim, '');
   t = t.replace(/^\s*(?:\*\*)?key notes:?\s*(?:\*\*)?\s*$/gim, '');

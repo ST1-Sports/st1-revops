@@ -572,7 +572,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_pricing',
-    description: 'Return authoritative ST1 pricing from dealer price lists (ranked by model/SKU — same lists Edgar quotes from), then Zoho Books / the product catalog. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
+    description: 'Fast cost / list / MAP lookup from dealer price lists (same lists Edgar quotes from), then Zoho Books / catalog. Use this for "what\'s our cost" or "what\'s the price" — do not call Edgar unless the user wants a formal quote. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
     permission: 'pricing:read',
     readOnly: true,
     input_schema: {

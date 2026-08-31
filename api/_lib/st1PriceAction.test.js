@@ -1,0 +1,33 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { st1PriceActionFromPricing } from './st1PriceAction.js';
+
+describe('st1PriceActionFromPricing', () => {
+  it('returns null when the lookup missed', () => {
+    assert.equal(st1PriceActionFromPricing({ status: 'not_found', result: null }), null);
+    assert.equal(st1PriceActionFromPricing({ result: null }), null);
+  });
+
+  it('maps dealer-list cost and list for the Scout card', () => {
+    const action = st1PriceActionFromPricing({
+      status: 'ok',
+      result: {
+        name: 'TF-5000 SZ5 SB NFHS',
+        sku: 'AC-WC647929',
+        brand: 'Spalding',
+        supplier: 'Athletic Connection',
+        cost: { amount: 58.89, source: 'ST1 price list (dealer cost)' },
+        customerPrice: { amount: 94.99, source: 'ST1 price list (our price)' },
+        mapPrice: null,
+        marginPct: 38.01,
+        matches: [{ name: 'Other', sku: 'X' }],
+      },
+    });
+    assert.equal(action.type, 'st1_price');
+    assert.equal(action.item.sku, 'AC-WC647929');
+    assert.equal(action.item.cost, 58.89);
+    assert.equal(action.item.list, 94.99);
+    assert.equal(action.item.supplier, 'Athletic Connection');
+    assert.equal(action.matches.length, 1);
+  });
+});

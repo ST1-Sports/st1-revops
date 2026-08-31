@@ -30,6 +30,13 @@ describe('chatFollowUp', () => {
     assert.equal(out.includes('---'), false);
   });
 
+  it('keeps the question and drops the cost dump when a price card is present', () => {
+    const out = chatFollowUp(SAMPLE, { hasPriceCard: true });
+    assert.match(out, /Want me to build a quote/i);
+    assert.equal(out.includes('Your Cost'), false);
+    assert.equal(out.includes('|'), false);
+  });
+
   it('keeps the question and drops the cost dump when a quote card is present', () => {
     const out = chatFollowUp(SAMPLE, { hasQuoteCard: true });
     assert.match(out, /Want me to build a quote/i);

@@ -18,6 +18,7 @@ import { getZohoToken } from './_lib/zoho-token.js';
 import { recall, remember, memoryBlock, logInteraction } from './_lib/memory.js';
 import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
+import { st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
 
 export const config = { maxDuration: 120 };
 
@@ -83,22 +84,6 @@ function usableChatMessage(parsed, finalText) {
   const fromText = String(finalText || '').trim();
   if (fromText && !fromText.startsWith('{')) return fromText;
   return '';
-}
-
-function lastUserText(messages) {
-  for (let i = (messages || []).length - 1; i >= 0; i--) {
-    if (messages[i].role === 'user') return String(messages[i].content || '');
-  }
-  return '';
-}
-
-function isProductPriceAsk(text) {
-  const t = String(text || '').toLowerCase();
-  if (t.length < 3) return false;
-  return (
-    /\b(price|pricing|cost|quote|how much|map|margin|dealer cost|list price|what(?:'s| is) our)\b/.test(t)
-    || /\b(?:tf|wth|ac)[- ]?\d{2,}/.test(t)
-  );
 }
 
 function messageFromEdgar(edgar) {
@@ -249,7 +234,7 @@ const TOOLS = [
   },
   {
     name: "propose_create_quote",
-    description: "Build and create a real Zoho CRM Quote (linked to the Account) for a customer based on their needs. Use product catalog rates as base cost and apply appropriate margin. Use call_edgar instead whenever possible — Edgar reads live dealer costs and enforces GM floor + MAP.",
+    description: "Build and create a real Zoho CRM Quote (linked to the Account) for a customer based on their needs. Prefer get_st1_pricing for a cost/list check, or call_edgar when the user wants a formal quote. This tool is a fallback when those cannot price the items.",
     input_schema: {
       type: "object",
       properties: {
@@ -331,7 +316,7 @@ const TOOLS = [
   },
   {
     name: "call_edgar",
-    description: "REQUIRED for any product cost, price, or quote question. Edgar searches the full dealer price lists by model and SKU (e.g. TF-5000), reads live cost / our price / MAP, enforces GM floor, and returns verified line items. Always call this instead of get_st1_pricing or propose_create_quote when the user names a product. Pass the user's product text in task — do not ask for a SKU first.",
+    description: "Build a formal quote with GM floor and MAP when the user explicitly wants a quote (e.g. 'quote 5 TF-5000s for Lincoln High', 'build a quote', 'price this out for a school'). Do NOT use this for a casual cost/price/MAP check — use get_st1_pricing for that. Pass the user's product text and school in task.",
     input_schema: {
       type: "object",
       properties: {
@@ -558,7 +543,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   let orgMemory = '';
   try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
 
-  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For any product cost, price, or quote, call call_edgar. Edgar searches the full dealer price lists (same database as Price Lists) by model and SKU, then applies GM floor and MAP. Do not invent prices. Do not ask for a SKU until Edgar has searched and returned no match.
+  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For a cost, list, MAP, or "what's the price" question, call get_st1_pricing — that is the fast lookup on the same dealer lists Edgar uses. Only call call_edgar when the user explicitly wants a quote built (a school, qty, or the word quote). Do not invent prices. Do not ask for a SKU until a lookup has returned no match.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
@@ -583,7 +568,7 @@ $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="
 
 ${inventory.length > 0 ? `=== PRODUCT CATALOG (${inventory.length} active items from Zoho Books — samples only) ===
 ${inventory.slice(0, 12).map(i => `· ${i.name}${i.sku ? " ["+i.sku+"]" : ""} — $${i.rate.toFixed(2)}${i.unit ? " / "+i.unit : ""}`).join("\n")}
-Do not quote a named product from this sample. Call call_edgar so it searches the full dealer lists.
+Do not quote a named product from this sample. Call get_st1_pricing so it searches the full dealer lists.
 ` : ""}${(() => {
   const own = priceLists.filter(pl => pl.type === "own");
   const comp = priceLists.filter(pl => pl.type === "competitor");
@@ -593,7 +578,7 @@ Do not quote a named product from this sample. Call call_edgar so it searches th
     for (const pl of own) {
       out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
     }
-    out += `These lists can have thousands of SKUs. Never answer a product price from a sample. Always call call_edgar with the product name/model.\n`;
+    out += `These lists can have thousands of SKUs. Never answer a product price from a sample. Always call get_st1_pricing with the product name/model. Use call_edgar only when they want a formal quote.\n`;
   }
   if (comp.length > 0) {
     out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
@@ -629,8 +614,8 @@ For every message, first classify the intent, then act:
 
 AUTHORITATIVE ST1 KNOWLEDGE — DO NOT GUESS:
 - Use search_st1_knowledge for broad questions about uploaded docs, policies, products, vendors, brands, customers, or internal ST1 knowledge.
-- For a named product cost, price, MAP, margin, or quote: call call_edgar. Do not use get_st1_pricing first and do not ask for a SKU first.
-- Use get_st1_pricing only if Edgar errors or the user wants a single catalog field with no quote.
+- For a named product cost, list, MAP, or margin check: call get_st1_pricing. Do not ask for a SKU first. Do not call Edgar unless they asked for a quote.
+- Use call_edgar only when they want a formal quote built (school/customer, quantity, "quote this", "build a quote", "price this out for").
 - Use get_st1_product for product details, availability, catalog fields, or product source questions.
 - Use get_st1_customer for customer/contact/school/lead lookups when the answer depends on internal data.
 - Use get_st1_policy for AI safety, pricing rules, brand voice, sponsorship config, customer-data rules, or sales talk track.
@@ -661,10 +646,14 @@ USE propose_create_campaign_sequence when:
 - User says "build a campaign", "send to a group", "email all [sport] coaches", "reach out to [segment]", or describes outbound to multiple people
 - Write COMPLETE email bodies for every touch in the sequence
 
-USE call_edgar (required for product prices and quotes) when:
-- User asks cost, price, MAP, "how much", "quote", "price this out", or names a model/SKU (TF-5000, basketball, etc.)
-- Always prefer call_edgar over get_st1_pricing and propose_create_quote
-- After Edgar returns, write 1-2 short sentences only. Do not paste markdown tables, SKU grids, or **bold** cost dumps — the UI shows the quote card. If not found, then ask for a SKU.
+USE get_st1_pricing (fast — default for price questions) when:
+- User asks cost, list, MAP, "how much", "what's our price", or names a model/SKU without asking to quote a school
+- After it returns, write 1-2 short sentences only. Do not paste markdown tables or cost dumps — the UI shows the price card. Offer to quote if they name a school.
+- If not found, then ask for a SKU or a more specific name
+
+USE call_edgar (formal quotes only) when:
+- User says "quote", "build a quote", "price this out for [school]", or gives a customer + qty they want on a quote
+- After Edgar returns, write 1-2 short sentences only. Do not paste markdown tables — the UI shows the quote card
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
 
 USE call_ledger when:
@@ -717,7 +706,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 8. propose_create_quote — build and create a real Zoho CRM Quote (linked to the Account) for a customer; fallback for when call_edgar can't price the items
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
-11. call_edgar — REQUIRED for product cost/price/quote. Searches full dealer lists by model/SKU, applies GM floor + MAP, returns edgar_quote
+11. call_edgar — formal quote only. Searches dealer lists, applies GM floor + MAP, returns edgar_quote. Not for casual price checks.
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
@@ -744,7 +733,7 @@ COMPETITOR INTEL — ALWAYS DO THIS:
 - If new info about an already-stored competitor is found, update it with the combined/latest intel.
 
 PRICING & RFP STRATEGY:
-- When asked "how much should we charge", "what's our cost", or "what's the price" — call call_edgar. Do not guess from list-name samples in this prompt.
+- When asked "how much should we charge", "what's our cost", or "what's the price" — call get_st1_pricing. Do not guess from list-name samples in this prompt. Call call_edgar only if they want a quote for a named school.
 - For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
 - When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
 - Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
@@ -766,6 +755,7 @@ After using tools, respond with a JSON object:
 {"message":"your response text","actions":[...tool proposals...],"suggestions":["follow-up 1","follow-up 2","follow-up 3"]}
 
 Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"
+get_st1_pricing executes server-side and returns type:"st1_price" with cost / list / GM automatically.
 call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically.
 call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.
 call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill"|"ledger_payments" depending on the task.`;
@@ -924,20 +914,6 @@ async function _handler(req, res) {
     loopCount++;
   }
 
-  // Price questions must go through Edgar even if Scout only called
-  // get_st1_pricing (that tool used to return unrelated "ball" rows).
-  const priceAsk = lastUserText(rawMessages);
-  let forceEdgarWrap = false;
-  if (isProductPriceAsk(priceAsk) && !agentResults.some(r => r.name === "call_edgar")) {
-    const output = await callEdgar({ task: priceAsk }, baseUrl);
-    agentResults.push({ name: "call_edgar", input: { task: priceAsk }, output });
-    messages.push({
-      role: "user",
-      content: `Edgar searched the dealer price lists for this request. Answer from Edgar — do not ask for a SKU if a matching line item is present.\n${JSON.stringify(output)}`,
-    });
-    forceEdgarWrap = true;
-  }
-
   // Parse final response — should be JSON. Pricing questions often end on a
   // tool_use turn with no text; force one text-only pass, then fall back to
   // a sentence built from the tool results so the chat never goes blank.
@@ -947,13 +923,13 @@ async function _handler(req, res) {
     if (m) parsed = JSON.parse(m[0]);
   } catch { /* fallback to plain text */ }
 
-  let message = forceEdgarWrap ? "" : usableChatMessage(parsed, finalText);
+  let message = usableChatMessage(parsed, finalText);
   if (!message) {
     try {
       const wrapUp = await callClaude(
         [
           ...messages,
-          { role: "user", content: "Answer the user now as JSON only: {\"message\":\"...\",\"actions\":[],\"suggestions\":[\"...\"]}. Use the tool results already in this conversation. Do not call tools. If Edgar returned a quote, message must be 1-2 short sentences — no markdown tables, no **bold** dump, no SKU/cost grid. The UI already shows the quote card." },
+          { role: "user", content: "Answer the user now as JSON only: {\"message\":\"...\",\"actions\":[],\"suggestions\":[\"...\"]}. Use the tool results already in this conversation. Do not call tools. If a price lookup or Edgar quote is present, message must be 1-2 short sentences — no markdown tables, no **bold** dump, no SKU/cost grid. The UI already shows the card." },
         ],
         system,
         TOOLS,
@@ -982,6 +958,7 @@ async function _handler(req, res) {
       if (!quote) return null;
       return { type: "edgar_quote", quote, warnings: r.output?.metadata?.warnings || [], task: r.input.task, customer: r.input.customer };
     }
+    if (r.name === "get_st1_pricing") return st1PriceActionFromPricing(r.output);
     if (r.name === "call_brad") {
       const drafts = r.output?.metadata?.drafts || [];
       if (!drafts.length) return null;
@@ -995,6 +972,8 @@ async function _handler(req, res) {
     }
     return null;
   }).filter(Boolean);
+  const hasEdgarQuote = agentActions.some(a => a.type === "edgar_quote");
+  const surfacedActions = hasEdgarQuote ? agentActions.filter(a => a.type !== "st1_price") : agentActions;
 
   // Actions from proposal tools (exclude agent tools — they're handled above)
   const typeMap = {
@@ -1013,7 +992,7 @@ async function _handler(req, res) {
     .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger" && t.name !== "remember_this" && !KNOWLEDGE_TOOL_NAMES.has(t.name))
     .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
 
-  const actions     = [...agentActions, ...proposedActions, ...(parsed?.actions || [])];
+  const actions     = [...surfacedActions, ...proposedActions, ...(parsed?.actions || [])];
   const suggestions = parsed?.suggestions || [];
 
   // Fire-and-forget: log this interaction to agent memory
