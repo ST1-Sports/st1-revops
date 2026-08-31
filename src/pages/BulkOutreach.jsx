@@ -41,11 +41,10 @@
  *      shared template) — nothing is generic, every send uses the exact
  *      subject/body written for that org — and schedules it via the same
  *      MT-business-hours-aware batching the Campaigns tab uses, so it shows
- *      up there for tracking like any other campaign. Day 1 can also fire
- *      immediately from this page via GO (all remaining Email 1s now, or
- *      one every 15 seconds) through api/agents/brad-send. The cron still
- *      owns later scheduled touches. The batch record is marked approved +
- *      linked to the campaign and kept around as history.
+ *      up there for tracking like any other campaign. GO on this page can
+ *      fire remaining Day 1 emails now (or one every 15 seconds) via
+ *      api/agents/brad-send; later touches still use the cron. The batch
+ *      record is marked approved + linked to the campaign and kept as history.
  */
 import { useState, useEffect, useMemo, useRef } from "react";
 
@@ -143,6 +142,17 @@ const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim
 // Same guard as api/cron/send-batches.js — belt-and-suspenders against ever
 // firing the literal unfilled-in placeholder copy as a real send.
 const isPlaceholderCopy = text => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
+const touchHasCopy = t => !!(t && String(t.subject || "").trim() && String(t.body || "").trim() && !isPlaceholderCopy(t.body));
+const isDay1Pending = (lead, isTouchSent) => !!(lead.sendable && lead.email && !lead.bounced && touchHasCopy(lead.touches?.[0]) && !isTouchSent(lead, 0));
+async function sleepAbortable(ms, aborted, onTick) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (aborted()) return false;
+    onTick?.(Math.max(0, Math.ceil((end - Date.now()) / 1000)));
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return !aborted();
+}
 
 // Resolves {{orgName}}/{{firstName}}/{{sport}} against one lead's fields —
 // used wherever a mass-applied draft (a bulk-added follow-up, or an EMAIL
@@ -231,6 +241,53 @@ function fmtDT(iso) {
 function Lbl({ children, c, s: sty }) { return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 1, ...sty }}>{children}</div>; }
 function OBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : B.orange, color: disabled ? B.muted : B.white, border: "none", borderRadius: 5, padding: "8px 16px", fontSize: 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? "not-allowed" : "pointer", ...sty }}>{children}</button>; }
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
+function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo }) {
+  const dripMins = Math.max(1, Math.ceil((readyCount * GO_DRIP_MS) / 60000));
+  return (
+    <div style={{ background: B.orangeBg, border: `2px solid ${B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <Lbl c={B.orange}>SEND DAY 1 FROM BRAD</Lbl>
+          <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
+            {readyCount} Email 1{readyCount !== 1 ? "s" : ""} ready
+          </div>
+          <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 520, lineHeight: 1.5 }}>
+            Sends the first email for each organization still pending, from brad@shopst1sports.com. Already-sent, bounced, or empty Day 1s are skipped.
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: run ? "default" : "pointer" }}>
+            <input type="radio" name="go-pace" checked={pace === "now"} disabled={!!run} onChange={() => setPace("now")} />
+            Send all Day 1 now
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: run ? "default" : "pointer" }}>
+            <input type="radio" name="go-pace" checked={pace === "drip"} disabled={!!run} onChange={() => setPace("drip")} />
+            1 every 15 seconds{readyCount > 1 ? ` (~${dripMins} min)` : ""}
+          </label>
+          <div style={{ marginTop: 2 }}>
+            {run
+              ? <GBtn onClick={onStop} style={{ color: B.red, borderColor: `${B.red}60`, fontWeight: 700 }}>■ STOP</GBtn>
+              : <OBtn onClick={onGo} disabled={!canGo} style={{ padding: "10px 28px", fontSize: 13 }}>▶ GO</OBtn>}
+          </div>
+        </div>
+      </div>
+      {run && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${B.orange}40` }}>
+          <div style={{ fontSize: 12, color: B.text, fontWeight: 600 }}>
+            {run.done} of {run.total} sent
+            {run.current ? ` — ${run.current}` : ""}
+            {run.failed ? ` · ${run.failed} failed` : ""}
+            {run.mode === "drip" && run.nextIn > 0 ? ` · next in ${run.nextIn}s` : ""}
+          </div>
+          <div style={{ height: 6, background: `${B.orange}30`, borderRadius: 99, marginTop: 8, overflow: "hidden" }}>
+            <div style={{ width: `${Math.round((run.done / Math.max(1, run.total)) * 100)}%`, height: "100%", background: B.orange, borderRadius: 99 }} />
+          </div>
+          <div style={{ fontSize: 10, color: B.muted, marginTop: 6 }}>Keep this page open — leaving Bulk Outreach stops the send.</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const CHANNEL_COLOR = { email: B.green, "contact form": B.blue, "social dm": B.purple, phone: B.yellow, "research needed": B.muted, suppressed: B.red };
 // Ways to clear a bounce alert without a replacement email — each moves the
@@ -666,41 +723,11 @@ Return JSON exactly as:
     }
   };
 
-  // Sends this exact touch right now, from Brad's inbox, bypassing the
-  // scheduled batch entirely — for when the rep wants to trigger a specific
-  // email themselves rather than wait on the cron. Goes through the same
-  // api/agents/brad-send endpoint (and its own BRAD_SENDING_ENABLED gate) as
-  // every other Brad send, so there's exactly one code path that can put an
-  // email in Brad's outbox as Brad.
-  const sendTouchNow = async (lead, touchIdx) => {
-    const touch = lead.touches[touchIdx];
-    if (!touch || touchSentInfo(lead, touchIdx).sent) return;
-    if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
-    if (!lead.email) { toast("No email address for this contact", "error"); return; }
-    if (!touch.subject.trim() || !touch.body.trim() || isPlaceholderCopy(touch.body)) {
-      toast("Write a real subject and body for this email first", "error"); return;
-    }
-    if (goRun) { toast("Stop the Day 1 send first", "info"); return; }
-    if (!window.confirm(`Send this exact email now, from brad@shopst1sports.com?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
-
-    const key = `${lead.id}-${touchIdx}`;
-    setSendingKey(key);
-    const result = await fireBradSend(lead, touchIdx);
-    if (result.ok) toast(`Sent to ${lead.email}`, "success");
-    else if (!result.skipped) toast(result.error || "Send failed", "error");
-    setSendingKey(null);
-  };
-
-  // One Brad send, no confirm — used by SEND NOW (after confirm) and by GO.
-  // Reads the latest lead from leadsRef so a long Day 1 drip doesn't stamp
-  // stale sentAt markers over emails that already went out in this run.
   const fireBradSend = async (lead, touchIdx) => {
     const live = leadsRef.current.find(l => l.id === lead.id) || lead;
     const touch = live.touches[touchIdx];
-    if (!touch || touchSentInfo(live, touchIdx).sent) return { skipped: true };
-    if (live.bounced || !live.email) return { skipped: true };
-    if (!touch.subject.trim() || !touch.body.trim() || isPlaceholderCopy(touch.body)) {
-      return { skipped: true, error: "Write a real subject and body first" };
+    if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || !live.email || !touchHasCopy(touch)) {
+      return { skipped: true };
     }
     try {
       const r = await fetch("/api/agents/brad-send", {
@@ -720,34 +747,45 @@ Return JSON exactly as:
     }
   };
 
-  const day1Ready = useMemo(() => sendableLeads.filter(l => {
-    const t = l.touches[0];
-    if (!t || touchSentInfo(l, 0).sent) return false;
-    if (!t.subject.trim() || !t.body.trim() || isPlaceholderCopy(t.body)) return false;
-    return true;
-  }), [sendableLeads, linkedCampaignId, s?.campaigns]);
+  const sendTouchNow = async (lead, touchIdx) => {
+    if (goRun) { toast("Stop the Day 1 send first", "info"); return; }
+    const touch = lead.touches[touchIdx];
+    if (!touch || touchSentInfo(lead, touchIdx).sent) return;
+    if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
+    if (!lead.email) { toast("No email address for this contact", "error"); return; }
+    if (!touchHasCopy(touch)) { toast("Write a real subject and body for this email first", "error"); return; }
+    if (!window.confirm(`Send this exact email now, from brad@shopst1sports.com?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
+    setSendingKey(`${lead.id}-${touchIdx}`);
+    const result = await fireBradSend(lead, touchIdx);
+    if (result.ok) toast(`Sent to ${lead.email}`, "success");
+    else if (!result.skipped) toast(result.error || "Send failed", "error");
+    setSendingKey(null);
+  };
 
-  const stopDay1Go = () => { goAbortRef.current = true; };
+  const day1Ready = useMemo(
+    () => sendableLeads.filter(l => isDay1Pending(l, (lead, i) => touchSentInfo(lead, i).sent)),
+    [sendableLeads, linkedCampaignId, s?.campaigns]
+  );
 
   const startDay1Go = async () => {
-    if (goRun) return;
+    if (goRun || !day1Ready.length) {
+      if (!day1Ready.length) toast("No Day 1 emails left to send", "info");
+      return;
+    }
     const queue = day1Ready;
-    if (!queue.length) { toast("No Day 1 emails left to send — every Email 1 is already sent, empty, or bounced", "info"); return; }
     const drip = goPace === "drip";
     const mins = Math.ceil((queue.length * GO_DRIP_MS) / 60000);
-    const ok = window.confirm(drip
+    if (!window.confirm(drip
       ? `Send ${queue.length} Day 1 email(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\nKeep this page open until it finishes.`
-      : `Send all ${queue.length} Day 1 email(s) from brad@shopst1sports.com now?`);
-    if (!ok) return;
+      : `Send all ${queue.length} Day 1 email(s) from brad@shopst1sports.com now?`)) return;
 
     goAbortRef.current = false;
     setGoRun({ mode: drip ? "drip" : "now", total: queue.length, done: 0, failed: 0, current: null, nextIn: 0 });
-    setSendingKey("go");
     let done = 0, failed = 0, streak = 0;
     for (let i = 0; i < queue.length; i++) {
       if (goAbortRef.current) break;
       const lead = queue[i];
-      setGoRun(r => r ? { ...r, current: lead.orgName || lead.email, nextIn: 0 } : r);
+      setGoRun(r => r && { ...r, current: lead.orgName || lead.email, nextIn: 0 });
       const result = await fireBradSend(lead, 0);
       if (goAbortRef.current) break;
       if (result.ok) { done += 1; streak = 0; }
@@ -755,25 +793,17 @@ Return JSON exactly as:
         failed += 1;
         streak += 1;
         toast(`${lead.email}: ${result.error || "Send failed"}`, "error");
-        if (streak >= 3) {
-          toast("Stopped — three sends in a row failed (check Brad sending / Gmail)", "error");
-          break;
-        }
+        if (streak >= 3) { toast("Stopped — three sends in a row failed", "error"); break; }
       }
-      setGoRun(r => r ? { ...r, done, failed, current: lead.orgName || lead.email } : r);
-      const more = i < queue.length - 1 && !goAbortRef.current;
-      if (more && drip) {
-        const end = Date.now() + GO_DRIP_MS;
-        while (Date.now() < end && !goAbortRef.current) {
-          setGoRun(r => r ? { ...r, nextIn: Math.max(0, Math.ceil((end - Date.now()) / 1000)) } : r);
-          await new Promise(res => setTimeout(res, 250));
-        }
+      setGoRun(r => r && { ...r, done, failed, current: lead.orgName || lead.email });
+      if (drip && i < queue.length - 1) {
+        await sleepAbortable(GO_DRIP_MS, () => goAbortRef.current, sec => setGoRun(r => r && { ...r, nextIn: sec }));
       }
     }
-    setSendingKey(null);
     setGoRun(null);
-    if (goAbortRef.current) toast(`Stopped — ${done} sent${failed ? `, ${failed} failed` : ""}`, "info");
-    else if (done || failed) toast(`Day 1 done — ${done} sent${failed ? `, ${failed} failed` : ""}`, failed && !done ? "error" : "success");
+    const summary = `${done} sent${failed ? `, ${failed} failed` : ""}`;
+    if (goAbortRef.current) toast(`Stopped — ${summary}`, "info");
+    else if (done || failed) toast(`Day 1 done — ${summary}`, failed && !done ? "error" : "success");
   };
 
   // Flags a batch of bounced leads everywhere it matters: this batch's
@@ -1452,50 +1482,15 @@ Subject: <subject line, may include {{orgName}}>
           )}
 
           {(day1Ready.length > 0 || goRun) && (
-            <div style={{ background: B.orangeBg, border: `2px solid ${B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
-                <div>
-                  <Lbl c={B.orange}>SEND DAY 1 FROM BRAD</Lbl>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
-                    {day1Ready.length} Email 1{day1Ready.length !== 1 ? "s" : ""} ready
-                  </div>
-                  <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 520, lineHeight: 1.5 }}>
-                    Sends the first email for each organization still pending, from brad@shopst1sports.com. Already-sent, bounced, or empty Day 1s are skipped.
-                  </div>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: goRun ? "default" : "pointer" }}>
-                    <input type="radio" name="go-pace" checked={goPace === "now"} disabled={!!goRun} onChange={() => setGoPace("now")} />
-                    Send all Day 1 now
-                  </label>
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: goRun ? "default" : "pointer" }}>
-                    <input type="radio" name="go-pace" checked={goPace === "drip"} disabled={!!goRun} onChange={() => setGoPace("drip")} />
-                    1 every 15 seconds{day1Ready.length > 1 ? ` (~${Math.ceil((day1Ready.length * GO_DRIP_MS) / 60000)} min)` : ""}
-                  </label>
-                  <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
-                    {goRun ? (
-                      <GBtn onClick={stopDay1Go} style={{ color: B.red, borderColor: `${B.red}60`, fontWeight: 700 }}>■ STOP</GBtn>
-                    ) : (
-                      <OBtn onClick={startDay1Go} disabled={!batchId} style={{ padding: "10px 28px", fontSize: 13 }}>▶ GO</OBtn>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {goRun && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${B.orange}40` }}>
-                  <div style={{ fontSize: 12, color: B.text, fontWeight: 600 }}>
-                    {goRun.done} of {goRun.total} sent
-                    {goRun.current ? ` — ${goRun.current}` : ""}
-                    {goRun.failed ? ` · ${goRun.failed} failed` : ""}
-                    {goRun.mode === "drip" && goRun.nextIn > 0 ? ` · next in ${goRun.nextIn}s` : ""}
-                  </div>
-                  <div style={{ height: 6, background: `${B.orange}30`, borderRadius: 99, marginTop: 8, overflow: "hidden" }}>
-                    <div style={{ width: `${Math.round((goRun.done / Math.max(1, goRun.total)) * 100)}%`, height: "100%", background: B.orange, borderRadius: 99 }} />
-                  </div>
-                  <div style={{ fontSize: 10, color: B.muted, marginTop: 6 }}>Keep this page open — leaving Bulk Outreach stops the send.</div>
-                </div>
-              )}
-            </div>
+            <Day1GoPanel
+              readyCount={day1Ready.length}
+              pace={goPace}
+              setPace={setGoPace}
+              run={goRun}
+              onGo={startDay1Go}
+              onStop={() => { goAbortRef.current = true; }}
+              canGo={!!batchId}
+            />
           )}
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
@@ -1601,7 +1596,7 @@ Subject: <subject line, may include {{orgName}}>
                           const sendKey = `${lead.id}-${i}`;
                           if (sentInfo.sent) return <span key={i} title={sentInfo.when ? `Sent ${fmtWhen(sentInfo.when)}` : "Sent"} style={{ fontSize: 9, color: B.green, fontWeight: 700 }}>✓{i + 1}</span>;
                           return (
-                            <button key={i} onClick={() => sendTouchNow(lead, i)} disabled={!!goRun || sendingKey === sendKey || !t.subject.trim() || !t.body.trim()}
+                            <button key={i} onClick={() => sendTouchNow(lead, i)} disabled={!!goRun || sendingKey === sendKey || !touchHasCopy(t)}
                               title={`Send email ${i + 1} now, from Brad`}
                               style={{ background: sendingKey === sendKey ? B.border : B.orangeBg, color: sendingKey === sendKey ? B.muted : B.orange, border: `1px solid ${B.orange}30`, borderRadius: 4, padding: "3px 8px", fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: sendingKey === sendKey ? "wait" : "pointer" }}>
                               {sendingKey === sendKey ? "…" : `SEND ${i + 1}`}
@@ -1655,7 +1650,7 @@ Subject: <subject line, may include {{orgName}}>
                             ) : lead.bounced ? (
                               <span style={{ fontSize: 10, color: B.red, fontWeight: 600 }}>⚠ Bad email — fix it above before sending</span>
                             ) : (
-                              <OBtn onClick={() => sendTouchNow(lead, i)} disabled={!!goRun || sendingKey === sendKey || !t.subject.trim() || !t.body.trim()} style={{ fontSize: 9, padding: "6px 12px" }}>
+                              <OBtn onClick={() => sendTouchNow(lead, i)} disabled={!!goRun || sendingKey === sendKey || !touchHasCopy(t)} style={{ fontSize: 9, padding: "6px 12px" }}>
                                 {sendingKey === sendKey ? "SENDING…" : "✉ SEND NOW — FROM BRAD"}
                               </OBtn>
                             )}
