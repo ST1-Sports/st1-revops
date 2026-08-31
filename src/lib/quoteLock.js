@@ -62,11 +62,14 @@ export function parseQuoteRates(text) {
     preferredSupplier: /\bspalding\b/.test(lower) && /\bcost\b/.test(lower) ? 'Spalding' : null,
   };
 
+  let prevEnd = 0;
   for (const m of t.matchAll(new RegExp(MONEY_RE.source, 'g'))) {
     const amount = parseMoneyToken(m[1]);
-    if (amount == null) continue;
-    const before = t.slice(Math.max(0, m.index - 32), m.index).toLowerCase();
+    const spanStart = prevEnd === 0 ? Math.max(0, m.index - 48) : prevEnd;
+    const before = t.slice(spanStart, m.index).toLowerCase();
     const after = t.slice(m.index, Math.min(t.length, m.index + m[0].length + 14)).toLowerCase();
+    prevEnd = m.index + m[0].length;
+    if (amount == null) continue;
 
     if (/,/.test(m[1]) && amount >= 200) continue;
     if (/\b(sum|altogether|grand|quote total)\b/.test(before)) continue;

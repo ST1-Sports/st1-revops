@@ -66,8 +66,9 @@ describe('userWantsNewSellPrice', () => {
   });
 });
 
+const hudsonAsk = 'Quote Hudson High School 14 men’s and 14 women’s TF-1000 Legacy basketballs at $81.95 each, optional customization add on $5.95 per ball, shipping estimated $3.00 per ball.';
+
 describe('parseQuoteRates', () => {
-  const hudsonAsk = 'Quote Hudson High School 14 men’s and 14 women’s TF-1000 Legacy basketballs at $81.95 each, optional customization add on $5.95 per ball, shipping estimated $3.00 per ball.';
 
   it('splits ball, customization, and shipping $ from one message', () => {
     const r = parseQuoteRates(hudsonAsk);
@@ -87,6 +88,13 @@ describe('parseQuoteRates', () => {
   it('does not pick a dealer cost out of Scout/Edgar prose as the sell price', () => {
     const r = parseQuoteRates('Held sell price. Cost $65.62 via Athletic Connection. Quote $81.95.');
     assert.equal(r.product, 81.95);
+  });
+
+  it('keeps compact customization and shipping $ on the right lines', () => {
+    const r = parseQuoteRates('customization $5.95, shipping $3');
+    assert.equal(r.customization, 5.95);
+    assert.equal(r.shipping, 3);
+    assert.equal(r.product, null);
   });
 });
 
