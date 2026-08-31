@@ -2851,6 +2851,17 @@ function ModCRM() {
     });
   },[contacts,cdMap,search,filter,cu?.id]);
 
+  const accountCount=useMemo(()=>{
+    const sq=search.toLowerCase();
+    const names=new Set();
+    contacts.filter(c=>!c.deadStatus).forEach(c=>{
+      const school=c.school||"(No School)";
+      if(sq&&!school.toLowerCase().includes(sq)&&!cName(c).toLowerCase().includes(sq)) return;
+      names.add(school);
+    });
+    return names.size;
+  },[contacts,search]);
+
   const sel=selId?contacts.find(c=>c.id===selId):null;
   const selCD=sel?getCD(sel):null;
   const activeDeal=selCD?.cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||selCD?.cd[0];
@@ -2989,7 +3000,6 @@ function ModCRM() {
                 </button>
               );
             })}
-            {filtered.length>CRM_PAGE_SIZE&&<ListPager page={crmPage} setPage={setCrmPage} total={filtered.length} pageSize={CRM_PAGE_SIZE} noun="contacts" compact/>}
           </>)}
           {leftMode==="accounts"&&(()=>{
             const sq=search.toLowerCase();
@@ -3026,10 +3036,11 @@ function ModCRM() {
                 </button>
               );
             })}
-            {schoolList.length>CRM_PAGE_SIZE&&<ListPager page={crmPage} setPage={setCrmPage} total={schoolList.length} pageSize={CRM_PAGE_SIZE} noun="accounts" compact/>}
             </>;
           })()}
         </div>
+        {leftMode==="contacts"&&<ListPager page={crmPage} setPage={setCrmPage} total={filtered.length} pageSize={CRM_PAGE_SIZE} noun="contacts" compact/>}
+        {leftMode==="accounts"&&<ListPager page={crmPage} setPage={setCrmPage} total={accountCount} pageSize={CRM_PAGE_SIZE} noun="accounts" compact/>}
       </div>
 
       {/* RIGHT DETAIL */}
