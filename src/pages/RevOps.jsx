@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext, Component, lazy, Suspense } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
+import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 
 // ─── LAZY-LOADED TOOL PANELS ─────────────────────────────────────────────────
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
@@ -596,7 +598,19 @@ function urgentCount(s) {
 // ════════════════════════════════════════════════════════════════════════════
 export default function App() {
   const [s, set, lastSynced, syncing, pullFromServer] = useStore();
-  const [mod, setMod]   = useState("briefing");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const mod = pathToMod(location.pathname);
+  const setMod = useCallback((id) => {
+    if (!id) return;
+    const path = modToPath(id);
+    if (location.pathname !== path) navigate(path);
+  }, [navigate, location.pathname]);
+  const goBack = useCallback(() => {
+    if (location.pathname === "/" && !location.search) return;
+    if (window.history.length > 1) navigate(-1);
+    else navigate("/");
+  }, [navigate, location.pathname, location.search]);
   const [slim, setSlim] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState(new Set());
   const toggleGroup = (id) => setExpandedGroups(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -644,7 +658,7 @@ export default function App() {
     return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
   })();
   const crmSyncRef = useRef(null);
-  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer};
+  const ctx = {s, dispatch, toast, cu, mod, setMod, goBack, crmSyncRef, lastSynced, syncing, pullFromServer};
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
@@ -743,9 +757,6 @@ export default function App() {
 
   usePrefetchPanels();
 
-  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
-
-  // Helper: find nav item label (including inside group children)
   const navLabel = (id) => {
     for (const n of NAV) {
       if (n.id === id) return n.label;
@@ -753,6 +764,13 @@ export default function App() {
     }
     return "";
   };
+
+  useEffect(()=>{
+    const label = navLabel(mod) || "Home";
+    document.title = `${label} · ST1 RevOps`;
+  }, [mod, NAV]);
+
+  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -811,11 +829,11 @@ export default function App() {
                       {!slim&&<span style={{fontSize:8,color:"rgba(255,255,255,0.3)",flexShrink:0,marginLeft:2}}>{isExp?"▾":"▸"}</span>}
                     </button>
                     {isExp&&!slim&&(n.children||[]).map(ch=>(
-                      <button key={ch.id} onClick={()=>setMod(ch.id)}
-                        style={{width:"100%",background:mod===ch.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===ch.id?B.orange:"transparent"}`,color:mod===ch.id?B.orange:"rgba(255,255,255,0.5)",padding:"6px 11px 6px 26px",display:"flex",alignItems:"center",gap:7,fontSize:10,fontWeight:mod===ch.id?500:400,textAlign:"left"}}>
+                      <Link key={ch.id} to={modToPath(ch.id)}
+                        style={{width:"100%",background:mod===ch.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===ch.id?B.orange:"transparent"}`,color:mod===ch.id?B.orange:"rgba(255,255,255,0.5)",padding:"6px 11px 6px 26px",display:"flex",alignItems:"center",gap:7,fontSize:10,fontWeight:mod===ch.id?500:400,textAlign:"left",textDecoration:"none"}}>
                         <span style={{fontSize:11,width:14,textAlign:"center",flexShrink:0}}>{ch.icon}</span>
                         <span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{ch.label}</span>
-                      </button>
+                      </Link>
                     ))}
                   </div>
                 );
@@ -829,15 +847,15 @@ export default function App() {
                   {!slim&&<span style={{marginLeft:"auto",fontSize:9,color:"rgba(255,255,255,0.3)",flexShrink:0}}>↗</span>}
                 </a>
               );
-              // Normal nav item
+              // Normal nav item — real URLs so browser back/forward and refresh work
               return (
-                <button key={n.id} onClick={()=>setMod(n.id)} title={slim?n.label:undefined}
-                  style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:"rgba(255,255,255,0.55)",padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative"}}>
+                <Link key={n.id} to={modToPath(n.id)} title={slim?n.label:undefined}
+                  style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent",border:"none",borderLeft:`3px solid ${mod===n.id?B.orange:"transparent"}`,color:mod===n.id?B.orange:"rgba(255,255,255,0.55)",padding:slim?"9px 0":"7px 11px 7px 10px",display:"flex",alignItems:"center",gap:slim?0:8,justifyContent:slim?"center":"flex-start",fontSize:11,fontWeight:mod===n.id?500:400,textAlign:"left",position:"relative",textDecoration:"none"}}>
                   <span style={{fontSize:12,width:15,textAlign:"center",flexShrink:0}}>{n.icon}</span>
                   {!slim&&<span style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{n.label}</span>}
                   {!slim&&n.badge>0&&<span style={{marginLeft:"auto",background:B.orange,color:"#fff",borderRadius:10,padding:"1px 5px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,flexShrink:0}}>{n.badge}</span>}
                   {slim&&n.badge>0&&<span style={{position:"absolute",top:5,right:5,background:B.orange,color:"#fff",borderRadius:"50%",width:13,height:13,display:"flex",alignItems:"center",justifyContent:"center",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif"}}>{n.badge}</span>}
-                </button>
+                </Link>
               );
             })}
           </nav>
@@ -863,7 +881,22 @@ export default function App() {
         {/* MAIN */}
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <header style={{background:B.white,borderBottom:`1px solid ${B.border}`,height:46,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",flexShrink:0,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
-            <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{navLabel(mod).toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
+              {mod!=="briefing"&&(
+                <button onClick={goBack} title="Go back" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 10px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:"pointer",flexShrink:0}}>← BACK</button>
+              )}
+              <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0,fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:2}}>
+                {mod!=="briefing"?(
+                  <>
+                    <Link to="/" style={{color:B.muted,textDecoration:"none"}}>HOME</Link>
+                    <span style={{color:B.borderD}}>/</span>
+                    <span style={{color:B.text}}>{(navLabel(mod)||mod).toUpperCase()}</span>
+                  </>
+                ):(
+                  <span style={{color:B.muted}}>HOME</span>
+                )}
+              </div>
+            </div>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
               {(()=>{
                 let st={};
@@ -921,6 +954,7 @@ export default function App() {
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="social"      && <ModSocial/>}
             {mod==="marketing"   && <ModMarketing/>}
+            {mod==="calendar"    && <ModCalendar/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
             {mod==="alerts"      && <ModAlerts/>}
@@ -1089,6 +1123,43 @@ const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBo
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+function ListPager({page,setPage,total,pageSize=25,noun="items",compact=false}){
+  const pages=Math.max(1,Math.ceil((total||0)/pageSize));
+  const safe=Math.min(Math.max(1,page),pages);
+  if((total||0)<=pageSize){
+    if(!total) return null;
+    return <div style={{padding:compact?"6px 10px":"8px 12px",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"center"}}>{total} {noun}</div>;
+  }
+  const start=(safe-1)*pageSize+1;
+  const end=Math.min(safe*pageSize,total);
+  const nums=[];
+  if(pages<=7){for(let i=1;i<=pages;i++) nums.push(i);}
+  else{
+    nums.push(1);
+    const lo=Math.max(2,safe-1), hi=Math.min(pages-1,safe+1);
+    if(lo>2) nums.push("…");
+    for(let i=lo;i<=hi;i++) nums.push(i);
+    if(hi<pages-1) nums.push("…");
+    nums.push(pages);
+  }
+  const btn=(disabled,onClick,label)=>(
+    <button disabled={disabled} onClick={onClick} style={{background:disabled?B.surface:B.white,color:disabled?B.gray2:B.text,border:`1px solid ${B.border}`,borderRadius:4,padding:compact?"3px 8px":"4px 10px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:disabled?"not-allowed":"pointer"}}>{label}</button>
+  );
+  return(
+    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:compact?"6px 10px":"8px 12px",borderTop:`1px solid ${B.border}`,background:B.surface,flexShrink:0,flexWrap:"wrap"}}>
+      {btn(safe<=1,()=>setPage(safe-1),"‹ Prev")}
+      <div style={{display:"flex",alignItems:"center",gap:4,flexWrap:"wrap",justifyContent:"center"}}>
+        {nums.map((n,i)=>n==="…"?<span key={`e${i}`} style={{color:B.muted,fontSize:10,padding:"0 2px"}}>…</span>:(
+          <button key={n} onClick={()=>setPage(n)} style={{background:n===safe?B.orange:B.white,color:n===safe?B.white:B.muted,border:`1px solid ${n===safe?B.orange:B.border}`,borderRadius:4,minWidth:24,padding:"3px 6px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>{n}</button>
+        ))}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,whiteSpace:"nowrap"}}>{start}–{end} of {total}</span>
+        {btn(safe>=pages,()=>setPage(safe+1),"Next ›")}
+      </div>
+    </div>
+  );
+}
 const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
@@ -2675,9 +2746,11 @@ function TalkTrack({onClose,linkedContact}){
 // ════════════════════════════════════════════════════════════════════════════
 function ModCRM() {
   const {s,dispatch,toast,cu,setMod}=useApp();
+  const navigate=useNavigate();
+  const location=useLocation();
   const [search,setSearch]=useState("");
   const [filter,setFilter]=useState("all");
-  const [selId,setSelId]=useState(null);
+  const [selId,setSelId]=useState(()=>new URLSearchParams(window.location.search).get("c"));
   const [crmTab,setCrmTab]=useState("overview");
   const [noteText,setNoteText]=useState("");
   const [touchNote,setTouchNote]=useState("");
@@ -2697,8 +2770,10 @@ function ModCRM() {
   const [quoteItems,setQuoteItems]=useState([]);
   const [showAddContact,setShowAddContact]=useState(false);
   const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
-  const [leftMode,setLeftMode]=useState("contacts");
-  const [selSchool,setSelSchool]=useState(null);
+  const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("school")?"accounts":"contacts");
+  const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
+  const [crmPage,setCrmPage]=useState(1);
+  const CRM_PAGE_SIZE=30;
   const [profileForm,setProfileForm]=useState({});
   const [profileDirty,setProfileDirty]=useState(false);
   const [zohoSyncing,setZohoSyncing]=useState(false);
@@ -2739,6 +2814,26 @@ function ModCRM() {
     dispatch("SET_CRM_NAV",null);
   },[s.crmNav]);
 
+  // Restore selection from the URL (browser back/forward + shared links)
+  useEffect(()=>{
+    if(!location.pathname.startsWith("/crm")) return;
+    const p=new URLSearchParams(location.search);
+    const c=p.get("c");
+    const school=p.get("school");
+    if(c && c!==selId){setLeftMode("contacts");setSelId(c);setSelSchool(null);}
+    else if(school && school!==selSchool){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
+  },[location.search, location.pathname]);
+
+  // Keep the selected contact/account in the URL so back works
+  useEffect(()=>{
+    if(!location.pathname.startsWith("/crm")) return;
+    const dest=crmPath({contactId:leftMode==="contacts"?selId:null, school:leftMode==="accounts"?selSchool:null});
+    const current=`${location.pathname}${location.search}`;
+    if(current!==dest) navigate(dest, {replace:!selId && !selSchool});
+  },[selId, selSchool, leftMode]);
+
+  useEffect(()=>{ setCrmPage(1); },[search, filter, leftMode]);
+
   const filtered=useMemo(()=>{
     const q=search.toLowerCase();
     const po={order:0,quote:1,deal:2,lead:3};
@@ -2771,6 +2866,10 @@ function ModCRM() {
     const c=selId?(contacts.find(x=>x.id===selId)||null):null;
     if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
     setProfileDirty(false);
+    if(selId && leftMode==="contacts"){
+      const idx=filtered.findIndex(x=>x.id===selId);
+      if(idx>=0) setCrmPage(Math.floor(idx/CRM_PAGE_SIZE)+1);
+    }
   },[selId]);
 
   const logTouch=()=>{
@@ -2866,7 +2965,7 @@ function ModCRM() {
         <div style={{flex:1,overflowY:"auto"}}>
           {leftMode==="contacts"&&(<>
             {filtered.length===0&&<div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No contacts found</div>}
-            {filtered.map(c=>{
+            {filtered.slice((crmPage-1)*CRM_PAGE_SIZE, crmPage*CRM_PAGE_SIZE).map(c=>{
               const {cd,phase}=getCD(c);
               const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
               const pc=PCOL[phase];
@@ -2890,6 +2989,7 @@ function ModCRM() {
                 </button>
               );
             })}
+            {filtered.length>CRM_PAGE_SIZE&&<ListPager page={crmPage} setPage={setCrmPage} total={filtered.length} pageSize={CRM_PAGE_SIZE} noun="contacts" compact/>}
           </>)}
           {leftMode==="accounts"&&(()=>{
             const sq=search.toLowerCase();
@@ -2904,7 +3004,9 @@ function ModCRM() {
             });
             const schoolList=Object.entries(groups).sort(([a],[b])=>a.localeCompare(b));
             if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
-            return schoolList.map(([school,g])=>{
+            const pageSchools=schoolList.slice((crmPage-1)*CRM_PAGE_SIZE, crmPage*CRM_PAGE_SIZE);
+            return <>
+            {pageSchools.map(([school,g])=>{
               const isActive=selSchool===school;
               const phases=g.contacts.map(c=>getCD(c).phase);
               const topPhase=phases.includes("order")?"order":phases.includes("quote")?"quote":phases.includes("deal")?"deal":"lead";
@@ -2923,7 +3025,9 @@ function ModCRM() {
                   </div>
                 </button>
               );
-            });
+            })}
+            {schoolList.length>CRM_PAGE_SIZE&&<ListPager page={crmPage} setPage={setCrmPage} total={schoolList.length} pageSize={CRM_PAGE_SIZE} noun="accounts" compact/>}
+            </>;
           })()}
         </div>
       </div>
@@ -5279,6 +5383,8 @@ const SCRAPE_TASK_ID = "prospecting_scrape";
 
 function ModProspecting() {
   const {s,dispatch,toast,setMod,crmSyncRef}=useApp();
+  const navigate=useNavigate();
+  const location=useLocation();
   const [crmSyncing, setCrmSyncing] = useState(false);
   const forceCrmSync = async () => {
     if (!crmSyncRef?.current) { toast("Sync not ready","error"); return; }
@@ -5287,7 +5393,19 @@ function ModProspecting() {
     setCrmSyncing(false);
   };
   const DEFAULT_AREA={id:mkId(),name:"Midwest Track & Field ADs",regions:["Midwest"],states:["IA","MN","WI","MO","IL","IN","ND"],sports:["Track & Field"],orgType:"schools",roles:["Athletic Director","Head Track Coach"],maxOrgs:15,active:true};
-  const [view,setView]=useState("areas");
+  const [view,setViewState]=useState(()=>prospectTabFromSearch(window.location.search));
+  const setView=useCallback((v)=>{
+    setViewState(v);
+    if(location.pathname.startsWith("/prospecting")){
+      const dest=prospectPath(v);
+      const current=`${location.pathname}${location.search}`;
+      if(current!==dest) navigate(dest);
+    }
+  },[navigate, location.pathname, location.search]);
+  useEffect(()=>{
+    const tab=prospectTabFromSearch(location.search);
+    if(tab!==view) setViewState(tab);
+  },[location.search]);
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
   const [editing,setEditing]=useState(null);
 
@@ -5329,6 +5447,24 @@ function ModProspecting() {
   const [enrollingContact,setEnrollingContact] = useState(null);
   const [flaggingContact,setFlaggingContact] = useState(null);
   const [dbFilter,setDbFilter] = useState("all"); // "all"|"leads"|"customers"|"dead"|"scraped"
+  const [dbPage,setDbPage] = useState(1);
+  const [resultsPage,setResultsPage] = useState(1);
+  const DB_PAGE_SIZE=25;
+  const RESULTS_PAGE_SIZE=25;
+  const contactMap=useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
+  const dbContacts=useMemo(()=>[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).filter(c=>{
+    const isDead=!!c.deadStatus;
+    if(dbFilter==="dead") return isDead;
+    if(isDead) return false;
+    const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);
+    if(dbFilter==="scraped") return isScraped;
+    const inv=findCustomerInvoice(c,s.invoices||[]);
+    if(dbFilter==="customers") return !!inv;
+    if(dbFilter==="leads") return !inv;
+    return true;
+  }),[s.contacts, dbFilter, s.invoices]);
+  useEffect(()=>{setDbPage(1);},[dbFilter]);
+  useEffect(()=>{setResultsPage(1);},[contacts.length]);
   const [bulkSel,setBulkSel] = useState(new Set()); // selected contact IDs
   const [timelineContact,setTimelineContact] = useState(null); // contact id with timeline expanded
   const [bulkEnrolling,setBulkEnrolling] = useState(false);
@@ -6048,8 +6184,8 @@ function ModProspecting() {
           <div>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <input type="checkbox" title="Select all visible contacts" checked={bulkSel.size>0&&(()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);return vis.length>0&&vis.every(c=>bulkSel.has(c.id));})()}
-                  onChange={()=>{const vis=[...(s.contacts||[])].filter(c=>{const isDead=!!c.deadStatus;if(dbFilter==="dead")return isDead;if(isDead)return false;const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);if(dbFilter==="scraped")return isScraped;const inv=findCustomerInvoice(c,s.invoices||[]);if(dbFilter==="customers")return !!inv;if(dbFilter==="leads")return !inv;return true;}).slice(0,100);const allSel=vis.every(c=>bulkSel.has(c.id));setBulkSel(allSel?new Set():new Set(vis.map(c=>c.id)));}}
+                <input type="checkbox" title="Select all contacts on this page" checked={bulkSel.size>0&&(()=>{const vis=dbContacts.slice((dbPage-1)*DB_PAGE_SIZE, dbPage*DB_PAGE_SIZE);return vis.length>0&&vis.every(c=>bulkSel.has(c.id));})()}
+                  onChange={()=>{const vis=dbContacts.slice((dbPage-1)*DB_PAGE_SIZE, dbPage*DB_PAGE_SIZE);const allSel=vis.length>0&&vis.every(c=>bulkSel.has(c.id));setBulkSel(allSel?new Set():new Set(vis.map(c=>c.id)));}}
                   style={{accentColor:B.orange,width:14,height:14,cursor:"pointer",flexShrink:0}}/>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>CONTACT DATABASE ({(s.contacts||[]).length})</div>
                 {bulkSel.size>0&&(
@@ -6228,17 +6364,7 @@ function ModProspecting() {
 
                 {/* Contact list */}
                 <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                  {[...(s.contacts||[])].sort((a,b)=>(b.score||0)-(a.score||0)).filter(c=>{
-                    const isDead=!!c.deadStatus;
-                    if(dbFilter==="dead") return isDead;
-                    if(isDead) return false;
-                    const isScraped=c.source==="scraped"||["website","directory","search"].includes(c.source);
-                    if(dbFilter==="scraped") return isScraped;
-                    const inv=findCustomerInvoice(c,s.invoices||[]);
-                    if(dbFilter==="customers") return !!inv;
-                    if(dbFilter==="leads") return !inv;
-                    return true;
-                  }).slice(0,100).map(c=>{
+                  {dbContacts.slice((dbPage-1)*DB_PAGE_SIZE, dbPage*DB_PAGE_SIZE).map(c=>{
                     const tier=scoreTier(c.score);
                     const campaigns=s.sequences||[];
                     const custInvoice=findCustomerInvoice(c,s.invoices||[]);
@@ -6424,7 +6550,7 @@ function ModProspecting() {
                       )}
                     </div>
                   );})}
-                  {(s.contacts||[]).length>100&&<div style={{textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"10px 0"}}>Showing 100 of {(s.contacts||[]).length} — export CSV to see all</div>}
+                  <ListPager page={dbPage} setPage={setDbPage} total={dbContacts.length} pageSize={DB_PAGE_SIZE} noun="contacts"/>
                 </div>
               </div>
             )}
@@ -6583,7 +6709,7 @@ function ModProspecting() {
               ))}
             </div>}
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
-              {contacts.map(c=>(
+              {contacts.slice((resultsPage-1)*RESULTS_PAGE_SIZE, resultsPage*RESULTS_PAGE_SIZE).map(c=>(
                 <div key={c.id} className="card fu" style={{padding:"9px 11px",borderLeft:`3px solid ${c.email?B.green:B.border}`}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div>
@@ -6601,6 +6727,7 @@ function ModProspecting() {
               ))}
               {contacts.length===0&&phase==="idle"&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Run a scrape from your focus areas to see contacts here</div>}
               {contacts.length===0&&phase!=="idle"&&phase!=="done"&&<div style={{textAlign:"center",padding:"30px 0",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted}}>Searching...</div>}
+              {contacts.length>RESULTS_PAGE_SIZE&&<ListPager page={resultsPage} setPage={setResultsPage} total={contacts.length} pageSize={RESULTS_PAGE_SIZE} noun="contacts"/>}
             </div>
           </div>
           <div className="card" style={{padding:13,alignSelf:"start",position:"sticky",top:0}}>

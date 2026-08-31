@@ -1,5 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate, useLocation, Link } from "react-router-dom";
 import ToolManager from "../components/ToolManager.jsx";
+import { integrationsPath } from "../lib/pages.js";
+
+const INTG_TABS = new Set(["overview","slack","zoho","marketing","ads","email","woo","tools","log","knowledge"]);
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -91,7 +95,29 @@ const DEMO_PRODUCTS = [
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function IntegrationsHub() {
-  const [tab, setTab]     = useState("overview");
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [tab, setTabState] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    return INTG_TABS.has(t) ? t : "overview";
+  });
+  const setTab = (id) => {
+    setTabState(id);
+    if (location.pathname === "/integrations" || location.pathname === "/ai-knowledge") {
+      const dest = location.pathname === "/ai-knowledge"
+        ? (id && id !== "overview" ? `/ai-knowledge?tab=${encodeURIComponent(id)}` : "/ai-knowledge")
+        : integrationsPath(id);
+      const current = `${location.pathname}${location.search}`;
+      if (current !== dest) navigate(dest);
+    }
+  };
+  useEffect(() => {
+    const t = new URLSearchParams(location.search).get("tab");
+    if (INTG_TABS.has(t) && t !== tab) setTabState(t);
+    if (!t && (location.pathname === "/integrations" || location.pathname === "/ai-knowledge") && tab !== "overview") {
+      setTabState("overview");
+    }
+  }, [location.search, location.pathname]);
   const [creds, setCreds] = useState(loadCreds);
   const [status, setStatus] = useState(() => {
     const saved = loadStatus();
@@ -797,9 +823,9 @@ Channel: ${slackChannelName}`);
       `}</style>
       {/* ← Back to RevOps */}
       <div style={{background:"#fff",borderBottom:"1px solid #E2E0DB",padding:"6px 20px",display:"flex",alignItems:"center",gap:8}}>
-        <a href="/" style={{display:"flex",alignItems:"center",gap:6,textDecoration:"none",color:"#7A7872",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+        <Link to="/" style={{display:"flex",alignItems:"center",gap:6,textDecoration:"none",color:"#7A7872",fontFamily:"'Lexend',sans-serif",fontSize:11}}>
           <span style={{fontSize:13}}>←</span> Back to RevOps
-        </a>
+        </Link>
       </div>
 
       {/* HEADER */}

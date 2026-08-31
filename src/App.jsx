@@ -82,8 +82,8 @@ function PageLoader() {
 
 // Task-done route map — where to navigate when clicking a notification
 const TASK_ROUTES = {
-  scrape: '/',          // prospecting lives in RevOps
-  import: '/prices',    // price list import
+  scrape: '/prospecting?tab=results',
+  import: '/prospecting?tab=import',
   rfp:    '/rfp',
   expansion: '/expansion',
 }
