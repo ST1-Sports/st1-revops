@@ -20,13 +20,14 @@ import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
 import {
-  extractExplicitSellPrice,
   formatLockedQuoteBlock,
   lockedPricingToolResult,
   matchLockedItem,
   overlayLockedPricing,
+  parseQuoteRates,
   pricingQueryOf,
   resolveLockedQuote,
+  userWantsNewCostSource,
   userWantsNewSellPrice,
   userWantsReprice,
 } from '../src/lib/quoteLock.js';
@@ -502,7 +503,9 @@ async function callEdgar(input, baseUrl, lock = {}) {
             lockedItems: lock.reprice ? [] : (lock.items || []),
             reprice: !!lock.reprice,
             lockSell: lock.lockSell !== false,
-            userPrice: lock.userPrice,
+            lockCost: lock.lockCost !== false,
+            quoteRates: lock.quoteRates || null,
+            preferredSupplier: lock.preferredSupplier || null,
           },
         }),
       },
@@ -792,7 +795,7 @@ This quote is already priced. On "update the quote", a qty change, add/remove a 
 - only change quantity or add/remove items they asked about
 - do NOT pick a new dealer-list cost or a new sell price
 Only refresh cost/list if they say reprice, new cost, latest list, refresh price, or dealer list changed.
-If they name a sell price ("keep it at $81.95", "the program at $81.95", "charge $90"), that number is the quote. Do not let GM floor or MAP raise it. Warn if it is below cost.
+If they name prices, apply each to the right line only: ball/program $ stays on the goods, customization/add-on $ stays on that add-on, shipping $ stays on shipping. Never copy the ball price onto customization. A line total like $2,294.60 is not a unit price. If they say cost is from Spalding, search Spalding — do not keep an Athletic Connection cost.
 ` : ''}`;
 }
 
@@ -870,9 +873,10 @@ async function _handler(req, res) {
   const lastUser = [...rawMessages].reverse().find(m => m.role === 'user')?.content || '';
   const lockedQuote = resolveLockedQuote(localContext, lastUser);
   const reprice = userWantsReprice(lastUser);
-  const userPrice = userWantsNewSellPrice(lastUser) ? extractExplicitSellPrice(lastUser) : null;
-  const lockSell = userPrice == null && !userWantsNewSellPrice(lastUser);
-  const ctx = { ...localContext, lockedQuote, userPrice };
+  const quoteRates = parseQuoteRates(lastUser);
+  const newCost = userWantsNewCostSource(lastUser) || !!quoteRates.preferredSupplier;
+  const lockSell = quoteRates.product == null && !userWantsNewSellPrice(lastUser);
+  const ctx = { ...localContext, lockedQuote, quoteRates };
 
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
@@ -920,7 +924,9 @@ async function _handler(req, res) {
           items: lockedQuote?.items || [],
           reprice: reprice || t.input?.reprice === true,
           lockSell,
-          userPrice,
+          lockCost: !newCost && !reprice,
+          quoteRates,
+          preferredSupplier: quoteRates.preferredSupplier,
         });
         agentResults.push({ name: "call_edgar", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };

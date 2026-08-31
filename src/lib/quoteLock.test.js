@@ -4,15 +4,19 @@ import { st1PriceActionFromPricing } from '../../api/_lib/st1PriceAction.js';
 import {
   applyLockedPrices,
   applyMattSellPrice,
+  applyQuoteRates,
   buildLockedQuotePayload,
   extractExplicitSellPrice,
   extractLockedQuoteFromDeals,
   extractLockedQuoteFromHistory,
+  lineKind,
   lockedPricingToolResult,
   matchLockedItem,
   mergeLockedItemsIntoRequest,
   overlayLockedPricing,
+  parseQuoteRates,
   resolveLockedQuote,
+  userWantsNewCostSource,
   userWantsNewSellPrice,
   userWantsReprice,
 } from './quoteLock.js';
@@ -61,19 +65,56 @@ describe('userWantsNewSellPrice', () => {
   });
 });
 
-describe('applyMattSellPrice', () => {
-  it('stamps $81.95 on balls and leaves shipping / customization alone', () => {
-    const out = applyMattSellPrice([
-      { name: 'Spalding TF-1000 NFHS 28.5" Girls Basketball (Booking Program)', sku: 'AC-1457055', qty: 14, cost: 99.99, quotedPrice: 124.99 },
-      { name: 'Spalding TF-1000 NFHS 29.5" Boys Basketball (Booking Program)', sku: 'AC-1457054', qty: 14, cost: 99.99, quotedPrice: 124.99 },
-      { name: 'Customization – Optional Add-On (per ball)', qty: 28, quotedPrice: 5.95 },
-      { name: 'Shipping – Billed Upon Final Total', qty: 1, quotedPrice: 84 },
-    ], 81.95);
+describe('parseQuoteRates', () => {
+  const hudsonAsk = 'Quote Hudson High School 14 men’s and 14 women’s TF-1000 Legacy basketballs at $81.95 each, optional customization add on $5.95 per ball, shipping estimated $3.00 per ball.';
+
+  it('splits ball, customization, and shipping $ from one message', () => {
+    const r = parseQuoteRates(hudsonAsk);
+    assert.equal(r.product, 81.95);
+    assert.equal(r.customization, 5.95);
+    assert.equal(r.shipping, 3);
+  });
+
+  it('does not treat a ball-line total as the unit price, and keeps customization at $5.95', () => {
+    const r = parseQuoteRates('The sum of the ball should be $2,294.60 then the shipping should show a total estimate and then the ball customization is $5.95/ball, not $81.95. The cost on these should be coming from spalding');
+    assert.equal(r.product, null);
+    assert.equal(r.customization, 5.95);
+    assert.equal(r.preferredSupplier, 'Spalding');
+    assert.equal(userWantsNewCostSource('The cost on these should be coming from spalding'), true);
+  });
+
+  it('does not pick a dealer cost out of Scout/Edgar prose as the sell price', () => {
+    const r = parseQuoteRates('Held sell price. Cost $65.62 via Athletic Connection. Quote $81.95.');
+    assert.equal(r.product, 81.95);
+  });
+});
+
+describe('applyQuoteRates / add-on kind', () => {
+  it('treats Ball Customization Add-On as customization, not a ball', () => {
+    assert.equal(lineKind({ name: 'Ball Customization Add-On' }), 'customization');
+    assert.equal(lineKind({ name: 'Spalding LEGACY TF-1000 (Men’s)' }), 'product');
+  });
+
+  it('stamps $81.95 on balls only and $5.95 on customization', () => {
+    const out = applyQuoteRates([
+      { name: 'Spalding LEGACY TF-1000 (Men’s)', qty: 14, cost: 53.62, quotedPrice: 65.62 },
+      { name: 'Spalding LEGACY TF-1000 (Women’s)', qty: 14, cost: 53.62, quotedPrice: 65.62 },
+      { name: 'Ball Customization Add-On', qty: 28, quotedPrice: 81.95 },
+      { name: 'Shipping', qty: 28, quotedPrice: 3 },
+    ], { product: 81.95, customization: 5.95, shipping: 3 });
     assert.equal(out[0].quotedPrice, 81.95);
     assert.equal(out[1].quotedPrice, 81.95);
-    assert.equal(out[0].userPriced, true);
     assert.equal(out[2].quotedPrice, 5.95);
-    assert.equal(out[3].quotedPrice, 84);
+    assert.equal(out[3].quotedPrice, 3);
+  });
+
+  it('does not let applyMattSellPrice overwrite a customization add-on', () => {
+    const out = applyMattSellPrice([
+      { name: 'Spalding TF-1000', quotedPrice: 10 },
+      { name: 'Ball Customization Add-On', quotedPrice: 5.95 },
+    ], 81.95);
+    assert.equal(out[0].quotedPrice, 81.95);
+    assert.equal(out[1].quotedPrice, 5.95);
   });
 });
 

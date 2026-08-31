@@ -12,13 +12,13 @@ import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
 import { findPriceItems }      from '../_lib/ai-tools/sources.js'
 import {
   applyLockedPrices,
-  applyMattSellPrice,
-  extractExplicitSellPrice,
+  applyQuoteRates,
   formatLockedQuoteBlock,
+  hasNamedLineRates,
   matchLockedItem,
   mergeLockedItemsIntoRequest,
-  numOrNull,
-  userWantsNewSellPrice,
+  parseQuoteRates,
+  userWantsNewCostSource,
   userWantsReprice,
 } from '../../src/lib/quoteLock.js'
 
@@ -27,6 +27,25 @@ const API_KEY       = process.env.ANTHROPIC_KEY
 const DEFAULT_FLOOR = 0.20   // 20% GM floor when item has no gmFloorPct
 
 function dec(v) { return v == null ? null : Number(v) }
+
+function preferSupplierRows(items, name) {
+  if (!name || !items?.length) return items || []
+  const n = String(name).toLowerCase()
+  const rank = it => {
+    const brand = String(it.brand || '').toLowerCase()
+    const sup = String(it.supplier?.name || '').toLowerCase()
+    return brand.includes(n) || sup.includes(n) ? 0 : 1
+  }
+  return [...items].sort((a, b) => {
+    const ra = rank(a)
+    const rb = rank(b)
+    if (ra !== rb) return ra - rb
+    const ca = Number(a.cost)
+    const cb = Number(b.cost)
+    if (Number.isFinite(ca) && Number.isFinite(cb) && ca !== cb) return ca - cb
+    return 0
+  })
+}
 
 // ── Price data ────────────────────────────────────────────────────────────────
 
@@ -316,8 +335,11 @@ export default async function handler(req, res) {
   const contactId    = input.contactId || null
   const contactEmail = input.contactEmail || null
   const reprice      = input.reprice === true || userWantsReprice(task)
-  const userPrice    = numOrNull(input.userPrice) ?? (userWantsNewSellPrice(task) ? extractExplicitSellPrice(task) : null)
-  const lockSell     = input.lockSell !== false && userPrice == null && !userWantsNewSellPrice(task)
+  const quoteRates   = hasNamedLineRates(input.quoteRates) ? input.quoteRates : parseQuoteRates(task)
+  const newCost      = input.lockCost === false || userWantsNewCostSource(task) || !!quoteRates.preferredSupplier
+  const lockSell     = input.lockSell !== false && quoteRates.product == null
+  const lockCost     = !newCost && !reprice
+  const preferredSupplier = input.preferredSupplier || quoteRates.preferredSupplier || null
   const lockedItems  = (!reprice && Array.isArray(input.lockedItems)) ? input.lockedItems : []
   const requestItems = mergeLockedItemsIntoRequest(input.items, lockedItems)
 
@@ -325,14 +347,17 @@ export default async function handler(req, res) {
     const extraNames = [
       ...(Array.isArray(requestItems) ? requestItems.map(i => i.sku || i.name) : []),
       ...lockedItems.map(i => i.sku || i.name),
+      preferredSupplier,
     ].filter(Boolean)
-    const [{ ownSuppliers, matchedItems, competitors }, memFacts, accountCtx] = await Promise.all([
+    const [{ ownSuppliers, matchedItems: rawMatched, competitors }, memFacts, accountCtx] = await Promise.all([
       fetchPriceData(task, extraNames),
       customer
         ? recall({ entity: `customer:${customer}` }).catch(() => [])
         : Promise.resolve([]),
       fetchAccountContext({ contactId, contactEmail }),
     ])
+
+    const matchedItems = preferSupplierRows(rawMatched, preferredSupplier)
 
     const memoryBlock = memFacts.length
       ? memFacts.map(f => `- ${f.key}: ${f.value}`).join('\n')
@@ -352,11 +377,18 @@ export default async function handler(req, res) {
     }
     if (customer) userMsg += `\n\nCustomer: ${customer}`
     if (lockBlock) {
-      userMsg += '\n\nHold cost and quotedPrice from the open quote. Only change qty or add/remove lines the user asked for.'
-      if (!lockSell) userMsg += ' The user set a new sell price — keep the locked cost and use their sell price.'
+      userMsg += '\n\nHold cost and quotedPrice from the open quote unless Matt named a new rate for that line. Only change qty or add/remove lines the user asked for.'
     }
-    if (userPrice != null) {
-      userMsg += `\n\nMatt set the sell price at $${userPrice.toFixed(2)}. Use that exact quotedPrice on the product lines. Do not raise it for GM floor, MAP, or list. Warn if it is below cost.`
+    if (hasNamedLineRates(quoteRates)) {
+      const bits = [
+        quoteRates.product != null ? `product/ball $${quoteRates.product.toFixed(2)}` : null,
+        quoteRates.customization != null ? `customization/add-on $${quoteRates.customization.toFixed(2)}` : null,
+        quoteRates.shipping != null ? `shipping $${quoteRates.shipping.toFixed(2)}` : null,
+      ].filter(Boolean)
+      userMsg += `\n\nMatt set these unit prices — apply each to the matching line only, never copy the ball price onto customization: ${bits.join('; ')}. Do not raise them for GM floor.`
+    }
+    if (preferredSupplier) {
+      userMsg += `\n\nUse dealer cost from ${preferredSupplier} lists/brand rows, not a generic Athletic Connection catalog ball.`
     }
 
     // Call Claude
@@ -407,23 +439,23 @@ export default async function handler(req, res) {
     if (lockedItems.length) {
       quote = {
         ...quote,
-        lineItems: applyLockedPrices(quote.lineItems || [], lockedItems, { lockSell }),
+        lineItems: applyLockedPrices(quote.lineItems || [], lockedItems, { lockSell, lockCost }),
       }
     }
-    if (userPrice != null) {
+    if (hasNamedLineRates(quoteRates)) {
       quote = {
         ...quote,
-        lineItems: applyMattSellPrice(quote.lineItems || [], userPrice),
+        lineItems: applyQuoteRates(quote.lineItems || [], quoteRates),
       }
     }
 
     const guarded = enforceGuardrails(quote, itemLookup, {
       skipLocked: lockSell ? lockedItems : [],
     })
-    if (userPrice != null) {
+    if (hasNamedLineRates(quoteRates)) {
       guarded.warnings = [
         ...(guarded.warnings || []),
-        `Held sell price at $${userPrice.toFixed(2)} as requested. GM floor / MAP were not applied.`,
+        'Applied Matt\'s unit prices per line (ball / customization / shipping). GM floor did not raise them.',
       ]
     } else if (lockedItems.length) {
       guarded.warnings = [

@@ -31,11 +31,60 @@ export function userWantsReprice(text) {
   return /\b(re-?price|new cost|update cost|refresh (?:the )?(?:price|list|cost)|latest (?:price|cost|list)|new list|dealer list (?:changed|updated)|cost went|list went|recalculate (?:the )?(?:price|cost)|pull (?:a )?(?:new|fresh|latest) (?:price|cost|list)|from the (?:latest|new) (?:list|dealer list))\b/.test(t);
 }
 
+const MONEY_RE = /\$\s*(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)/g;
+
+export function parseMoneyToken(raw) {
+  const n = Number(String(raw || '').replace(/,/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** First unit-looking $ in the text. Skips comma totals like $2,294.60. */
 export function extractExplicitSellPrice(text) {
-  const matches = [...String(text || '').matchAll(/\$\s*(\d+(?:\.\d{1,2})?)/g)]
-    .map(m => Number(m[1]))
-    .filter(n => Number.isFinite(n) && n > 0);
-  return matches.length ? matches[0] : null;
+  const rates = parseQuoteRates(text);
+  return rates.product ?? rates.customization ?? rates.shipping ?? null;
+}
+
+export function parseQuoteRates(text) {
+  const t = String(text || '');
+  const lower = t.toLowerCase();
+  const rates = {
+    product: null,
+    customization: null,
+    shipping: null,
+    preferredSupplier: /\bspalding\b/.test(lower) && /\bcost\b/.test(lower) ? 'Spalding' : null,
+  };
+
+  for (const m of t.matchAll(new RegExp(MONEY_RE.source, 'g'))) {
+    const amount = parseMoneyToken(m[1]);
+    if (amount == null) continue;
+    const before = t.slice(Math.max(0, m.index - 32), m.index).toLowerCase();
+    const after = t.slice(m.index, Math.min(t.length, m.index + m[0].length + 14)).toLowerCase();
+
+    if (/,/.test(m[1]) && amount >= 200) continue;
+    if (/\b(sum|altogether|grand|quote total)\b/.test(before)) continue;
+    if (/\bcost\b/.test(before)) continue;
+    if (/\bnot\b/.test(before) && !/\beach\b/.test(after)) continue;
+
+    if (/\b(custom(?:ization)?|logo|add[\s-]?on|addon|embroidery)\b/.test(before)) {
+      rates.customization = amount;
+      continue;
+    }
+    if (/\b(ship(?:ping)?|freight|postage)\b/.test(before)) {
+      rates.shipping = amount;
+      continue;
+    }
+    if (amount < 5 || amount > 400) continue;
+    if (rates.product == null) rates.product = amount;
+  }
+
+  if (!rates.preferredSupplier && /\b(?:from|via|use|using)\s+spalding\b/.test(lower)) {
+    rates.preferredSupplier = 'Spalding';
+  }
+  return rates;
+}
+
+export function hasNamedLineRates(rates) {
+  return !!(rates && (rates.product != null || rates.customization != null || rates.shipping != null));
 }
 
 export function userWantsNewSellPrice(text) {
@@ -46,38 +95,61 @@ export function userWantsNewSellPrice(text) {
   if (/\b(charge|sell(?:ing)?\s+(?:at|for)|quote\s+(?:at|for)|price(?:\s+it|\s+them)?\s+at|change\s+(?:the\s+)?(?:sell\s+|quote\s+|list\s+)?price\s+to|make\s+(?:the\s+)?(?:price|quote)\s+)\s*\$?\s*\d/.test(t)) {
     return true;
   }
-  const price = extractExplicitSellPrice(t);
-  if (price == null) return false;
   if (/\b(what'?s|how much)\b/.test(t) && !/\b(keep|need|charge|set|use|hold|program|booking)\b/.test(t)) {
     return false;
   }
-  return /\b(keep|need|hold|leave|stay|set|use|lock|charge|program|booking|book)\b/.test(t)
-    || /\b(?:at|@)\s+(?:the\s+)?\$/.test(t);
+  return hasNamedLineRates(parseQuoteRates(t));
+}
+
+export function userWantsNewCostSource(text) {
+  const t = String(text || '').toLowerCase();
+  return /\b(wrong cost|cost (?:is |are |was )?wrong|cost should|coming from|from spalding|spalding (?:cost|list|price)|use spalding|dealer cost from)\b/.test(t);
+}
+
+export function lineKind(item) {
+  const n = normalizeName(item?.name);
+  if (!n) return 'product';
+  if (/\b(shipping|freight|postage)\b/.test(n) || /^ship\b/.test(n)) return 'shipping';
+  if (/\b(custom|logo|add-?on|addon|embroidery|print(?:ing)?)\b/.test(n)) return 'customization';
+  return 'product';
 }
 
 export function isAddOnLine(item) {
-  const n = normalizeName(item?.name);
-  if (!n) return false;
-  return /^(shipping|freight|customization|logo|setup|handling|tax|optional add-?on)\b/.test(n)
-    || /\b(shipping|freight)\b/.test(n)
-    || /\boptional add-?on\b/.test(n);
+  const kind = lineKind(item);
+  return kind === 'shipping' || kind === 'customization';
 }
 
-/** Stamp Matt's dollar amount on product lines. Shipping / add-ons stay as-is. */
+function stampSell(item, price) {
+  const cost = numOrNull(item.cost);
+  const gm = cost > 0 && price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : item.gmPct;
+  return {
+    ...item,
+    quotedPrice: price,
+    ourPrice: price,
+    gmPct: gm,
+    userPriced: true,
+  };
+}
+
+/** Stamp one product $ on goods only. Add-ons / shipping stay as-is. */
 export function applyMattSellPrice(items, sellPrice) {
   const price = numOrNull(sellPrice);
   if (price == null || !Array.isArray(items) || !items.length) return items || [];
   return items.map(item => {
     if (!item || item.notFound || isAddOnLine(item)) return item;
-    const cost = numOrNull(item.cost);
-    const gm = cost > 0 && price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : item.gmPct;
-    return {
-      ...item,
-      quotedPrice: price,
-      ourPrice: price,
-      gmPct: gm,
-      userPriced: true,
-    };
+    return stampSell(item, price);
+  });
+}
+
+/** Apply per-line rates so customization cannot inherit the ball price. */
+export function applyQuoteRates(items, rates) {
+  if (!hasNamedLineRates(rates) || !Array.isArray(items)) return items || [];
+  return items.map(item => {
+    if (!item || item.notFound) return item;
+    const kind = lineKind(item);
+    const price = numOrNull(rates[kind]);
+    if (price == null) return item;
+    return stampSell(item, price);
   });
 }
 
@@ -119,25 +191,26 @@ export function normalizeLockedQuote(raw) {
 
 export function matchLockedItem(item, lockedItems) {
   if (!item || !Array.isArray(lockedItems) || !lockedItems.length) return null;
+  const kind = lineKind(item);
   const sku = normalizeSku(item.sku);
   if (sku) {
-    const bySku = lockedItems.find(l => l.sku && normalizeSku(l.sku) === sku);
+    const bySku = lockedItems.find(l => l.sku && normalizeSku(l.sku) === sku && lineKind(l) === kind);
     if (bySku) return bySku;
   }
   const name = item.name || item.productName || item.query;
   if (name) {
-    const byName = lockedItems.find(l => namesMatch(l.name, name));
+    const byName = lockedItems.find(l => namesMatch(l.name, name) && lineKind(l) === kind);
     if (byName) return byName;
   }
   return null;
 }
 
-export function applyLockedPrices(items, lockedItems, { lockSell = true } = {}) {
+export function applyLockedPrices(items, lockedItems, { lockSell = true, lockCost = true } = {}) {
   if (!Array.isArray(items) || !items.length || !lockedItems?.length) return items || [];
   return items.map(item => {
     const lock = matchLockedItem(item, lockedItems);
     if (!lock) return item;
-    const cost = lock.cost != null ? Number(lock.cost) : item.cost;
+    const cost = lockCost && lock.cost != null ? Number(lock.cost) : item.cost;
     const sell = lockSell
       ? (lock.quotedPrice != null ? Number(lock.quotedPrice) : (lock.ourPrice != null ? Number(lock.ourPrice) : item.quotedPrice))
       : (item.quotedPrice ?? item.ourPrice ?? lock.quotedPrice);
