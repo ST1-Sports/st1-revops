@@ -20,6 +20,7 @@ import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
 import {
+  extractExplicitSellPrice,
   formatLockedQuoteBlock,
   lockedPricingToolResult,
   matchLockedItem,
@@ -501,6 +502,7 @@ async function callEdgar(input, baseUrl, lock = {}) {
             lockedItems: lock.reprice ? [] : (lock.items || []),
             reprice: !!lock.reprice,
             lockSell: lock.lockSell !== false,
+            userPrice: lock.userPrice,
           },
         }),
       },
@@ -790,7 +792,7 @@ This quote is already priced. On "update the quote", a qty change, add/remove a 
 - only change quantity or add/remove items they asked about
 - do NOT pick a new dealer-list cost or a new sell price
 Only refresh cost/list if they say reprice, new cost, latest list, refresh price, or dealer list changed.
-If they name a new sell price ("charge $90"), keep the locked cost and use their sell price.
+If they name a sell price ("keep it at $81.95", "the program at $81.95", "charge $90"), that number is the quote. Do not let GM floor or MAP raise it. Warn if it is below cost.
 ` : ''}`;
 }
 
@@ -868,8 +870,9 @@ async function _handler(req, res) {
   const lastUser = [...rawMessages].reverse().find(m => m.role === 'user')?.content || '';
   const lockedQuote = resolveLockedQuote(localContext, lastUser);
   const reprice = userWantsReprice(lastUser);
-  const lockSell = !userWantsNewSellPrice(lastUser);
-  const ctx = { ...localContext, lockedQuote };
+  const userPrice = userWantsNewSellPrice(lastUser) ? extractExplicitSellPrice(lastUser) : null;
+  const lockSell = userPrice == null && !userWantsNewSellPrice(lastUser);
+  const ctx = { ...localContext, lockedQuote, userPrice };
 
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
@@ -917,6 +920,7 @@ async function _handler(req, res) {
           items: lockedQuote?.items || [],
           reprice: reprice || t.input?.reprice === true,
           lockSell,
+          userPrice,
         });
         agentResults.push({ name: "call_edgar", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };

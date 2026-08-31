@@ -31,12 +31,54 @@ export function userWantsReprice(text) {
   return /\b(re-?price|new cost|update cost|refresh (?:the )?(?:price|list|cost)|latest (?:price|cost|list)|new list|dealer list (?:changed|updated)|cost went|list went|recalculate (?:the )?(?:price|cost)|pull (?:a )?(?:new|fresh|latest) (?:price|cost|list)|from the (?:latest|new) (?:list|dealer list))\b/.test(t);
 }
 
+export function extractExplicitSellPrice(text) {
+  const matches = [...String(text || '').matchAll(/\$\s*(\d+(?:\.\d{1,2})?)/g)]
+    .map(m => Number(m[1]))
+    .filter(n => Number.isFinite(n) && n > 0);
+  return matches.length ? matches[0] : null;
+}
+
 export function userWantsNewSellPrice(text) {
   const t = String(text || '').toLowerCase();
+  if (/\b(\d+\s*%\s*off|discount|lower the (?:price|quote)|raise the (?:price|quote)|drop the (?:price|quote)|match (?:map|their price))\b/.test(t)) {
+    return true;
+  }
   if (/\b(charge|sell(?:ing)?\s+(?:at|for)|quote\s+(?:at|for)|price(?:\s+it|\s+them)?\s+at|change\s+(?:the\s+)?(?:sell\s+|quote\s+|list\s+)?price\s+to|make\s+(?:the\s+)?(?:price|quote)\s+)\s*\$?\s*\d/.test(t)) {
     return true;
   }
-  return /\b(\d+\s*%\s*off|discount|lower the (?:price|quote)|raise the (?:price|quote)|drop the (?:price|quote)|match (?:map|their price))\b/.test(t);
+  const price = extractExplicitSellPrice(t);
+  if (price == null) return false;
+  if (/\b(what'?s|how much)\b/.test(t) && !/\b(keep|need|charge|set|use|hold|program|booking)\b/.test(t)) {
+    return false;
+  }
+  return /\b(keep|need|hold|leave|stay|set|use|lock|charge|program|booking|book)\b/.test(t)
+    || /\b(?:at|@)\s+(?:the\s+)?\$/.test(t);
+}
+
+export function isAddOnLine(item) {
+  const n = normalizeName(item?.name);
+  if (!n) return false;
+  return /^(shipping|freight|customization|logo|setup|handling|tax|optional add-?on)\b/.test(n)
+    || /\b(shipping|freight)\b/.test(n)
+    || /\boptional add-?on\b/.test(n);
+}
+
+/** Stamp Matt's dollar amount on product lines. Shipping / add-ons stay as-is. */
+export function applyMattSellPrice(items, sellPrice) {
+  const price = numOrNull(sellPrice);
+  if (price == null || !Array.isArray(items) || !items.length) return items || [];
+  return items.map(item => {
+    if (!item || item.notFound || isAddOnLine(item)) return item;
+    const cost = numOrNull(item.cost);
+    const gm = cost > 0 && price > 0 ? Math.round(((price - cost) / price) * 1000) / 10 : item.gmPct;
+    return {
+      ...item,
+      quotedPrice: price,
+      ourPrice: price,
+      gmPct: gm,
+      userPriced: true,
+    };
+  });
 }
 
 export function compactLockItem(item) {

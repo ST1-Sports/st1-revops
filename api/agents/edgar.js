@@ -12,9 +12,12 @@ import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
 import { findPriceItems }      from '../_lib/ai-tools/sources.js'
 import {
   applyLockedPrices,
+  applyMattSellPrice,
+  extractExplicitSellPrice,
   formatLockedQuoteBlock,
   matchLockedItem,
   mergeLockedItemsIntoRequest,
+  numOrNull,
   userWantsNewSellPrice,
   userWantsReprice,
 } from '../../src/lib/quoteLock.js'
@@ -130,13 +133,11 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
 
   const rules = `
 === HARD PRICING RULES ===
-1. Never quote below dealer cost.
-2. Never quote below MAP where MAP is listed. Flag it if a customer pushes lower.
-3. Never quote below GM floor. Formula: minimum price = cost ÷ (1 − gmFloor%).
-   Default GM floor = 20% if none listed.
-4. Standard price = "Our list price" — already reviewed by Matt. Use it as your default.
-5. Quantity discounts: only if cost is known; always stay above GM floor.
-6. Not found: respond "Not in current price list — Matt will confirm pricing."
+1. Never invent a sell price that Matt did not set. If Matt names a dollar amount (e.g. "$81.95", "keep it at $81.95", "the program at $81.95"), that IS the quotedPrice on product lines. Warn if it is below cost or MAP — do not raise it.
+2. When Matt has not named a price: never quote below dealer cost, MAP, or GM floor. Formula: minimum price = cost ÷ (1 − gmFloor%). Default GM floor = 20% if none listed.
+3. Standard price = "Our list price" — already reviewed by Matt. Use it as your default when he has not named a program/override price.
+4. Quantity discounts: only if cost is known; stay above GM floor unless Matt named a price.
+5. Not found: respond "Not in current price list — Matt will confirm pricing."
 
 === RESPONSE FORMAT ===
 Return valid JSON only (no prose outside the JSON):
@@ -217,17 +218,6 @@ function enforceGuardrails(quote, itemLookup, { skipLocked = [] } = {}) {
   const lineItems = (quote.lineItems || []).map(item => {
     if (item.notFound) return item
 
-    if (skipLocked.length && matchLockedItem(item, skipLocked)) {
-      const cost   = item.cost || 0
-      const quoted = item.quotedPrice || item.ourPrice || 0
-      const gm = quoted > 0 && cost > 0 ? (quoted - cost) / quoted : null
-      return {
-        ...item,
-        quotedPrice: quoted,
-        gmPct:       gm != null ? Math.round(gm * 1000) / 10 : item.gmPct,
-      }
-    }
-
     const cost   = item.cost || 0
     const dbData = itemLookup?.get(item.name?.toLowerCase())
     const floor  = dbData?.gmFloorPct ?? DEFAULT_FLOOR
@@ -236,7 +226,22 @@ function enforceGuardrails(quote, itemLookup, { skipLocked = [] } = {}) {
     const minByGm  = cost > 0 ? cost / (1 - floor) : 0
     const minByMap = map > 0 ? map : 0
     const minPrice = Math.max(minByGm, minByMap)
-    let   quoted   = item.quotedPrice || 0
+    let   quoted   = item.quotedPrice || item.ourPrice || 0
+    const held = item.userPriced || (skipLocked.length && matchLockedItem(item, skipLocked))
+
+    if (held) {
+      if (cost > 0 && quoted > 0 && quoted < cost) {
+        warnings.push(`${item.name}: held at $${quoted.toFixed(2)} — below dealer cost $${cost.toFixed(2)}. You set this price.`)
+      } else if (minPrice > 0 && quoted < minPrice) {
+        warnings.push(`${item.name}: held at $${quoted.toFixed(2)} — below the usual ${Math.round(floor * 100)}% GM floor (min $${minPrice.toFixed(2)}). You set this price.`)
+      }
+      const gm = quoted > 0 && cost > 0 ? (quoted - cost) / quoted : null
+      return {
+        ...item,
+        quotedPrice: quoted,
+        gmPct:       gm != null ? Math.round(gm * 1000) / 10 : item.gmPct,
+      }
+    }
 
     if (minPrice > 0 && quoted < minPrice) {
       quoted = Math.round(minPrice * 100) / 100
@@ -311,7 +316,8 @@ export default async function handler(req, res) {
   const contactId    = input.contactId || null
   const contactEmail = input.contactEmail || null
   const reprice      = input.reprice === true || userWantsReprice(task)
-  const lockSell     = input.lockSell !== false && !userWantsNewSellPrice(task)
+  const userPrice    = numOrNull(input.userPrice) ?? (userWantsNewSellPrice(task) ? extractExplicitSellPrice(task) : null)
+  const lockSell     = input.lockSell !== false && userPrice == null && !userWantsNewSellPrice(task)
   const lockedItems  = (!reprice && Array.isArray(input.lockedItems)) ? input.lockedItems : []
   const requestItems = mergeLockedItemsIntoRequest(input.items, lockedItems)
 
@@ -348,6 +354,9 @@ export default async function handler(req, res) {
     if (lockBlock) {
       userMsg += '\n\nHold cost and quotedPrice from the open quote. Only change qty or add/remove lines the user asked for.'
       if (!lockSell) userMsg += ' The user set a new sell price — keep the locked cost and use their sell price.'
+    }
+    if (userPrice != null) {
+      userMsg += `\n\nMatt set the sell price at $${userPrice.toFixed(2)}. Use that exact quotedPrice on the product lines. Do not raise it for GM floor, MAP, or list. Warn if it is below cost.`
     }
 
     // Call Claude
@@ -401,11 +410,22 @@ export default async function handler(req, res) {
         lineItems: applyLockedPrices(quote.lineItems || [], lockedItems, { lockSell }),
       }
     }
+    if (userPrice != null) {
+      quote = {
+        ...quote,
+        lineItems: applyMattSellPrice(quote.lineItems || [], userPrice),
+      }
+    }
 
     const guarded = enforceGuardrails(quote, itemLookup, {
       skipLocked: lockSell ? lockedItems : [],
     })
-    if (lockedItems.length) {
+    if (userPrice != null) {
+      guarded.warnings = [
+        ...(guarded.warnings || []),
+        `Held sell price at $${userPrice.toFixed(2)} as requested. GM floor / MAP were not applied.`,
+      ]
+    } else if (lockedItems.length) {
       guarded.warnings = [
         ...(guarded.warnings || []),
         lockSell

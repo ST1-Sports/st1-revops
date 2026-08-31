@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { st1PriceActionFromPricing } from '../../api/_lib/st1PriceAction.js';
 import {
   applyLockedPrices,
+  applyMattSellPrice,
   buildLockedQuotePayload,
+  extractExplicitSellPrice,
   extractLockedQuoteFromDeals,
   extractLockedQuoteFromHistory,
   lockedPricingToolResult,
@@ -49,6 +51,29 @@ describe('userWantsNewSellPrice', () => {
     assert.equal(userWantsNewSellPrice('charge $90'), true);
     assert.equal(userWantsNewSellPrice('change the price to 89.99'), true);
     assert.equal(userWantsNewSellPrice('10% off'), true);
+    assert.equal(userWantsNewSellPrice('yes - we need theprogram at the $81.95'), true);
+    assert.equal(userWantsNewSellPrice('keep it at $81.95'), true);
+    assert.equal(extractExplicitSellPrice('yes - we need theprogram at the $81.95'), 81.95);
+  });
+
+  it('does not treat a price question as a new sell price', () => {
+    assert.equal(userWantsNewSellPrice("what's the price on the TF-5000, $94.99?"), false);
+  });
+});
+
+describe('applyMattSellPrice', () => {
+  it('stamps $81.95 on balls and leaves shipping / customization alone', () => {
+    const out = applyMattSellPrice([
+      { name: 'Spalding TF-1000 NFHS 28.5" Girls Basketball (Booking Program)', sku: 'AC-1457055', qty: 14, cost: 99.99, quotedPrice: 124.99 },
+      { name: 'Spalding TF-1000 NFHS 29.5" Boys Basketball (Booking Program)', sku: 'AC-1457054', qty: 14, cost: 99.99, quotedPrice: 124.99 },
+      { name: 'Customization – Optional Add-On (per ball)', qty: 28, quotedPrice: 5.95 },
+      { name: 'Shipping – Billed Upon Final Total', qty: 1, quotedPrice: 84 },
+    ], 81.95);
+    assert.equal(out[0].quotedPrice, 81.95);
+    assert.equal(out[1].quotedPrice, 81.95);
+    assert.equal(out[0].userPriced, true);
+    assert.equal(out[2].quotedPrice, 5.95);
+    assert.equal(out[3].quotedPrice, 84);
   });
 });
 
