@@ -8,8 +8,15 @@
  *   - recordOutcome()        → close the loop (won/lost/replied) later
  *   - recentOutcomes()       → feed prior results back into a new prompt
  *   - countActions()         → power rate limits / guardrails without a new table
+ *   - recordChatFeedback()   → thumbs on Scout answers become reusable facts
  */
 import { prisma } from './prisma.js'
+import {
+  CHAT_FEEDBACK_ENTITY,
+  CHAT_FEEDBACK_MAX,
+  clipText,
+  feedbackMemoryKey,
+} from '../../src/lib/chatMemory.js'
 
 // ── MEMORY ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +52,88 @@ export async function memoryBlock(entity, scope = 'org') {
   if (!facts.length) return ''
   const lines = facts.map(f => `- ${f.key}: ${f.value}`).join('\n')
   return `What we already know about ${entity}:\n${lines}`
+}
+
+export async function listMemory({ limit = 80 } = {}) {
+  return prisma.agentMemory.findMany({
+    orderBy: { updatedAt: 'desc' },
+    take: limit,
+  })
+}
+
+export async function forgetMemory({ id, scope, entity, key } = {}) {
+  if (id) {
+    return prisma.agentMemory.delete({ where: { id } }).catch(() => null)
+  }
+  if (scope != null && entity != null && key) {
+    return prisma.agentMemory.delete({
+      where: { scope_entity_key: { scope, entity, key } },
+    }).catch(() => null)
+  }
+  return null
+}
+
+/** Drop oldest facts for an entity so the brain stays readable. */
+export async function pruneEntityFacts(entity, max = CHAT_FEEDBACK_MAX) {
+  if (!entity) return 0
+  const rows = await prisma.agentMemory.findMany({
+    where: { entity },
+    orderBy: { updatedAt: 'desc' },
+  })
+  if (rows.length <= max) return 0
+  const extra = rows.slice(max)
+  await prisma.agentMemory.deleteMany({ where: { id: { in: extra.map(r => r.id) } } })
+  return extra.length
+}
+
+/** Thumbs on a Scout answer → durable fact + closed interaction. */
+export async function recordChatFeedback({
+  vote, query, answer, messageId = null, userId = null,
+} = {}) {
+  const v = vote === 'down' ? 'down' : 'up'
+  const q = clipText(query, 160)
+  const a = clipText(answer, 220)
+  const key = feedbackMemoryKey(v, q)
+  await remember({
+    scope: 'org',
+    entity: CHAT_FEEDBACK_ENTITY,
+    key,
+    value: v === 'up'
+      ? `Good answer. Q: ${q || '(no question)'} → A: ${a || '(no answer)'}`
+      : `Do not repeat this. Q: ${q || '(no question)'} → bad A: ${a || '(no answer)'}`,
+    agentId: 'revops-agent',
+    confidence: v === 'up' ? 0.9 : 0.75,
+  })
+  await pruneEntityFacts(CHAT_FEEDBACK_ENTITY, CHAT_FEEDBACK_MAX)
+  return logInteraction({
+    agentId: 'revops-agent',
+    userId,
+    action: 'chat_feedback',
+    entity: CHAT_FEEDBACK_ENTITY,
+    input: { query: q, messageId },
+    output: { answer: a, vote: v },
+    outcome: v,
+  })
+}
+
+/** Matt's thumbs — inject into Scout so good/bad answers actually steer the next turn. */
+export async function feedbackBlock(limit = 10) {
+  const rows = await prisma.agentMemory.findMany({
+    where: { entity: CHAT_FEEDBACK_ENTITY },
+    orderBy: { updatedAt: 'desc' },
+    take: limit,
+  })
+  if (!rows.length) return ''
+  const good = rows.filter(r => String(r.key).startsWith('good:'))
+  const avoid = rows.filter(r => String(r.key).startsWith('avoid:'))
+  const parts = []
+  if (good.length) {
+    parts.push(`Matt marked these answers as good — match this quality:\n${good.map(r => `- ${r.value}`).join('\n')}`)
+  }
+  if (avoid.length) {
+    parts.push(`Matt marked these as wrong — do not repeat them:\n${avoid.map(r => `- ${r.value}`).join('\n')}`)
+  }
+  return parts.join('\n\n')
 }
 
 // ── INTERACTIONS + OUTCOMES ────────────────────────────────────────────────────

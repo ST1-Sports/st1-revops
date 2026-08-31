@@ -6,6 +6,7 @@ import { dealIsSuppressed, filterLiveDeals, mergeIdLists, suppressFromRemovedDea
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
+import { splitChatPayload } from "../lib/chatMemory.js";
 import { buildQuoteEmailDraft, sanitizeOutgoingQuoteEmail } from "../lib/quoteEmail.js";
 import {
   orgNamesMatch,
@@ -2006,7 +2007,10 @@ if(Array.isArray(v))return v.map(chatText).filter(Boolean).join("\n");
 if(typeof v==="object"){if(v.text||v.message||v.content)return chatText(v.text||v.message||v.content);try{return JSON.stringify(v);}catch{return"[object]";}}
 return String(v);
 };
-const history=(Array.isArray(s.agentHistory)?s.agentHistory:[]).map(m=>({...m,content:chatText(m.content),raw:chatText(m.raw||m.content),actions:dedupeChatActions(Array.isArray(m.actions)?m.actions:[]),suggestions:Array.isArray(m.suggestions)?m.suggestions:[]}));
+const history=(Array.isArray(s.agentHistory)?s.agentHistory:[]).map(m=>{
+const packed=splitChatPayload(m.actions);
+return{...m,content:chatText(m.content),raw:chatText(m.raw||m.content),actions:dedupeChatActions(packed.actions),vote:m.vote||packed.vote||null,suggestions:Array.isArray(m.suggestions)?m.suggestions:[]};
+});
 const lastUserIdx=history.reduce((n,m,i)=>m.role==="user"?i:n,-1);
 const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",fn);
 const [input,setInput]=useState("");
@@ -2068,11 +2072,14 @@ if(days===0)return"Today";if(days===1)return"Yesterday";
 if(days<7)return`${days}d ago`;
 return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
 };
-const saveMsg=(role,content,actions)=>{
-if(!sessionIdRef.current)return;
-fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})})
-.catch(()=>{});
+const saveMsg=async(role,content,actions)=>{
+if(!sessionIdRef.current)return null;
+try{
+const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"save_message",sessionId:sessionIdRef.current,role,content,actions:actions||null})});
+const d=await r.json();
+return d.id||null;
+}catch{return null;}
 };
 const newChat=()=>{
 setHistory([]);setInsights({});
@@ -2083,13 +2090,59 @@ const loadSession=async(sess)=>{
 setActiveSessionId(sess.id);
 sessionIdRef.current=sess.id;
 setInsights({});
-const msgs=(sess.messages||[]).map(m=>({
-id:m.id,role:m.role,content:chatText(m.content),
-actions:Array.isArray(m.actions)?m.actions:m.actions?[]:m.actions||[],
+const msgs=(sess.messages||[]).map(m=>{
+const packed=splitChatPayload(m.actions);
+return{
+id:m.id,dbId:m.id,role:m.role,content:chatText(m.content),
+actions:dedupeChatActions(packed.actions),vote:packed.vote,
 suggestions:[],ts:new Date(m.ts).getTime(),
-}));
+};
+});
 setHistory(msgs);
 setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
+};
+const deleteSession=async(sessId,{silent}={})=>{
+if(!sessId)return;
+try{
+await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"delete_session",sessionId:sessId,userId:cu?.id||null})});
+}catch{}
+setSessions(prev=>prev.filter(x=>x.id!==sessId));
+if(sessionIdRef.current===sessId||activeSessionId===sessId){
+sessionIdRef.current=null;setActiveSessionId(null);setHistory([]);setInsights({});
+}
+if(!silent)toast("Chat deleted","info");
+};
+const clearAllChats=async()=>{
+if(!cu?.id){toast("Sign in to delete saved chats","error");return;}
+if(!window.confirm("Delete all saved chats? This cannot be undone."))return;
+try{
+await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"delete_all",userId:cu.id})});
+}catch{}
+sessionIdRef.current=null;setActiveSessionId(null);setSessions([]);setHistory([]);setInsights({});
+toast("All chats deleted","info");
+};
+const rateMessage=async(m,vote)=>{
+if(!m||m.role!=="assistant")return;
+const prevUser=[...history].reverse().find(x=>x.role==="user"&&(x.ts||0)<=(m.ts||Infinity));
+setHistory(h=>h.map(x=>x.id===m.id?{...x,vote}:x));
+try{
+const r=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({
+action:"rate_message",
+messageId:m.dbId||null,
+sessionId:sessionIdRef.current,
+vote,
+query:prevUser?.content||"",
+answer:m.content||m.raw||"",
+userId:cu?.id||null,
+})});
+if(!r.ok)throw new Error("rate failed");
+const d=await r.json();
+if(d.messageId)setHistory(h=>h.map(x=>x.id===m.id?{...x,dbId:d.messageId,vote}:x));
+toast(vote==="up"?"Saved as a good answer — Scout will reuse this":"Noted — Scout will avoid this next time","success");
+}catch{toast("Could not save that rating","error");}
 };
 const copyEmail=(action)=>{
 const text=`To: ${action.to_name} <${action.to_email||"(find email)"}>\nSubject: ${action.subject}\n\n${action.body}`;
@@ -2195,7 +2248,8 @@ const msgId=mkId();
 const userEntry={id:msgId,role:"user",content:msg,ts:Date.now()};
 const nextHistory=[...history,userEntry];
 setHistory(h=>[...(Array.isArray(h)?h:[]),userEntry]);
-saveMsg("user",msg,null);
+const userDbId=await saveMsg("user",msg,null);
+if(userDbId)setHistory(h=>h.map(x=>x.id===msgId?{...x,dbId:userDbId}:x));
 setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
 ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
 const apiMsgs=nextHistory.slice(-20).map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
@@ -2245,9 +2299,10 @@ const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
 setLastMeta(meta);
 const aId=mkId();
 const cleanActions=dedupeChatActions(actions);
-const assistantEntry={id:aId,role:"assistant",content:message,actions:cleanActions,suggestions,raw:message,meta,ts:Date.now()};
+const assistantEntry={id:aId,role:"assistant",content:message,actions:cleanActions,suggestions,raw:message,meta,ts:Date.now(),vote:null};
 setHistory(h=>[...(Array.isArray(h)?h:[]),assistantEntry]);
-saveMsg("assistant",message,cleanActions.length?cleanActions:null);
+const aDbId=await saveMsg("assistant",message,cleanActions.length?cleanActions:null);
+if(aDbId)setHistory(h=>h.map(x=>x.id===aId?{...x,dbId:aDbId}:x));
 if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Review in Home"});
 dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
 actions.forEach(a=>{
@@ -2274,13 +2329,19 @@ body:JSON.stringify({action:"find_similar",query:msg,excludeUserId:cu.id,limit:2
 .catch(()=>{});
 }
 }catch(e){
-setHistory(h=>[...(Array.isArray(h)?h:[]),{id:mkId(),role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
+const errId=mkId();
+setHistory(h=>[...(Array.isArray(h)?h:[]),{id:errId,role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
 saveMsg("assistant",`Error: ${e.message}`,null);
 }
 setAgentStatus(null);setRunning(false);
 setTimeout(()=>inputRef.current?.focus(),100);
 };
-const clearHistory=()=>{dispatch("SET_AGENT_HISTORY",[]);setInsights({});toast("Conversation cleared","info");};
+const clearHistory=()=>{
+const id=sessionIdRef.current||activeSessionId;
+if(id){deleteSession(id);return;}
+setHistory([]);setInsights({});sessionIdRef.current=null;setActiveSessionId(null);
+toast("Conversation cleared","info");
+};
 const openDeals=useMemo(()=>(s.deals||[]).filter(d=>!["Closed Won","Closed Lost"].includes(d.stage)),[s.deals]);
 const pipeline=useMemo(()=>openDeals.reduce((a,d)=>a+d.value,0),[openDeals]);
 const overdueDeals=useMemo(()=>openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0).slice(0,4),[openDeals]);
@@ -2306,8 +2367,9 @@ return(
 <div style={{padding:"12px 12px 10px",borderBottom:`1px solid ${B.border}`,flexShrink:0}}>
 <button onClick={newChat} style={{width:"100%",background:B.orange,color:"#fff",border:"none",borderRadius:6,padding:"8px 0",fontSize:11,fontWeight:700,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,cursor:"pointer"}}>+ NEW CHAT</button>
 </div>
-<div style={{padding:"8px 8px 4px",flexShrink:0}}>
+<div style={{padding:"8px 8px 4px",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"0 4px"}}>CHAT HISTORY</div>
+{sessions.length>0&&<button onClick={clearAllChats} style={{background:"none",border:"none",color:B.muted,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.6,cursor:"pointer",padding:"2px 4px"}}>CLEAR ALL</button>}
 </div>
 <div style={{flex:1,overflowY:"auto",padding:"0 8px 8px"}}>
 {sessionsLoading&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px 4px"}}>Loading…</div>}
@@ -2317,14 +2379,18 @@ const isActive=sess.id===activeSessionId;
 const title=sessionTitle(sess);
 const msgCount=(sess.messages||[]).filter(m=>m.role==="user").length;
 return(
-<button key={sess.id} onClick={()=>loadSession(sess)}
-style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparent",border:`1px solid ${isActive?B.orange:B.border}`,borderRadius:6,padding:"8px 9px",marginBottom:4,cursor:"pointer",display:"block"}}>
+<div key={sess.id} style={{position:"relative",marginBottom:4}}>
+<button onClick={()=>loadSession(sess)}
+style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparent",border:`1px solid ${isActive?B.orange:B.border}`,borderRadius:6,padding:"8px 26px 8px 9px",cursor:"pointer",display:"block"}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:isActive?600:400,color:isActive?B.orange:B.text,lineHeight:1.35,marginBottom:3,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{title}</div>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{relDate(sess.createdAt)}</span>
 {msgCount>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{msgCount}q</span>}
 </div>
 </button>
+<button type="button" aria-label="Delete chat" title="Delete chat" onClick={e=>{e.stopPropagation();deleteSession(sess.id);}}
+style={{position:"absolute",top:5,right:5,width:20,height:20,border:"none",background:isActive?B.orangeBg:B.surface,color:B.muted,borderRadius:4,cursor:"pointer",fontSize:11,lineHeight:1}}>✕</button>
+</div>
 );
 })}
 </div>
@@ -2335,12 +2401,12 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 <div style={{padding:"11px 18px 9px",borderBottom:`1px solid ${B.border}`,background:B.white,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black,letterSpacing:.3}}>{HOME_AGENT_NAME}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Prices, pipeline, outreach · chats saved per user</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Prices, pipeline, outreach · thumbs train Scout</div>
 </div>
 <div style={{display:"flex",gap:6,alignItems:"center"}}>
 {lastMeta?.liveZoho&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>● LIVE ZOHO</span>}
 {lastMeta?.searchUsed&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue,background:B.blueBg,padding:"2px 7px",borderRadius:10,letterSpacing:.5}}>🔍 WEB</span>}
-{history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>CLEAR</GBtn>}
+{history.length>0&&<GBtn onClick={clearHistory} style={{fontSize:9,padding:"3px 9px"}}>DELETE CHAT</GBtn>}
 </div>
 </div>
 {/* Messages */}
@@ -3008,6 +3074,16 @@ return(
 {m.suggestions.map((sg,si)=>(
 <button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:12,padding:"6px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1,whiteSpace:"normal",textAlign:"left",maxWidth:"100%",overflowWrap:"anywhere"}}>→ {sg}</button>
 ))}
+</div>
+)}
+{m.role==="assistant"&&(
+<div style={{display:"flex",alignItems:"center",gap:6,marginTop:5,maxWidth:"88%"}}>
+<button type="button" title="Good — save this for Scout" onClick={()=>rateMessage(m,"up")}
+style={{background:m.vote==="up"?B.greenBg:B.white,border:`1px solid ${m.vote==="up"?B.green:B.border}`,color:m.vote==="up"?B.green:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer",lineHeight:1}}>👍</button>
+<button type="button" title="Off — Scout should not do this again" onClick={()=>rateMessage(m,"down")}
+style={{background:m.vote==="down"?B.redBg:B.white,border:`1px solid ${m.vote==="down"?B.red:B.border}`,color:m.vote==="down"?B.red:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer",lineHeight:1}}>👎</button>
+{m.vote==="up"&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green}}>Saved to memory</span>}
+{m.vote==="down"&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red}}>Scout will avoid this</span>}
 </div>
 )}
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:3}}>{m.role==="user"?(cu?.name?.split(" ")[0]||"You"):HOME_AGENT_NAME} · {new Date(m.ts).toLocaleTimeString()}</div>

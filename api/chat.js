@@ -7,6 +7,10 @@
  * POST { action:"save_message", sessionId, role, content, actions? }
  *   → appends a ChatMessage to the session, returns { id }
  *
+ * POST { action:"delete_session", sessionId, userId? }
+ * POST { action:"delete_all", userId }
+ * POST { action:"rate_message", messageId?, sessionId?, vote, query?, answer?, userId? }
+ *
  * GET ?context=home&limit=50
  *   → returns recent ChatSessions with their messages (for history view)
  *
@@ -16,6 +20,8 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
+import { recordChatFeedback } from './_lib/memory.js';
+import { packChatPayload, splitChatPayload } from '../src/lib/chatMemory.js';
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
@@ -127,6 +133,53 @@ export default async function handler(req, res) {
           });
         }
         return res.json({ matches });
+      }
+
+      if (body.action === 'delete_session') {
+        const { sessionId, userId } = body;
+        if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+        const session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
+        if (!session) return res.json({ ok: true, deleted: 0 });
+        if (userId && session.userId && session.userId !== userId) {
+          return res.status(403).json({ error: 'Not your chat' });
+        }
+        await prisma.chatSession.delete({ where: { id: sessionId } });
+        return res.json({ ok: true, deleted: 1 });
+      }
+
+      if (body.action === 'delete_all') {
+        if (!body.userId) return res.status(400).json({ error: 'userId required' });
+        const result = await prisma.chatSession.deleteMany({ where: { userId: body.userId } });
+        return res.json({ ok: true, deleted: result.count });
+      }
+
+      if (body.action === 'rate_message') {
+        const vote = body.vote === 'down' ? 'down' : 'up';
+        let msg = null;
+        if (body.messageId) {
+          msg = await prisma.chatMessage.findUnique({ where: { id: body.messageId } });
+        }
+        if (!msg && body.sessionId) {
+          msg = await prisma.chatMessage.findFirst({
+            where: { sessionId: body.sessionId, role: 'assistant' },
+            orderBy: { ts: 'desc' },
+          });
+        }
+        if (msg) {
+          const { actions } = splitChatPayload(msg.actions);
+          await prisma.chatMessage.update({
+            where: { id: msg.id },
+            data: { actions: packChatPayload(actions, vote) },
+          });
+        }
+        await recordChatFeedback({
+          vote,
+          query: body.query || '',
+          answer: body.answer || msg?.content || '',
+          messageId: msg?.id || null,
+          userId: body.userId || null,
+        });
+        return res.json({ ok: true, vote, messageId: msg?.id || null });
       }
 
       return res.status(400).json({ error: 'Unknown action' });

@@ -67,6 +67,12 @@ const SOURCE_MAP = [
     content: 'AI safety, pricing rules, customer data rules, brand voice, sponsorship config, talk track.',
     add: 'Update code policy definitions or admin/database-backed sponsorship and talk-track records.',
   },
+  {
+    name: 'Scout memory and ratings',
+    owner: 'AgentMemory + chat thumbs',
+    content: 'Facts Scout remembers, plus answers you upvote or downvote.',
+    add: 'Thumb answers in Home chat, or add/delete facts in the Memory panel on this page.',
+  },
 ]
 
 function readLocalSummary() {
@@ -161,6 +167,11 @@ export default function AiKnowledgeHub({ embedded = false }) {
   const [notionImporting, setNotionImporting] = useState(false)
   const [driveUrl, setDriveUrl] = useState('')
   const [driveImporting, setDriveImporting] = useState(false)
+  const [memory, setMemory] = useState({ facts: [], feedback: [], chatSessionCount: 0 })
+  const [memoryLoading, setMemoryLoading] = useState(false)
+  const [memoryMsg, setMemoryMsg] = useState('')
+  const [factKey, setFactKey] = useState('')
+  const [factValue, setFactValue] = useState('')
 
   const localSummary = useMemo(() => readLocalSummary(), [])
   const tools = discovery?.tools || []
@@ -169,6 +180,62 @@ export default function AiKnowledgeHub({ embedded = false }) {
   useEffect(() => {
     if (apiKey) sessionStorage.setItem('st1_ai_tool_key', apiKey)
   }, [apiKey])
+
+  useEffect(() => { loadMemory() }, [])
+
+  async function loadMemory() {
+    setMemoryLoading(true)
+    try {
+      const r = await fetch('/api/ai/memory')
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`)
+      setMemory({ facts: d.facts || [], feedback: d.feedback || [], chatSessionCount: d.chatSessionCount || 0 })
+    } catch (e) {
+      setMemoryMsg(`Could not load memory: ${e.message}`)
+    } finally {
+      setMemoryLoading(false)
+    }
+  }
+
+  async function saveFact() {
+    setMemoryMsg('')
+    if (!factKey.trim() || !factValue.trim()) {
+      setMemoryMsg('Add a key and a value first.')
+      return
+    }
+    try {
+      const r = await fetch('/api/ai/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'remember', key: factKey.trim(), value: factValue.trim(), entity: 'org' }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`)
+      setFactKey('')
+      setFactValue('')
+      setMemoryMsg('Saved. Scout will see this on the next chat.')
+      await loadMemory()
+    } catch (e) {
+      setMemoryMsg(e.message)
+    }
+  }
+
+  async function forgetFact(id) {
+    setMemoryMsg('')
+    try {
+      const r = await fetch('/api/ai/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'forget', id }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`)
+      setMemory(prev => ({ ...prev, facts: (prev.facts || []).filter(f => f.id !== id) }))
+      setMemoryMsg('Removed from Scout memory.')
+    } catch (e) {
+      setMemoryMsg(e.message)
+    }
+  }
 
   async function loadTools() {
     setLoading(true)
@@ -401,6 +468,48 @@ export default function AiKnowledgeHub({ embedded = false }) {
         </div>
         <StatusPill ok={Boolean(discovery?.ok)} label={discovery?.ok ? 'API CONNECTED' : 'PASTE KEY TO CONNECT'} />
       </div>
+
+      <Card style={{ marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+          <div>
+            <Label>SCOUT MEMORY AND RATINGS</Label>
+            <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted, lineHeight: 1.55, maxWidth: 720 }}>
+              Facts Scout remembers, plus answers you thumb up or down in Home chat. Delete stale rows so the brain stays clean. Scout reads this on every turn.
+            </div>
+          </div>
+          <button onClick={loadMemory} disabled={memoryLoading} style={{ background: B.surface, border: `1px solid ${B.border}`, color: B.muted, borderRadius: 5, padding: '5px 10px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8 }}>
+            {memoryLoading ? 'LOADING' : 'REFRESH'}
+          </button>
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <StatusPill ok={memory.facts?.length > 0} label={`${memory.facts?.length || 0} FACTS`} />
+          <StatusPill ok={memory.feedback?.length > 0} label={`${memory.feedback?.length || 0} RATINGS`} />
+          <StatusPill ok={memory.chatSessionCount > 0} label={`${memory.chatSessionCount} SAVED CHATS`} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 280px) 1fr', gap: 12, alignItems: 'start' }}>
+          <div>
+            <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black, marginBottom: 6 }}>Teach Scout</div>
+            <input value={factKey} onChange={e => setFactKey(e.target.value)} placeholder="Key — e.g. hudson-ball-rate" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, marginBottom: 7 }} />
+            <textarea value={factValue} onChange={e => setFactValue(e.target.value)} rows={3} placeholder="What should Scout remember?" style={{ width: '100%', background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: '8px 10px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, resize: 'vertical', marginBottom: 8 }} />
+            <button onClick={saveFact} style={{ background: B.orange, color: B.white, border: 'none', borderRadius: 6, padding: '8px 12px', fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: .8 }}>SAVE FACT</button>
+            {memoryMsg && <div style={{ marginTop: 8, fontFamily: "'Lexend',sans-serif", fontSize: 11, color: memoryMsg.startsWith('Could') || memoryMsg.includes('required') || memoryMsg.includes('Add a') ? B.yellow : B.green, lineHeight: 1.45 }}>{memoryMsg}</div>}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 280, overflowY: 'auto' }}>
+            {(memory.facts || []).length === 0 && !memoryLoading && (
+              <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted, lineHeight: 1.5 }}>No facts yet. Thumb a Scout answer or save one here.</div>
+            )}
+            {(memory.facts || []).map(f => (
+              <div key={f.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 7, padding: '8px 10px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, color: String(f.key).startsWith('avoid:') ? B.red : String(f.key).startsWith('good:') ? B.green : B.orange, letterSpacing: .8, marginBottom: 3 }}>{f.entity || 'org'} · {f.key}</div>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.text, lineHeight: 1.45 }}>{f.value}</div>
+                </div>
+                <button onClick={() => forgetFact(f.id)} style={{ background: 'none', border: 'none', color: B.muted, fontSize: 14, padding: 2, cursor: 'pointer' }} title="Remove from memory">✕</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 420px) 1fr', gap: 14, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
