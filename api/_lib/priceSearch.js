@@ -202,17 +202,37 @@ function genderToken(text) {
   return '';
 }
 
+export function extractSeriesToken(text) {
+  const n = normalizePriceText(text);
+  const series = n.match(/\b(legacy|precision|classic|replica)\b/);
+  return series ? series[1] : '';
+}
+
+export function extractCertToken(text) {
+  const n = normalizePriceText(text);
+  if (/\bnfhs\b/.test(n)) return 'nfhs';
+  if (/\bncaa\b/.test(n)) return 'ncaa';
+  if (/\bnaia\b/.test(n)) return 'naia';
+  if (/\bnjcaa\b/.test(n)) return 'njcaa';
+  return '';
+}
+
 /**
  * Same manufacturer product across vendor catalogs. Athletic Connection,
- * Spalding, and a Frazier-style list of the TF-1000 28.5 share a key even
- * when their SKUs differ. 28.5 and 29.5 stay apart.
+ * Spalding, and a Frazier-style list of the Legacy TF-1000 NFHS 28.5 share
+ * a key even when their SKUs differ. Precision vs Legacy, NFHS vs NAIA,
+ * and 28.5 vs 29.5 stay apart.
  */
 export function productFamilyKey(item) {
   const hay = `${item?.name || ''} ${item?.brand || ''}`;
   const model = extractModelToken(hay);
   const size = extractSizeToken(`${hay} ${item?.sku || ''}`);
+  const series = extractSeriesToken(hay);
+  const cert = extractCertToken(hay);
   const gender = size ? '' : genderToken(hay);
-  if (model) return `fam:${model}${size ? `:${size}` : ''}${gender ? `:${gender}` : ''}`;
+  if (model) {
+    return ['fam', model, series, size, cert, gender].filter(Boolean).join(':');
+  }
   const sku = normalizePriceText(item?.sku);
   if (sku) return `sku:${sku}`;
   return `name:${normalizePriceText(item?.name).slice(0, 48)}`;
@@ -247,7 +267,15 @@ export function vendorRatesFor(items, winner) {
     if (a.cost == null && b.cost != null) return 1;
     return String(a.supplier).localeCompare(String(b.supplier));
   });
-  return rows.map((row, i) => ({ ...row, best: i === 0 && row.cost != null }));
+  const bySupplier = [];
+  const seenSupplier = new Set();
+  for (const row of rows) {
+    const key = normalizePriceText(row.supplier);
+    if (seenSupplier.has(key)) continue;
+    seenSupplier.add(key);
+    bySupplier.push(row);
+  }
+  return bySupplier.map((row, i) => ({ ...row, best: i === 0 && row.cost != null }));
 }
 
 /**
@@ -256,10 +284,10 @@ export function vendorRatesFor(items, winner) {
  */
 export function pickBestRate(ranked) {
   if (!Array.isArray(ranked) || ranked.length < 2) return ranked || [];
+  const winnerKey = productFamilyKey(ranked[0].item);
+  const same = winnerKey ? ranked.filter(r => productFamilyKey(r.item) === winnerKey) : [];
   const topScore = ranked[0].score;
   const relevant = ranked.filter(r => r.score >= topScore * 0.8 || r.score >= topScore - 50);
-  const winnerKey = productFamilyKey(ranked[0].item);
-  const same = relevant.filter(r => productFamilyKey(r.item) === winnerKey);
   const pool = same.length ? same : relevant;
   const priced = [...pool].sort((a, b) => {
     const ca = dealerCostOf(a.item);
