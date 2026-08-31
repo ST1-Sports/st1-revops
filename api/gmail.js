@@ -14,6 +14,7 @@
 
 import { prisma } from './_lib/prisma.js';
 import { classifyEmailIntent } from './_lib/brad-shared.js';
+import { encodeMimeWord, encodeMailbox, encodeFilename } from './_lib/mimeHeader.js';
 
 export const config = {
   api: { bodyParser: { sizeLimit: "2mb" } },
@@ -227,18 +228,19 @@ export default async function handler(req, res) {
       if (!subject)  return res.status(400).json({ error: "subject required" });
       if (!emailBody) return res.status(400).json({ error: "body required" });
 
-      const toHeader = to_name ? `${to_name} <${to_email}>` : to_email;
+      const toHeader = to_name ? encodeMailbox(to_name, to_email) : to_email;
       const contentType = htmlBody ? "text/html; charset=UTF-8" : "text/plain; charset=UTF-8";
       // From: set only when both name and address are provided explicitly.
       // Gmail requires the address to match the authenticated account or a Send As alias.
       const fromEmail = req.body.from_email || null;
       const fromHeader = (from_name && fromEmail)
-        ? `${from_name} <${fromEmail}>`
+        ? encodeMailbox(from_name, fromEmail)
         : null;
       // Reply-To points to the rep so replies land in their inbox
       const replyToHeader = reply_to
-        ? (from_name ? `${from_name} <${reply_to}>` : reply_to)
+        ? (from_name ? encodeMailbox(from_name, reply_to) : reply_to)
         : null;
+      const subjectHeader = encodeMimeWord(subject);
       const validAttachments = (attachments || []).filter(a => a?.contentBase64 && a?.filename);
       const wrap = (b64) => b64.replace(/(.{76})/g, "$1\r\n");
       const boundary = `st1_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -250,18 +252,19 @@ export default async function handler(req, res) {
             ...(cc  ? [`Cc: ${cc}`]   : []),
             ...(bcc ? [`Bcc: ${bcc}`] : []),
             ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
-            `Subject: ${subject}`,
+            `Subject: ${subjectHeader}`,
             `MIME-Version: 1.0`,
             `Content-Type: multipart/mixed; boundary="${boundary}"`,
             ``,
             `--${boundary}`,
             `Content-Type: ${contentType}`,
+            `Content-Transfer-Encoding: 8bit`,
             ``,
             htmlBody || emailBody,
             ...validAttachments.flatMap(att => [
               `--${boundary}`,
-              `Content-Type: ${att.mimeType || "application/octet-stream"}; name="${att.filename}"`,
-              `Content-Disposition: attachment; filename="${att.filename}"`,
+              `Content-Type: ${att.mimeType || "application/octet-stream"}; name=${encodeFilename(att.filename)}`,
+              `Content-Disposition: attachment; filename=${encodeFilename(att.filename)}`,
               `Content-Transfer-Encoding: base64`,
               ``,
               wrap(att.contentBase64),
@@ -274,9 +277,10 @@ export default async function handler(req, res) {
             ...(cc  ? [`Cc: ${cc}`]   : []),
             ...(bcc ? [`Bcc: ${bcc}`] : []),
             ...(replyToHeader ? [`Reply-To: ${replyToHeader}`] : []),
-            `Subject: ${subject}`,
+            `Subject: ${subjectHeader}`,
             `MIME-Version: 1.0`,
             `Content-Type: ${contentType}`,
+            `Content-Transfer-Encoding: 8bit`,
             ``,
             htmlBody || emailBody,
           ];

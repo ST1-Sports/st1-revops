@@ -5,6 +5,7 @@ import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
+import { buildQuoteEmailDraft, sanitizeOutgoingQuoteEmail } from "../lib/quoteEmail.js";
 import {
   orgNamesMatch,
   schoolKeyOf,
@@ -214,10 +215,17 @@ ctx.dispatch("ADD_CONTACTS",[{id:mkId(),firstName:names[0]||"",lastName:names.sl
 if(resolved.schoolKey)ctx.dispatch("SET_CRM_NAV",{school:resolved.schoolKey});
 ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} + deal for ${resolved.school}`});
 setApprovedQuotes(prev=>({...prev,[key]:d}));
+const mail=buildQuoteEmailDraft({
+quoteNumber:d.quoteNumber,
+contactName:resolved.contactName||action.contact_person,
+school:resolved.school,
+cu:ctx.cu,
+company:ctx.company,
+});
 setQuoteEmailDrafts(prev=>({...prev,[key]:{
 to:resolved.email||action.email||"",
-subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
-body:`Hi ${resolved.contactName||action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${ctx.cu?.name||"Matt Stone"}\n${ctx.cu?.email||""}\n${ctx.cu?.phone||""}`,
+subject:mail.subject,
+body:mail.body,
 sent:false,
 }}));
 if(d.dealId)ctx.toast(`Edgar PDF ready · deal on ${resolved.school}`,"success");
@@ -283,13 +291,15 @@ async function sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendi
 const draft=quoteEmailDrafts[key];
 const q=approvedQuotes[key];
 if(!draft?.to||!q?.pdfBase64)return;
+const outgoing=sanitizeOutgoingQuoteEmail({...draft,quoteNumber:q.quoteNumber},ctx.cu,ctx.company);
 setSendingQuoteEmail(key);
 try{
 const r=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
 action:"send",
 ...(ctx.cu?.gmailEnvKey?{repEnvKey:ctx.cu.gmailEnvKey}:{}),
-to_email:draft.to,subject:draft.subject,body:draft.body,
-...(ctx.cu?.email?{reply_to:ctx.cu.email,from_name:ctx.cu.name||""}:{}),
+to_email:draft.to,subject:outgoing.subject,body:outgoing.body,
+reply_to:outgoing.signer.email,
+from_name:outgoing.signer.name,
 attachments:[{filename:`Quote-${q.quoteNumber}.pdf`,mimeType:"application/pdf",contentBase64:q.pdfBase64}],
 })});
 const d=await r.json();
@@ -2121,7 +2131,7 @@ if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpanded
 if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
 if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
-const quoteCtx={toast,dispatch,deals:s.deals,contacts:s.contacts,cu,setMod};
+const quoteCtx={toast,dispatch,deals:s.deals,contacts:s.contacts,cu,company:s.company,setMod};
 const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
 const createEdgarQuoteInZoho=(action,key,fields)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
 const createPriceQuoteInZoho=(action,key,fields)=>sharedCreatePriceQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
@@ -14135,10 +14145,10 @@ email:matchedContact?.email||"",
 line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:[...(q.warnings||[]),linkNote].filter(Boolean).join("\n"),
 send_email:false,
-},"edgar_main",setSendingZoho,setApprovedQuotes,setQuoteEmailDrafts,{toast,dispatch,deals:s.deals,contacts:s.contacts,cu});
+},"edgar_main",setSendingZoho,setApprovedQuotes,setQuoteEmailDrafts,{toast,dispatch,deals:s.deals,contacts:s.contacts,cu,company:s.company});
 };
 const downloadQuotePdf=(key)=>sharedDownloadQuotePdf(approvedQuotes,key);
-const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,{toast,dispatch,cu});
+const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,{toast,dispatch,cu,company:s.company});
 return(
 <div style={{padding:"26px 34px",maxWidth:1280,margin:"0 auto"}}>
 <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:22}}>
