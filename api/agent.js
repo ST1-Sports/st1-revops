@@ -523,7 +523,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   let orgMemory = '';
   try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
 
-  return `You are ST1 — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. You are not named "RevOps Agent".
+  return `You are ST1 — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
