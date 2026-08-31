@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useState, useEffect, useCallback, useRef, Component } from 'react'
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { Routes, Route, useNavigate } from 'react-router-dom'
 import { APP_STATE_KEY } from './lib/appStateSync.js'
 
 // Wraps lazy(import) so a stale-chunk 404 (browser cached an old index.html
@@ -26,10 +26,6 @@ const RevOps      = lazyWithReload(() => import('./pages/RevOps.jsx'))
 // Standalone tools — loaded on demand, keep bundle small
 const RFPTool     = lazyWithReload(() => import('./pages/RFPTool.jsx'))
 const PriceTool   = lazyWithReload(() => import('./pages/PriceTool.jsx'))
-const Expansion   = lazyWithReload(() => import('./pages/Expansion.jsx'))
-const Integrations= lazyWithReload(() => import('./pages/Integrations.jsx'))
-const Reddit      = lazyWithReload(() => import('./pages/Reddit.jsx'))
-const CommandCenter = lazyWithReload(() => import('./pages/CommandCenter.jsx'))
 const SponsorshipReveal = lazyWithReload(() => import('./pages/SponsorshipReveal.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
@@ -130,8 +126,8 @@ function PageLoader() {
 
 // Task-done route map — where to navigate when clicking a notification
 const TASK_ROUTES = {
-  scrape: '/',          // prospecting lives in RevOps
-  import: '/prices',    // price list import
+  scrape: '/prospecting?tab=contacts',
+  import: '/prospecting?tab=import',
   rfp:    '/rfp',
   expansion: '/expansion',
 }
@@ -239,21 +235,15 @@ export default function App() {
       <Suspense fallback={<PageLoader />}>
         <BgNotifications />
         <Routes>
-          {/* Main unified app — handles all daily ops */}
-          <Route path="/*"           element={<RevOps />} />
-
-          {/* Standalone tools — opened from within RevOps or directly */}
+          {/* Standalone tools — opened in their own chrome, not the RevOps shell */}
           <Route path="/rfp"         element={<RFPTool />} />
           <Route path="/prices"      element={<PriceTool />} />
-          <Route path="/expansion"   element={<Expansion />} />
-          <Route path="/integrations"element={<Integrations />} />
-          <Route path="/reddit"      element={<Reddit />} />
-          <Route path="/command-center" element={<CommandCenter />} />
           <Route path="/sponsorship-reveal" element={<SponsorshipReveal />} />
-          <Route path="/ai-knowledge" element={<Integrations initialTab="knowledge" />} />
 
-          {/* Catch-all */}
-          <Route path="*"            element={<Navigate to="/" replace />} />
+          {/* Daily-ops pages stay in RevOps so sidebar / back / history work.
+              /integrations, /reddit, /expansion, /command-center, /ai-knowledge
+              used to be standalone routes and would steal those URLs from the shell. */}
+          <Route path="/*"           element={<RevOps />} />
         </Routes>
       </Suspense>
     </RootErrorBoundary>
