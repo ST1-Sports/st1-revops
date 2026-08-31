@@ -664,7 +664,7 @@ USE propose_create_campaign_sequence when:
 USE call_edgar (required for product prices and quotes) when:
 - User asks cost, price, MAP, "how much", "quote", "price this out", or names a model/SKU (TF-5000, basketball, etc.)
 - Always prefer call_edgar over get_st1_pricing and propose_create_quote
-- After Edgar returns, answer from Edgar's line items. If Edgar found the item, report cost + quote price. If not found, then ask for a SKU.
+- After Edgar returns, write 1-2 short sentences only. Do not paste markdown tables, SKU grids, or **bold** cost dumps — the UI shows the quote card. If not found, then ask for a SKU.
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
 
 USE call_ledger when:
@@ -953,7 +953,7 @@ async function _handler(req, res) {
       const wrapUp = await callClaude(
         [
           ...messages,
-          { role: "user", content: "Answer the user now as JSON only: {\"message\":\"...\",\"actions\":[],\"suggestions\":[\"...\"]}. Use the tool results already in this conversation. Do not call tools." },
+          { role: "user", content: "Answer the user now as JSON only: {\"message\":\"...\",\"actions\":[],\"suggestions\":[\"...\"]}. Use the tool results already in this conversation. Do not call tools. If Edgar returned a quote, message must be 1-2 short sentences — no markdown tables, no **bold** dump, no SKU/cost grid. The UI already shows the quote card." },
         ],
         system,
         TOOLS,

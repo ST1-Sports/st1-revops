@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
+import { assistantBubbleText, ChatProse, EdgarQuoteCard } from "../components/ScoutChatBits.jsx";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -1908,7 +1909,6 @@ const [running,setRunning]=useState(false);
 const [expandedEmail,setExpandedEmail]=useState(null);
 const [expandedQuote,setExpandedQuote]=useState(null);
 const [expandedCampaign,setExpandedCampaign]=useState(null);
-const [expandedEdgarQuote,setExpandedEdgarQuote]=useState(null);
 const [expandedBradOutreach,setExpandedBradOutreach]=useState(null);
 const [expandedLedgerReconcile,setExpandedLedgerReconcile]=useState(null);
 const [expandedLedgerBill,setExpandedLedgerBill]=useState(null);
@@ -2028,7 +2028,6 @@ return;
 if(action.type==="create_campaign"){dispatch("SET_PROSPECTING_NAV","campaigns");setMod("prospecting");toast("Switched to Campaigns","info");return;}
 if(action.type==="create_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedQuote(e=>e===key?null:key);return;}
 if(action.type==="create_campaign_sequence"){const key=`${msgIdx}_${actionIdx}`;setExpandedCampaign(e=>e===key?null:key);return;}
-if(action.type==="edgar_quote"){const key=`${msgIdx}_${actionIdx}`;setExpandedEdgarQuote(e=>e===key?null:key);return;}
 if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpandedBradOutreach(e=>e===key?null:key);return;}
 if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
 if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
@@ -2256,7 +2255,11 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
 <div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
-<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.75,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none",whiteSpace:"pre-wrap"}}>{chatText(m.content)}</div>
+{(()=>{const body=m.role==="assistant"?assistantBubbleText(chatText(m.content),m.actions):chatText(m.content);if(!body)return null;return(
+<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none"}}>
+{m.role==="assistant"?<ChatProse text={body} color={B.text}/>:<span style={{whiteSpace:"pre-wrap"}}>{body}</span>}
+</div>
+);})()}
 {/* Action buttons */}
 {m.actions?.length>0&&(
 <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
@@ -2438,58 +2441,10 @@ style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border
 );
 }
 if(a.type==="edgar_quote"){
-const key=`${msgIdx}_${ai}`;const expanded=expandedEdgarQuote===key;
-const q=a.quote||{};const items=(q.lineItems||[]);const warns=a.warnings||q.warnings||[];
-const revenue=q.totalRevenue||items.reduce((s,i)=>s+(Number(i.quotedPrice)||0)*(Number(i.qty)||1),0);
-const gm=q.overallGmPct!=null?q.overallGmPct:null;
+const key=`${msgIdx}_${ai}`;
 return(
-<div key={ai} style={{background:B.white,border:`1px solid ${B.teal}50`,borderRadius:6,overflow:"hidden"}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",background:B.tealBg,borderBottom:expanded?`1px solid ${B.teal}20`:"none"}}>
-<div style={{display:"flex",gap:8,alignItems:"center"}}>
-<span style={{fontSize:14}}>▤</span>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.teal,fontWeight:600}}>{q.customer||a.customer||"Quote"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.3}}>{items.length} item{items.length!==1?"s":""} · ${Number(revenue).toFixed(2)}{gm!=null?` · ${gm}% GM`:""}{warns.length>0?` · ${warns.length} warning${warns.length!==1?"s":""}`:""}</div>
-</div>
-</div>
-<div style={{display:"flex",gap:5,flexShrink:0}}>
-<button onClick={()=>createEdgarQuoteInZoho(a,key)} disabled={sendingQuote===key} style={{background:B.teal,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"CREATING...":"▤ CREATE IN ZOHO"}</button>
-<button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
-</div>
-</div>
-{expanded&&(
-<div style={{padding:"10px 12px"}}>
-{warns.length>0&&<div style={{background:B.yellowBg,border:`1px solid ${B.yellow}30`,borderRadius:4,padding:"6px 10px",marginBottom:8}}>{warns.map((w,wi)=><div key={wi} style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow}}>⚠ {w}</div>)}</div>}
-<table style={{width:"100%",borderCollapse:"collapse",marginBottom:6}}>
-<thead><tr style={{borderBottom:`1px solid ${B.border}`}}>
-<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"left",padding:"4px 0",fontWeight:700}}>ITEM</th>
-<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QTY</th>
-<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>COST</th>
-<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>QUOTED</th>
-<th style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.5,textAlign:"right",padding:"4px 0",fontWeight:700}}>GM%</th>
-</tr></thead>
-<tbody>
-{items.map((li,i)=>(
-<tr key={i} style={{borderBottom:`1px solid ${B.border}20`,opacity:li.notFound?.5:1}}>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,padding:"5px 0",paddingRight:8}}>
-{li.name}{li.mapFlag&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.yellow,background:B.yellowBg,borderRadius:2,padding:"1px 4px",marginLeft:5,letterSpacing:.3}}>MAP</span>}
-{li.notFound&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.red,marginLeft:5}}>NOT FOUND</span>}
-</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,textAlign:"right",padding:"5px 0"}}>{li.qty||1}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"right",padding:"5px 0"}}>{li.cost?`$${Number(li.cost).toFixed(2)}`:"—"}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.teal,textAlign:"right",padding:"5px 0",fontWeight:600}}>{li.notFound?"—":`$${Number(li.quotedPrice||0).toFixed(2)}`}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:li.gmPct>=20?B.green:B.yellow,textAlign:"right",padding:"5px 0"}}>{li.gmPct!=null?`${li.gmPct}%`:"—"}</td>
-</tr>
-))}
-</tbody>
-<tfoot><tr>
-<td colSpan={3} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.teal,textAlign:"right",paddingTop:6,letterSpacing:.5,fontWeight:700}}>TOTAL</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.teal,textAlign:"right",paddingTop:6,fontWeight:700}}>${Number(revenue).toFixed(2)}</td>
-<td style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:gm>=20?B.green:B.yellow,textAlign:"right",paddingTop:6,fontWeight:600}}>{gm!=null?`${gm}%`:""}</td>
-</tr></tfoot>
-</table>
-</div>
-)}
+<div key={ai}>
+<EdgarQuoteCard B={B} action={a} creating={sendingQuote===key} onCreate={()=>createEdgarQuoteInZoho(a,key)}/>
 </div>
 );
 }
