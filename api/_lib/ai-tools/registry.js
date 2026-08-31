@@ -8,6 +8,7 @@ import {
   PRICING_POLICY,
   ST1_BRAND_GUIDANCE,
   fetchZohoItems,
+  findPriceItems,
   findProducts,
   getKnowledgeDocuments,
   mapSalesContact,
@@ -64,12 +65,19 @@ function marginPct(cost, price) {
   return Number((((price - cost) / price) * 100).toFixed(2));
 }
 
+function numOrNull(v) {
+  if (v == null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function getSt1Pricing(input) {
   const query = queryFromProductInput(input);
   if (!query && !input.productId) {
     return notFound('get_st1_pricing', input, [], ['Need a product name, SKU, or product ID.']);
   }
-  const [products, zoho] = await Promise.all([
+  const [listItems, products, zoho] = await Promise.all([
+    findPriceItems({ query, sku: input.sku, limit: input.includeAlternatives ? 8 : 5 }).catch(() => []),
     findProducts({
       query,
       productId: input.productId,
@@ -84,12 +92,57 @@ async function getSt1Pricing(input) {
     })),
   ]);
 
+  const primaryList = listItems[0] || null;
+  if (primaryList) {
+    const cost = numOrNull(primaryList.cost ?? primaryList.lastCost);
+    const ourPrice = numOrNull(primaryList.ourPrice);
+    const mapPrice = numOrNull(primaryList.map);
+    const msrp = numOrNull(primaryList.msrp);
+    const customerPrice = ourPrice ?? mapPrice ?? msrp;
+    return ok('get_st1_pricing', {
+      status: 'ok',
+      query: input,
+      result: {
+        name: primaryList.name,
+        sku: primaryList.sku || input.sku || null,
+        productId: null,
+        brand: primaryList.brand || input.brand || null,
+        supplier: primaryList.supplier?.name || null,
+        currency: 'USD',
+        cost: cost == null ? null : { amount: cost, source: 'ST1 price list (dealer cost)' },
+        customerPrice: customerPrice == null ? null : { amount: customerPrice, source: ourPrice != null ? 'ST1 price list (our price)' : mapPrice != null ? 'ST1 price list (MAP)' : 'ST1 price list (MSRP)' },
+        regularPrice: msrp,
+        salePrice: ourPrice,
+        onSale: null,
+        mapPrice,
+        marginPct: marginPct(cost, customerPrice),
+        stockStatus: null,
+        updatedAt: primaryList.updatedAt || null,
+        matches: (input.includeAlternatives ? listItems : listItems.slice(0, 5)).map(it => ({
+          name: it.name,
+          sku: it.sku,
+          brand: it.brand,
+          supplier: it.supplier?.name || null,
+          cost: numOrNull(it.cost ?? it.lastCost),
+          ourPrice: numOrNull(it.ourPrice),
+          map: numOrNull(it.map),
+          msrp: numOrNull(it.msrp),
+        })),
+      },
+      sources: [source('ST1 Price Lists', { recordId: primaryList.id, supplier: primaryList.supplier?.name || null })],
+      limitations: [
+        cost == null ? 'Dealer cost was not set on this price-list row.' : null,
+        customerPrice == null ? 'Our price / MAP / MSRP were not set on this price-list row.' : null,
+      ].filter(Boolean),
+    });
+  }
+
   const primaryZoho = zoho.items?.[0] || null;
   const primaryProduct = products[0] || null;
   if (!primaryZoho && !primaryProduct) {
     return notFound('get_st1_pricing', input, zoho.sources || [], [
       zoho.configured === false ? 'Zoho Books is not configured for item cost lookup.' : null,
-      'No matching product was found in the ST1 product catalog.',
+      'No matching item in the ST1 price lists, product catalog, or Zoho Books.',
     ].filter(Boolean));
   }
 
@@ -516,7 +569,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_pricing',
-    description: 'Return authoritative ST1 pricing and cost data for a specific product or SKU when available. The tool returns null for unavailable cost fields instead of estimating.',
+    description: 'Return authoritative ST1 pricing from the dealer price-list database first (same lists Edgar quotes from), then Zoho Books / the product catalog. Returns null for missing cost fields instead of estimating.',
     permission: 'pricing:read',
     readOnly: true,
     input_schema: {

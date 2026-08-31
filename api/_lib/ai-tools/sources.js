@@ -36,8 +36,9 @@ export const PRICING_POLICY = {
   name: 'ST1 pricing policy',
   summary: 'Use authoritative internal price and cost sources first; never invent missing pricing.',
   rules: [
-    'Use Zoho Books item cost and price data when configured and available.',
-    'Use the synced product catalog for customer-facing list/sale prices.',
+    'Use ST1 dealer price lists (PriceItem / uploaded supplier lists) first — same database Edgar quotes from.',
+    'Use Zoho Books item cost and price data when a list item is not on file.',
+    'Use the synced product catalog for customer-facing list/sale prices only as a last fallback.',
     'When cost is not available, return null and explain the limitation.',
     'Never estimate internal cost unless the user explicitly asks for a non-authoritative estimate.',
     'Include source records and retrieval timestamps in pricing answers.',
@@ -156,6 +157,29 @@ const PRODUCT_SELECT = {
   brand: true,
   date_modified: true,
 };
+
+const COMP_PREFIX = '__COMPETITOR__:';
+
+export async function findPriceItems({ query, sku, limit = 10 } = {}) {
+  const q = String(query || sku || '').trim();
+  if (q.length < 2) return [];
+  const words = q.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(w => w.length > 2);
+  return prisma.priceItem.findMany({
+    where: {
+      supplier: { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
+      OR: [
+        ...(sku ? [{ sku: { equals: sku, mode: 'insensitive' } }] : []),
+        { name: { contains: q, mode: 'insensitive' } },
+        { sku: { contains: q, mode: 'insensitive' } },
+        { brand: { contains: q, mode: 'insensitive' } },
+        ...words.map(kw => ({ name: { contains: kw, mode: 'insensitive' } })),
+      ],
+    },
+    include: { supplier: { select: { id: true, name: true } } },
+    orderBy: { name: 'asc' },
+    take: safeLimit(limit, 10, 25),
+  });
+}
 
 export async function findProducts({ query, productId, brand, limit = 10 } = {}) {
   const take = safeLimit(limit, 10, 50);

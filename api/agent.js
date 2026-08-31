@@ -97,8 +97,9 @@ function messageFromToolResults(agentResults) {
     const price = p.customerPrice?.amount;
     const name = p.name || asked;
     const sku = p.sku ? ` [${p.sku}]` : '';
-    if (price != null) return `${name}${sku}: $${Number(price).toFixed(2)}.`;
-    return `${name}${sku} is in the catalog, but no customer price is on file.`;
+    const from = p.supplier ? ` · ${p.supplier}` : '';
+    if (price != null) return `${name}${sku}${from}: $${Number(price).toFixed(2)}.`;
+    return `${name}${sku} is in the price lists, but no customer price is on file.`;
   }
   const edgar = (agentResults || []).find(r => r.name === 'call_edgar');
   if (edgar?.output?.error) return `I couldn't pull a quote just now (${edgar.output.error}).`;
@@ -523,7 +524,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   let orgMemory = '';
   try { orgMemory = await memoryBlock('org', 'org') } catch { /* non-fatal */ }
 
-  return `You are ST1 — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions.
+  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. Price answers come from ST1's dealer price lists first (the same database Edgar quotes from). Do not invent prices.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}
