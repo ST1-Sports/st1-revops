@@ -76,6 +76,7 @@ export default async function handler(req, res) {
 
   let accountId = null
   let accountCreated = false
+  let accountName = customerName
   let contactId = null
   let quoteId = null
   let quoteNumber = localQuoteNumber(dateStr)
@@ -90,6 +91,7 @@ export default async function handler(req, res) {
     )
     accountId = account.id
     accountCreated = account.created
+    if (account.name) accountName = account.name
   } catch (err) {
     quoteError = err.message
   }
@@ -106,7 +108,7 @@ export default async function handler(req, res) {
 
   if (accountId) {
     const quotePayload = {
-      Subject:           `${customerName} — ${dateStr}`,
+      Subject:           `${accountName} — ${dateStr}`,
       Account_Name:      { id: accountId },
       Valid_Till:        validTill,
       Description:       description,
@@ -148,7 +150,7 @@ export default async function handler(req, res) {
   try {
     const pdfBytes = await generateQuotePdf({
       quoteNumber, date: dateStr, validUntil: validTill,
-      customerName, contactPerson, lineItems, notes,
+      customerName: accountName, contactPerson, lineItems, notes,
     })
     pdfBase64 = Buffer.from(pdfBytes).toString('base64')
     if (quoteId) {
@@ -169,7 +171,7 @@ export default async function handler(req, res) {
 
   try {
     const deal = await createZohoDeal({
-      dealName: `${customerName} — ${quoteNumber}`,
+      dealName: `${accountName} — ${quoteNumber}`,
       amount: subtotal,
       stage: 'Quoted',
       description,
@@ -187,6 +189,7 @@ export default async function handler(req, res) {
     quoteId,
     quoteNumber,
     accountId,
+    accountName,
     accountCreated,
     contactId,
     dealId,

@@ -10,31 +10,54 @@
  * of each endpoint re-implementing its own slightly different version.
  */
 import { CRM_BASE, zohoCrmCreateRecord, zohoRecordId } from './zohoCrm.js'
+import { pickBestZohoAccount, zohoAccountSearchWord } from './zohoAccountMatch.js'
+
+function zohoCriteriaValue(value) {
+  return String(value || '').replace(/[\\()]/g, '\\$&')
+}
+
+async function searchZohoAccounts(headers, criteria) {
+  const searchRes = await fetch(
+    `${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`,
+    { headers }
+  )
+  if (!searchRes.ok) return []
+  const data = await searchRes.json().catch(() => null)
+  return data?.data || []
+}
 
 export async function findOrCreateZohoAccount({ name, city, state, website }, headers) {
   const trimmed = (name || '').trim()
-  if (!trimmed) return { id: null, created: false }
+  if (!trimmed) return { id: null, created: false, name: '' }
 
   try {
-    const criteria = `(Account_Name:equals:${trimmed})`
-    const searchRes = await fetch(`${CRM_BASE}/Accounts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
-    if (searchRes.ok) {
-      const data = await searchRes.json().catch(() => null)
-      const matches = data?.data || []
-      const existing = state && matches.length > 1
-        ? (matches.find(m => (m.Billing_State || '').toLowerCase() === state.toLowerCase()) || matches[0])
-        : matches[0]
-      if (existing?.id) {
-        // Backfill Website on an existing Account only when it doesn't have one yet —
-        // never overwrite a value someone already set.
-        if (website && !existing.Website) {
-          await fetch(`${CRM_BASE}/Accounts/${existing.id}`, {
-            method: 'PUT', headers,
-            body: JSON.stringify({ data: [{ id: existing.id, Website: website }] }),
-          }).catch(() => {})
-        }
-        return { id: existing.id, created: false }
+    const exact = await searchZohoAccounts(
+      headers,
+      `(Account_Name:equals:${zohoCriteriaValue(trimmed)})`
+    )
+    let existing = pickBestZohoAccount(exact, trimmed, state)
+
+    if (!existing) {
+      const word = zohoAccountSearchWord(trimmed)
+      if (word) {
+        const fuzzy = await searchZohoAccounts(
+          headers,
+          `(Account_Name:starts_with:${zohoCriteriaValue(word)})`
+        )
+        existing = pickBestZohoAccount(fuzzy, trimmed, state)
       }
+    }
+
+    if (existing?.id) {
+      // Backfill Website on an existing Account only when it doesn't have one yet —
+      // never overwrite a value someone already set.
+      if (website && !existing.Website) {
+        await fetch(`${CRM_BASE}/Accounts/${existing.id}`, {
+          method: 'PUT', headers,
+          body: JSON.stringify({ data: [{ id: existing.id, Website: website }] }),
+        }).catch(() => {})
+      }
+      return { id: existing.id, created: false, name: existing.Account_Name || trimmed }
     }
   } catch { /* fall through to create */ }
 
@@ -49,5 +72,5 @@ export async function findOrCreateZohoAccount({ name, city, state, website }, he
   if (!createdId) {
     throw new Error(`Zoho account create returned no id for "${trimmed}": ${JSON.stringify(rec).slice(0, 300)}`)
   }
-  return { id: createdId, created: true }
+  return { id: createdId, created: true, name: trimmed }
 }

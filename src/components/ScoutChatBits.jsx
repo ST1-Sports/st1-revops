@@ -1,5 +1,6 @@
 import React, { useId, useMemo, useState } from 'react';
 import { chatFollowUp, money, splitChatBlocks, splitInlineMarks } from '../lib/chatDisplay.js';
+import { orgNamesMatch } from '../lib/quoteCrmLink.js';
 
 function Inline({ text }) {
   return splitInlineMarks(text).map((part, i) => (
@@ -117,8 +118,12 @@ export function ZohoQuoteForm({ B, defaults = {}, contacts = [], showQty = true,
 
   const fillFromSchool = (name) => {
     setSchool(name);
-    const hit = people.find(c => (c.school || '').toLowerCase() === name.toLowerCase());
-    if (!hit) return;
+    const q = name.trim();
+    if (q.length < 4) return;
+    const hits = people.filter(c => orgNamesMatch(c.school, q));
+    const unique = [...new Set(hits.map(c => c.school).filter(Boolean))];
+    if (unique.length !== 1) return;
+    const hit = hits[0];
     if (hit.fullName && !contact) setContact(hit.fullName);
     if (hit.email && !email) setEmail(hit.email);
     if (hit.city && !city) setCity(hit.city);

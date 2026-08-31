@@ -5,6 +5,20 @@ import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
+import {
+  orgNamesMatch,
+  schoolKeyOf,
+  cleanSchoolName,
+  contactBelongsToSchoolKey,
+  dealBelongsToSchool,
+  dealBelongsToContact,
+  resolveQuoteCrmTarget,
+  findExistingQuoteDeal,
+  buildLocalQuoteDeal,
+  quoteDealUpdate,
+  mergeAccountGroups,
+  attachOpenDealsToAccountGroups,
+} from "../lib/quoteCrmLink.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -161,43 +175,54 @@ const useApp = () => useContext(AppCtx);
 // and get passed in here rather than closed over.
 async function sharedCreateQuoteNow(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
 if(!(action.customer_name||"").trim()){ctx.toast("School or account name is required","error");return;}
+let resolved=resolveQuoteCrmTarget(ctx.contacts||[],{
+school:action.customer_name,
+contact:action.contact_person,
+email:action.email,
+city:action.account_city,
+state:action.account_state,
+});
 setSQ(key);
 try{
 const r=await fetch("/api/crm/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-customerName:action.customer_name,
-accountCity:action.account_city||"",
-accountState:action.account_state||"",
-contactPerson:action.contact_person||"",
-email:action.email||"",
+customerName:resolved.school,
+accountCity:resolved.city||"",
+accountState:resolved.state||"",
+contactPerson:resolved.contactName||"",
+email:resolved.email||"",
 lineItems:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0,cost:Number(li.cost)||0})),
 shippingCost:Number(action.shipping_cost)||0,
 notes:action.notes||"",
 })});
 const d=await r.json();
 if(d.ok&&d.pdfBase64){
-const total=(action.line_items||[]).reduce((s,li)=>s+(Number(li.rate)||0)*(Number(li.quantity)||1),0);
-const matchDeal=(ctx.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
+if(d.accountName&&d.accountName!==resolved.school){
+resolved={...resolved,school:d.accountName,schoolKey:resolved.state?`${d.accountName} — ${resolved.state}`:d.accountName};
+}
+const items=action.line_items||[];
+const matchDeal=findExistingQuoteDeal(ctx.deals,d.quoteNumber);
+const quotePatch=quoteDealUpdate({quoteNumber:d.quoteNumber,resolved,lineItems:items,notes:action.notes||"",zohoId:d.dealId||null});
 if(matchDeal){
-ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",value:total||matchDeal.value,contact:action.contact_person||matchDeal.contact,notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`,...(d.dealId?{zohoId:d.dealId}:{})});
+ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,...quotePatch,notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`});
 }else{
-const localDeal={id:mkId(),name:`${action.customer_name} — ${d.quoteNumber}`,school:action.customer_name,contact:action.contact_person||"",value:total,stage:"Quoted",product:(action.line_items||[])[0]?.name||"",priority:"warm",createdAt:today(),followUpDate:"",notes:`Quote ${d.quoteNumber}${action.notes?`\n${action.notes}`:""}`,zohoId:d.dealId||null,source:"scout-quote"};
-ctx.dispatch("ADD_DEAL",localDeal);
+ctx.dispatch("ADD_DEAL",buildLocalQuoteDeal({id:mkId(),quoteNumber:d.quoteNumber,resolved,lineItems:items,notes:action.notes||"",zohoId:d.dealId||null,createdAt:today()}));
 }
-if((action.contact_person||action.email)&&ctx.dispatch){
-const names=String(action.contact_person||"").trim().split(/\s+/);
-ctx.dispatch("ADD_CONTACTS",[{id:mkId(),firstName:names[0]||"",lastName:names.slice(1).join(" "),fullName:action.contact_person||"",email:action.email||"",school:action.customer_name,city:action.account_city||"",state:action.account_state||"",source:"quote",importedAt:Date.now()}]);
+if(resolved.isNewContact&&ctx.dispatch){
+const names=String(resolved.contactName||"").trim().split(/\s+/);
+ctx.dispatch("ADD_CONTACTS",[{id:mkId(),firstName:names[0]||"",lastName:names.slice(1).join(" "),fullName:resolved.contactName||"",email:resolved.email||"",school:resolved.school,city:resolved.city||"",state:resolved.state||"",source:"quote",importedAt:Date.now()}]);
 }
-ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} + deal for ${action.customer_name}`});
+if(resolved.schoolKey)ctx.dispatch("SET_CRM_NAV",{school:resolved.schoolKey});
+ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} + deal for ${resolved.school}`});
 setApprovedQuotes(prev=>({...prev,[key]:d}));
 setQuoteEmailDrafts(prev=>({...prev,[key]:{
-to:action.email||"",
+to:resolved.email||action.email||"",
 subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
-body:`Hi ${action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${ctx.cu?.name||"Matt Stone"}\n${ctx.cu?.email||""}\n${ctx.cu?.phone||""}`,
+body:`Hi ${resolved.contactName||action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${ctx.cu?.name||"Matt Stone"}\n${ctx.cu?.email||""}\n${ctx.cu?.phone||""}`,
 sent:false,
 }}));
-if(d.dealId)ctx.toast(`Edgar PDF ready · deal in open pipeline`,"success");
-else if(d.dealError)ctx.toast(`PDF ready. Deal stayed local — ${d.dealError}`,"info");
-else ctx.toast(`Edgar PDF ready for ${action.customer_name}`,"success");
+if(d.dealId)ctx.toast(`Edgar PDF ready · deal on ${resolved.school}`,"success");
+else if(d.dealError)ctx.toast(`PDF ready. Deal stayed local on ${resolved.school} — ${d.dealError}`,"info");
+else ctx.toast(`Edgar PDF ready for ${resolved.school}`,"success");
 }else{ctx.toast(d.error||d.quoteError||"Quote creation failed","error");}
 }catch(e){ctx.toast(`Quote error: ${e.message}`,"error");}
 setSQ(null);
@@ -2096,7 +2121,7 @@ if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpanded
 if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
 if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
-const quoteCtx={toast,dispatch,deals:s.deals,cu,setMod};
+const quoteCtx={toast,dispatch,deals:s.deals,contacts:s.contacts,cu,setMod};
 const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
 const createEdgarQuoteInZoho=(action,key,fields)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
 const createPriceQuoteInZoho=(action,key,fields)=>sharedCreatePriceQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
@@ -3539,25 +3564,8 @@ const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
 const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
-// Two same-named schools in different states are different accounts —
-// group/select by name+state, not name alone, so they don't collide.
-const schoolKeyOf=(c)=>{
-const sch=(typeof c.school==="string"?c.school:c.school?.name||"")||"(No School)";
-const st=(c.state||"").trim();
-return st?`${sch} — ${st}`:sch;
-};
-const cleanSchoolName=(key)=>(key||"").replace(/ — [^—]*$/,"");
-// Matches the server-side normalizeAccountName (api/_lib/accountUtils.js) so a
-// Books customer name and a CRM Account/school name line up on more than an
-// exact string match — case/whitespace/trailing-punctuation only, no suffix
-// stripping, so it doesn't risk merging two genuinely different orgs.
-const normalizeOrgName=(raw)=>(raw||"").trim().replace(/\s+/g," ").replace(/[.,]+$/g,"").toLowerCase();
-const orgNamesMatch=(a,b)=>{
-const na=normalizeOrgName(a),nb=normalizeOrgName(b);
-if(!na||!nb)return false;
-if(na===nb)return true;
-return na.length>4&&nb.length>4&&(na.includes(nb)||nb.includes(na));
-};
+// schoolKeyOf / orgNamesMatch / cleanSchoolName live in quoteCrmLink.js so a
+// chat quote typed as "Hudson" lands on the existing Hudson High School row.
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
 const FREE_EMAIL_DOMAINS=new Set(["gmail.com","yahoo.com","hotmail.com","outlook.com","aol.com","icloud.com","comcast.net","msn.com","live.com","me.com","protonmail.com"]);
 const pullTeammatesIntoQualifyingAccounts=async()=>{
@@ -3704,7 +3712,7 @@ const cdMap=useMemo(()=>{
 const m=new Map();
 for(const c of contacts){
 const nm=cName(c).toLowerCase();
-const cd=deals.filter(d=>d.contactId===c.id||(d.contact||"").toLowerCase()===nm);
+const cd=deals.filter(d=>dealBelongsToContact(d,c));
 const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm);
 // A real Zoho Contact (module, not Lead) only ever gets created for an
 // invoiced, paying customer (see zoho-align-accounts.js) — that's a
@@ -4121,7 +4129,9 @@ if(sq&&!custName.toLowerCase().includes(sq)) return;
 if(Object.keys(groups).some(sch=>fuzzyMatch(sch,custName))) return;
 groups[custName]={name:custName,contacts:[],deals:[],value:0,invoiced:true};
 });
-const schoolList=Object.entries(groups).sort(([a,ga],[b,gb])=>(gb.invoiced-ga.invoiced)||a.localeCompare(b));
+const mergedGroups=mergeAccountGroups(groups);
+attachOpenDealsToAccountGroups(mergedGroups,deals);
+const schoolList=Object.entries(mergedGroups).sort(([a,ga],[b,gb])=>(gb.invoiced-ga.invoiced)||a.localeCompare(b));
 if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
 const pageSchools=schoolList.slice((crmPage-1)*CRM_PAGE_SIZE, crmPage*CRM_PAGE_SIZE);
 return <>
@@ -4160,10 +4170,11 @@ onClose={()=>{setTtView(false);setTtContact(null);}}
 linkedContact={ttContact}
 />
 ):leftMode==="accounts"&&selSchool?(()=>{
-const schoolContacts=contacts.filter(c=>!c.deadStatus&&schoolKeyOf(c)===selSchool);
+const schoolContacts=contacts.filter(c=>contactBelongsToSchoolKey(c,selSchool));
 const coverage=computeAccountCoverage(schoolContacts);
 const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
-const schoolDeals=deals.filter(d=>schoolContacts.some(c=>c.id===d.contactId||(c.fullName||"")===d.contact));
+const schoolCleanNameForDeals=schoolContacts[0]?.school||cleanSchoolName(selSchool);
+const schoolDeals=deals.filter(d=>dealBelongsToSchool(d,schoolContacts,schoolCleanNameForDeals));
 const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
 const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
 const allDeals=schoolDeals;
@@ -4413,7 +4424,7 @@ return(
 <div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||""}{d.quoteNumber?` · Quote #${d.quoteNumber}`:""}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
 </div>
 <div style={{textAlign:"right",flexShrink:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
@@ -14124,7 +14135,7 @@ email:matchedContact?.email||"",
 line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:[...(q.warnings||[]),linkNote].filter(Boolean).join("\n"),
 send_email:false,
-},"edgar_main",setSendingZoho,setApprovedQuotes,setQuoteEmailDrafts,{toast,dispatch,deals:s.deals,cu});
+},"edgar_main",setSendingZoho,setApprovedQuotes,setQuoteEmailDrafts,{toast,dispatch,deals:s.deals,contacts:s.contacts,cu});
 };
 const downloadQuotePdf=(key)=>sharedDownloadQuotePdf(approvedQuotes,key);
 const sendQuoteEmail=(key)=>sharedSendQuoteEmail(key,approvedQuotes,quoteEmailDrafts,setSendingQuoteEmail,setQuoteEmailDrafts,{toast,dispatch,cu});
