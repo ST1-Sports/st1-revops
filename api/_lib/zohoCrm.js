@@ -23,12 +23,37 @@ export function zohoCrmHeaders(token) {
  * retrying with a trimmed-down payload — can inspect `status === 'error'`
  * themselves instead of catching an exception.
  */
+export function zohoRecordId(rec) {
+  return rec?.details?.id || rec?.details?.Id || rec?.id || null
+}
+
+export function zohoRecordError(rec, fallback = 'Zoho request failed') {
+  if (!rec) return fallback
+  const field = rec.details?.api_name ? ` (${rec.details.api_name})` : ''
+  return `${rec.message || rec.code || fallback}${field}`
+}
+
 export async function zohoCrmCreateRecord(module, payload, headers) {
   const res = await fetch(`${CRM_BASE}/${module}`, {
     method: 'POST', headers, body: JSON.stringify({ data: [payload] }),
   })
   const data = await res.json().catch(() => null)
-  return data?.data?.[0] || null
+  const rec = data?.data?.[0]
+  if (rec) return rec
+  if (data?.code || data?.message || data?.status === 'error') {
+    return { status: 'error', message: data.message || data.code || `Zoho ${res.status}`, raw: data }
+  }
+  return { status: 'error', message: `Zoho returned no record (${res.status})`, raw: data }
+}
+
+export async function zohoCrmDeleteRecords(module, ids, headers) {
+  const list = (ids || []).filter(Boolean)
+  if (!list.length) return { status: 'error', message: 'No ids to delete' }
+  const res = await fetch(`${CRM_BASE}/${module}?ids=${list.join(',')}`, {
+    method: 'DELETE', headers,
+  })
+  const data = await res.json().catch(() => null)
+  return data?.data?.[0] || { status: res.ok ? 'success' : 'error', message: data?.message || `Zoho ${res.status}`, raw: data }
 }
 
 /**

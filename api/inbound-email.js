@@ -32,39 +32,47 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
-import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
+import { classifyEmailIntent, pickRep, notifyBradSlack, notifyBradEmail, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
 async function classifyAndPromote(fromEmail, subject, bodyText, host) {
   try {
     const contact = await prisma.salesContact.findUnique({ where: { email: fromEmail } }).catch(() => null)
-    if (!contact) return
 
     const verdict = await classifyEmailIntent(subject, bodyText)
     if (verdict !== 'INTENT') return
 
     const assigned    = await pickRep()
-    const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || fromEmail
+    const contactName = contact
+      ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') || fromEmail
+      : fromEmail
+
+    const [slack, email] = await Promise.all([
+      notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText),
+      notifyBradEmail(host, assigned, contactName, fromEmail, subject, bodyText),
+    ])
 
     await prisma.agentInteraction.create({
       data: {
         agentId: 'brad',
         action:  'reply_intent',
-        entity:  `contact:${contact.id}`,
+        entity:  contact ? `contact:${contact.id}` : `email:${fromEmail}`,
         input:   { fromEmail, contactName, subject, snippet: (bodyText || '').slice(0, 300) },
-        output:  { assignedTo: assigned.email, assignedName: assigned.name },
+        output:  {
+          assignedTo: assigned.email,
+          assignedName: assigned.name,
+          slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
+          email: email?.ok ? 'sent' : (email?.error || 'failed'),
+        },
         outcome: 'pending',
         dryRun:  false,
       },
     }).catch(() => {})
 
-    // Promote as a real Account + Contact (not a Lead) — a genuine positive
-    // reply being handed to a rep, not a cold marketing lead.
-    if (!contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
+    if (contact && !contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
 
-    await notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText)
-    console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name}`)
+    console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name} slack=${slack?.ok} email=${email?.ok}`)
   } catch (err) {
     console.error('[inbound-email] classifyAndPromote error:', err.message)
   }

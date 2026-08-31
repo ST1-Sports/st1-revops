@@ -9,7 +9,7 @@
  * api/crm/quote.js) so account-matching stays consistent everywhere instead
  * of each endpoint re-implementing its own slightly different version.
  */
-import { CRM_BASE, zohoCrmCreateRecord } from './zohoCrm.js'
+import { CRM_BASE, zohoCrmCreateRecord, zohoRecordId } from './zohoCrm.js'
 
 export async function findOrCreateZohoAccount({ name, city, state, website }, headers) {
   const trimmed = (name || '').trim()
@@ -45,13 +45,9 @@ export async function findOrCreateZohoAccount({ name, city, state, website }, he
     Website:       website || undefined,
   }, headers)
   if (rec?.status === 'error') throw new Error(rec.message || 'Zoho account create failed')
-  if (!rec?.details?.id) {
-    // Zoho didn't return the shape we expect (e.g. a permission or validation
-    // error at the top level instead of a per-record error) — throw instead
-    // of silently returning a null id, so a systemic failure here shows up
-    // as a reported error instead of a Contact/Deal/Quote getting created
-    // with no Account link at all.
+  const createdId = zohoRecordId(rec)
+  if (!createdId) {
     throw new Error(`Zoho account create returned no id for "${trimmed}": ${JSON.stringify(rec).slice(0, 300)}`)
   }
-  return { id: rec.details.id, created: true }
+  return { id: createdId, created: true }
 }

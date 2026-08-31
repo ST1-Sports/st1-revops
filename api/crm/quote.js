@@ -21,7 +21,7 @@ import { getZohoToken } from '../_lib/zoho-token.js'
 import { setCors }      from '../_lib/cors.js'
 import { generateQuotePdf } from '../_lib/quotePdf.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
-import { CRM_BASE, zohoCrmHeaders, zohoCrmCreateRecord } from '../_lib/zohoCrm.js'
+import { CRM_BASE, zohoCrmHeaders, zohoCrmCreateRecord, zohoRecordId, zohoRecordError } from '../_lib/zohoCrm.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '2mb' } } }
 
@@ -77,14 +77,20 @@ export default async function handler(req, res) {
     const dateStr   = today.toISOString().slice(0, 10)
     const validTill = new Date(today.getTime() + Number(validDays || 30) * 86_400_000).toISOString().slice(0, 10)
 
-    // 3. Create the Quote. Quoted_Items subform uses Zoho's stock field
-    //    names — best-effort: if the shape doesn't match this org's setup,
-    //    retry once without it rather than losing the whole quote over it.
+    // Line items go in Description so the quote still creates when this
+    // org's Quoted_Items subform requires a Products-module lookup.
+    const itemBlock = lineItems.map(li => {
+      const qty = Number(li.quantity) || 1
+      const rate = Number(li.rate) || 0
+      return `• ${li.name || 'Item'} × ${qty} @ $${rate.toFixed(2)} = $${(qty * rate).toFixed(2)}`
+    }).join('\n')
+    const description = [notes, itemBlock, `Subtotal: $${subtotal.toFixed(2)}`].filter(Boolean).join('\n\n')
+
     const quotePayload = {
       Subject:           `${customerName} — ${dateStr}`,
       Account_Name:      { id: accountId },
       Valid_Till:        validTill,
-      Description:       notes || '',
+      Description:       description,
       Total_Dealer_Cost: Number(totalCost.toFixed(2)),
       Total_Shipping:    Number(Number(shippingCost || 0).toFixed(2)),
       Gross_Profit:      Number(grossProfit.toFixed(2)),
@@ -96,18 +102,26 @@ export default async function handler(req, res) {
       })),
     }
 
-    let rec = await zohoCrmCreateRecord('Quotes', quotePayload, headers)
+    const attempts = [
+      quotePayload,
+      (({ Quoted_Items, ...rest }) => rest)(quotePayload),
+      (({ Quoted_Items, Total_Dealer_Cost, Total_Shipping, Gross_Profit, GP_Percent, ...rest }) => rest)(quotePayload),
+      { Subject: quotePayload.Subject, Account_Name: quotePayload.Account_Name, Description: description, Valid_Till: validTill },
+    ]
 
-    if (rec?.status === 'error') {
-      const { Quoted_Items, ...withoutSubform } = quotePayload
-      rec = await zohoCrmCreateRecord('Quotes', withoutSubform, headers)
+    let rec = null
+    for (const payload of attempts) {
+      rec = await zohoCrmCreateRecord('Quotes', payload, headers)
+      if (rec?.status !== 'error' && zohoRecordId(rec)) break
     }
 
-    if (rec?.status === 'error') {
-      return res.status(502).json({ error: rec.message || 'Zoho quote creation failed', raw: rec })
+    const quoteId = zohoRecordId(rec)
+    if (!quoteId) {
+      return res.status(502).json({
+        error: zohoRecordError(rec, 'Zoho did not return a quote id'),
+        raw: rec,
+      })
     }
-    const quoteId = rec?.details?.id
-    if (!quoteId) return res.status(502).json({ error: 'Zoho did not return a quote id' })
 
     // Pull the real Quote_Number for the PDF — the create response only
     // ever returns the record id, autonumber fields aren't echoed back.

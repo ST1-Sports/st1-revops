@@ -3,6 +3,7 @@
  * Used by api/cron/brad-inbox.js and api/inbound-email.js.
  */
 import { prisma } from './prisma.js'
+import { postSlackMessage } from './slack.js'
 
 export async function classifyEmailIntent(subject, bodyText) {
   const apiKey = process.env.ANTHROPIC_KEY
@@ -19,7 +20,9 @@ export async function classifyEmailIntent(subject, bodyText) {
       }),
     })
     const d = await r.json()
-    return (d.content?.[0]?.text || '').trim().toUpperCase()
+    const text = (d.content?.[0]?.text || '').trim().toUpperCase()
+    if (text.startsWith('INTENT') || /\bINTENT\b/.test(text)) return 'INTENT'
+    return 'PASS'
   } catch {
     return 'PASS'
   }
@@ -36,6 +39,7 @@ export async function pickRep() {
     where: { scope_entity_key: { scope: 'org', entity: 'brad', key: 'last_assigned_rep' } },
   }).catch(() => null)
 
+  if (!repList.length) return { name: 'Matt Stone', email: 'matt@st1sports.com' }
   const lastIdx  = lastMem ? repList.findIndex(r => r.email === lastMem.value) : -1
   const nextIdx  = (lastIdx + 1) % repList.length
   const assigned = repList[nextIdx]
@@ -49,23 +53,68 @@ export async function pickRep() {
   return assigned
 }
 
-export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText) {
-  const slackToken   = process.env.SLACK_BOT_TOKEN
-  const slackChannel = process.env.BRAD_REPLY_SLACK_CHANNEL || process.env.SLACK_CHANNEL
-  if (!slackToken || !slackChannel) return
-  await fetch('https://slack.com/api/chat.postMessage', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${slackToken}` },
-    body: JSON.stringify({
-      channel: slackChannel,
-      text: `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}…"_`,
-    }),
-  }).catch(() => {})
+function bradSlackChannels() {
+  return [
+    process.env.BRAD_REPLY_SLACK_CHANNEL,
+    process.env.SLACK_CHANNEL,
+    process.env.SLACK_ALERT_CHANNEL,
+    'C0AQ7CMB01X',
+  ].filter(Boolean)
 }
 
-export async function notifyBradEmail(host, assigned, contactName, fromEmail, subject, bodyText) {
-  const notifyEmail = process.env.BRAD_REPLY_NOTIFY_EMAIL || 'matt@st1sports.com'
-  if (!host || !notifyEmail) return
+export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText) {
+  const text = `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
+  const errors = []
+  for (const channel of bradSlackChannels()) {
+    const result = await postSlackMessage({ channel, text })
+    if (result.ok) return { ok: true, channel }
+    errors.push(`${channel}: ${result.error || result.reason || 'failed'}`)
+  }
+  console.warn('[brad] slack notify failed:', errors.join(' | ') || 'no channel configured')
+  return { ok: false, error: errors.join(' | ') || 'no Slack channel configured' }
+}
+
+async function sendNotifyGmail({ to, subject, body }) {
+  const clientId = process.env.GMAIL_CLIENT_ID
+  const clientSecret = process.env.GMAIL_CLIENT_SECRET
+  const refresh = process.env.GMAIL_REFRESH_TOKEN
+  if (!clientId || !clientSecret || !refresh) {
+    return { ok: false, error: 'Gmail not configured' }
+  }
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refresh,
+      grant_type: 'refresh_token',
+    }).toString(),
+  })
+  const tokenData = await tokenRes.json()
+  if (!tokenData.access_token) return { ok: false, error: 'Gmail token refresh failed' }
+
+  const raw = [
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    body,
+  ].join('\r\n')
+  const encoded = Buffer.from(raw).toString('base64url')
+  const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${tokenData.access_token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: encoded }),
+  })
+  const sendData = await sendRes.json().catch(() => ({}))
+  if (!sendRes.ok) return { ok: false, error: sendData.error?.message || `Gmail ${sendRes.status}` }
+  return { ok: true }
+}
+
+export async function notifyBradEmail(_host, assigned, contactName, fromEmail, subject, bodyText) {
+  const notifyEmail = process.env.BRAD_REPLY_NOTIFY_EMAIL || assigned?.email || 'matt@st1sports.com'
   const body = [
     `Brad received a positive reply.`,
     ``,
@@ -78,19 +127,18 @@ export async function notifyBradEmail(host, assigned, contactName, fromEmail, su
     ``,
     `Open RevOps -> Prospecting -> Brad to handle this reply.`,
   ].join('\n')
-  await fetch(`https://${host}/api/gmail`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'send',
-      to_email: notifyEmail,
-      to_name: 'Matt Stone',
+  try {
+    const result = await sendNotifyGmail({
+      to: notifyEmail,
       subject: `Brad reply needs follow-up: ${contactName}`,
       body,
-      reply_to: 'brad@shopst1sports.com',
-      from_name: 'ST1 RevOps',
-    }),
-  }).catch(() => {})
+    })
+    if (!result.ok) console.warn('[brad] email notify failed:', result.error)
+    return result
+  } catch (err) {
+    console.warn('[brad] email notify failed:', err.message)
+    return { ok: false, error: err.message }
+  }
 }
 
 export function parseAddr(raw = '') {

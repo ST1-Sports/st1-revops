@@ -127,6 +127,7 @@ competeIntel: {},
 battlecards: {},
 prospectAreas: [],
 agentHistory: [],
+suppressedDealZohoIds: [],
 agentDraft: "",
 edgarDraft: "",
 lastBriefDate: null,
@@ -189,9 +190,11 @@ setSQ(null);
 }
 function sharedCreateEdgarQuoteInZoho(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
 const q=action.quote||{};
+const items=(q.lineItems||[]).filter(li=>!li.notFound);
+const fallbackName=items[0]?.name?`Quote — ${items[0].name}`:"ST1 quote";
 return sharedCreateQuoteNow({
-customer_name:q.customer||action.customer||"Customer",
-line_items:(q.lineItems||[]).filter(li=>!li.notFound).map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
+customer_name:q.customer||action.customer||fallbackName,
+line_items:items.map(li=>({name:li.name,description:li.notes||"",quantity:Number(li.qty)||1,rate:Number(li.quotedPrice)||0,cost:Number(li.cost)||0})),
 notes:(q.warnings||[]).join("\n"),
 },key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx);
 }
@@ -274,9 +277,10 @@ ctx.dispatch("REMOVE_DEALS",[deal.id]);
 ctx.dispatch("LOG",{msg:`${ctx.cu?.name||"Someone"} deleted deal: ${deal.name}`});
 if(deal.zohoId){
 try{
-await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({service:"crm",endpoint:`/Deals/${deal.zohoId}`,method:"DELETE"})});
-}catch(e){ctx.toast(`Deleted locally — Zoho delete failed: ${e.message}`,"info");return true;}
+const r=await fetch("/api/crm/deal",{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({dealId:deal.zohoId})});
+const d=await r.json().catch(()=>({}));
+if(!r.ok||d.error){ctx.toast(`Removed here — Zoho said: ${d.error||r.status}. It will stay gone on the next sync.`,"info");return true;}
+}catch(e){ctx.toast(`Removed here — Zoho delete failed: ${e.message}`,"info");return true;}
 }
 ctx.toast(`"${deal.name}" deleted`,"success");
 return true;
@@ -301,6 +305,7 @@ campaigns:    mergeById(base.campaigns,    server.campaigns),
 contacts:     Array.isArray(server.contacts) ? server.contacts : (base.contacts||[]),
 contactLists: mergeById(base.contactLists, server.contactLists),
 deals:        mergeById(base.deals,        server.deals),
+suppressedDealZohoIds: [...new Set([...(base.suppressedDealZohoIds||[]),...(Array.isArray(server.suppressedDealZohoIds)?server.suppressedDealZohoIds:[])])],
 rfps:         mergeById(base.rfps,         server.rfps),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
@@ -593,7 +598,15 @@ case "UPDATE_REORDER":    return {...prev, reorders:(prev.reorders||[]).map(r=>r
 case "SET_INVOICES":      return {...prev, invoices:payload.invoices, invoiceLastSync:payload.lastSync||Date.now()};
 case "SET_CONTACTS":      return {...prev, contacts:payload};
 case "SET_DEALS":         return {...prev, deals:payload};
-case "REMOVE_DEALS":      return {...prev, deals:(prev.deals||[]).filter(d=>!payload.includes(d.id))};
+case "REMOVE_DEALS": {
+const gone=(prev.deals||[]).filter(d=>payload.includes(d.id));
+const extraZoho=gone.map(d=>d.zohoId).filter(Boolean);
+return {
+...prev,
+deals:(prev.deals||[]).filter(d=>!payload.includes(d.id)),
+suppressedDealZohoIds:[...new Set([...(prev.suppressedDealZohoIds||[]),...extraZoho])],
+};
+}
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
 case "UPDATE_CONTACT":      return {...prev, contacts:(prev.contacts||[]).map(c=>c.id===payload.id?{...c,...payload}:c)};
 // One-time reset after the out-of-office/bounce auto-reply scoring bug —
@@ -975,7 +988,7 @@ const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quo
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
 if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
-}else{
+}else if(!(s.suppressedDealZohoIds||[]).includes(zd.id)){
 dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
 dealsAdded++;
 }
@@ -2255,6 +2268,13 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
 <div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+{m.role==="assistant"&&(m.actions||[]).some(a=>a.type==="edgar_quote")&&(
+<div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:"88%",width:"88%",marginBottom:8}}>
+{(m.actions||[]).map((a,ai)=>a.type==="edgar_quote"?(
+<EdgarQuoteCard key={ai} B={B} action={a} creating={sendingQuote===`${msgIdx}_${ai}`} onCreate={()=>createEdgarQuoteInZoho(a,`${msgIdx}_${ai}`)}/>
+):null)}
+</div>
+)}
 {(()=>{const body=m.role==="assistant"?assistantBubbleText(chatText(m.content),m.actions):chatText(m.content);if(!body)return null;return(
 <div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none"}}>
 {m.role==="assistant"?<ChatProse text={body} color={B.text}/>:<span style={{whiteSpace:"pre-wrap"}}>{body}</span>}
@@ -2264,6 +2284,7 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 {m.actions?.length>0&&(
 <div style={{display:"flex",flexDirection:"column",gap:5,marginTop:6,maxWidth:"88%",width:"88%"}}>
 {m.actions.map((a,ai)=>{
+if(a.type==="edgar_quote") return null;
 if(a.type==="draft_email"){
 const key=`${msgIdx}_${ai}`;const expanded=expandedEmail===key;
 return(
@@ -2437,14 +2458,6 @@ style={{fontSize:9,fontFamily:"'Lexend',sans-serif",border:`1px solid ${B.border
 {a.notes&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,fontStyle:"italic",marginTop:8}}>{a.notes}</div>}
 </div>
 )}
-</div>
-);
-}
-if(a.type==="edgar_quote"){
-const key=`${msgIdx}_${ai}`;
-return(
-<div key={ai}>
-<EdgarQuoteCard B={B} action={a} creating={sendingQuote===key} onCreate={()=>createEdgarQuoteInZoho(a,key)}/>
 </div>
 );
 }
@@ -4442,6 +4455,7 @@ return(
 <div style={{textAlign:"right"}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:dsc}}>{d.stage}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+<button onClick={e=>{e.stopPropagation();sharedDeleteDeal(d,{dispatch,toast,cu});}} title="Delete deal" style={{background:"none",border:"none",color:B.red,fontSize:10,cursor:"pointer",padding:"4px 0 0"}}>Delete</button>
 </div>
 </div>
 );
@@ -4636,6 +4650,7 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 </div>
 )}
 {d.followUpDate&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:dUntil(d.followUpDate)<0?B.red:B.muted}}>Due {d.followUpDate}</div>}
+<button onClick={e=>{e.stopPropagation();sharedDeleteDeal(d,{dispatch,toast,cu});}} title="Delete deal" style={{background:"none",border:"none",color:B.red,fontSize:11,cursor:"pointer",padding:"2px 0"}}>Delete</button>
 </div>
 </div>
 ))}
@@ -6762,7 +6777,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else{dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!(s.suppressedDealZohoIds||[]).includes(zd.id)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
 return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
 };
 const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];

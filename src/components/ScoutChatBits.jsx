@@ -40,8 +40,8 @@ function Stat({ B, label, value, hint, tone }) {
   const valueColor = tone === 'good' ? B.green : tone === 'warn' ? B.yellow : B.black;
   return (
     <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 7, padding: '10px 12px', minWidth: 0 }}>
-      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 7, letterSpacing: 1.1, color: B.muted, fontWeight: 700 }}>{label}</div>
-      <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 18, color: valueColor, marginTop: 4, letterSpacing: 0.2 }}>{value}</div>
+      <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: 1.1, color: B.textMid, fontWeight: 700 }}>{label}</div>
+      <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 20, color: valueColor, marginTop: 4, letterSpacing: 0.2 }}>{value}</div>
       {hint ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted, marginTop: 3 }}>{hint}</div> : null}
     </div>
   );

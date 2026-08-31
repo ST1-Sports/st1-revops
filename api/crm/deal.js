@@ -16,12 +16,22 @@
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { setCors }      from '../_lib/cors.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
-import { zohoCrmHeaders, zohoCrmCreateRecord } from '../_lib/zohoCrm.js'
+import { zohoCrmHeaders, zohoCrmCreateRecord, zohoCrmDeleteRecords, zohoRecordId, zohoRecordError } from '../_lib/zohoCrm.js'
 
 export default async function handler(req, res) {
-  setCors(res, 'POST, OPTIONS')
+  setCors(res, 'POST, DELETE, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
-  if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+  if (req.method !== 'POST' && req.method !== 'DELETE') return res.status(405).json({ error: 'POST or DELETE only' })
+
+  if (req.method === 'DELETE') {
+    const dealId = req.body?.dealId || req.query?.dealId
+    if (!dealId) return res.status(400).json({ error: 'dealId required' })
+    let token
+    try { token = await getZohoToken() } catch (err) { return res.status(500).json({ error: err.message, setup: '/api/zoho-setup' }) }
+    const rec = await zohoCrmDeleteRecords('Deals', [dealId], zohoCrmHeaders(token))
+    if (rec?.status === 'error') return res.status(502).json({ error: zohoRecordError(rec, 'Zoho deal delete failed'), raw: rec })
+    return res.json({ ok: true, dealId })
+  }
 
   const {
     dealName, accountName, accountCity, accountState,
@@ -52,9 +62,9 @@ export default async function handler(req, res) {
     }
 
     const rec = await zohoCrmCreateRecord('Deals', dealPayload, headers)
-    if (rec?.status === 'error') return res.status(502).json({ error: rec.message || 'Zoho deal creation failed', raw: rec })
-    const dealId = rec?.details?.id
-    if (!dealId) return res.status(502).json({ error: 'Zoho did not return a deal id' })
+    if (rec?.status === 'error') return res.status(502).json({ error: zohoRecordError(rec, 'Zoho deal creation failed'), raw: rec })
+    const dealId = zohoRecordId(rec)
+    if (!dealId) return res.status(502).json({ error: zohoRecordError(rec, 'Zoho did not return a deal id'), raw: rec })
 
     return res.json({ ok: true, dealId, accountId, accountCreated })
 

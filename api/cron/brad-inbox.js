@@ -95,21 +95,10 @@ async function pollInbox(host) {
 
     checked++
 
-    // Check if sender is a known prospect
     const contact = await prisma.salesContact.findUnique({ where: { email: from.email } }).catch(() => null)
-    if (!contact) {
-      // Mark as read and skip — not a Brad prospect
-      await fetch(`${GMAIL_BASE}/messages/${msg.id}/modify`, {
-        method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ removeLabelIds: ['UNREAD'] }),
-      }).catch(() => {})
-      continue
-    }
 
-    // Classify intent
     const verdict = await classifyEmailIntent(subject, bodyText)
 
-    // Mark as read regardless
     await fetch(`${GMAIL_BASE}/messages/${msg.id}/modify`, {
       method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
       body: JSON.stringify({ removeLabelIds: ['UNREAD'] }),
@@ -118,34 +107,38 @@ async function pollInbox(host) {
     if (verdict !== 'INTENT') continue
 
     intents++
-    // Round-robin rep assignment must stay sequential/in-order here.
     const assigned    = await pickRep()
-    const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(' ') || from.email
+    const contactName = contact
+      ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') || from.email
+      : (from.name || from.email)
 
-    // Log the reply
-    await prisma.agentInteraction.create({
-      data: {
-        agentId: 'brad',
-        action:  'reply_intent',
-        entity:  `contact:${contact.id}`,
-        input:   { fromEmail: from.email, contactName, subject, snippet: bodyText.slice(0, 300), gmailMessageId: msg.id },
-        output:  { assignedTo: assigned.email, assignedName: assigned.name },
-        outcome: 'pending',
-        dryRun:  false,
-      },
-    }).catch(() => {})
-
-    postActions.push({ contact, assigned, contactName, from, subject, bodyText })
+    postActions.push({ contact, assigned, contactName, from, subject, bodyText, gmailMessageId: msg.id })
   }
 
   // Promote to Zoho (real Account + Contact, not a Lead — a genuine positive
   // reply being handed to a rep) and notify Slack, all in parallel.
   await Promise.all(postActions.map(async pa => {
-    if (!pa.contact.pushedToZoho) await promoteContactToZoho(host, pa.contact.id)
-    await Promise.all([
+    const [slack, email] = await Promise.all([
       notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
       notifyBradEmail(host, pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
     ])
+    await prisma.agentInteraction.create({
+      data: {
+        agentId: 'brad',
+        action:  'reply_intent',
+        entity:  pa.contact ? `contact:${pa.contact.id}` : `email:${pa.from.email}`,
+        input:   { fromEmail: pa.from.email, contactName: pa.contactName, subject: pa.subject, snippet: pa.bodyText.slice(0, 300), gmailMessageId: pa.gmailMessageId },
+        output:  {
+          assignedTo: pa.assigned.email,
+          assignedName: pa.assigned.name,
+          slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
+          email: email?.ok ? 'sent' : (email?.error || 'failed'),
+        },
+        outcome: 'pending',
+        dryRun:  false,
+      },
+    }).catch(() => {})
+    if (pa.contact && !pa.contact.pushedToZoho) await promoteContactToZoho(host, pa.contact.id)
   }))
 
   return { checked, intents }
