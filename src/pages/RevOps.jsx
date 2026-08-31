@@ -4,6 +4,7 @@ import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard } from "../components/ScoutChatBits.jsx";
+import { dedupeChatActions } from "../lib/chatActions.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -325,7 +326,7 @@ return {
 currentUserId: base.currentUserId,
 integrations: {...(base.integrations||{}), ...(typeof server.integrations==="object"&&server.integrations?server.integrations:{})},
 company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
-agentHistory: Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : (base.agentHistory||[]),
+agentHistory: Array.isArray(base.agentHistory) ? base.agentHistory : (Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : []),
 campaigns:    mergeById(base.campaigns,    server.campaigns),
 // contacts is NOT union-merged like everything else here — it's meant to be
 // a live mirror of Zoho (reconciled by syncContacts, which already adds,
@@ -681,7 +682,7 @@ case "SET_PROSPECT_AREAS":  return {...prev, prospectAreas:payload};
 case "SET_CRM_NAV":         return {...prev, crmNav:payload};
 case "SET_PROSPECTING_NAV": return {...prev, prospectingNav:payload};
 case "SET_CAMPAIGN_NAV":    return {...prev, campaignNavId:payload};
-case "SET_AGENT_HISTORY":   return {...prev, agentHistory:payload};
+case "SET_AGENT_HISTORY":   return {...prev, agentHistory:typeof payload==="function"?payload(Array.isArray(prev.agentHistory)?prev.agentHistory:[]):payload};
 case "SET_AGENT_DRAFT":     return {...prev, agentDraft:payload};
 case "SET_EDGAR_DRAFT":     return {...prev, edgarDraft:payload};
 case "SET_BRIEF":           return {...prev, pendingBriefActions:payload.actions, lastBriefDate:payload.date};
@@ -1947,8 +1948,9 @@ if(Array.isArray(v))return v.map(chatText).filter(Boolean).join("\n");
 if(typeof v==="object"){if(v.text||v.message||v.content)return chatText(v.text||v.message||v.content);try{return JSON.stringify(v);}catch{return"[object]";}}
 return String(v);
 };
-const history=(Array.isArray(s.agentHistory)?s.agentHistory:[]).map(m=>({...m,content:chatText(m.content),raw:chatText(m.raw||m.content),actions:Array.isArray(m.actions)?m.actions:[],suggestions:Array.isArray(m.suggestions)?m.suggestions:[]}));
-const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",typeof fn==="function"?fn(history):fn);
+const history=(Array.isArray(s.agentHistory)?s.agentHistory:[]).map(m=>({...m,content:chatText(m.content),raw:chatText(m.raw||m.content),actions:dedupeChatActions(Array.isArray(m.actions)?m.actions:[]),suggestions:Array.isArray(m.suggestions)?m.suggestions:[]}));
+const lastUserIdx=history.reduce((n,m,i)=>m.role==="user"?i:n,-1);
+const setHistory=(fn)=>dispatch("SET_AGENT_HISTORY",fn);
 const [input,setInput]=useState("");
 const [running,setRunning]=useState(false);
 const [expandedEmail,setExpandedEmail]=useState(null);
@@ -1976,8 +1978,12 @@ const [activeSessionId,setActiveSessionId]=useState(null);
 const [insights,setInsights]=useState({});
 const sessionIdRef=useRef(null);
 const endRef=useRef(null);
+const lastUserRef=useRef(null);
 const inputRef=useRef(null);
-useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[history]);
+useEffect(()=>{
+const el=lastUserRef.current||endRef.current;
+el?.scrollIntoView({behavior:"smooth",block:"start"});
+},[history.length,running]);
 useEffect(()=>{
 if(s.agentDraft){setInput(s.agentDraft);dispatch("SET_AGENT_DRAFT","");}
 },[s.agentDraft]);
@@ -2130,7 +2136,7 @@ setSessions(prev=>[stub,...prev]);
 const msgId=mkId();
 const userEntry={id:msgId,role:"user",content:msg,ts:Date.now()};
 const nextHistory=[...history,userEntry];
-setHistory(nextHistory);
+setHistory(h=>[...(Array.isArray(h)?h:[]),userEntry]);
 saveMsg("user",msg,null);
 setSessions(prev=>prev.map(s=>s.id===sessionIdRef.current
 ?{...s,messages:[...(s.messages||[]),{id:msgId,role:"user",content:msg,ts:new Date().toISOString()}]}:s));
@@ -2176,9 +2182,10 @@ const suggestions=Array.isArray(raw?.suggestions)?raw.suggestions.slice(0,3):[];
 const meta={liveZoho:!!raw.liveZoho,searchUsed:!!raw.searchUsed};
 setLastMeta(meta);
 const aId=mkId();
-const assistantEntry={id:aId,role:"assistant",content:message,actions,suggestions,raw:message,meta,ts:Date.now()};
-setHistory(h=>[...h,assistantEntry]);
-saveMsg("assistant",message,actions.length?actions:null);
+const cleanActions=dedupeChatActions(actions);
+const assistantEntry={id:aId,role:"assistant",content:message,actions:cleanActions,suggestions,raw:message,meta,ts:Date.now()};
+setHistory(h=>[...(Array.isArray(h)?h:[]),assistantEntry]);
+saveMsg("assistant",message,cleanActions.length?cleanActions:null);
 if(message.includes("🔥"))dispatch("ADD_ALERT",{msg:"Agent flagged high priority action",action:"Review in Home"});
 dispatch("LOG",{msg:`${cu?.name||"User"} — agent: ${msg.slice(0,60)}`});
 actions.forEach(a=>{
@@ -2205,7 +2212,7 @@ body:JSON.stringify({action:"find_similar",query:msg,excludeUserId:cu.id,limit:2
 .catch(()=>{});
 }
 }catch(e){
-setHistory(h=>[...h,{id:mkId(),role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
+setHistory(h=>[...(Array.isArray(h)?h:[]),{id:mkId(),role:"assistant",content:`Error: ${e.message}`,actions:[],suggestions:[],ts:Date.now()}]);
 saveMsg("assistant",`Error: ${e.message}`,null);
 }
 setAgentStatus(null);setRunning(false);
@@ -2300,7 +2307,12 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 )}
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
-<div style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start"}}>
+<div ref={msgIdx===lastUserIdx?lastUserRef:undefined} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",scrollMarginTop:12}}>
+{m.role==="user"&&(
+<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.orange,color:B.white}}>
+<span style={{whiteSpace:"pre-wrap"}}>{chatText(m.content)||m.raw||" "}</span>
+</div>
+)}
 {m.role==="assistant"&&(m.actions||[]).some(a=>a.type==="edgar_quote"||a.type==="st1_price")&&(
 <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:"88%",width:"88%",marginBottom:8}}>
 {(m.actions||[]).map((a,ai)=>{
@@ -2311,9 +2323,9 @@ return null;
 })}
 </div>
 )}
-{(()=>{const body=m.role==="assistant"?assistantBubbleText(chatText(m.content),m.actions):chatText(m.content);if(!body)return null;return(
-<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:m.role==="user"?B.orange:B.surface,color:m.role==="user"?B.white:B.text,border:m.role==="assistant"?`1px solid ${B.border}`:"none"}}>
-{m.role==="assistant"?<ChatProse text={body} color={B.text}/>:<span style={{whiteSpace:"pre-wrap"}}>{body}</span>}
+{m.role==="assistant"&&(()=>{const body=assistantBubbleText(chatText(m.content),m.actions);if(!body)return null;return(
+<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.surface,color:B.text,border:`1px solid ${B.border}`}}>
+<ChatProse text={body} color={B.text}/>
 </div>
 );})()}
 {/* Action buttons */}

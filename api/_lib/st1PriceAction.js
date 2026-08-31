@@ -2,6 +2,7 @@
 export function st1PriceActionFromPricing(output) {
   const p = output?.result;
   if (!p || output?.status === 'not_found') return null;
+  if (!p.name && !p.sku && p.cost?.amount == null && p.customerPrice?.amount == null) return null;
   const cost = p.cost?.amount ?? null;
   const list = p.customerPrice?.amount ?? p.salePrice ?? p.regularPrice ?? null;
   return {
@@ -19,4 +20,21 @@ export function st1PriceActionFromPricing(output) {
     },
     matches: Array.isArray(p.matches) ? p.matches : [],
   };
+}
+
+/** Tool cards win. Drop empty model echoes and the same SKU twice. */
+export function mergeScoutActions(toolActions, proposedActions, parsedActions) {
+  const parsed = (parsedActions || []).filter(a => a?.type !== 'st1_price' && a?.type !== 'edgar_quote');
+  const seen = new Set();
+  return [...(toolActions || []), ...(proposedActions || []), ...parsed].filter(a => {
+    if (!a || typeof a !== 'object') return false;
+    if (a.type === 'st1_price') {
+      const item = a.item || {};
+      if (!item.name && !item.sku && item.cost == null && item.list == null) return false;
+      const key = `st1:${String(item.sku || item.name || '').toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+    }
+    return true;
+  });
 }

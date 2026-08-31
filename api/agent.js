@@ -18,7 +18,7 @@ import { getZohoToken } from './_lib/zoho-token.js';
 import { recall, remember, memoryBlock, logInteraction } from './_lib/memory.js';
 import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
-import { st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
+import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
 
 export const config = { maxDuration: 120 };
 
@@ -992,7 +992,7 @@ async function _handler(req, res) {
     .filter(t => t.name !== "call_edgar" && t.name !== "call_brad" && t.name !== "call_ledger" && t.name !== "remember_this" && !KNOWLEDGE_TOOL_NAMES.has(t.name))
     .map(t => ({ type: typeMap[t.name] || t.name, ...t.input }));
 
-  const actions     = [...surfacedActions, ...proposedActions, ...(parsed?.actions || [])];
+  const actions     = mergeScoutActions(surfacedActions, proposedActions, parsed?.actions);
   const suggestions = parsed?.suggestions || [];
 
   // Fire-and-forget: log this interaction to agent memory

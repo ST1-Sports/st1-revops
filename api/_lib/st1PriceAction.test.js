@@ -1,11 +1,12 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { st1PriceActionFromPricing } from './st1PriceAction.js';
+import { mergeScoutActions, st1PriceActionFromPricing } from './st1PriceAction.js';
 
 describe('st1PriceActionFromPricing', () => {
   it('returns null when the lookup missed', () => {
     assert.equal(st1PriceActionFromPricing({ status: 'not_found', result: null }), null);
     assert.equal(st1PriceActionFromPricing({ result: null }), null);
+    assert.equal(st1PriceActionFromPricing({ status: 'ok', result: {} }), null);
   });
 
   it('maps dealer-list cost and list for the Scout card', () => {
@@ -29,5 +30,22 @@ describe('st1PriceActionFromPricing', () => {
     assert.equal(action.item.list, 94.99);
     assert.equal(action.item.supplier, 'Athletic Connection');
     assert.equal(action.matches.length, 1);
+  });
+});
+
+describe('mergeScoutActions', () => {
+  it('drops a parsed st1_price echo and keeps the tool card', () => {
+    const tool = st1PriceActionFromPricing({
+      status: 'ok',
+      result: {
+        name: 'TF-5000 SZ5 SB NFHS',
+        sku: 'AC-WC647929',
+        cost: { amount: 58.89 },
+        customerPrice: { amount: 94.99 },
+      },
+    });
+    const out = mergeScoutActions([tool], [], [{ type: 'st1_price' }, { type: 'log_note', note: 'ok' }]);
+    assert.equal(out.filter(a => a.type === 'st1_price').length, 1);
+    assert.equal(out.some(a => a.type === 'log_note'), true);
   });
 });
