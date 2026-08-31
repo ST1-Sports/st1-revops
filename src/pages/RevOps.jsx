@@ -20,6 +20,7 @@ import {
   mergeAccountGroups,
   attachOpenDealsToAccountGroups,
 } from "../lib/quoteCrmLink.js";
+import { buildLockedQuotePayload } from "../lib/quoteLock.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -2214,6 +2215,7 @@ items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:
 })),
 competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
 brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
+lockedQuote:buildLockedQuotePayload({history:nextHistory,deals:s.deals}),
 };
 try{
 const ctrl=new AbortController();

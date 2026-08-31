@@ -10,6 +10,14 @@ import { setCors }             from '../_lib/cors.js'
 import { prisma }              from '../_lib/prisma.js'
 import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
 import { findPriceItems }      from '../_lib/ai-tools/sources.js'
+import {
+  applyLockedPrices,
+  formatLockedQuoteBlock,
+  matchLockedItem,
+  mergeLockedItemsIntoRequest,
+  userWantsNewSellPrice,
+  userWantsReprice,
+} from '../../src/lib/quoteLock.js'
 
 const COMP_PREFIX   = '__COMPETITOR__:'
 const API_KEY       = process.env.ANTHROPIC_KEY
@@ -80,7 +88,7 @@ async function fetchAccountContext({ contactId, contactEmail }) {
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountBlock) {
+function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountBlock, lockBlock = '') {
   const intro =
     'You are Edgar, ST1 Sports\'s quoting agent. ST1 Sports is a nationwide B2B athletic equipment ' +
     'supplier. You build accurate, professional quotes for K-12 athletic directors and coaches. ' +
@@ -118,6 +126,7 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
 
   const acctSection = accountBlock ? `\n=== ACCOUNT ON FILE (from CRM/Brad's prospect history) ===\n${accountBlock}\nUse this to inform tone, urgency, and whether to reference prior contact — but only quote real prices from the price data above.\n` : ''
   const memSection = memoryBlock ? `\n=== CUSTOMER HISTORY (recalled facts) ===\n${memoryBlock}\n` : ''
+  const heldSection = lockBlock ? `\n=== OPEN QUOTE — HOLD THESE PRICES ===\n${lockBlock}\nKeep cost and quotedPrice from this lock. Only change qty or add/remove lines the user asked for. Do not pick a different dealer-list row for a locked SKU.\n` : ''
 
   const rules = `
 === HARD PRICING RULES ===
@@ -155,7 +164,7 @@ Return valid JSON only (no prose outside the JSON):
   "warnings": []
 }`
 
-  return `${intro}${priceSection}${compSection}${acctSection}${memSection}${rules}`
+  return `${intro}${priceSection}${compSection}${acctSection}${memSection}${heldSection}${rules}`
 }
 
 function formatItem(item, supplierName) {
@@ -202,11 +211,22 @@ function buildItemLookup(ownSuppliers, matchedItems) {
   return lookup
 }
 
-function enforceGuardrails(quote, itemLookup) {
+function enforceGuardrails(quote, itemLookup, { skipLocked = [] } = {}) {
   const warnings = [...(quote.warnings || [])]
 
   const lineItems = (quote.lineItems || []).map(item => {
     if (item.notFound) return item
+
+    if (skipLocked.length && matchLockedItem(item, skipLocked)) {
+      const cost   = item.cost || 0
+      const quoted = item.quotedPrice || item.ourPrice || 0
+      const gm = quoted > 0 && cost > 0 ? (quoted - cost) / quoted : null
+      return {
+        ...item,
+        quotedPrice: quoted,
+        gmPct:       gm != null ? Math.round(gm * 1000) / 10 : item.gmPct,
+      }
+    }
 
     const cost   = item.cost || 0
     const dbData = itemLookup?.get(item.name?.toLowerCase())
@@ -290,9 +310,16 @@ export default async function handler(req, res) {
   const customer     = input.customer || null
   const contactId    = input.contactId || null
   const contactEmail = input.contactEmail || null
+  const reprice      = input.reprice === true || userWantsReprice(task)
+  const lockSell     = input.lockSell !== false && !userWantsNewSellPrice(task)
+  const lockedItems  = (!reprice && Array.isArray(input.lockedItems)) ? input.lockedItems : []
+  const requestItems = mergeLockedItemsIntoRequest(input.items, lockedItems)
 
   try {
-    const extraNames = Array.isArray(input.items) ? input.items.map(i => i.name).filter(Boolean) : []
+    const extraNames = [
+      ...(Array.isArray(requestItems) ? requestItems.map(i => i.sku || i.name) : []),
+      ...lockedItems.map(i => i.sku || i.name),
+    ].filter(Boolean)
     const [{ ownSuppliers, matchedItems, competitors }, memFacts, accountCtx] = await Promise.all([
       fetchPriceData(task, extraNames),
       customer
@@ -306,15 +333,22 @@ export default async function handler(req, res) {
       : ''
 
     const itemLookup = buildItemLookup(ownSuppliers, matchedItems)
-    const system = buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountCtx.block)
+    const lockBlock = lockedItems.length
+      ? formatLockedQuoteBlock({ customer, items: lockedItems })
+      : ''
+    const system = buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accountCtx.block, lockBlock)
 
     // Build user message — embed structured items if provided
     let userMsg = task
-    if (Array.isArray(input.items) && input.items.length) {
+    if (Array.isArray(requestItems) && requestItems.length) {
       userMsg += '\n\nRequested items:\n' +
-        input.items.map(i => `- ${i.qty || 1}x ${i.name}`).join('\n')
+        requestItems.map(i => `- ${i.qty || 1}x ${i.name}${i.sku ? ` [${i.sku}]` : ''}`).join('\n')
     }
     if (customer) userMsg += `\n\nCustomer: ${customer}`
+    if (lockBlock) {
+      userMsg += '\n\nHold cost and quotedPrice from the open quote. Only change qty or add/remove lines the user asked for.'
+      if (!lockSell) userMsg += ' The user set a new sell price — keep the locked cost and use their sell price.'
+    }
 
     // Call Claude
     const ctrl  = new AbortController()
@@ -361,7 +395,24 @@ export default async function handler(req, res) {
       return res.json({ output: raw, metadata: { quote: null, warnings: [] } })
     }
 
-    const guarded = enforceGuardrails(quote, itemLookup)
+    if (lockedItems.length) {
+      quote = {
+        ...quote,
+        lineItems: applyLockedPrices(quote.lineItems || [], lockedItems, { lockSell }),
+      }
+    }
+
+    const guarded = enforceGuardrails(quote, itemLookup, {
+      skipLocked: lockSell ? lockedItems : [],
+    })
+    if (lockedItems.length) {
+      guarded.warnings = [
+        ...(guarded.warnings || []),
+        lockSell
+          ? 'Held cost and sell price from the open quote. Say "reprice" or "latest list" to refresh.'
+          : 'Held dealer cost from the open quote. Sell price updated as requested.',
+      ]
+    }
 
     // Fire-and-forget interaction log
     logInteraction({

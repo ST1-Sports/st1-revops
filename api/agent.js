@@ -19,6 +19,16 @@ import { recall, remember, memoryBlock, logInteraction } from './_lib/memory.js'
 import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
+import {
+  formatLockedQuoteBlock,
+  lockedPricingToolResult,
+  matchLockedItem,
+  overlayLockedPricing,
+  pricingQueryOf,
+  resolveLockedQuote,
+  userWantsNewSellPrice,
+  userWantsReprice,
+} from '../src/lib/quoteLock.js';
 
 export const config = { maxDuration: 120 };
 
@@ -316,7 +326,7 @@ const TOOLS = [
   },
   {
     name: "call_edgar",
-    description: "Build a formal quote with GM floor and MAP when the user explicitly wants a quote (e.g. 'quote 5 TF-5000s for Lincoln High', 'build a quote', 'price this out for a school'). Do NOT use this for a casual cost/price/MAP check — use get_st1_pricing for that. Pass the user's product text and school in task.",
+    description: "Build a formal quote with GM floor and MAP when the user explicitly wants a quote (e.g. 'quote 5 TF-5000s for Lincoln High', 'build a quote', 'price this out for a school', 'update the quote'). Do NOT use this for a casual cost/price/MAP check — use get_st1_pricing for that. On an update, pass the same SKU and keep cost/sell unless they asked to reprice. Pass the user's product text and school in task.",
     input_schema: {
       type: "object",
       properties: {
@@ -329,11 +339,13 @@ const TOOLS = [
             type: "object",
             properties: {
               name: { type: "string" },
+              sku:  { type: "string" },
               qty:  { type: "number" },
             },
             required: ["name"],
           },
         },
+        reprice: { type: "boolean", description: "True only if the user asked to refresh dealer-list cost or list price" },
       },
       required: ["task"],
     },
@@ -474,14 +486,23 @@ async function callLedger(input, baseUrl) {
   }
 }
 
-async function callEdgar(input, baseUrl) {
+async function callEdgar(input, baseUrl, lock = {}) {
   try {
     const r = await fetchWithTimeout(
       `${baseUrl}/api/agents/edgar`,
       {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ task: input.task, input: { customer: input.customer, items: input.items } }),
+        body:    JSON.stringify({
+          task: input.task,
+          input: {
+            customer: input.customer,
+            items: input.items,
+            lockedItems: lock.reprice ? [] : (lock.items || []),
+            reprice: !!lock.reprice,
+            lockSell: lock.lockSell !== false,
+          },
+        }),
       },
       50_000
     );
@@ -527,6 +548,7 @@ async function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const priceLists = localCtx.priceLists || [];
   const storedIntel = localCtx.competeIntel || [];
   const brandVoice = localCtx.brandVoice || "";
+  const lockedQuote = localCtx.lockedQuote || null;
 
   const open = deals.filter(d => !["Closed Won","Closed Lost"].includes(d.stage));
   const pipeline = open.reduce((a,d) => a + (d.value||0), 0);
@@ -652,9 +674,10 @@ USE get_st1_pricing (fast — default for price questions) when:
 - If not found, then ask for a SKU or a more specific name
 
 USE call_edgar (formal quotes only) when:
-- User says "quote", "build a quote", "price this out for [school]", or gives a customer + qty they want on a quote
+- User says "quote", "build a quote", "update the quote", "price this out for [school]", or gives a customer + qty they want on a quote
 - After Edgar returns, write 1-2 short sentences only. Do not paste markdown tables — the UI shows the quote card
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
+- If an OPEN QUOTE is listed below, keep that SKU's cost and sell price. Only change qty or add/remove lines. Set reprice:true only if they asked to refresh the dealer list.
 
 USE call_ledger when:
 - A CRM deal is marked "Closed Won" and an invoice needs to be created → task:"invoice", pass crmDealId and crmDealName
@@ -706,7 +729,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 8. propose_create_quote — build and create a real Zoho CRM Quote (linked to the Account) for a customer; fallback for when call_edgar can't price the items
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
-11. call_edgar — formal quote only. Searches dealer lists, applies GM floor + MAP, returns edgar_quote. Not for casual price checks.
+11. call_edgar — formal quote only. Searches dealer lists, applies GM floor + MAP, returns edgar_quote. On an update of an open quote, hold cost and sell price unless they asked to reprice. Not for casual price checks.
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
@@ -756,9 +779,19 @@ After using tools, respond with a JSON object:
 
 Each tool proposal maps to an action in the actions array with the same fields from the tool input plus type: "create_deal"|"add_contact"|"draft_email"|"schedule_followup"|"flag_deal"|"add_to_nurture"|"log_note"|"create_quote"|"create_campaign_sequence"
 get_st1_pricing executes server-side and returns type:"st1_price" with cost / list / GM automatically.
-call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically.
+call_edgar executes server-side and returns type:"edgar_quote" with the full verified quote automatically. Open-quote cost and sell price are held unless the user asked to reprice.
 call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.
-call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill"|"ledger_payments" depending on the task.`;
+call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill"|"ledger_payments" depending on the task.
+${lockedQuote?.items?.length ? `
+=== OPEN QUOTE — HOLD COST AND SELL PRICE ===
+${formatLockedQuoteBlock(lockedQuote)}
+This quote is already priced. On "update the quote", a qty change, add/remove a line, or a CREATE IN ZOHO follow-up:
+- call_edgar and keep the same SKU, cost, and quotedPrice
+- only change quantity or add/remove items they asked about
+- do NOT pick a new dealer-list cost or a new sell price
+Only refresh cost/list if they say reprice, new cost, latest list, refresh price, or dealer list changed.
+If they name a new sell price ("charge $90"), keep the locked cost and use their sell price.
+` : ''}`;
 }
 
 // ── CALL CLAUDE ───────────────────────────────────────────────────────────────
@@ -832,10 +865,16 @@ async function _handler(req, res) {
     return res.status(400).json({ error: "messages array required" });
   }
 
+  const lastUser = [...rawMessages].reverse().find(m => m.role === 'user')?.content || '';
+  const lockedQuote = resolveLockedQuote(localContext, lastUser);
+  const reprice = userWantsReprice(lastUser);
+  const lockSell = !userWantsNewSellPrice(lastUser);
+  const ctx = { ...localContext, lockedQuote };
+
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
 
-  const system  = await buildSystemPrompt(localContext, zoho, inventory);
+  const system  = await buildSystemPrompt(ctx, zoho, inventory);
   const baseUrl = `https://${req.headers.host}`;
 
   // Convert history to Anthropic format
@@ -874,7 +913,11 @@ async function _handler(req, res) {
     messages.push({ role: "assistant", content: response.content });
     const toolResults = await Promise.all(toolUseBlocks.map(async t => {
       if (t.name === "call_edgar") {
-        const output = await callEdgar(t.input, baseUrl);
+        const output = await callEdgar(t.input, baseUrl, {
+          items: lockedQuote?.items || [],
+          reprice: reprice || t.input?.reprice === true,
+          lockSell,
+        });
         agentResults.push({ name: "call_edgar", input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
@@ -901,10 +944,25 @@ async function _handler(req, res) {
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify({ ok: true, remembered: true }) };
       }
       if (KNOWLEDGE_TOOL_NAMES.has(t.name)) {
+        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !reprice) {
+          const lockHit = matchLockedItem({
+            sku: t.input?.sku,
+            name: t.input?.productName || t.input?.query || t.input?.sku,
+            query: pricingQueryOf(t.input),
+          }, lockedQuote.items);
+          if (lockHit) {
+            const output = lockedPricingToolResult(t.input, lockHit);
+            agentResults.push({ name: t.name, input: t.input, output });
+            return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
+          }
+        }
         const tool = getTool(t.name);
-        const output = tool
+        let output = tool
           ? await invokeTool(tool, t.input || {}, INTERNAL_TOOL_AUTH)
           : { ok: false, error: { code: 'unknown_tool', message: `Unknown knowledge tool ${t.name}` } };
+        if (t.name === 'get_st1_pricing' && lockedQuote?.items?.length && !reprice) {
+          output = overlayLockedPricing(output, lockedQuote.items);
+        }
         agentResults.push({ name: t.name, input: t.input, output });
         return { type: "tool_result", tool_use_id: t.id, content: JSON.stringify(output) };
       }
