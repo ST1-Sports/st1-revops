@@ -3,7 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
-import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard } from "../components/ScoutChatBits.jsx";
+import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
@@ -160,6 +160,7 @@ const useApp = () => useContext(AppCtx);
 // components, so the approved-quote state and setters live locally in each
 // and get passed in here rather than closed over.
 async function sharedCreateQuoteNow(action,key,setSQ,setApprovedQuotes,setQuoteEmailDrafts,ctx){
+if(!(action.customer_name||"").trim()){ctx.toast("School or account name is required","error");return;}
 setSQ(key);
 try{
 const r=await fetch("/api/crm/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -173,11 +174,20 @@ shippingCost:Number(action.shipping_cost)||0,
 notes:action.notes||"",
 })});
 const d=await r.json();
-if(d.ok){
-ctx.toast(`Quote created: ${d.quoteNumber}!`,"success");
-ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} created for ${action.customer_name}`});
+if(d.ok&&d.pdfBase64){
+const total=(action.line_items||[]).reduce((s,li)=>s+(Number(li.rate)||0)*(Number(li.quantity)||1),0);
 const matchDeal=(ctx.deals||[]).find(d2=>(d2.name||"").toLowerCase().includes((action.customer_name||"").toLowerCase().slice(0,6)));
-if(matchDeal)ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`});
+if(matchDeal){
+ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,stage:"Quoted",value:total||matchDeal.value,contact:action.contact_person||matchDeal.contact,notes:(matchDeal.notes?matchDeal.notes+"\n":"")+`Quote ${d.quoteNumber} created`,...(d.dealId?{zohoId:d.dealId}:{})});
+}else{
+const localDeal={id:mkId(),name:`${action.customer_name} — ${d.quoteNumber}`,school:action.customer_name,contact:action.contact_person||"",value:total,stage:"Quoted",product:(action.line_items||[])[0]?.name||"",priority:"warm",createdAt:today(),followUpDate:"",notes:`Quote ${d.quoteNumber}${action.notes?`\n${action.notes}`:""}`,zohoId:d.dealId||null,source:"scout-quote"};
+ctx.dispatch("ADD_DEAL",localDeal);
+}
+if((action.contact_person||action.email)&&ctx.dispatch){
+const names=String(action.contact_person||"").trim().split(/\s+/);
+ctx.dispatch("ADD_CONTACTS",[{id:mkId(),firstName:names[0]||"",lastName:names.slice(1).join(" "),fullName:action.contact_person||"",email:action.email||"",school:action.customer_name,city:action.account_city||"",state:action.account_state||"",source:"quote",importedAt:Date.now()}]);
+}
+ctx.dispatch("LOG",{msg:`Quote ${d.quoteNumber} + deal for ${action.customer_name}`});
 setApprovedQuotes(prev=>({...prev,[key]:d}));
 setQuoteEmailDrafts(prev=>({...prev,[key]:{
 to:action.email||"",
@@ -185,7 +195,10 @@ subject:`Your quote from ST1 Sports — ${d.quoteNumber}`,
 body:`Hi ${action.contact_person||"there"},\n\nAttached is your quote (${d.quoteNumber}) from ST1 Sports. Let me know if you have any questions.\n\nThanks,\n${ctx.cu?.name||"Matt Stone"}\n${ctx.cu?.email||""}\n${ctx.cu?.phone||""}`,
 sent:false,
 }}));
-}else{ctx.toast(d.error||"Quote creation failed","error");}
+if(d.dealId)ctx.toast(`Edgar PDF ready · deal in open pipeline`,"success");
+else if(d.dealError)ctx.toast(`PDF ready. Deal stayed local — ${d.dealError}`,"info");
+else ctx.toast(`Edgar PDF ready for ${action.customer_name}`,"success");
+}else{ctx.toast(d.error||d.quoteError||"Quote creation failed","error");}
 }catch(e){ctx.toast(`Quote error: ${e.message}`,"error");}
 setSQ(null);
 }
@@ -2083,7 +2096,7 @@ if(action.type==="brad_outreach"){const key=`${msgIdx}_${actionIdx}`;setExpanded
 if(action.type==="ledger_reconcile"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerReconcile(e=>e===key?null:key);return;}
 if(action.type==="ledger_vendor_bill"){const key=`${msgIdx}_${actionIdx}`;setExpandedLedgerBill(e=>e===key?null:key);return;}
 };
-const quoteCtx={toast,dispatch,deals:s.deals,cu};
+const quoteCtx={toast,dispatch,deals:s.deals,cu,setMod};
 const createQuoteNow=(action,key)=>sharedCreateQuoteNow(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx);
 const createEdgarQuoteInZoho=(action,key,fields)=>sharedCreateEdgarQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
 const createPriceQuoteInZoho=(action,key,fields)=>sharedCreatePriceQuoteInZoho(action,key,setSendingQuote,setApprovedQuotes,setQuoteEmailDrafts,quoteCtx,fields);
@@ -2317,9 +2330,39 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:"88%",width:"88%",marginBottom:8}}>
 {(m.actions||[]).map((a,ai)=>{
 const key=`${msgIdx}_${ai}`;
-if(a.type==="edgar_quote")return <EdgarQuoteCard key={ai} B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onCreate={fields=>createEdgarQuoteInZoho(a,key,fields)}/>;
-if(a.type==="st1_price")return <ScoutPriceCard key={ai} B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onQuote={fields=>createPriceQuoteInZoho(a,key,fields)}/>;
-return null;
+const approved=approvedQuotes[key];
+const draft=quoteEmailDrafts[key];
+const card=a.type==="edgar_quote"?<EdgarQuoteCard B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onCreate={fields=>createEdgarQuoteInZoho(a,key,fields)}/>
+:a.type==="st1_price"?<ScoutPriceCard B={B} action={a} contacts={s.contacts} creating={sendingQuote===key} onQuote={fields=>createPriceQuoteInZoho(a,key,fields)}/>
+:null;
+if(!card)return null;
+return(
+<div key={ai} style={{display:"flex",flexDirection:"column",gap:0}}>
+{card}
+{approved&&(
+<div style={{padding:"10px 12px",background:B.surface,border:`1px solid ${B.border}`,borderTop:"none",borderRadius:"0 0 10px 10px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:8,lineHeight:1.5}}>
+Edgar made a PDF ({approved.quoteNumber}). Send it to the customer — this deal is in your open pipeline.
+</div>
+<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:draft?.sent?0:8}}>
+<button onClick={()=>downloadQuotePdf(key)} style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>⬇ DOWNLOAD PDF</button>
+<button onClick={()=>setMod("crm")} style={{background:"none",border:`1px solid ${B.orange}50`,color:B.orange,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>OPEN CRM PIPELINE</button>
+{approved.reviewUrl&&<a href={approved.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",letterSpacing:.3}}>OPEN IN ZOHO →</a>}
+</div>
+{draft?.sent
+?<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Emailed to {draft.to}</div>
+:draft&&(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+<input value={draft.to} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],to:e.target.value}}))} placeholder="Email the PDF to the coach" style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text}}/>
+<input value={draft.subject} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],subject:e.target.value}}))} placeholder="Subject" style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text}}/>
+<textarea rows={3} value={draft.body} onChange={e=>setQuoteEmailDrafts(prev=>({...prev,[key]:{...prev[key],body:e.target.value}}))} style={{fontFamily:"'Lexend',sans-serif",fontSize:11,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 8px",color:B.text,resize:"vertical"}}/>
+<button onClick={()=>sendQuoteEmail(key)} disabled={sendingQuoteEmail===key||!draft.to} style={{alignSelf:"flex-start",background:B.green,border:"none",color:B.white,borderRadius:4,padding:"5px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuoteEmail===key?.6:1}}>{sendingQuoteEmail===key?"SENDING...":"📧 SEND PDF"}</button>
+</div>
+)}
+</div>
+)}
+</div>
+);
 })}
 </div>
 )}
@@ -2371,10 +2414,30 @@ return(
 <div style={{display:"flex",gap:5,flexShrink:0,alignItems:"center"}}>
 {approved
 ?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,background:B.greenBg,padding:"3px 9px",borderRadius:4,letterSpacing:.3}}>✓ APPROVED — {approved.quoteNumber}</span>
-:<button onClick={()=>createQuoteNow(a,key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"APPROVING...":"✓ APPROVE"}</button>}
+:<button onClick={()=>setExpandedQuote(key)} disabled={sendingQuote===key} style={{background:B.blue,border:"none",color:B.white,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3,opacity:sendingQuote===key?.6:1}}>{sendingQuote===key?"APPROVING...":"✓ APPROVE"}</button>}
 <button onClick={()=>executeAction(a,msgIdx,ai)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"3px 8px",fontSize:11,cursor:"pointer"}}>{expanded?"▲":"▼"}</button>
 </div>
 </div>
+{expanded&&!approved&&(
+<ZohoQuoteForm
+B={B}
+contacts={s.contacts}
+showQty={lineItems.length===1}
+submitting={sendingQuote===key}
+defaults={{school:a.customer_name||"",contact:a.contact_person||"",email:a.email||"",city:a.account_city||"",state:a.account_state||"",qty:lineItems.length===1?(Number(lineItems[0].quantity)||1):1,notes:a.notes||""}}
+onCancel={()=>setExpandedQuote(null)}
+onSubmit={fields=>createQuoteNow({
+...a,
+customer_name:fields.school,
+account_city:fields.city,
+account_state:fields.state,
+contact_person:fields.contact,
+email:fields.email,
+notes:fields.notes||a.notes,
+line_items:lineItems.length===1?[{...lineItems[0],quantity:fields.qty}]:lineItems,
+},key)}
+/>
+)}
 {expanded&&(
 <div style={{padding:"10px 12px"}}>
 {a.contact_person&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:4}}>Contact: {a.contact_person}{a.email?` · ${a.email}`:""}</div>}
@@ -2411,8 +2474,12 @@ return(
 )}
 {approved&&(
 <div style={{padding:"10px 12px",borderTop:`1px solid ${B.blue}20`}}>
-<div style={{display:"flex",gap:6,marginBottom:draft?.sent?0:8}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:8,lineHeight:1.5}}>
+Edgar made a PDF for {a.customer_name||"this school"}. Send it to the customer — the deal is in your open pipeline{approved.dealId?"":" (local until Zoho accepts it)"}.
+</div>
+<div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:draft?.sent?0:8}}>
 <button onClick={()=>downloadQuotePdf(key)} style={{background:"none",border:`1px solid ${B.blue}50`,color:B.blue,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>⬇ DOWNLOAD PDF</button>
+<button onClick={()=>setMod("crm")} style={{background:"none",border:`1px solid ${B.orange}50`,color:B.orange,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>OPEN CRM PIPELINE</button>
 {approved.reviewUrl&&<a href={approved.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.blue}50`,color:B.blue,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",letterSpacing:.3}}>OPEN IN ZOHO →</a>}
 </div>
 {draft?.sent
@@ -14162,8 +14229,10 @@ return(
 </div>
 {approved&&(
 <div style={{marginTop:10,padding:"10px 13px",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5}}>
-<div style={{display:"flex",gap:8,marginBottom:draft?.sent?0:8}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:8,lineHeight:1.5}}>Edgar made a PDF. Send it to the customer — the deal is in your open pipeline.</div>
+<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:draft?.sent?0:8}}>
 <button onClick={()=>downloadQuotePdf("edgar_main")} style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>⬇ DOWNLOAD PDF</button>
+<button onClick={()=>setMod("crm")} style={{background:"none",border:`1px solid ${B.orange}50`,color:B.orange,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>OPEN CRM PIPELINE</button>
 {approved.reviewUrl&&<a href={approved.reviewUrl} target="_blank" rel="noreferrer" style={{background:"none",border:`1px solid ${B.teal}50`,color:B.teal,borderRadius:4,padding:"5px 12px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,textDecoration:"none",letterSpacing:.3}}>OPEN IN ZOHO →</a>}
 </div>
 {draft?.sent

@@ -16,7 +16,8 @@
 import { getZohoToken } from '../_lib/zoho-token.js'
 import { setCors }      from '../_lib/cors.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
-import { zohoCrmHeaders, zohoCrmCreateRecord, zohoCrmDeleteRecords, zohoRecordId, zohoRecordError } from '../_lib/zohoCrm.js'
+import { zohoCrmHeaders, zohoCrmDeleteRecords, zohoRecordError } from '../_lib/zohoCrm.js'
+import { createZohoDeal } from '../_lib/zohoDeal.js'
 
 export default async function handler(req, res) {
   setCors(res, 'POST, DELETE, OPTIONS')
@@ -52,21 +53,12 @@ export default async function handler(req, res) {
       accountCreated = account.created
     }
 
-    const dealPayload = {
-      Deal_Name: dealName,
-      Amount:    Number(amount) || 0,
-      Stage:     stage,
-      ...(closingDate  ? { Closing_Date: closingDate } : {}),
-      ...(description  ? { Description: description } : {}),
-      ...(accountId    ? { Account_Name: { id: accountId } } : {}),
-    }
+    const deal = await createZohoDeal({
+      dealName, amount, stage, closingDate, description, accountId,
+    }, headers)
+    if (!deal.id) return res.status(502).json({ error: zohoRecordError(deal.rec, 'Zoho deal creation failed'), raw: deal.rec })
 
-    const rec = await zohoCrmCreateRecord('Deals', dealPayload, headers)
-    if (rec?.status === 'error') return res.status(502).json({ error: zohoRecordError(rec, 'Zoho deal creation failed'), raw: rec })
-    const dealId = zohoRecordId(rec)
-    if (!dealId) return res.status(502).json({ error: zohoRecordError(rec, 'Zoho did not return a deal id'), raw: rec })
-
-    return res.json({ ok: true, dealId, accountId, accountCreated })
+    return res.json({ ok: true, dealId: deal.id, accountId, accountCreated })
 
   } catch (err) {
     console.error('[crm/deal]', err.message)
