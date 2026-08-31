@@ -19,7 +19,7 @@ export function ChatProse({ text, color }) {
           return (
             <ul key={i} style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
               {block.items.map((item, j) => (
-                <li key={j} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, lineHeight: 1.55, color }}>
+                <li key={j} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, lineHeight: 1.55, color, overflowWrap: 'anywhere' }}>
                   <Inline text={item} />
                 </li>
               ))}
@@ -27,7 +27,7 @@ export function ChatProse({ text, color }) {
           );
         }
         return (
-          <div key={i} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, lineHeight: 1.55, color }}>
+          <div key={i} style={{ fontFamily: "'Lexend',sans-serif", fontSize: 13, lineHeight: 1.55, color, overflowWrap: 'anywhere' }}>
             <Inline text={block.text} />
           </div>
         );

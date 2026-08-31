@@ -2119,7 +2119,7 @@ const sendBradEmail=(draft,key)=>sharedSendBradEmail(draft,key,setSendingInstant
 const send=async(overrideMsg)=>{
 const msg=(overrideMsg||input).trim();
 if(!msg||running)return;
-setInput("");setRunning(true);setAgentStatus("thinking");
+setInput("");if(inputRef.current)inputRef.current.style.height="auto";setRunning(true);setAgentStatus("thinking");
 if(!sessionIdRef.current){
 try{
 const sr=await fetch("/api/chat",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -2282,7 +2282,7 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 </div>
 </div>
 {/* Messages */}
-<div style={{flex:1,overflowY:"auto",padding:"18px 20px 8px",display:"flex",flexDirection:"column",gap:12}}>
+<div style={{flex:1,overflowY:"auto",overflowX:"hidden",padding:"18px 20px 8px",display:"flex",flexDirection:"column",gap:12,minWidth:0}}>
 {history.length===0&&(
 <div style={{flex:1,display:"flex",flexDirection:"column",justifyContent:"center",paddingTop:16}}>
 <div style={{textAlign:"center",marginBottom:18}}>
@@ -2307,10 +2307,10 @@ style={{width:"100%",textAlign:"left",background:isActive?B.orangeBg:"transparen
 )}
 {history.map((m,msgIdx)=>(
 <MsgErrBound key={m.id||msgIdx}>
-<div ref={msgIdx===lastUserIdx?lastUserRef:undefined} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",scrollMarginTop:12}}>
+<div ref={msgIdx===lastUserIdx?lastUserRef:undefined} style={{display:"flex",flexDirection:"column",alignItems:m.role==="user"?"flex-end":"flex-start",scrollMarginTop:12,width:"100%",minWidth:0}}>
 {m.role==="user"&&(
-<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.orange,color:B.white}}>
-<span style={{whiteSpace:"pre-wrap"}}>{chatText(m.content)||m.raw||" "}</span>
+<div style={{maxWidth:"88%",minWidth:0,padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.orange,color:B.white,overflowWrap:"anywhere",wordBreak:"break-word"}}>
+<span style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{chatText(m.content)||m.raw||" "}</span>
 </div>
 )}
 {m.role==="assistant"&&(m.actions||[]).some(a=>a.type==="edgar_quote"||a.type==="st1_price")&&(
@@ -2324,7 +2324,7 @@ return null;
 </div>
 )}
 {m.role==="assistant"&&(()=>{const body=assistantBubbleText(chatText(m.content),m.actions);if(!body)return null;return(
-<div style={{maxWidth:"88%",padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.surface,color:B.text,border:`1px solid ${B.border}`}}>
+<div style={{maxWidth:"88%",minWidth:0,padding:"10px 14px",borderRadius:8,fontFamily:"'Lexend',sans-serif",fontSize:13,lineHeight:1.55,background:B.surface,color:B.text,border:`1px solid ${B.border}`,overflowWrap:"anywhere",wordBreak:"break-word"}}>
 <ChatProse text={body} color={B.text}/>
 </div>
 );})()}
@@ -2888,9 +2888,9 @@ return(
 )}
 {/* Follow-up suggestions */}
 {m.role==="assistant"&&m.suggestions?.length>0&&(
-<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,maxWidth:"88%"}}>
+<div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5,maxWidth:"88%",minWidth:0}}>
 {m.suggestions.map((sg,si)=>(
-<button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:20,padding:"4px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1}}>→ {sg}</button>
+<button key={si} onClick={()=>send(sg)} disabled={running} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.muted,borderRadius:12,padding:"6px 11px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer",lineHeight:1.4,opacity:running?.6:1,whiteSpace:"normal",textAlign:"left",maxWidth:"100%",overflowWrap:"anywhere"}}>→ {sg}</button>
 ))}
 </div>
 )}
@@ -2909,8 +2909,20 @@ return(
 </div>
 {/* Input bar */}
 <div style={{background:B.white,borderTop:`1px solid ${B.border}`,padding:"11px 16px"}}>
-<div style={{display:"flex",gap:9}}>
-<input ref={inputRef} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&!e.shiftKey&&send()} placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..." style={{flex:1,background:B.pageBg,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,fontFamily:"'Lexend',sans-serif"}}/>
+<div style={{display:"flex",gap:9,alignItems:"flex-end"}}>
+<textarea
+ref={inputRef}
+value={input}
+rows={1}
+onChange={e=>{
+setInput(e.target.value);
+e.target.style.height="auto";
+e.target.style.height=`${Math.min(e.target.scrollHeight,120)}px`;
+}}
+onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}}}
+placeholder="Ask about your pipeline, contacts, deals — or say 'draft outreach for [name]'..."
+style={{flex:1,minWidth:0,background:B.pageBg,border:`1px solid ${B.border}`,color:B.text,borderRadius:6,padding:"10px 13px",fontSize:13,fontFamily:"'Lexend',sans-serif",lineHeight:1.45,resize:"none",overflowY:"auto",maxHeight:120,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}
+/>
 <OBtn onClick={()=>send()} disabled={running||!input.trim()}>SEND →</OBtn>
 </div>
 <div style={{marginTop:6,display:"flex",gap:5,flexWrap:"wrap"}}>
