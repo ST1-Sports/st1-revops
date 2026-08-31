@@ -317,11 +317,16 @@ export function EdgarQuoteCard({ action, B, onCreate, creating, contacts }) {
 export function ScoutPriceCard({ action, B, onQuote, creating, contacts }) {
   const [formOpen, setFormOpen] = useState(false);
   const item = action.item || {};
-  const matches = (action.matches || []).filter(m => m.sku && m.sku !== item.sku).slice(0, 3);
+  const vendorRates = (action.vendorRates || []).filter(r => r.cost != null).slice(0, 6);
+  const competing = vendorRates.length >= 2 ? vendorRates : [];
+  const matches = competing.length
+    ? []
+    : (action.matches || []).filter(m => m.sku && m.sku !== item.sku).slice(0, 3);
   const cost = item.cost != null ? Number(item.cost) : null;
   const list = item.list != null ? Number(item.list) : null;
   const gm = item.marginPct != null ? item.marginPct : (cost != null && list > 0 ? Math.round(((list - cost) / list) * 100) : null);
   const map = item.map != null ? Number(item.map) : null;
+  const bestVendor = competing.find(r => r.best) || competing[0] || null;
 
   return (
     <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: 'hidden' }}>
@@ -334,6 +339,7 @@ export function ScoutPriceCard({ action, B, onQuote, creating, contacts }) {
             {item.sku && item.supplier ? <span> · </span> : null}
             {item.supplier ? <span>{item.supplier}</span> : null}
             {!item.sku && !item.supplier && item.source ? <span>{item.source}</span> : null}
+            {competing.length ? <span> · {competing.length} dealer lists</span> : null}
           </div>
         </div>
         {onQuote ? (
@@ -342,7 +348,7 @@ export function ScoutPriceCard({ action, B, onQuote, creating, contacts }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, padding: 12 }}>
-        <Stat B={B} label="YOUR COST" value={money(cost) || '—'} />
+        <Stat B={B} label="YOUR COST" value={money(cost) || '—'} hint={bestVendor ? `Best from ${bestVendor.supplier}` : null} />
         <Stat B={B} label="LIST PRICE" value={money(list) || '—'} />
         <Stat
           B={B}
@@ -363,6 +369,39 @@ export function ScoutPriceCard({ action, B, onQuote, creating, contacts }) {
           Info only — quote when you have a school
         </span>
       </div>
+
+      {competing.length > 0 ? (
+        <div style={{ padding: '0 12px 12px' }}>
+          <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: 1.2, color: B.muted, fontWeight: 700, marginBottom: 6 }}>VENDOR COSTS</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {competing.map((row, i) => (
+              <div
+                key={`${row.supplier}-${row.sku}-${i}`}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr auto auto',
+                  gap: 8,
+                  alignItems: 'center',
+                  padding: '6px 8px',
+                  background: row.best ? B.greenBg : B.surface,
+                  borderRadius: 6,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.black, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.supplier}</div>
+                  {row.sku ? <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 10, color: B.muted }}>SKU {row.sku}</div> : null}
+                </div>
+                <div style={{ fontFamily: "'Russo One',sans-serif", fontSize: 13, color: B.black }}>{money(row.cost)}</div>
+                {row.best ? (
+                  <span style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, letterSpacing: 0.8, color: B.green, fontWeight: 700 }}>BEST</span>
+                ) : (
+                  <span />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {matches.length > 0 ? (
         <div style={{ padding: '0 12px 12px', fontFamily: "'Lexend',sans-serif", fontSize: 11, color: B.muted }}>

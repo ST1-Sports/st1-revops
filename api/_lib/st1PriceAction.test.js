@@ -31,6 +31,48 @@ describe('st1PriceActionFromPricing', () => {
     assert.equal(action.item.supplier, 'Athletic Connection');
     assert.equal(action.matches.length, 1);
   });
+
+  it('passes competing vendor rates onto the Scout card', () => {
+    const action = st1PriceActionFromPricing({
+      status: 'ok',
+      result: {
+        name: 'TF-1000 28.5',
+        sku: 'FRZ-TF1000-285',
+        brand: 'Spalding',
+        supplier: 'Frazier',
+        cost: { amount: 53, source: 'ST1 price list (dealer cost)' },
+        customerPrice: { amount: 81.95, source: 'ST1 price list (our price)' },
+        vendorRates: [
+          { supplier: 'Frazier', sku: 'FRZ-TF1000-285', cost: 53, best: true },
+          { supplier: 'Athletic Connection', sku: 'AC-1457055', cost: 99.99, best: false },
+        ],
+      },
+    });
+    assert.equal(action.vendorRates.length, 2);
+    assert.equal(action.vendorRates[0].supplier, 'Frazier');
+    assert.equal(action.vendorRates[0].best, true);
+  });
+
+  it('builds vendor rates from matches when the tool omitted them', () => {
+    const action = st1PriceActionFromPricing({
+      status: 'ok',
+      result: {
+        name: 'TF-1000 28.5 Girls',
+        sku: 'AC-1457055',
+        brand: 'Spalding',
+        supplier: 'Athletic Connection',
+        cost: { amount: 99.99 },
+        customerPrice: { amount: 120 },
+        matches: [
+          { name: 'TF-1000 28.5 Girls', sku: 'AC-1457055', supplier: 'Athletic Connection', cost: 99.99 },
+          { name: 'TF-1000 28.5 Girls Basketball', sku: 'FRZ-1', supplier: 'Frazier', cost: 53 },
+        ],
+      },
+    });
+    assert.equal(action.vendorRates[0].supplier, 'Frazier');
+    assert.equal(action.vendorRates[0].cost, 53);
+    assert.equal(action.vendorRates[0].best, true);
+  });
 });
 
 describe('mergeScoutActions', () => {

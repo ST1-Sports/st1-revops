@@ -1,7 +1,7 @@
 import { prisma } from '../prisma.js';
 import { hasScope, requireScope } from './auth.js';
 import { cloneJson } from './schema.js';
-import { minAcceptableScore, tokenizePriceQuery } from '../priceSearch.js';
+import { dealerCostOf, minAcceptableScore, tokenizePriceQuery, vendorRatesFor } from '../priceSearch.js';
 import {
   AI_TOOL_SAFETY_POLICY,
   CUSTOMER_POLICY,
@@ -79,7 +79,7 @@ async function getSt1Pricing(input) {
     return notFound('get_st1_pricing', input, [], ['Need a product name, SKU, or product ID.']);
   }
   const [listItems, products, zoho] = await Promise.all([
-    findPriceItems({ query, sku: input.sku, limit: input.includeAlternatives ? 8 : 5 }).catch(() => []),
+    findPriceItems({ query, sku: input.sku, limit: 12 }).catch(() => []),
     findProducts({
       query,
       productId: input.productId,
@@ -96,13 +96,26 @@ async function getSt1Pricing(input) {
 
   const tokens = tokenizePriceQuery(query);
   const floor = minAcceptableScore(tokens);
-  const primaryList = listItems.find(it => (it.searchScore || 0) >= floor) || null;
+  let primaryList = listItems.find(it => (it.searchScore || 0) >= floor) || null;
   if (primaryList) {
+    const vendorRates = vendorRatesFor(listItems, primaryList);
+    const best = vendorRates.find(row => row.best) || vendorRates[0] || null;
+    if (best?.cost != null) {
+      const cheaper = listItems.find(it =>
+        (it.supplier?.name || 'Unknown list') === best.supplier
+        && (it.sku || null) === (best.sku || null)
+        && dealerCostOf(it) === best.cost
+      );
+      if (cheaper) primaryList = cheaper;
+    }
     const cost = numOrNull(primaryList.cost ?? primaryList.lastCost);
     const ourPrice = numOrNull(primaryList.ourPrice);
     const mapPrice = numOrNull(primaryList.map);
     const msrp = numOrNull(primaryList.msrp);
     const customerPrice = ourPrice ?? mapPrice ?? msrp;
+    const bestNote = vendorRates.length > 1 && best?.cost != null
+      ? `Best dealer cost is $${Number(best.cost).toFixed(2)} from ${best.supplier}.`
+      : null;
     return ok('get_st1_pricing', {
       status: 'ok',
       query: input,
@@ -122,7 +135,8 @@ async function getSt1Pricing(input) {
         marginPct: marginPct(cost, customerPrice),
         stockStatus: null,
         updatedAt: primaryList.updatedAt || null,
-        matches: (input.includeAlternatives ? listItems : listItems.slice(0, 5)).map(it => ({
+        vendorRates,
+        matches: listItems.map(it => ({
           name: it.name,
           sku: it.sku,
           brand: it.brand,
@@ -137,6 +151,7 @@ async function getSt1Pricing(input) {
       limitations: [
         cost == null ? 'Dealer cost was not set on this price-list row.' : null,
         customerPrice == null ? 'Our price / MAP / MSRP were not set on this price-list row.' : null,
+        bestNote,
       ].filter(Boolean),
     });
   }
@@ -592,7 +607,7 @@ export const AI_TOOLS = [
   },
   {
     name: 'get_st1_pricing',
-    description: 'Fast cost / list / MAP lookup from dealer price lists (same lists Edgar quotes from), then Zoho Books / catalog. Use this for "what\'s our cost" or "what\'s the price" — do not call Edgar unless the user wants a formal quote. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
+    description: 'Fast cost / list / MAP lookup from dealer price lists (same lists Edgar quotes from), then Zoho Books / catalog. Compares every uploaded dealer list (Athletic Connection, Spalding, Frazier-style catalogs, and later lists) for the same model/size and returns the lowest dealer cost plus vendorRates. Use this for "what\'s our cost" or "what\'s the price" — do not call Edgar unless the user wants a formal quote. Pass the full product name or model (e.g. TF-5000), not a generic word like "ball".',
     permission: 'pricing:read',
     readOnly: true,
     input_schema: {
