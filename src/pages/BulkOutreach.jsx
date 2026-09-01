@@ -387,6 +387,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [syncingGmail, setSyncingGmail] = useState(false);
   const [goPace, setGoPace] = useState("now"); // now | drip
   const [goRun, setGoRun] = useState(null); // {mode,total,done,failed,current,nextIn} while GO is live
+  const [exportingSent, setExportingSent] = useState(false);
   const fileRef = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(false);
@@ -405,6 +406,34 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     setLoadingList(false);
   };
   useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const exportSentCsv = async (unique = true) => {
+    setExportingSent(true);
+    try {
+      const r = await fetch(`/api/outreach/sent-export?unique=${unique ? "1" : "0"}`);
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        toast(d.error || "Couldn't export the sent list", "error");
+        return;
+      }
+      const blob = await r.blob();
+      const n = r.headers.get("X-Sent-Count");
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = unique ? "brad-bulk-sent-unique.csv" : "brad-bulk-sent-all.csv";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast(unique
+        ? `Downloaded ${n || ""} unique emails Brad already sent — use this to skip them on the next sheet`
+        : `Downloaded ${n || ""} sent emails`, "success");
+    } catch (e) {
+      toast(`Couldn't export the sent list: ${e.message}`, "error");
+    }
+    setExportingSent(false);
+  };
 
   // Removes a bad upload entirely — refused server-side once approved
   // (that upload is now a real running campaign; nothing here to fix by
@@ -1276,8 +1305,17 @@ Subject: <subject line, may include {{orgName}}>
 
       {screen === "list" && (
         <>
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
             <OBtn onClick={startNewUpload} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
+            <GBtn onClick={() => exportSentCsv(true)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 12 }}>
+              {exportingSent ? "EXPORTING…" : "EXPORT SENT (DEDUPE)"}
+            </GBtn>
+            <GBtn onClick={() => exportSentCsv(false)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 12 }}>
+              ALL SENDS
+            </GBtn>
+          </div>
+          <div style={{ fontSize: 12, color: B.muted, marginBottom: 14, maxWidth: 640, lineHeight: 1.5 }}>
+            Export everyone Brad already emailed from these uploads (unique emails by default). Paste that sheet next to a new list and drop matching addresses so you do not double-send.
           </div>
           {loadingList ? (
             <div style={{ textAlign: "center", padding: "50px 0", color: B.muted, fontSize: 13 }}>Loading…</div>
