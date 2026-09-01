@@ -351,8 +351,9 @@ function StepEditor({ draftKey, seed, templates, updateTemplateField, onApply, a
   );
 }
 const STATUS_BADGE = {
-  draft:    { bg: B.yellowBg, c: B.yellow, label: "DRAFT" },
-  approved: { bg: B.greenBg,  c: B.green,  label: "APPROVED" },
+  draft:    { bg: B.yellowBg, c: B.yellow,  label: "DRAFT" },
+  active:   { bg: B.orangeBg, c: B.orange,  label: "ACTIVE" },
+  approved: { bg: B.greenBg,  c: B.green,   label: "APPROVED" },
 };
 
 export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
@@ -407,10 +408,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   };
   useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  const exportSentCsv = async (unique = true) => {
+  const exportSentCsv = async (unique = true, onlyBatchId = null) => {
     setExportingSent(true);
     try {
-      const r = await fetch(`/api/outreach/sent-export?unique=${unique ? "1" : "0"}`);
+      const q = new URLSearchParams({ unique: unique ? "1" : "0" });
+      if (onlyBatchId) q.set("batchId", onlyBatchId);
+      const r = await fetch(`/api/outreach/sent-export?${q}`);
       if (!r.ok) {
         const d = await r.json().catch(() => ({}));
         toast(d.error || "Couldn't export the sent list", "error");
@@ -421,7 +424,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = unique ? "brad-bulk-sent-unique.csv" : "brad-bulk-sent-all.csv";
+      a.download = onlyBatchId
+        ? (unique ? "brad-batch-sent-unique.csv" : "brad-batch-sent-all.csv")
+        : (unique ? "brad-bulk-sent-unique.csv" : "brad-bulk-sent-all.csv");
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -726,6 +731,7 @@ Return JSON exactly as:
     try {
       await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
+      setBatchStatus(prev => prev === "approved" ? prev : "active");
     } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
 
     if (linkedCampaignId) {
@@ -1287,6 +1293,8 @@ Subject: <subject line, may include {{orgName}}>
   const isApproved = batchStatus === "approved";
   const sentTouchCount = sendableLeads.reduce((a, l) => a + l.touches.filter((t, i) => touchSentInfo(l, i).sent).length, 0);
   const totalTouchCount = sendableLeads.reduce((a, l) => a + l.touches.length, 0);
+  const isActive = batchStatus === "active" || sentTouchCount > 0;
+  const canDelete = batchId && !isApproved && !isActive;
 
   return (
     <div style={{ padding: "26px 34px", maxWidth: 1100, margin: "0 auto" }}>
@@ -1295,8 +1303,15 @@ Subject: <subject line, may include {{orgName}}>
           <div style={{ fontSize: 22, fontWeight: 700, color: B.text }}>Bulk Outreach — for Brad</div>
           <div style={{ fontSize: 12, color: B.muted, marginTop: 2 }}>Upload a cold-outreach spreadsheet, review the schedule, approve — Brad sends it from here.</div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {screen === "review" && phase === "ready" && batchId && !isApproved && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <OBtn onClick={() => exportSentCsv(true)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 11 }}>
+            {exportingSent ? "DOWNLOADING…" : "⬇ DOWNLOAD SENT LIST"}
+          </OBtn>
+          <GBtn onClick={() => exportSentCsv(false)} disabled={exportingSent}>ALL SENDS</GBtn>
+          {screen === "review" && phase === "ready" && sentTouchCount > 0 && (
+            <GBtn onClick={() => exportSentCsv(true, batchId)} disabled={exportingSent}>THIS BATCH</GBtn>
+          )}
+          {screen === "review" && phase === "ready" && canDelete && (
             <GBtn onClick={deleteCurrentBatch} style={{ color: B.red, borderColor: `${B.red}60` }}>DELETE THIS UPLOAD</GBtn>
           )}
           {screen === "review" && <GBtn onClick={backToList}>← Back to all uploads</GBtn>}
@@ -1305,17 +1320,11 @@ Subject: <subject line, may include {{orgName}}>
 
       {screen === "list" && (
         <>
-          <div style={{ marginBottom: 16, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          <div style={{ marginBottom: 12 }}>
             <OBtn onClick={startNewUpload} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
-            <GBtn onClick={() => exportSentCsv(true)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 12 }}>
-              {exportingSent ? "EXPORTING…" : "EXPORT SENT (DEDUPE)"}
-            </GBtn>
-            <GBtn onClick={() => exportSentCsv(false)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 12 }}>
-              ALL SENDS
-            </GBtn>
           </div>
-          <div style={{ fontSize: 12, color: B.muted, marginBottom: 14, maxWidth: 640, lineHeight: 1.5 }}>
-            Export everyone Brad already emailed from these uploads (unique emails by default). Paste that sheet next to a new list and drop matching addresses so you do not double-send.
+          <div style={{ fontSize: 12, color: B.muted, marginBottom: 14, maxWidth: 720, lineHeight: 1.5 }}>
+            Download sent list is always in the top right — unique emails Brad already emailed, so the next sheet can skip them. A batch turns <b>Active</b> as soon as the first email goes out.
           </div>
           {loadingList ? (
             <div style={{ textAlign: "center", padding: "50px 0", color: B.muted, fontSize: 13 }}>Loading…</div>
@@ -1327,6 +1336,8 @@ Subject: <subject line, may include {{orgName}}>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden" }}>
               {batches.map(b => {
                 const badge = STATUS_BADGE[b.status] || STATUS_BADGE.draft;
+                const sent = Number(b.sentCount) || 0;
+                const locked = b.status === "approved" || b.status === "active" || sent > 0;
                 return (
                   <div key={b.id} onClick={() => openBatch(b.id)} style={{ padding: "13px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", borderBottom: `1px solid ${B.border}` }}>
                     <div style={{ minWidth: 0 }}>
@@ -1334,10 +1345,13 @@ Subject: <subject line, may include {{orgName}}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{b.name}</span>
                         <span style={{ fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", color: badge.c, background: badge.bg, padding: "2px 7px", borderRadius: 8, letterSpacing: .5 }}>{badge.label}</span>
                       </div>
-                      <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}</div>
+                      <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>
+                        {sent > 0 ? <span style={{ color: B.orange, fontWeight: 600 }}>{sent} sent · </span> : null}
+                        {b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}
+                      </div>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
-                      {b.status !== "approved" && (
+                      {!locked && (
                         <button onClick={e => deleteBatch(b, e)} title="Delete this upload"
                           style={{ background: "none", border: "none", color: B.red, fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", cursor: "pointer", padding: "4px 6px" }}>
                           DELETE
@@ -1405,6 +1419,13 @@ Subject: <subject line, may include {{orgName}}>
             <div style={{ background: B.greenBg, border: `1px solid ${B.green}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
               <div style={{ fontSize: 12, color: B.textMid }}><b style={{ color: B.green }}>✓ Approved</b> — start time/batch size are locked in, but you can still edit copy below and send any email manually; edits sync to whatever's still queued.</div>
               {setMod && <GBtn onClick={goToCampaigns} style={{ fontSize: 10 }}>View in Campaigns →</GBtn>}
+            </div>
+          )}
+          {!isApproved && isActive && (
+            <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: B.textMid }}>
+                <b style={{ color: B.orange }}>● Active</b> — Brad has sent {sentTouchCount} email{sentTouchCount !== 1 ? "s" : ""} from this list. It stays Active until you approve a schedule. Use <b>Download sent list</b> or <b>This batch</b> to export who already got mail.
+              </div>
             </div>
           )}
 

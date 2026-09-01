@@ -6,6 +6,7 @@ import {
   uniqueSentByEmail,
   toCsv,
   SENT_UNIQUE_HEADERS,
+  effectiveBatchStatus,
 } from './outreachSent.js';
 
 describe('sentRowsFromBatches', () => {
@@ -65,6 +66,24 @@ describe('sentRowsFromBatches', () => {
     assert.equal(uniq[0].bounced, 'yes');
     assert.match(uniq[0].batches, /Iowa AD/);
     assert.match(uniq[0].batches, /Basketball 500/);
+  });
+});
+
+describe('effectiveBatchStatus', () => {
+  it('stays draft until something is sent, then becomes active', () => {
+    const draft = { status: 'draft', leads: [{ touches: [{ subject: 'Hi' }] }] };
+    assert.equal(effectiveBatchStatus(draft), 'draft');
+    assert.equal(effectiveBatchStatus({
+      status: 'draft',
+      leads: [{ touches: [{ subject: 'Hi', sentAt: '2026-09-01T12:00:00.000Z' }] }],
+    }), 'active');
+  });
+
+  it('does not drop an approved campaign back to active', () => {
+    assert.equal(effectiveBatchStatus({
+      status: 'approved',
+      leads: [{ touches: [{ sentAt: '2026-09-01T12:00:00.000Z' }] }],
+    }), 'approved');
   });
 });
 

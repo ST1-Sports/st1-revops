@@ -40,10 +40,15 @@ export default async function handler(req, res) {
 
   try {
     const unique = String(req.query?.unique ?? '1') !== '0';
-    const rows = sentRowsFromBatches(await loadBatches());
+    const batchId = req.query?.batchId ? String(req.query.batchId) : '';
+    let batches = await loadBatches();
+    if (batchId) batches = batches.filter(b => b.id === batchId);
+    const rows = sentRowsFromBatches(batches);
     const out = unique ? uniqueSentByEmail(rows) : rows;
     const headers = unique ? SENT_UNIQUE_HEADERS : SENT_ALL_HEADERS;
-    const filename = unique ? 'brad-bulk-sent-unique.csv' : 'brad-bulk-sent-all.csv';
+    const filename = batchId
+      ? (unique ? 'brad-batch-sent-unique.csv' : 'brad-batch-sent-all.csv')
+      : (unique ? 'brad-bulk-sent-unique.csv' : 'brad-bulk-sent-all.csv');
     const csv = toCsv(headers, out);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);

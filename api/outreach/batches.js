@@ -12,14 +12,10 @@
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { effectiveBatchStatus, promoteStatus, sentTouchCount } from '../_lib/outreachSent.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '6mb' } } };
 
-const LIST_SELECT = {
-  id: true, name: true, fileName: true, status: true,
-  totalCount: true, sendableCount: true, touchCount: true,
-  campaignId: true, createdAt: true, updatedAt: true,
-};
 const FALLBACK_KEY = 'outreach_batches_v1';
 
 function isMissingTable(e) {
@@ -39,7 +35,12 @@ const PATCHABLE = ['name', 'status', 'columnMap', 'startDt', 'batchSize', 'touch
 
 function listShape(batch) {
   const { leads, columnMap, templates, ...rest } = batch;
-  return rest;
+  const sentCount = sentTouchCount(leads);
+  return {
+    ...rest,
+    sentCount,
+    status: effectiveBatchStatus({ ...rest, leads }),
+  };
 }
 
 async function loadFallbackBatches() {
@@ -58,7 +59,7 @@ async function saveFallbackBatches(batches) {
 async function fallbackList(id) {
   const batches = await loadFallbackBatches();
   if (id) return batches.find(batch => batch.id === id) || null;
-  return [...batches].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))).map(listShape);
+  return [...batches].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
 async function fallbackCreate({ name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy }) {
@@ -126,18 +127,35 @@ export default async function handler(req, res) {
           batch = await fallbackList(String(id));
         }
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
-        return res.json({ ok: true, batch });
+        return res.json({
+          ok: true,
+          batch: {
+            ...batch,
+            status: effectiveBatchStatus(batch),
+            sentCount: sentTouchCount(batch.leads),
+          },
+        });
       }
       let batches;
       try {
         batches = prisma.outreachBatch
-          ? await prisma.outreachBatch.findMany({ select: LIST_SELECT, orderBy: { createdAt: 'desc' } })
+          ? await prisma.outreachBatch.findMany({ orderBy: { createdAt: 'desc' } })
           : await fallbackList();
       } catch (e) {
         if (!isMissingTable(e)) throw e;
         batches = await fallbackList();
       }
-      return res.json({ ok: true, batches });
+      const listed = (batches || []).map(listShape);
+      for (const raw of batches || []) {
+        if (raw.status === 'draft' && effectiveBatchStatus(raw) === 'active' && raw.id) {
+          const promote = { status: 'active' };
+          try {
+            if (prisma.outreachBatch) await prisma.outreachBatch.update({ where: { id: raw.id }, data: promote });
+            else await fallbackPatch(raw.id, promote);
+          } catch { /* list still shows active even if the write fails */ }
+        }
+      }
+      return res.json({ ok: true, batches: listed });
     }
 
     if (req.method === 'POST') {
@@ -175,6 +193,16 @@ export default async function handler(req, res) {
       for (const k of PATCHABLE) if (fields[k] !== undefined) data[k] = fields[k];
       if (Array.isArray(leads)) { data.leads = leads; Object.assign(data, countsFrom(leads)); }
       if (templates && typeof templates === 'object') data.templates = templates;
+      if (Array.isArray(leads) && fields.status === undefined) {
+        let prevStatus = 'draft';
+        try {
+          const existing = prisma.outreachBatch
+            ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true } })
+            : await fallbackGetRaw(String(id));
+          prevStatus = existing?.status || 'draft';
+        } catch { /* promote from the incoming leads anyway */ }
+        data.status = promoteStatus(prevStatus, leads);
+      }
       if (Object.keys(data).length === 0) return res.status(400).json({ error: 'no updatable fields provided' });
       let batch;
       try {
@@ -195,15 +223,15 @@ export default async function handler(req, res) {
       let existing;
       try {
         existing = prisma.outreachBatch
-          ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true } })
+          ? await prisma.outreachBatch.findUnique({ where: { id: String(id) }, select: { status: true, leads: true } })
           : await fallbackGetRaw(String(id));
       } catch (e) {
         if (!isMissingTable(e)) throw e;
         existing = await fallbackGetRaw(String(id));
       }
       if (!existing) return res.status(404).json({ error: 'Batch not found' });
-      if (existing.status === 'approved') {
-        return res.status(409).json({ error: 'This upload is already approved and linked to a running campaign — manage it from Campaigns instead of deleting it here.' });
+      if (existing.status === 'approved' || existing.status === 'active' || sentTouchCount(existing.leads) > 0) {
+        return res.status(409).json({ error: 'This upload is already sending — keep it as history instead of deleting it.' });
       }
       try {
         if (prisma.outreachBatch) await prisma.outreachBatch.delete({ where: { id: String(id) } });

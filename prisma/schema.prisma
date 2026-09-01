@@ -1016,7 +1016,7 @@ model OutreachBatch {
   id            String   @id @default(cuid())
   name          String
   fileName      String?
-  status        String   @default("draft")        // draft | approved
+  status        String   @default("draft")        // draft | active | approved
   columnMap     Json?                              // detected field -> source header, for display/edit
   leads         Json                               // full parsed rows incl. per-lead touches[{subject,body,sentAt?}], plus bounced/bouncedAt/bounceNote once flagged
   templates     Json?                              // EMAIL STEPS drafts, keyed by position: { "step0"/"step1"/"step2": {subject,body,label} }

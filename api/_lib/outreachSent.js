@@ -96,3 +96,21 @@ export const SENT_UNIQUE_HEADERS = [
   'email', 'org', 'contact', 'sport', 'city', 'state',
   'last_sent_at', 'last_touch', 'send_count', 'last_subject', 'bounced', 'batches',
 ];
+
+export function sentTouchCount(leads) {
+  return (leads || []).reduce((n, lead) => n + (lead.touches || []).filter(t => t?.sentAt).length, 0);
+}
+
+/** draft until the first email goes out, then active. approved stays approved. */
+export function effectiveBatchStatus(batch) {
+  const status = batch?.status || 'draft';
+  if (status === 'approved') return 'approved';
+  if (status === 'active' || sentTouchCount(batch?.leads) > 0) return 'active';
+  return 'draft';
+}
+
+export function promoteStatus(current, leads) {
+  if (current === 'approved') return 'approved';
+  if (sentTouchCount(leads) > 0) return 'active';
+  return current || 'draft';
+}
