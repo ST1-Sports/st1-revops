@@ -5,8 +5,8 @@
  * ?unique=1 (default) — one row per email, for pasting into a new sheet to dedupe
  * ?unique=0 — every sent touch
  */
-import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
 import {
   sentRowsFromBatches,
   uniqueSentByEmail,
@@ -14,24 +14,6 @@ import {
   SENT_ALL_HEADERS,
   SENT_UNIQUE_HEADERS,
 } from '../_lib/outreachSent.js';
-
-const FALLBACK_KEY = 'outreach_batches_v1';
-
-function isMissingTable(e) {
-  return e?.code === 'P2021' || e?.message?.includes('does not exist') || e?.message?.includes('outreachBatch');
-}
-
-async function loadBatches() {
-  try {
-    if (prisma.outreachBatch) {
-      return await prisma.outreachBatch.findMany({ orderBy: { createdAt: 'desc' } });
-    }
-  } catch (e) {
-    if (!isMissingTable(e)) throw e;
-  }
-  const row = await prisma.setting.findUnique({ where: { key: FALLBACK_KEY } }).catch(() => null);
-  return Array.isArray(row?.value?.batches) ? row.value.batches : [];
-}
 
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
@@ -41,7 +23,7 @@ export default async function handler(req, res) {
   try {
     const unique = String(req.query?.unique ?? '1') !== '0';
     const batchId = req.query?.batchId ? String(req.query.batchId) : '';
-    let batches = await loadBatches();
+    let batches = await loadAllOutreachBatches();
     if (batchId) batches = batches.filter(b => b.id === batchId);
     const rows = sentRowsFromBatches(batches);
     const out = unique ? uniqueSentByEmail(rows) : rows;

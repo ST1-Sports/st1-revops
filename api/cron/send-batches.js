@@ -18,6 +18,8 @@
  */
 
 import { prisma } from '../_lib/prisma.js';
+import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
+import { claimForEmail } from '../_lib/outreachSent.js';
 
 const APP_URL = process.env.APP_URL || "https://revops.st1sports.com";
 
@@ -173,6 +175,7 @@ export default async function handler(req, res) {
     let stoppedReason = "done";
     const batchLog = [];
     const errors = [];
+    const outreachBatches = await loadAllOutreachBatches().catch(() => []);
 
     outer: for (let ci = 0; ci < campaigns.length; ci++) {
       // Process every due batch for this campaign before moving to the next
@@ -261,6 +264,15 @@ export default async function handler(req, res) {
           if (!c?.email) {
             console.warn(`[cron] No contact data for ${contactId} in batch ${batchKey} — skipping`);
             continue;
+          }
+
+          if (camp.fromBrad) {
+            const owner = outreachBatches.find(b => b.campaignId === camp.id);
+            const claim = claimForEmail(outreachBatches, c.email);
+            if (claim && ((owner && claim.batchId !== owner.id) || (!owner && claim.batchId))) {
+              console.log(`[cron] Skipping ${c.email} in "${camp.name}" — earlier list "${claim.batchName}" owns this address`);
+              continue;
+            }
           }
 
           // Bulk-imported sequences (see src/pages/BulkOutreach.jsx) bake a

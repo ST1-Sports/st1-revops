@@ -45,6 +45,8 @@
  *      fire remaining Day 1 emails now (or one every 15 seconds) via
  *      api/agents/brad-send; later touches still use the cron. The batch
  *      record is marked approved + linked to the campaign and kept as history.
+ *   7. First Active/Approved upload owns each email. Later lists mark those
+ *      people heldForEarlier and drop them from Ready so they are not sent twice.
  */
 import { useState, useEffect, useMemo, useRef } from "react";
 
@@ -380,6 +382,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [bulkDraft, setBulkDraft] = useState(null); // {subject, body} — template applied to every eligible lead at once
   const [bulkDrafting, setBulkDrafting] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
+  const [showHeld, setShowHeld] = useState(false);
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
   const [committing, setCommitting] = useState(false);
@@ -473,8 +476,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // treatment as "needs a different channel" leads — so a bounced address
   // can never be picked up again by a bulk template apply, a manual SEND
   // NOW, or a future approve-and-schedule pass.
-  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced), [leads]);
-  const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !(l.sendable && l.email)), [leads]);
+  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced && !l.heldForEarlier), [leads]);
+  const heldLeads = useMemo(() => leads.filter(l => l.heldForEarlier), [leads]);
+  const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !l.heldForEarlier && !(l.sendable && l.email)), [leads]);
   // A skipped lead still has a real, valid email whenever the sheet had one
   // (the parser always keeps it if valid, regardless of sendable) — this is
   // the recovery path for a batch parsed before sendable stopped requiring
@@ -484,7 +488,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // that explicitly said Phone/Contact Form/etc. was correctly routed
   // there by the sheet itself and shouldn't be swept into email regardless
   // of whether a fallback address happens to be on file.
-  const canReclassifyToEmail = l => isValidEmail(l.email) && (!l.channel || l.channel.toLowerCase() === "unknown");
+  const canReclassifyToEmail = l => isValidEmail(l.email) && !l.heldForEarlier && (!l.channel || l.channel.toLowerCase() === "unknown");
   const reclassifiableSkipped = useMemo(() => skippedLeads.filter(canReclassifyToEmail), [skippedLeads]);
   const bouncedLeads = useMemo(() => leads.filter(l => l.bounced), [leads]);
   const bulkEligible = useMemo(() => sendableLeads.filter(l => l.touches.length < 3), [sendableLeads]);
@@ -761,7 +765,7 @@ Return JSON exactly as:
   const fireBradSend = async (lead, touchIdx) => {
     const live = leadsRef.current.find(l => l.id === lead.id) || lead;
     const touch = live.touches[touchIdx];
-    if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || !live.email || !touchHasCopy(touch)) {
+    if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || live.heldForEarlier || !live.email || !touchHasCopy(touch)) {
       return { skipped: true };
     }
     try {
@@ -770,10 +774,27 @@ Return JSON exactly as:
         body: JSON.stringify({
           contactEmail: live.email,
           contactName: (live.contactName && live.contactName !== "-") ? live.contactName : live.orgName,
-          subject: touch.subject, body: touch.body, contactId: live.id,
+          subject: touch.subject, body: touch.body, contactId: live.id, batchId,
         }),
       });
       const d = await r.json();
+      if (d.held || d.skipped) {
+        if (d.held) {
+          const updated = leadsRef.current.map(l => l.id === live.id
+            ? { ...l, sendable: false, heldForEarlier: true, heldByBatch: d.error || "earlier list" }
+            : l);
+          leadsRef.current = updated;
+          setLeads(updated);
+          if (batchId) {
+            fetch("/api/outreach/batches", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ id: batchId, leads: updated }),
+            }).catch(() => {});
+          }
+        }
+        return { skipped: true, held: !!d.held };
+      }
       if (!d.ok || !d.sent) return { ok: false, error: d.error || "Send failed" };
       await markTouchesSent([{ leadId: live.id, touchIdx, sentAt: new Date().toISOString() }]);
       return { ok: true };
@@ -793,6 +814,7 @@ Return JSON exactly as:
     setSendingKey(`${lead.id}-${touchIdx}`);
     const result = await fireBradSend(lead, touchIdx);
     if (result.ok) toast(`Sent to ${lead.email}`, "success");
+    else if (result.held) toast("Already on an earlier list — pulled off this send", "info");
     else if (!result.skipped) toast(result.error || "Send failed", "error");
     setSendingKey(null);
   };
@@ -1324,7 +1346,7 @@ Subject: <subject line, may include {{orgName}}>
             <OBtn onClick={startNewUpload} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
           </div>
           <div style={{ fontSize: 12, color: B.muted, marginBottom: 14, maxWidth: 720, lineHeight: 1.5 }}>
-            Download sent list is always in the top right — unique emails Brad already emailed, so the next sheet can skip them. A batch turns <b>Active</b> as soon as the first email goes out.
+            Download sent list is always in the top right — unique emails Brad already emailed, so the next sheet can skip them. A batch turns <b>Active</b> as soon as the first email goes out. The first Active or Approved upload keeps each address; later lists pull those people off Ready so they are not emailed twice.
           </div>
           {loadingList ? (
             <div style={{ textAlign: "center", padding: "50px 0", color: B.muted, fontSize: 13 }}>Loading…</div>
@@ -1347,6 +1369,7 @@ Subject: <subject line, may include {{orgName}}>
                       </div>
                       <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>
                         {sent > 0 ? <span style={{ color: B.orange, fontWeight: 600 }}>{sent} sent · </span> : null}
+                        {Number(b.heldCount) > 0 ? <span style={{ color: B.purple, fontWeight: 600 }}>{b.heldCount} on earlier list · </span> : null}
                         {b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}
                       </div>
                     </div>
@@ -1426,6 +1449,36 @@ Subject: <subject line, may include {{orgName}}>
               <div style={{ fontSize: 12, color: B.textMid }}>
                 <b style={{ color: B.orange }}>● Active</b> — Brad has sent {sentTouchCount} email{sentTouchCount !== 1 ? "s" : ""} from this list. It stays Active until you approve a schedule. Use <b>Download sent list</b> or <b>This batch</b> to export who already got mail.
               </div>
+            </div>
+          )}
+
+          {heldLeads.length > 0 && (
+            <div style={{ background: B.purpleBg, border: `1px solid ${B.purple}`, borderLeft: `6px solid ${B.purple}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: B.purple, marginBottom: 2 }}>
+                {heldLeads.length} ALREADY ON AN EARLIER LIST
+              </div>
+              <div style={{ fontSize: 11, color: B.textMid, marginBottom: 10 }}>
+                First upload keeps these addresses. They are off Ready and will not get another send from this list.
+              </div>
+              <button onClick={() => setShowHeld(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.purple, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                {showHeld ? "Hide names" : "Show names"}
+              </button>
+              {showHeld && (
+                <div style={{ marginTop: 10, maxHeight: 320, overflowY: "auto" }}>
+                  {heldLeads.map(l => (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${B.border}`, gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: B.text }}>{l.orgName || l.contactName || l.email}</div>
+                        <div style={{ fontSize: 11, color: B.muted }}>{l.email}</div>
+                      </div>
+                      <div style={{ fontSize: 10, color: B.purple, textAlign: "right", flexShrink: 0 }}>
+                        {l.heldByBatch ? `Kept by ${l.heldByBatch}` : "Kept by earlier list"}
+                        {l.touches?.some(t => t?.sentAt) ? <div style={{ color: B.muted, marginTop: 2 }}>already emailed here — no more touches</div> : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1569,6 +1622,11 @@ Subject: <subject line, may include {{orgName}}>
               <Lbl>NEEDS ANOTHER CHANNEL</Lbl>
               <div style={{ fontSize: 24, fontWeight: 700, color: B.yellow, marginTop: 4 }}>{skippedLeads.length}</div>
               <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>saved here, not auto-sent</div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl c={B.purple}>ON EARLIER LIST</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.purple, marginTop: 4 }}>{heldLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>first upload keeps them</div>
             </div>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
               <Lbl c={B.red}>BOUNCED</Lbl>

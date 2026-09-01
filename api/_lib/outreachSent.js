@@ -114,3 +114,80 @@ export function promoteStatus(current, leads) {
   if (sentTouchCount(leads) > 0) return 'active';
   return current || 'draft';
 }
+
+export function emailKey(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function leadWasSent(lead) {
+  return (lead?.touches || []).some(t => t?.sentAt);
+}
+
+function batchTime(batch) {
+  const t = new Date(batch?.createdAt || 0).getTime();
+  return Number.isFinite(t) ? t : 0;
+}
+
+/**
+ * First uploaded active/approved list owns each email. Later lists must not
+ * send to someone already on an earlier in-progress or completed send.
+ */
+export function claimedEmails(batches) {
+  const sorted = [...(batches || [])].sort((a, b) => batchTime(a) - batchTime(b) || String(a.id || '').localeCompare(String(b.id || '')));
+  const claims = new Map();
+  for (const batch of sorted) {
+    const status = effectiveBatchStatus(batch);
+    const inPlay = status === 'active' || status === 'approved';
+    for (const lead of batch.leads || []) {
+      const key = emailKey(lead.email);
+      if (!key || claims.has(key)) continue;
+      const sent = leadWasSent(lead);
+      const onActiveList = inPlay && lead.sendable !== false && !lead.bounced && !lead.heldForEarlier;
+      if (!sent && !onActiveList) continue;
+      claims.set(key, {
+        batchId: batch.id,
+        batchName: batch.name || '',
+        createdAt: batch.createdAt,
+        sent,
+      });
+    }
+  }
+  return claims;
+}
+
+export function claimForEmail(batches, email) {
+  return claimedEmails(batches).get(emailKey(email)) || null;
+}
+
+/** Pull later-list rows off the send queue when an earlier list already owns them. */
+export function applyFirstUploadHolds(leads, batchId, claims) {
+  let changed = 0;
+  const next = (leads || []).map(lead => {
+    const key = emailKey(lead.email);
+    const claim = key ? claims.get(key) : null;
+    const heldByOther = !!(claim && claim.batchId && claim.batchId !== batchId);
+    if (heldByOther) {
+      if (lead.heldForEarlier && lead.heldByBatchId === claim.batchId && lead.sendable === false) return lead;
+      changed += 1;
+      return {
+        ...lead,
+        sendable: false,
+        heldForEarlier: true,
+        heldByBatch: claim.batchName,
+        heldByBatchId: claim.batchId,
+      };
+    }
+    if (lead.heldForEarlier) {
+      changed += 1;
+      return {
+        ...lead,
+        heldForEarlier: false,
+        heldByBatch: null,
+        heldByBatchId: null,
+        sendable: !lead.bounced && !!key,
+      };
+    }
+    return lead;
+  });
+  return { leads: next, changed };
+}

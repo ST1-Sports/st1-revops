@@ -10,6 +10,8 @@
 
 import { setCors }        from '../_lib/cors.js'
 import { logInteraction } from '../_lib/memory.js'
+import { loadAllOutreachBatches } from '../_lib/outreachLoad.js'
+import { claimForEmail } from '../_lib/outreachSent.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '50kb' } } }
 
@@ -18,7 +20,7 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
-  const { contactEmail, contactName, subject, body, contactId } = req.body || {}
+  const { contactEmail, contactName, subject, body, contactId, batchId } = req.body || {}
   if (!contactEmail) return res.status(400).json({ error: 'contactEmail required' })
   if (!body)         return res.status(400).json({ error: 'body required' })
   if (process.env.BRAD_SENDING_ENABLED !== 'true') {
@@ -32,6 +34,17 @@ export default async function handler(req, res) {
   const baseUrl = `https://${req.headers.host}`
 
   try {
+    const claim = claimForEmail(await loadAllOutreachBatches(), contactEmail)
+    if (claim && claim.batchId && claim.batchId !== batchId) {
+      return res.status(409).json({
+        ok: false,
+        sent: false,
+        skipped: true,
+        held: true,
+        error: `Already on the earlier list "${claim.batchName}" — first upload keeps this address.`,
+      })
+    }
+
     const gmailRes = await fetch(`${baseUrl}/api/gmail`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

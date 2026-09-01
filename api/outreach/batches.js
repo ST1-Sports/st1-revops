@@ -12,7 +12,8 @@
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
-import { effectiveBatchStatus, promoteStatus, sentTouchCount } from '../_lib/outreachSent.js';
+import { applyFirstUploadHolds, claimedEmails, effectiveBatchStatus, promoteStatus, sentTouchCount } from '../_lib/outreachSent.js';
+import { saveOutreachBatchLeads } from '../_lib/outreachLoad.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '6mb' } } };
 
@@ -23,7 +24,7 @@ function isMissingTable(e) {
 }
 
 function countsFrom(leads) {
-  const sendable = leads.filter(l => l?.sendable && l?.email);
+  const sendable = leads.filter(l => l?.sendable && l?.email && !l.heldForEarlier && !l.bounced);
   return {
     totalCount: leads.length,
     sendableCount: sendable.length,
@@ -32,6 +33,13 @@ function countsFrom(leads) {
 }
 
 const PATCHABLE = ['name', 'status', 'columnMap', 'startDt', 'batchSize', 'touchGapDays', 'campaignId'];
+
+function applyHolds(batch, allBatches) {
+  if (!batch?.id) return { batch, changed: 0 };
+  const { leads, changed } = applyFirstUploadHolds(batch.leads, batch.id, claimedEmails(allBatches));
+  if (!changed) return { batch, changed: 0 };
+  return { batch: { ...batch, leads, ...countsFrom(leads) }, changed };
+}
 
 function listShape(batch) {
   const { leads, columnMap, templates, ...rest } = batch;
@@ -127,12 +135,27 @@ export default async function handler(req, res) {
           batch = await fallbackList(String(id));
         }
         if (!batch) return res.status(404).json({ error: 'Batch not found' });
+        let all;
+        try {
+          all = prisma.outreachBatch
+            ? await prisma.outreachBatch.findMany()
+            : await fallbackList();
+        } catch (e) {
+          if (!isMissingTable(e)) throw e;
+          all = await fallbackList();
+        }
+        const held = applyHolds(batch, (all || []).map(b => b.id === batch.id ? batch : b));
+        if (held.changed) {
+          await saveOutreachBatchLeads(batch.id, held.batch.leads, countsFrom(held.batch.leads));
+          batch = held.batch;
+        }
         return res.json({
           ok: true,
           batch: {
             ...batch,
             status: effectiveBatchStatus(batch),
             sentCount: sentTouchCount(batch.leads),
+            heldCount: (batch.leads || []).filter(l => l.heldForEarlier).length,
           },
         });
       }
@@ -145,16 +168,26 @@ export default async function handler(req, res) {
         if (!isMissingTable(e)) throw e;
         batches = await fallbackList();
       }
-      const listed = (batches || []).map(listShape);
-      for (const raw of batches || []) {
-        if (raw.status === 'draft' && effectiveBatchStatus(raw) === 'active' && raw.id) {
-          const promote = { status: 'active' };
+      const working = [...(batches || [])].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      for (const raw of working) {
+        const extra = {};
+        if (raw.status === 'draft' && effectiveBatchStatus(raw) === 'active') extra.status = 'active';
+        const held = applyHolds(raw, working);
+        if (held.changed) {
+          raw.leads = held.batch.leads;
+          Object.assign(raw, countsFrom(held.batch.leads));
+        }
+        if (held.changed || extra.status) {
           try {
-            if (prisma.outreachBatch) await prisma.outreachBatch.update({ where: { id: raw.id }, data: promote });
-            else await fallbackPatch(raw.id, promote);
-          } catch { /* list still shows active even if the write fails */ }
+            await saveOutreachBatchLeads(raw.id, raw.leads, { ...countsFrom(raw.leads), ...extra });
+            if (extra.status) raw.status = extra.status;
+          } catch { /* list still shows the computed status/holds */ }
         }
       }
+      const listed = (batches || []).map(listShape).map(b => ({
+        ...b,
+        heldCount: (working.find(w => w.id === b.id)?.leads || []).filter(l => l.heldForEarlier).length,
+      }));
       return res.json({ ok: true, batches: listed });
     }
 
@@ -183,6 +216,16 @@ export default async function handler(req, res) {
         if (!isMissingTable(e)) throw e;
         batch = await fallbackCreate({ name, fileName, columnMap, leads, templates, startDt, batchSize, touchGapDays, createdBy });
       }
+      try {
+        const all = prisma.outreachBatch
+          ? await prisma.outreachBatch.findMany()
+          : await fallbackList();
+        const held = applyHolds(batch, (all || []).map(b => b.id === batch.id ? batch : b));
+        if (held.changed) {
+          await saveOutreachBatchLeads(batch.id, held.batch.leads, countsFrom(held.batch.leads));
+          batch = held.batch;
+        }
+      } catch { /* new upload still returns; holds apply on next load */ }
       return res.json({ ok: true, batch });
     }
 
@@ -191,7 +234,19 @@ export default async function handler(req, res) {
       if (!id) return res.status(400).json({ error: 'id required' });
       const data = {};
       for (const k of PATCHABLE) if (fields[k] !== undefined) data[k] = fields[k];
-      if (Array.isArray(leads)) { data.leads = leads; Object.assign(data, countsFrom(leads)); }
+      if (Array.isArray(leads)) {
+        let heldLeads = leads;
+        try {
+          const all = prisma.outreachBatch
+            ? await prisma.outreachBatch.findMany()
+            : await fallbackList();
+          const preview = { id: String(id), leads, status: fields.status, createdAt: all?.find(b => b.id === id)?.createdAt };
+          const held = applyHolds(preview, (all || []).map(b => b.id === id ? preview : b));
+          heldLeads = held.batch.leads || leads;
+        } catch { /* save the posted leads; holds apply on next load */ }
+        data.leads = heldLeads;
+        Object.assign(data, countsFrom(heldLeads));
+      }
       if (templates && typeof templates === 'object') data.templates = templates;
       if (Array.isArray(leads) && fields.status === undefined) {
         let prevStatus = 'draft';
