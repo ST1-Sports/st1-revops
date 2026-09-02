@@ -22,6 +22,7 @@ import {
   userWantsNewCostSource,
   userWantsReprice,
 } from '../../src/lib/quoteLock.js'
+import { dealerCostOf, orderQuotePriceRows, productFamilyKey } from '../_lib/priceSearch.js'
 
 const COMP_PREFIX   = '__COMPETITOR__:'
 const API_KEY       = process.env.ANTHROPIC_KEY
@@ -42,22 +43,7 @@ function normalizePassedRates(rates) {
 }
 
 function preferSupplierRows(items, name) {
-  if (!name || !items?.length) return items || []
-  const n = String(name).toLowerCase()
-  const rank = it => {
-    const brand = String(it.brand || '').toLowerCase()
-    const sup = String(it.supplier?.name || '').toLowerCase()
-    return brand.includes(n) || sup.includes(n) ? 0 : 1
-  }
-  return [...items].sort((a, b) => {
-    const ra = rank(a)
-    const rb = rank(b)
-    if (ra !== rb) return ra - rb
-    const ca = Number(a.cost)
-    const cb = Number(b.cost)
-    if (Number.isFinite(ca) && Number.isFinite(cb) && ca !== cb) return ca - cb
-    return 0
-  })
+  return orderQuotePriceRows(items, { preferredSupplier: name || null })
 }
 
 // ── Price data ────────────────────────────────────────────────────────────────
@@ -134,8 +120,11 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
   if (matchedItems.length === 0) {
     priceSection += '(no close matches in the dealer price lists — do not invent a price)\n'
   } else {
+    const topKey = productFamilyKey(matchedItems[0])
+    const bestCost = dealerCostOf(matchedItems[0])
     for (const item of matchedItems) {
-      priceSection += formatItem(item, item.supplier?.name)
+      const best = topKey && productFamilyKey(item) === topKey && dealerCostOf(item) === bestCost
+      priceSection += formatItem(item, item.supplier?.name, { best })
     }
   }
 
@@ -170,6 +159,7 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
 3. Standard price = "Our list price" — already reviewed by Matt. Use it as your default when he has not named a program/override price.
 4. Quantity discounts: only if cost is known; stay above GM floor unless Matt named a price.
 5. Not found: respond "Not in current price list — Matt will confirm pricing."
+6. Same model and size on more than one dealer list (Athletic Connection, Spalding, Frazier-style uploads, or any later list): use the lowest dealer cost, marked BEST DEALER COST. Only use a higher-cost list if Matt named that supplier.
 
 === RESPONSE FORMAT ===
 Return valid JSON only (no prose outside the JSON):
@@ -200,7 +190,7 @@ Return valid JSON only (no prose outside the JSON):
   return `${intro}${priceSection}${compSection}${acctSection}${memSection}${heldSection}${rules}`
 }
 
-function formatItem(item, supplierName) {
+function formatItem(item, supplierName, { best = false } = {}) {
   const cost     = dec(item.cost)
   const ourPrice = dec(item.ourPrice)
   const map      = dec(item.map)
@@ -217,6 +207,7 @@ function formatItem(item, supplierName) {
   if (ourPrice != null) line += ` | list $${ourPrice.toFixed(2)}`
   if (map != null)      line += ` | MAP $${map.toFixed(2)}`
   line += ` | GM floor ${Math.round(floor * 100)}%`
+  if (best)             line += ' | BEST DEALER COST'
   return line + '\n'
 }
 

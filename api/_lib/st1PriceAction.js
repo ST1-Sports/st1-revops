@@ -1,3 +1,17 @@
+import { vendorRatesFor } from './priceSearch.js';
+
+function vendorRatesFromPricing(p) {
+  if (Array.isArray(p.vendorRates) && p.vendorRates.length) return p.vendorRates;
+  const winner = {
+    name: p.name,
+    sku: p.sku,
+    brand: p.brand,
+    cost: p.cost?.amount ?? p.cost ?? null,
+    supplier: p.supplier,
+  };
+  return vendorRatesFor([winner, ...(p.matches || [])], winner);
+}
+
 /** Compact Scout price-card payload from a get_st1_pricing tool result. */
 export function st1PriceActionFromPricing(output) {
   const p = output?.result;
@@ -19,6 +33,7 @@ export function st1PriceActionFromPricing(output) {
       source: p.customerPrice?.source || p.cost?.source || 'ST1 price list',
     },
     matches: Array.isArray(p.matches) ? p.matches : [],
+    vendorRates: vendorRatesFromPricing(p),
   };
 }
 

@@ -1,6 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { tokenizePriceQuery, rankPriceItems, scorePriceItem, pickBestRate } from './priceSearch.js';
+import {
+  tokenizePriceQuery,
+  rankPriceItems,
+  scorePriceItem,
+  pickBestRate,
+  productFamilyKey,
+  vendorRatesFor,
+  orderQuotePriceRows,
+} from './priceSearch.js';
 
 describe('tokenizePriceQuery', () => {
   it('keeps TF-5000 as a model and does not search generic ball/soccer', () => {
@@ -75,6 +83,56 @@ describe('rankPriceItems', () => {
       { score: 390, item: { id: 'lo', sku: 'AC-1457055', name: 'TF-1000 28.5 Booking', cost: 58 } },
     ]);
     assert.equal(ranked[0].item.id, 'lo');
+  });
+
+  it('picks the lowest dealer cost across vendors for the same model and size', () => {
+    const ac = { id: 'ac', sku: 'AC-1457055', name: 'Spalding Legacy TF-1000 NFHS 28.5 Girls', brand: 'Spalding', supplier: { name: 'Athletic Connection' }, cost: 99.99 };
+    const frazier = { id: 'frz', sku: 'FRZ-TF1000-285', name: 'Legacy TF-1000 NFHS 28.5 Girls Basketball', brand: 'Spalding', supplier: { name: 'Frazier' }, cost: 53 };
+    const men = { id: 'men', sku: 'AC-1457056', name: 'Spalding Legacy TF-1000 NFHS 29.5 Boys', brand: 'Spalding', supplier: { name: 'Athletic Connection' }, cost: 40 };
+    assert.equal(productFamilyKey(ac), productFamilyKey(frazier));
+    assert.notEqual(productFamilyKey(ac), productFamilyKey(men));
+
+    const ranked = rankPriceItems([ac, frazier, men], 'Legacy TF-1000 NFHS 28.5 girls basketball');
+    assert.equal(ranked[0].item.id, 'frz');
+
+    const rates = vendorRatesFor([ac, frazier, men], ranked[0].item);
+    assert.deepEqual(rates.map(r => r.supplier), ['Frazier', 'Athletic Connection']);
+    assert.equal(rates[0].best, true);
+    assert.equal(rates[0].cost, 53);
+    assert.equal(rates[1].best, false);
+  });
+
+  it('does not merge Precision with Legacy or NFHS with a cheaper uncertified SKU', () => {
+    const legacyAc = { id: 'ac', sku: 'AC-1457055', name: 'LEGACY TF-1000 NFHS 28.5"', cost: 99.99, supplier: { name: 'Athletic Connection 2026' } };
+    const legacySp = { id: 'sp-nfhs', sku: 'IN.76814', name: 'LEGACY TF-1000 28.5" NFHS (Box/Inflate)', cost: 77.17, supplier: { name: 'Spalding 2026' } };
+    const precision = { id: 'prec', sku: 'DE.780168', name: 'PRECISION TF-1000 28.5" (Bulk Deflate)', cost: 55.79, supplier: { name: 'Spalding 2026' } };
+    const bulk = { id: 'bulk', sku: 'DE.768148', name: 'LEGACY TF-1000 28.5" NFHS (Bulk Deflate)', cost: 75.66, supplier: { name: 'Spalding 2026' } };
+    assert.notEqual(productFamilyKey(legacyAc), productFamilyKey(precision));
+    assert.equal(productFamilyKey(legacyAc), productFamilyKey(legacySp));
+    assert.equal(productFamilyKey(legacyAc), productFamilyKey(bulk));
+
+    const ranked = rankPriceItems([legacyAc, legacySp, precision, bulk], 'Legacy TF-1000 NFHS 28.5');
+    assert.equal(ranked[0].item.id, 'bulk');
+    const rates = vendorRatesFor([legacyAc, legacySp, precision, bulk], ranked[0].item);
+    assert.deepEqual(rates.map(r => `${r.supplier}:${r.cost}`), ['Spalding 2026:75.66', 'Athletic Connection 2026:99.99']);
+  });
+
+  it('does not treat a vendor catalog SKU as the product family', () => {
+    const named = { name: 'Spalding TF-1000 Classic 28.5', sku: 'AC-1457055', brand: 'Spalding' };
+    const skuOnly = { name: 'Official Rubber Basketball 28.5', sku: 'AC-1457055', brand: 'Generic' };
+    assert.equal(productFamilyKey(named).startsWith('fam:tf1000'), true);
+    assert.equal(productFamilyKey(skuOnly).startsWith('sku:'), true);
+  });
+
+  it('uses a named supplier even when another list is cheaper', () => {
+    const items = [
+      { id: 'frz', name: 'TF-1000 28.5', sku: 'FRZ-1', brand: 'Spalding', supplier: { name: 'Frazier' }, cost: 53 },
+      { id: 'sp', name: 'TF-1000 28.5', sku: 'SP-1', brand: 'Spalding', supplier: { name: 'Spalding' }, cost: 71.2 },
+    ];
+    const cheapest = orderQuotePriceRows(items);
+    assert.equal(cheapest[0].id, 'frz');
+    const named = orderQuotePriceRows(items, { preferredSupplier: 'Spalding' });
+    assert.equal(named[0].id, 'sp');
   });
 
   it('scores a model hit well above a generic-only name', () => {

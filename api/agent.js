@@ -662,7 +662,8 @@ USE propose_create_campaign_sequence when:
 
 USE get_st1_pricing (fast — default for price questions) when:
 - User asks cost, list, MAP, "how much", "what's our price", or names a model/SKU without asking to quote a school
-- After it returns, write 1-2 short sentences only. Do not paste markdown tables or cost dumps — the UI shows the price card. Offer to quote if they name a school.
+- The tool compares every dealer list we have for the same model/size (Athletic Connection, Spalding, Frazier-style uploads, and later lists). The cost on the card is the lowest unless they named a supplier.
+- After it returns, write 1-2 short sentences only. If more than one list has the item, name the winning list and its cost. Do not paste markdown tables or cost dumps — the UI shows the vendor-cost card. Offer to quote if they name a school.
 - If not found, then ask for a SKU or a more specific name
 
 USE call_edgar (formal quotes only) when:
