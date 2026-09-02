@@ -12,7 +12,7 @@
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
-import { applyFirstUploadHolds, claimedEmails, effectiveBatchStatus, promoteStatus, sentTouchCount } from '../_lib/outreachSent.js';
+import { applyFirstUploadHolds, claimedEmails, effectiveBatchStatus, promoteStatus, sentRowsFromBatches, sentTouchCount, uniqueSentByEmail } from '../_lib/outreachSent.js';
 import { saveOutreachBatchLeads } from '../_lib/outreachLoad.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '6mb' } } };
@@ -188,7 +188,11 @@ export default async function handler(req, res) {
         ...b,
         heldCount: (working.find(w => w.id === b.id)?.leads || []).filter(l => l.heldForEarlier).length,
       }));
-      return res.json({ ok: true, batches: listed });
+      return res.json({
+        ok: true,
+        batches: listed,
+        uniqueSentCount: uniqueSentByEmail(sentRowsFromBatches(working)).length,
+      });
     }
 
     if (req.method === 'POST') {

@@ -59,6 +59,18 @@ describe('sentRowsFromBatches', () => {
     assert.equal(rows.some(r => r.email === 'skip@example.com'), false);
   });
 
+  it('never includes a row that has not actually been emailed', () => {
+    const rows = sentRowsFromBatches([{
+      name: 'Open list',
+      leads: [
+        { email: 'queued@school.org', orgName: 'Queued', touches: [{ subject: 'Hi', sentAt: true }] },
+        { email: 'blank@school.org', orgName: 'Blank', touches: [{ subject: 'Hi', sentAt: '' }] },
+        { email: 'real@school.org', orgName: 'Real', touches: [{ subject: 'Hi', sentAt: '2026-09-02T12:00:00.000Z' }] },
+      ],
+    }]);
+    assert.deepEqual(rows.map(r => r.email), ['real@school.org']);
+  });
+
   it('collapses to one email for a new-sheet dedupe', () => {
     const uniq = uniqueSentByEmail(sentRowsFromBatches(batches));
     assert.equal(uniq.length, 1);

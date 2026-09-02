@@ -49,6 +49,7 @@
  *      people heldForEarlier and drop them from Ready so they are not sent twice.
  */
 import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -359,8 +360,12 @@ const STATUS_BADGE = {
 };
 
 export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
-  const [screen, setScreen] = useState("list"); // list | review
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlBatch = searchParams.get("batch") || "";
+  const urlNew = searchParams.has("new");
+  const [screen, setScreen] = useState(urlBatch || urlNew ? "review" : "list"); // list | review
   const [batches, setBatches] = useState([]);
+  const [uniqueSentCount, setUniqueSentCount] = useState(0);
   const [loadingList, setLoadingList] = useState(true);
 
   const [batchId, setBatchId] = useState(null);
@@ -406,10 +411,16 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       const r = await fetch("/api/outreach/batches");
       const d = await r.json();
       setBatches(d.batches || []);
+      if (Number.isFinite(Number(d.uniqueSentCount))) setUniqueSentCount(Number(d.uniqueSentCount));
     } catch (e) { toast(`Couldn't load outreach batches: ${e.message}`, "error"); }
     setLoadingList(false);
   };
   useEffect(() => { loadList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const emailedLeads = useMemo(
+    () => leads.filter(l => (l.touches || []).some(t => t?.sentAt && !Number.isNaN(Date.parse(t.sentAt)))),
+    [leads]
+  );
 
   const exportSentCsv = async (unique = true, onlyBatchId = null) => {
     setExportingSent(true);
@@ -435,8 +446,8 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       a.remove();
       URL.revokeObjectURL(url);
       toast(unique
-        ? `Downloaded ${n || ""} unique emails Brad already sent — use this to skip them on the next sheet`
-        : `Downloaded ${n || ""} sent emails`, "success");
+        ? `Downloaded ${n || "0"} emails that already got mail${onlyBatchId ? " from this list" : ""}`
+        : `Downloaded ${n || "0"} sent emails`, "success");
     } catch (e) {
       toast(`Couldn't export the sent list: ${e.message}`, "error");
     }
@@ -539,6 +550,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   }, [leads, templates, campaignName, startDt, batchSize, touchGapDays, batchStatus]);
 
   const openBatch = async (id) => {
+    if (!id) return;
     try {
       const r = await fetch(`/api/outreach/batches?id=${encodeURIComponent(id)}`);
       const d = await r.json();
@@ -570,7 +582,37 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     setScreen("review");
   };
 
-  const backToList = () => { setScreen("list"); loadList(); };
+  const backToList = () => {
+    setSearchParams({});
+    setScreen("list");
+    setBatchId(null);
+    setLinkedCampaignId(null);
+    setLeads([]);
+    setPhase("upload");
+    loadList();
+  };
+
+  useEffect(() => {
+    if (urlBatch) {
+      if (batchId === urlBatch && screen === "review") return;
+      openBatch(urlBatch);
+      return;
+    }
+    if (urlNew) {
+      if (screen === "review" && !batchId) return;
+      startNewUpload();
+      return;
+    }
+    if (screen !== "list" || batchId) {
+      setScreen("list");
+      setBatchId(null);
+      setLinkedCampaignId(null);
+      setLeads([]);
+      setPhase("upload");
+      loadList();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlBatch, urlNew]);
 
   const handleFile = async (e) => {
     const file = e.target.files[0]; if (!file) return;
@@ -690,8 +732,9 @@ Return JSON exactly as:
       setBatchId(created.batch.id);
       setBatchStatus("draft");
       setCampaignName(nm);
-      setLeads(parsed);
+      setLeads(created.batch.leads || parsed);
       setPhase("ready");
+      setSearchParams({ batch: created.batch.id });
     } catch (err) {
       toast(`Import error: ${err.message}`, "error");
       setPhase("upload");
@@ -1326,27 +1369,38 @@ Subject: <subject line, may include {{orgName}}>
           <div style={{ fontSize: 12, color: B.muted, marginTop: 2 }}>Upload a cold-outreach spreadsheet, review the schedule, approve — Brad sends it from here.</div>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <OBtn onClick={() => exportSentCsv(true)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 11 }}>
-            {exportingSent ? "DOWNLOADING…" : "⬇ DOWNLOAD SENT LIST"}
-          </OBtn>
-          <GBtn onClick={() => exportSentCsv(false)} disabled={exportingSent}>ALL SENDS</GBtn>
-          {screen === "review" && phase === "ready" && sentTouchCount > 0 && (
-            <GBtn onClick={() => exportSentCsv(true, batchId)} disabled={exportingSent}>THIS BATCH</GBtn>
+          {screen === "list" && (
+            <>
+              <OBtn onClick={() => exportSentCsv(true)} disabled={exportingSent || uniqueSentCount === 0} style={{ padding: "10px 16px", fontSize: 11 }}>
+                {exportingSent ? "DOWNLOADING…" : `⬇ ${uniqueSentCount || ""} ALREADY EMAILED`}
+              </OBtn>
+              <GBtn onClick={() => exportSentCsv(false)} disabled={exportingSent || uniqueSentCount === 0}>Every send</GBtn>
+            </>
+          )}
+          {screen === "review" && phase === "ready" && emailedLeads.length > 0 && (
+            <OBtn onClick={() => exportSentCsv(true, batchId)} disabled={exportingSent} style={{ padding: "10px 16px", fontSize: 11 }}>
+              {exportingSent ? "DOWNLOADING…" : `⬇ ${emailedLeads.length} ALREADY EMAILED`}
+            </OBtn>
           )}
           {screen === "review" && phase === "ready" && canDelete && (
             <GBtn onClick={deleteCurrentBatch} style={{ color: B.red, borderColor: `${B.red}60` }}>DELETE THIS UPLOAD</GBtn>
           )}
-          {screen === "review" && <GBtn onClick={backToList}>← Back to all uploads</GBtn>}
         </div>
       </div>
+
+      {screen === "review" && (
+        <button onClick={backToList} style={{ display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 16, background: "none", border: "none", padding: 0, fontSize: 13, fontWeight: 600, color: B.orange, cursor: "pointer" }}>
+          ← Back to Bulk Outreach
+        </button>
+      )}
 
       {screen === "list" && (
         <>
           <div style={{ marginBottom: 12 }}>
-            <OBtn onClick={startNewUpload} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
+            <OBtn onClick={() => setSearchParams({ new: "1" })} style={{ padding: "10px 20px", fontSize: 12 }}>⬆ UPLOAD NEW SHEET</OBtn>
           </div>
           <div style={{ fontSize: 12, color: B.muted, marginBottom: 14, maxWidth: 720, lineHeight: 1.5 }}>
-            Download sent list is always in the top right — unique emails Brad already emailed, so the next sheet can skip them. A batch turns <b>Active</b> as soon as the first email goes out. The first Active or Approved upload keeps each address; later lists pull those people off Ready so they are not emailed twice.
+            <b>Already emailed</b> in the top right is only people Brad actually sent — not the rest of the sheet. Use that list to clean the next upload. A batch turns <b>Active</b> as soon as the first email goes out. The first Active or Approved upload keeps each address; later lists pull those people off Ready so they are not emailed twice.
           </div>
           {loadingList ? (
             <div style={{ textAlign: "center", padding: "50px 0", color: B.muted, fontSize: 13 }}>Loading…</div>
@@ -1361,7 +1415,7 @@ Subject: <subject line, may include {{orgName}}>
                 const sent = Number(b.sentCount) || 0;
                 const locked = b.status === "approved" || b.status === "active" || sent > 0;
                 return (
-                  <div key={b.id} onClick={() => openBatch(b.id)} style={{ padding: "13px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", borderBottom: `1px solid ${B.border}` }}>
+                  <div key={b.id} onClick={() => setSearchParams({ batch: b.id })} style={{ padding: "13px 18px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", borderBottom: `1px solid ${B.border}` }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{b.name}</span>
@@ -1836,14 +1890,14 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          {!isApproved && (
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <GBtn onClick={backToList}>Save for later</GBtn>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+            <GBtn onClick={backToList}>← Back to Bulk Outreach</GBtn>
+            {!isApproved && (
               <OBtn onClick={approveAndSchedule} disabled={committing || !sendableLeads.length} style={{ padding: "10px 22px", fontSize: 12 }}>
                 {committing ? "SCHEDULING…" : "✓ APPROVE & SCHEDULE"}
               </OBtn>
-            </div>
-          )}
+            )}
+          </div>
         </>
       )}
     </div>

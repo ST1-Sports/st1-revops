@@ -14,12 +14,21 @@ export function toCsv(headers, rows) {
   return `${lines.join('\n')}\n`;
 }
 
+/** True only when a touch actually went out — not a draft, flag, or scheduled slot. */
+export function isRealSentAt(value) {
+  if (value == null || value === false) return false;
+  const s = String(value).trim();
+  if (!s || s === 'true' || s === '1' || s === 'yes') return false;
+  const t = Date.parse(s);
+  return Number.isFinite(t);
+}
+
 export function sentRowsFromBatches(batches) {
   const rows = [];
   for (const batch of batches || []) {
     for (const lead of batch.leads || []) {
       for (const [i, touch] of (lead.touches || []).entries()) {
-        if (!touch?.sentAt) continue;
+        if (!isRealSentAt(touch?.sentAt)) continue;
         rows.push({
           email: String(lead.email || '').trim(),
           email_key: String(lead.email || '').trim().toLowerCase(),
@@ -48,7 +57,7 @@ export function sentRowsFromBatches(batches) {
 export function uniqueSentByEmail(rows) {
   const byEmail = new Map();
   for (const row of rows) {
-    if (!row.email_key) continue;
+    if (!row.email_key || !isRealSentAt(row.sent_at)) continue;
     const prev = byEmail.get(row.email_key);
     if (!prev) {
       byEmail.set(row.email_key, {
