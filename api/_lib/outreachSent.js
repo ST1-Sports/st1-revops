@@ -128,6 +128,60 @@ export function emailKey(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+export function leadStoppedAuto(lead) {
+  return !!(lead?.positiveIntent || lead?.manualFollowUp);
+}
+
+export function leadOutcome(lead) {
+  if (lead?.positiveIntent) return 'intent';
+  if (lead?.manualFollowUp) return 'manual';
+  return null;
+}
+
+/** Pull a person off automated follow-ups. Intent and manual replace each other. */
+export function applyLeadOutcome(lead, outcome) {
+  const now = new Date().toISOString();
+  if (outcome === 'intent') {
+    return {
+      ...lead,
+      positiveIntent: true,
+      positiveIntentAt: lead?.positiveIntentAt || now,
+      manualFollowUp: false,
+      manualFollowUpAt: null,
+    };
+  }
+  if (outcome === 'manual') {
+    return {
+      ...lead,
+      manualFollowUp: true,
+      manualFollowUpAt: lead?.manualFollowUpAt || now,
+      manualFollowUpNote: lead?.manualFollowUpNote || null,
+      positiveIntent: false,
+      positiveIntentAt: null,
+    };
+  }
+  return {
+    ...lead,
+    positiveIntent: false,
+    positiveIntentAt: null,
+    manualFollowUp: false,
+    manualFollowUpAt: null,
+  };
+}
+
+export function stoppedLeadForEmail(batches, email, batchId) {
+  const key = emailKey(email);
+  if (!key) return null;
+  const pool = batchId ? (batches || []).filter(b => b.id === batchId) : (batches || []);
+  for (const batch of pool) {
+    for (const lead of batch.leads || []) {
+      if (emailKey(lead.email) !== key || !leadStoppedAuto(lead)) continue;
+      return { outcome: leadOutcome(lead), batchName: batch.name || '', batchId: batch.id };
+    }
+  }
+  return null;
+}
+
 function leadWasSent(lead) {
   return (lead?.touches || []).some(t => t?.sentAt);
 }

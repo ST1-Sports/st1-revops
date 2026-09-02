@@ -24,7 +24,7 @@ function isMissingTable(e) {
 }
 
 function countsFrom(leads) {
-  const sendable = leads.filter(l => l?.sendable && l?.email && !l.heldForEarlier && !l.bounced);
+  const sendable = leads.filter(l => l?.sendable && l?.email && !l.heldForEarlier && !l.bounced && !l.positiveIntent && !l.manualFollowUp);
   return {
     totalCount: leads.length,
     sendableCount: sendable.length,
@@ -156,6 +156,8 @@ export default async function handler(req, res) {
             status: effectiveBatchStatus(batch),
             sentCount: sentTouchCount(batch.leads),
             heldCount: (batch.leads || []).filter(l => l.heldForEarlier).length,
+            intentCount: (batch.leads || []).filter(l => l.positiveIntent).length,
+            manualCount: (batch.leads || []).filter(l => l.manualFollowUp).length,
           },
         });
       }
@@ -187,6 +189,8 @@ export default async function handler(req, res) {
       const listed = (batches || []).map(listShape).map(b => ({
         ...b,
         heldCount: (working.find(w => w.id === b.id)?.leads || []).filter(l => l.heldForEarlier).length,
+        intentCount: (working.find(w => w.id === b.id)?.leads || []).filter(l => l.positiveIntent).length,
+        manualCount: (working.find(w => w.id === b.id)?.leads || []).filter(l => l.manualFollowUp).length,
       }));
       return res.json({
         ok: true,

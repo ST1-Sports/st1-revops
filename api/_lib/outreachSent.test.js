@@ -9,6 +9,9 @@ import {
   effectiveBatchStatus,
   claimedEmails,
   applyFirstUploadHolds,
+  applyLeadOutcome,
+  leadStoppedAuto,
+  stoppedLeadForEmail,
 } from './outreachSent.js';
 
 describe('sentRowsFromBatches', () => {
@@ -184,6 +187,32 @@ describe('first-upload priority', () => {
     assert.equal(changed, 1);
     assert.equal(leads[0].heldForEarlier, false);
     assert.equal(leads[0].sendable, true);
+  });
+});
+
+describe('lead outcomes', () => {
+  it('stops automated follow-ups for intent and manual, and clears them', () => {
+    const lead = { email: 'ad@lincoln.k12.ia.us', sendable: true, touches: [{ sentAt: '2026-09-01T12:00:00.000Z' }, { subject: 'Follow' }] };
+    const intent = applyLeadOutcome(lead, 'intent');
+    assert.equal(intent.positiveIntent, true);
+    assert.equal(intent.manualFollowUp, false);
+    assert.equal(leadStoppedAuto(intent), true);
+    const manual = applyLeadOutcome(intent, 'manual');
+    assert.equal(manual.manualFollowUp, true);
+    assert.equal(manual.positiveIntent, false);
+    const cleared = applyLeadOutcome(manual, null);
+    assert.equal(leadStoppedAuto(cleared), false);
+  });
+
+  it('finds a stopped lead on a batch so send paths can skip them', () => {
+    const batches = [{
+      id: 'hoops',
+      name: 'Basketball 500',
+      leads: [{ email: 'ad@lincoln.k12.ia.us', positiveIntent: true }],
+    }];
+    const hit = stoppedLeadForEmail(batches, 'AD@lincoln.k12.ia.us', 'hoops');
+    assert.equal(hit.outcome, 'intent');
+    assert.equal(stoppedLeadForEmail(batches, 'other@x.com', 'hoops'), null);
   });
 });
 

@@ -11,7 +11,7 @@
 import { setCors }        from '../_lib/cors.js'
 import { logInteraction } from '../_lib/memory.js'
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js'
-import { claimForEmail } from '../_lib/outreachSent.js'
+import { claimForEmail, stoppedLeadForEmail } from '../_lib/outreachSent.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '50kb' } } }
 
@@ -34,7 +34,20 @@ export default async function handler(req, res) {
   const baseUrl = `https://${req.headers.host}`
 
   try {
-    const claim = claimForEmail(await loadAllOutreachBatches(), contactEmail)
+    const batches = await loadAllOutreachBatches()
+    const stopped = stoppedLeadForEmail(batches, contactEmail, batchId)
+    if (stopped) {
+      return res.status(409).json({
+        ok: false,
+        sent: false,
+        skipped: true,
+        outcome: stopped.outcome,
+        error: stopped.outcome === 'intent'
+          ? 'Marked as positive intent — no more automated emails.'
+          : 'Marked for manual follow-up — no more automated emails.',
+      })
+    }
+    const claim = claimForEmail(batches, contactEmail)
     if (claim && claim.batchId && claim.batchId !== batchId) {
       return res.status(409).json({
         ok: false,

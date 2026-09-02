@@ -19,7 +19,7 @@
 
 import { prisma } from '../_lib/prisma.js';
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
-import { claimForEmail } from '../_lib/outreachSent.js';
+import { claimForEmail, leadStoppedAuto } from '../_lib/outreachSent.js';
 
 const APP_URL = process.env.APP_URL || "https://revops.st1sports.com";
 
@@ -257,7 +257,7 @@ export default async function handler(req, res) {
           const enroll = updEnr.find(e => e.contactId === contactId);
           if (!enroll) continue;
           if (!forceResend && enroll.step !== touchIdx) continue;
-          if (enroll.status === "interested") continue;
+          if (enroll.status === "interested" || enroll.status === "manual") continue;
           if ((enroll.sentSteps || []).includes(touchIdx)) continue;
 
           const c = batchContacts[contactId] || contactMap[contactId];
@@ -271,6 +271,11 @@ export default async function handler(req, res) {
             const claim = claimForEmail(outreachBatches, c.email);
             if (claim && ((owner && claim.batchId !== owner.id) || (!owner && claim.batchId))) {
               console.log(`[cron] Skipping ${c.email} in "${camp.name}" — earlier list "${claim.batchName}" owns this address`);
+              continue;
+            }
+            const outreachLead = (owner?.leads || []).find(l => String(l.email || '').trim().toLowerCase() === String(c.email || '').trim().toLowerCase());
+            if (leadStoppedAuto(outreachLead)) {
+              console.log(`[cron] Skipping ${c.email} in "${camp.name}" — ${outreachLead.positiveIntent ? 'positive intent' : 'manual follow-up'}`);
               continue;
             }
           }

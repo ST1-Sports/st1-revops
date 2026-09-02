@@ -47,9 +47,13 @@
  *      record is marked approved + linked to the campaign and kept as history.
  *   7. First Active/Approved upload owns each email. Later lists mark those
  *      people heldForEarlier and drop them from Ready so they are not sent twice.
+ *   8. A person can be marked Positive Intent (they engaged — no Email 2/3)
+ *      or Manual Follow-up (we know them / will handle it). Both stay on the
+ *      list as history but drop off GO, Send now, and the cron.
  */
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
+import { applyLeadOutcome, leadStoppedAuto } from "../../api/_lib/outreachSent.js";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -146,7 +150,7 @@ const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim
 // firing the literal unfilled-in placeholder copy as a real send.
 const isPlaceholderCopy = text => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
 const touchHasCopy = t => !!(t && String(t.subject || "").trim() && String(t.body || "").trim() && !isPlaceholderCopy(t.body));
-const isDay1Pending = (lead, isTouchSent) => !!(lead.sendable && lead.email && !lead.bounced && touchHasCopy(lead.touches?.[0]) && !isTouchSent(lead, 0));
+const isDay1Pending = (lead, isTouchSent) => !!(lead.sendable && lead.email && !lead.bounced && !leadStoppedAuto(lead) && touchHasCopy(lead.touches?.[0]) && !isTouchSent(lead, 0));
 async function sleepAbortable(ms, aborted, onTick) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -191,7 +195,7 @@ async function aiCall(prompt, opts = {}) {
 // authored for touch index t are included at that step — a lead with only
 // one email written simply never appears in touch 1/2's batches.
 function buildOutreachSchedule(campId, leads, { startMs, batchSize, touchGapDays }) {
-  const sendable = leads.filter(l => l.sendable && l.email);
+  const sendable = leads.filter(l => l.sendable && l.email && !leadStoppedAuto(l));
   const maxTouches = Math.max(1, ...sendable.map(l => l.touches.length));
   const scheduledBatches = {};
   const perLeadDates = {};
@@ -388,6 +392,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [bulkDrafting, setBulkDrafting] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
   const [showHeld, setShowHeld] = useState(false);
+  const [showIntent, setShowIntent] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const [leadQuery, setLeadQuery] = useState("");
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
   const [committing, setCommitting] = useState(false);
@@ -487,9 +494,11 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // treatment as "needs a different channel" leads — so a bounced address
   // can never be picked up again by a bulk template apply, a manual SEND
   // NOW, or a future approve-and-schedule pass.
-  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced && !l.heldForEarlier), [leads]);
+  const sendableLeads = useMemo(() => leads.filter(l => l.sendable && l.email && !l.bounced && !l.heldForEarlier && !leadStoppedAuto(l)), [leads]);
   const heldLeads = useMemo(() => leads.filter(l => l.heldForEarlier), [leads]);
-  const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !l.heldForEarlier && !(l.sendable && l.email)), [leads]);
+  const intentLeads = useMemo(() => leads.filter(l => l.positiveIntent), [leads]);
+  const manualLeads = useMemo(() => leads.filter(l => l.manualFollowUp), [leads]);
+  const skippedLeads = useMemo(() => leads.filter(l => !l.bounced && !l.heldForEarlier && !leadStoppedAuto(l) && !(l.sendable && l.email)), [leads]);
   // A skipped lead still has a real, valid email whenever the sheet had one
   // (the parser always keeps it if valid, regardless of sendable) — this is
   // the recovery path for a batch parsed before sendable stopped requiring
@@ -509,6 +518,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   // construction (that's the only kind of lead that can bounce), so this is
   // sendableLeads plus bounced ones, in one pass.
   const visibleLeads = useMemo(() => leads.filter(l => l.sendable && l.email), [leads]);
+  const filteredVisibleLeads = useMemo(() => {
+    const q = leadQuery.trim().toLowerCase();
+    if (!q) return visibleLeads;
+    return visibleLeads.filter(l => [l.orgName, l.contactName, l.email, l.city, l.sport, l.state]
+      .some(v => String(v || "").toLowerCase().includes(q)));
+  }, [visibleLeads, leadQuery]);
   // Every touch position that exists across sendableLeads right now — [0],
   // [0,1], or [0,1,2] — drives the EMAIL STEPS panel below (EMAIL 1/2/3).
   const stepIndices = useMemo(() => {
@@ -805,11 +820,39 @@ Return JSON exactly as:
     }
   };
 
+  const markLeadOutcome = (leadId, outcome) => {
+    const updated = leadsRef.current.map(l => l.id === leadId ? applyLeadOutcome(l, outcome) : l);
+    leadsRef.current = updated;
+    setLeads(updated);
+    const live = updated.find(l => l.id === leadId);
+    if (linkedCampaignId) {
+      const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
+      if (camp) {
+        const status = outcome === "intent" ? "interested" : outcome === "manual" ? "manual" : "active";
+        dispatch("UPDATE_CAMPAIGN", {
+          id: camp.id,
+          enrollments: (camp.enrollments || []).map(en => en.contactId === leadId ? { ...en, status } : en),
+        });
+      }
+    }
+    if (batchId) {
+      fetch("/api/outreach/batches", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: batchId, leads: updated }),
+      }).catch(() => {});
+    }
+    const who = live?.orgName || live?.email || "Contact";
+    if (outcome === "intent") toast(`${who} — positive intent, no more automated emails`, "success");
+    else if (outcome === "manual") toast(`${who} — manual follow-up, pulled off the send queue`, "success");
+    else toast(`${who} back on the automated list`, "info");
+  };
+
   const fireBradSend = async (lead, touchIdx) => {
     const live = leadsRef.current.find(l => l.id === lead.id) || lead;
     const touch = live.touches[touchIdx];
-    if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || live.heldForEarlier || !live.email || !touchHasCopy(touch)) {
-      return { skipped: true };
+    if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || live.heldForEarlier || leadStoppedAuto(live) || !live.email || !touchHasCopy(touch)) {
+      return { skipped: true, outcome: live.positiveIntent ? "intent" : live.manualFollowUp ? "manual" : undefined };
     }
     try {
       const r = await fetch("/api/agents/brad-send", {
@@ -836,7 +879,7 @@ Return JSON exactly as:
             }).catch(() => {});
           }
         }
-        return { skipped: true, held: !!d.held };
+        return { skipped: true, held: !!d.held, outcome: d.outcome };
       }
       if (!d.ok || !d.sent) return { ok: false, error: d.error || "Send failed" };
       await markTouchesSent([{ leadId: live.id, touchIdx, sentAt: new Date().toISOString() }]);
@@ -851,6 +894,8 @@ Return JSON exactly as:
     const touch = lead.touches[touchIdx];
     if (!touch || touchSentInfo(lead, touchIdx).sent) return;
     if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
+    if (lead.positiveIntent) { toast("Positive intent — they are off the automated follow-ups", "info"); return; }
+    if (lead.manualFollowUp) { toast("Manual follow-up — they will not get another automated email", "info"); return; }
     if (!lead.email) { toast("No email address for this contact", "error"); return; }
     if (!touchHasCopy(touch)) { toast("Write a real subject and body for this email first", "error"); return; }
     if (!window.confirm(`Send this exact email now, from brad@shopst1sports.com?\n\nTo: ${lead.email}\nSubject: ${touch.subject}\n\n${touch.body}`)) return;
@@ -1308,12 +1353,17 @@ Subject: <subject line, may include {{orgName}}>
     // A lead may already have one or more touches sent manually via SEND NOW
     // before approval — start its enrollment past those steps (and record
     // them in sentSteps) so the cron never re-sends what already went out.
-    const enrollments = sendableLeads.map(l => {
+    const enrollOne = (l, status) => {
       const sentSteps = l.touches.map((t, i) => t.sentAt ? i : -1).filter(i => i >= 0);
       const firstUnsent = l.touches.findIndex(t => !t.sentAt);
       const allSent = firstUnsent === -1;
-      return { contactId: l.id, step: allSent ? l.touches.length : firstUnsent, status: allSent ? "done" : "active", enrolledAt: nowStr, nextDate: nowStr, sentSteps };
-    });
+      return { contactId: l.id, step: allSent ? l.touches.length : firstUnsent, status: status || (allSent ? "done" : "active"), enrolledAt: nowStr, nextDate: nowStr, sentSteps };
+    };
+    const enrollments = [
+      ...sendableLeads.map(l => enrollOne(l)),
+      ...intentLeads.map(l => enrollOne(l, "interested")),
+      ...manualLeads.map(l => enrollOne(l, "manual")),
+    ];
 
     const campaign = {
       id: campId, name: campaignName.trim() || `Bulk Outreach — ${nowStr}`,
@@ -1323,7 +1373,7 @@ Subject: <subject line, may include {{orgName}}>
       scheduledBatches, sentBatches: {},
       batchSize: Math.max(1, Number(batchSize) || 25),
       status: "running", createdAt: nowStr,
-      leadMeta: Object.fromEntries(sendableLeads.map(l => [l.id, { orgName: l.orgName, angle: l.angle, priority: l.priority, whyNow: l.whyNow }])),
+      leadMeta: Object.fromEntries([...sendableLeads, ...intentLeads, ...manualLeads].map(l => [l.id, { orgName: l.orgName, angle: l.angle, priority: l.priority, whyNow: l.whyNow }])),
     };
     dispatch("ADD_CAMPAIGN", campaign);
     dispatch("LOG", { msg: `${cu?.name || "Someone"} scheduled bulk outreach "${campaign.name}" — ${sendableLeads.length} orgs, ${totalTouches} email(s) total` });
@@ -1424,6 +1474,8 @@ Subject: <subject line, may include {{orgName}}>
                       <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>
                         {sent > 0 ? <span style={{ color: B.orange, fontWeight: 600 }}>{sent} sent · </span> : null}
                         {Number(b.heldCount) > 0 ? <span style={{ color: B.purple, fontWeight: 600 }}>{b.heldCount} on earlier list · </span> : null}
+                        {Number(b.intentCount) > 0 ? <span style={{ color: B.teal, fontWeight: 600 }}>{b.intentCount} intent · </span> : null}
+                        {Number(b.manualCount) > 0 ? <span style={{ color: B.blue, fontWeight: 600 }}>{b.manualCount} manual · </span> : null}
                         {b.sendableCount} ready · {b.touchCount} email(s) · {b.totalCount} total rows · updated {fmtDT(b.updatedAt)}
                       </div>
                     </div>
@@ -1529,6 +1581,60 @@ Subject: <subject line, may include {{orgName}}>
                         {l.heldByBatch ? `Kept by ${l.heldByBatch}` : "Kept by earlier list"}
                         {l.touches?.some(t => t?.sentAt) ? <div style={{ color: B.muted, marginTop: 2 }}>already emailed here — no more touches</div> : null}
                       </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {intentLeads.length > 0 && (
+            <div style={{ background: B.tealBg, border: `1px solid ${B.teal}`, borderLeft: `6px solid ${B.teal}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: B.teal, marginBottom: 2 }}>
+                {intentLeads.length} POSITIVE INTENT
+              </div>
+              <div style={{ fontSize: 11, color: B.textMid, marginBottom: 10 }}>
+                They engaged. Email 2/3 will not send. They stay on this list so you can still see them.
+              </div>
+              <button onClick={() => setShowIntent(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.teal, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                {showIntent ? "Hide names" : "Show names"}
+              </button>
+              {showIntent && (
+                <div style={{ marginTop: 10, maxHeight: 320, overflowY: "auto" }}>
+                  {intentLeads.map(l => (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${B.border}`, gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: B.text }}>{l.orgName || l.contactName || l.email}</div>
+                        <div style={{ fontSize: 11, color: B.muted }}>{l.email}</div>
+                      </div>
+                      <button onClick={() => markLeadOutcome(l.id, null)} style={{ background: "none", border: "none", color: B.teal, fontSize: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>Put back on sends</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {manualLeads.length > 0 && (
+            <div style={{ background: B.blueBg, border: `1px solid ${B.blue}`, borderLeft: `6px solid ${B.blue}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: B.blue, marginBottom: 2 }}>
+                {manualLeads.length} MANUAL FOLLOW-UP
+              </div>
+              <div style={{ fontSize: 11, color: B.textMid, marginBottom: 10 }}>
+                Someone here knows them or will handle this by hand. No more automated emails.
+              </div>
+              <button onClick={() => setShowManual(v => !v)} style={{ background: "none", border: "none", padding: 0, fontSize: 11, color: B.blue, cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" }}>
+                {showManual ? "Hide names" : "Show names"}
+              </button>
+              {showManual && (
+                <div style={{ marginTop: 10, maxHeight: 320, overflowY: "auto" }}>
+                  {manualLeads.map(l => (
+                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: `1px solid ${B.border}`, gap: 10 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: B.text }}>{l.orgName || l.contactName || l.email}</div>
+                        <div style={{ fontSize: 11, color: B.muted }}>{l.email}{l.manualFollowUpNote ? ` · ${l.manualFollowUpNote}` : ""}</div>
+                      </div>
+                      <button onClick={() => markLeadOutcome(l.id, null)} style={{ background: "none", border: "none", color: B.blue, fontSize: 10, cursor: "pointer", padding: 0, textDecoration: "underline" }}>Put back on sends</button>
                     </div>
                   ))}
                 </div>
@@ -1687,6 +1793,16 @@ Subject: <subject line, may include {{orgName}}>
               <div style={{ fontSize: 24, fontWeight: 700, color: B.red, marginTop: 4 }}>{bouncedLeads.length}</div>
               <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>flagged, opted out, removed from sends</div>
             </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl c={B.teal}>POSITIVE INTENT</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.teal, marginTop: 4 }}>{intentLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>engaged — no Email 2/3</div>
+            </div>
+            <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
+              <Lbl c={B.blue}>MANUAL FOLLOW-UP</Lbl>
+              <div style={{ fontSize: 24, fontWeight: 700, color: B.blue, marginTop: 4 }}>{manualLeads.length}</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>we know them — handle by hand</div>
+            </div>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 220 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
                 <Lbl>CAMPAIGN NAME</Lbl>
@@ -1738,14 +1854,25 @@ Subject: <subject line, may include {{orgName}}>
           )}
 
           <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
-            {visibleLeads.map(lead => {
+            <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 11, color: B.textMid }}>
+                Find someone and mark <b style={{ color: B.teal }}>Positive intent</b> or <b style={{ color: B.blue }}>Manual follow-up</b> so they do not get the next email.
+              </div>
+              <input value={leadQuery} onChange={e => setLeadQuery(e.target.value)} placeholder="Search school, name, or email"
+                style={{ width: 260, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" }} />
+            </div>
+            {filteredVisibleLeads.length === 0 && (
+              <div style={{ padding: "16px", fontSize: 12, color: B.muted }}>{leadQuery.trim() ? "No organizations match that search." : "No organizations on this list."}</div>
+            )}
+            {filteredVisibleLeads.map(lead => {
               const isOpen = expandedId === lead.id;
               const dates = preview.perLeadDates[lead.id] || [];
-              const canAddMore = lead.touches.length < 3 && !isApproved;
+              const canAddMore = lead.touches.length < 3 && !isApproved && !leadStoppedAuto(lead);
               const draftHere = followupDraft?.leadId === lead.id;
+              const stopped = leadStoppedAuto(lead);
               return (
-                <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}`, background: lead.bounced ? B.redBg : "transparent" }}>
-                  <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : (lead.bounced ? B.redBg : B.white) }}>
+                <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}`, background: lead.bounced ? B.redBg : lead.positiveIntent ? B.tealBg : lead.manualFollowUp ? B.blueBg : "transparent" }}>
+                  <div onClick={() => setExpandedId(isOpen ? null : lead.id)} style={{ padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", background: isOpen ? B.surface : (lead.bounced ? B.redBg : lead.positiveIntent ? B.tealBg : lead.manualFollowUp ? B.blueBg : B.white) }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: B.text }}>{lead.orgName}</div>
                       <div style={{ fontSize: 11, color: lead.bounced ? B.red : B.muted, marginTop: 1 }}>
@@ -1757,11 +1884,29 @@ Subject: <subject line, may include {{orgName}}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                       {lead.angle && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.purple, background: B.purpleBg, padding: "3px 8px", borderRadius: 10 }}>{lead.angle}</span>}
                       <div style={{ display: "flex", alignItems: "center", gap: 5 }} onClick={e => e.stopPropagation()}>
+                        {!lead.bounced && !lead.heldForEarlier && (
+                          <>
+                            <button onClick={() => markLeadOutcome(lead.id, lead.positiveIntent ? null : "intent")}
+                              title="They engaged — stop Email 2/3"
+                              style={{ background: lead.positiveIntent ? B.teal : B.tealBg, color: lead.positiveIntent ? B.white : B.teal, border: `1px solid ${B.teal}50`, borderRadius: 4, padding: "3px 8px", fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: "pointer" }}>
+                              INTENT
+                            </button>
+                            <button onClick={() => markLeadOutcome(lead.id, lead.manualFollowUp ? null : "manual")}
+                              title="We know them — handle this by hand"
+                              style={{ background: lead.manualFollowUp ? B.blue : B.blueBg, color: lead.manualFollowUp ? B.white : B.blue, border: `1px solid ${B.blue}50`, borderRadius: 4, padding: "3px 8px", fontSize: 8, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: "pointer" }}>
+                              MANUAL
+                            </button>
+                          </>
+                        )}
                         {lead.bounced ? (
                           <button onClick={() => setExpandedId(isOpen ? null : lead.id)}
                             style={{ background: B.red, color: B.white, border: "none", borderRadius: 4, padding: "4px 9px", fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .3, cursor: "pointer" }}>
                             ⚠ BAD EMAIL — UPDATE
                           </button>
+                        ) : stopped ? (
+                          <span style={{ fontSize: 9, fontWeight: 700, color: lead.positiveIntent ? B.teal : B.blue }}>
+                            {lead.positiveIntent ? "INTENT — no more emails" : "MANUAL — handle by hand"}
+                          </span>
                         ) : lead.touches.map((t, i) => {
                           const sentInfo = touchSentInfo(lead, i);
                           const sendKey = `${lead.id}-${i}`;
@@ -1781,6 +1926,26 @@ Subject: <subject line, may include {{orgName}}>
                   </div>
                   {isOpen && (
                     <div style={{ padding: "4px 16px 16px" }}>
+                      {lead.positiveIntent && (
+                        <div style={{ background: B.white, border: `1px solid ${B.teal}40`, borderRadius: 6, padding: 10, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                          <div style={{ fontSize: 11, color: B.teal, fontWeight: 600 }}>Positive intent — they will not get Email 2 or 3 from this list.</div>
+                          <GBtn onClick={() => markLeadOutcome(lead.id, null)} style={{ fontSize: 9, padding: "5px 10px" }}>PUT BACK ON SENDS</GBtn>
+                        </div>
+                      )}
+                      {lead.manualFollowUp && (
+                        <div style={{ background: B.white, border: `1px solid ${B.blue}40`, borderRadius: 6, padding: 10, marginBottom: 10 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                            <div style={{ fontSize: 11, color: B.blue, fontWeight: 600 }}>Manual follow-up — someone here knows them or will handle this. No automated emails.</div>
+                            <GBtn onClick={() => markLeadOutcome(lead.id, null)} style={{ fontSize: 9, padding: "5px 10px" }}>PUT BACK ON SENDS</GBtn>
+                          </div>
+                          <input value={lead.manualFollowUpNote || ""} placeholder="Optional note — why we know them"
+                            onChange={e => {
+                              const note = e.target.value;
+                              setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, manualFollowUpNote: note } : l));
+                            }}
+                            style={{ width: "100%", background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 12, boxSizing: "border-box" }} />
+                        </div>
+                      )}
                       {lead.bounced && (
                         <div style={{ background: B.white, border: `1px solid ${B.red}40`, borderRadius: 6, padding: 10, marginBottom: 10 }}>
                           <div style={{ fontSize: 11, color: B.red, fontWeight: 600, marginBottom: 6 }}>
@@ -1820,6 +1985,10 @@ Subject: <subject line, may include {{orgName}}>
                               <span style={{ fontSize: 10, color: B.green, fontWeight: 600 }}>✓ Sent{sentInfo.when ? ` ${fmtWhen(sentInfo.when)}` : ""}</span>
                             ) : lead.bounced ? (
                               <span style={{ fontSize: 10, color: B.red, fontWeight: 600 }}>⚠ Bad email — fix it above before sending</span>
+                            ) : stopped ? (
+                              <span style={{ fontSize: 10, color: lead.positiveIntent ? B.teal : B.blue, fontWeight: 600 }}>
+                                {lead.positiveIntent ? "Positive intent — not sending" : "Manual follow-up — not sending"}
+                              </span>
                             ) : (
                               <OBtn onClick={() => sendTouchNow(lead, i)} disabled={!!goRun || sendingKey === sendKey || !touchHasCopy(t)} style={{ fontSize: 9, padding: "6px 12px" }}>
                                 {sendingKey === sendKey ? "SENDING…" : "✉ SEND NOW — FROM BRAD"}
