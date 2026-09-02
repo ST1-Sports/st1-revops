@@ -17,6 +17,7 @@
 
 import { setCors }             from '../../_lib/cors.js'
 import { prisma }             from '../../_lib/prisma.js'
+import { postSlackMessage }   from '../../_lib/slack.js'
 import { booksGet,
          isPrismaTableMissing } from '../../_lib/zoho-books.js'
 
@@ -34,20 +35,15 @@ const STATUS_MAP = {
 // ── Slack helper ──────────────────────────────────────────────────────────────
 
 async function postSlack(text, blocks) {
-  const token   = process.env.SLACK_BOT_TOKEN
   const channel = process.env.SLACK_PAYMENT_CHANNEL
                   || process.env.SLACK_LEDGER_REVIEW_CHANNEL
                   || process.env.SLACK_REDDIT_REVIEW_CHANNEL
-  if (!token || !channel) return
-
-  const payload = { channel, text }
-  if (blocks) payload.blocks = blocks
-
-  await fetch('https://slack.com/api/chat.postMessage', {
-    method:  'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
-  }).catch(e => console.warn('[payments] slack:', e.message))
+  if (!channel) return
+  const result = await postSlackMessage({ channel, text, blocks }).catch(e => {
+    console.warn('[payments] slack:', e.message)
+    return { ok: false }
+  })
+  if (result && !result.ok && !result.skipped) console.warn('[payments] slack:', result.error || result.reason)
 }
 
 function invoiceUrl(zohoInvoiceId) {

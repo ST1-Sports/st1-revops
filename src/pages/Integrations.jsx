@@ -718,6 +718,8 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
   ];
 
   const exportBooksModule = async (mod) => {
+    // Local list accumulator in an async exporter — not React render state.
+    /* eslint-disable react-hooks/immutability */
     if (!status.books) { addLog("Connect Zoho Books first", "warn"); return null; }
     setBooksExportingModule(mod.key);
     setBooksExportProgress(p=>({...p,[mod.key]:{page:0,records:0}}));
@@ -770,6 +772,7 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
     } finally {
       setBooksExportingModule(null);
     }
+    /* eslint-enable react-hooks/immutability */
   };
 
   const exportAllBooksModules = async () => {

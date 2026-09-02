@@ -6,3 +6,5 @@ dist
 *.log
 .DS_Store
 .claude/
+test_results/
+test.txt

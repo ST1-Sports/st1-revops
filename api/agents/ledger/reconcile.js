@@ -33,6 +33,7 @@
 import { setCors }                              from '../../_lib/cors.js'
 import { prisma }                              from '../../_lib/prisma.js'
 import { recall, remember }                    from '../../_lib/memory.js'
+import { postSlackMessage }                    from '../../_lib/slack.js'
 import { booksGet, booksPost,
          isPrismaTableMissing }                from '../../_lib/zoho-books.js'
 
@@ -687,10 +688,9 @@ async function seedTeamStores() {
 // ── Slack notification for new pending items ─────────────────────────────────
 
 async function notifySlack(pending) {
-  const token   = process.env.SLACK_BOT_TOKEN
   const channel = process.env.SLACK_LEDGER_REVIEW_CHANNEL
                   || process.env.SLACK_REDDIT_REVIEW_CHANNEL
-  if (!token || !channel || !pending.length) return
+  if (!channel || !pending.length) return
 
   const lines = pending.map(r => {
     const amt  = `$${Math.abs(r.amount || 0).toFixed(2)}`
@@ -699,13 +699,9 @@ async function notifySlack(pending) {
     return `• ${r.txn.date} | ${amt} | ${r.source} | ${name}${coded}`
   })
 
-  await fetch('https://slack.com/api/chat.postMessage', {
-    method:  'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      channel,
-      text: `*Ledger: ${pending.length} transaction${pending.length !== 1 ? 's' : ''} ready for review*\n${lines.join('\n')}`,
-    }),
+  await postSlackMessage({
+    channel,
+    text: `*Ledger: ${pending.length} transaction${pending.length !== 1 ? 's' : ''} ready for review*\n${lines.join('\n')}`,
   }).catch(() => {})
 }
 

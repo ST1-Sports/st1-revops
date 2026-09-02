@@ -816,9 +816,9 @@ if(status.ok) return(
 const setupUrl=repKey?`/api/gmail-setup?repKey=${repKey}${repEmail?`&hint=${encodeURIComponent(repEmail)}`:""}`:"/api/gmail-setup";
 const fixes={
 network:<>The API server is unreachable. <strong>Try a hard refresh (Ctrl+Shift+R)</strong> — if the problem persists, check that your Vercel deployment is live and the function logs show no build errors.</>,
-setup:<>Gmail not connected. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
-expired:<>Gmail authorization has expired for {repKey||"this account"}. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
-auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href={setupUrl} target="_blank" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+setup:<>Gmail not connected. <a href={setupUrl} target="_blank" rel="noreferrer" style={{color:"#b91c1c",fontWeight:600,textDecoration:"none",border:"1px solid #b91c1c",borderRadius:3,padding:"1px 8px",marginLeft:4}}>Connect your Gmail →</a></>,
+expired:<>Gmail authorization has expired for {repKey||"this account"}. <a href={setupUrl} target="_blank" rel="noreferrer" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
+auth:<>Gmail auth error: <code style={{fontSize:10}}>{status.error}</code>. <a href={setupUrl} target="_blank" rel="noreferrer" style={{color:"#b91c1c",fontWeight:600}}>Re-authorize Gmail →</a></>,
 };
 return(
 <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"10px 14px",background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:5,marginBottom:8}}>
@@ -3352,6 +3352,13 @@ const [drafting,setDrafting]=useState(false);
 const [saving,setSaving]=useState(false);
 const saveTimer=useRef(null);
 const sessRef=useRef(null);
+function doCreateSession(){
+fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
+.then(r=>r.json()).then(d=>{
+setSessionId(d.session.id);sessRef.current=d.session.id;
+sessionStorage.setItem("ttSessionId",d.session.id);
+}).catch(()=>{});
+}
 useEffect(()=>{
 fetch("/api/admin/questions")
 .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
@@ -3385,13 +3392,6 @@ doCreateSession();
 doCreateSession();
 }
 },[]);
-const doCreateSession=()=>{
-fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
-.then(r=>r.json()).then(d=>{
-setSessionId(d.session.id);sessRef.current=d.session.id;
-sessionStorage.setItem("ttSessionId",d.session.id);
-}).catch(()=>{});
-};
 const scheduleSave=(patch)=>{
 if(!sessRef.current)return;
 clearTimeout(saveTimer.current);
@@ -14392,6 +14392,15 @@ const [repForm,setRepForm]=useState(null);
 const [pinForm,setPinForm]=useState(null);
 const [pinVal,setPinVal]=useState("");
 const [gmailStatus,setGmailStatus]=useState(null);
+const [gmailInfo,setGmailInfo]=useState(null);
+const [gmailChecking,setGmailChecking]=useState(false);
+const [publerInfo,setPublerInfo]=useState(null);
+const [publerChecking,setPublerChecking]=useState(false);
+const [publerPosts,setPublerPosts]=useState(null);
+const [publerPostsLoading,setPublerPostsLoading]=useState(false);
+const [publerAccounts,setPublerAccounts]=useState(null);
+const [publerSendDebug,setPublerSendDebug]=useState(null);
+const [publerSendDebugging,setPublerSendDebugging]=useState(false);
 const testRepEmail=async(rep)=>{
 const fromLabel = rep.gmailEnvKey ? `${rep.gmailEnvKey}'s Gmail` : "shared Gmail";
 if(rep.gmailEnvKey){
@@ -14436,10 +14445,61 @@ if(repForm.id){dispatch("UPDATE_REP",repForm);toast("Rep updated","success");}
 else{dispatch("ADD_REP",{...repForm,id:mkId()});toast("Rep added","success");}
 setRepForm(null);
 };
+const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
+const failedPosts=(s.socialPosts||[]).filter(p=>p.status==="local_only");
+const checkGmail=async()=>{
+setGmailChecking(true);setGmailInfo(null);
+try{
+const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile",...(repGmailKey?{repEnvKey:repGmailKey}:{})})}).then(r=>r.json());
+setGmailInfo(d.error?{error:d.error}:{email:d.email});
+}catch(e){setGmailInfo({error:e.message});}
+setGmailChecking(false);
+};
+const checkPubler=async()=>{
+setPublerChecking(true);setPublerInfo(null);
+try{
+const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
+setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
+}catch(e){setPublerInfo({error:e.message});}
+setPublerChecking(false);
+};
+const loadPublerPosts=async()=>{
+setPublerPostsLoading(true);setPublerPosts(null);
+try{
+const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list-posts"})}).then(r=>r.json());
+setPublerPosts(d);
+}catch(e){setPublerPosts({error:e.message});}
+setPublerPostsLoading(false);
+};
+const loadPublerAccounts=async()=>{
+try{
+const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
+setPublerAccounts(d);
+}catch(e){setPublerAccounts({error:e.message});}
+};
+const testSendToPubler=async()=>{
+setPublerSendDebugging(true);setPublerSendDebug(null);
+const n=new Date(Date.now()+5*60*1000);
+const pad=v=>String(v).padStart(2,"0");
+const tzOff=new Date().getTimezoneOffset();
+const tzSign=tzOff<=0?"+":"-";
+const tzH=pad(Math.floor(Math.abs(tzOff)/60));
+const tzM=pad(Math.abs(tzOff)%60);
+const scheduleDate=`${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
+const platforms=(publerAccounts?.profiles||[]).map(a=>a.service).filter(Boolean);
+const testPlatforms=platforms.length?[platforms[0]]:["instagram"];
+try{
+const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({action:"send-verbose",post:"ST1 RevOps test post — please delete",platforms:testPlatforms,scheduleDate})}).then(r=>r.json());
+setPublerSendDebug(d);
+}catch(e){setPublerSendDebug({error:e.message});}
+setPublerSendDebugging(false);
+};
 useEffect(()=>{
 fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile"})})
 .then(r=>r.json()).then(d=>setGmailStatus(!d.error&&(d.email||d.emailAddress||d.profile)))
 .catch(()=>setGmailStatus(false));
+if (cu?.isAdmin) { checkGmail(); checkPubler(); }
 },[]);
 if (cu && !cu.isAdmin) {
 const myRep = (s.reps||[]).find(r=>r.id===cu?.id) || cu;
@@ -14522,78 +14582,6 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 <OBtn onClick={save}>SAVE SETTINGS</OBtn>
 </div>
 {/* Email & Social connection status */}
-{(()=>{
-const [gmailInfo,setGmailInfo]=useState(null);
-const [gmailChecking,setGmailChecking]=useState(false);
-const [publerInfo,setPublerInfo]=useState(null);
-const [publerChecking,setPublerChecking]=useState(false);
-const [publerPosts,setPublerPosts]=useState(null);
-const [publerPostsLoading,setPublerPostsLoading]=useState(false);
-const [publerDebug,setPublerDebug]=useState(null);
-const [publerDebugging,setPublerDebugging]=useState(false);
-const [publerAccounts,setPublerAccounts]=useState(null);
-const [publerSendDebug,setPublerSendDebug]=useState(null);
-const [publerSendDebugging,setPublerSendDebugging]=useState(false);
-const repGmailKey = (cu && !cu.isAdmin && cu?.gmailEnvKey) ? cu.gmailEnvKey : "";
-const checkGmail=async()=>{
-setGmailChecking(true);setGmailInfo(null);
-try{
-const d=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profile",...(repGmailKey?{repEnvKey:repGmailKey}:{})})}).then(r=>r.json());
-setGmailInfo(d.error?{error:d.error}:{email:d.email});
-}catch(e){setGmailInfo({error:e.message});}
-setGmailChecking(false);
-};
-const checkPubler=async()=>{
-setPublerChecking(true);setPublerInfo(null);
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
-setPublerInfo(d.ok?{name:d.user?.name}:{error:d.error||"Connection failed"});
-}catch(e){setPublerInfo({error:e.message});}
-setPublerChecking(false);
-};
-const loadPublerPosts=async()=>{
-setPublerPostsLoading(true);setPublerPosts(null);
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list-posts"})}).then(r=>r.json());
-setPublerPosts(d);
-}catch(e){setPublerPosts({error:e.message});}
-setPublerPostsLoading(false);
-};
-const debugPublerPost=async()=>{
-setPublerDebugging(true);setPublerDebug(null);
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"debug-post",platform:"instagram"})}).then(r=>r.json());
-setPublerDebug(d);
-}catch(e){setPublerDebug({error:e.message});}
-setPublerDebugging(false);
-};
-const loadPublerAccounts=async()=>{
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
-setPublerAccounts(d);
-}catch(e){setPublerAccounts({error:e.message});}
-};
-const testSendToPubler=async()=>{
-setPublerSendDebugging(true);setPublerSendDebug(null);
-const n=new Date(Date.now()+5*60*1000);
-const pad=v=>String(v).padStart(2,"0");
-const tzOff=new Date().getTimezoneOffset();
-const tzSign=tzOff<=0?"+":"-";
-const tzH=pad(Math.floor(Math.abs(tzOff)/60));
-const tzM=pad(Math.abs(tzOff)%60);
-const scheduleDate=`${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}:00${tzSign}${tzH}:${tzM}`;
-const platforms=(publerAccounts?.profiles||[]).map(a=>a.service).filter(Boolean);
-const testPlatforms=platforms.length?[platforms[0]]:["instagram"];
-try{
-const d=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
-body:JSON.stringify({action:"send-verbose",post:"ST1 RevOps test post — please delete",platforms:testPlatforms,scheduleDate})}).then(r=>r.json());
-setPublerSendDebug(d);
-}catch(e){setPublerSendDebug({error:e.message});}
-setPublerSendDebugging(false);
-};
-useEffect(()=>{checkGmail();checkPubler();},[]);
-const failedPosts=(s.socialPosts||[]).filter(p=>p.status==="local_only");
-return(
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.green}`}}>
 <Lbl c={B.green} s={{marginBottom:12}}>Email & Social Status</Lbl>
 {/* Gmail */}
@@ -14673,7 +14661,6 @@ publerInfo.error
 }
 </div>
 )}
-{false&&publerDebug&&null}
 {publerSendDebug&&(
 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"10px 12px",fontSize:10,fontFamily:"'Lexend',sans-serif"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
@@ -14775,8 +14762,6 @@ return(
 </div>
 )}
 </div>
-);
-})()}
 {/* Sales Reps */}
 <div className="card" style={{padding:16,marginBottom:13,borderTop:`3px solid ${B.blue}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>

@@ -533,10 +533,10 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   }, [sendableLeads]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
-  const campIdRef = useRef(mkId());
+  const [campId, setCampId] = useState(() => mkId());
   const preview = useMemo(
-    () => buildOutreachSchedule(campIdRef.current, sendableLeads, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5) }),
-    [sendableLeads, startMs, batchSize, touchGapDays]
+    () => buildOutreachSchedule(campId, sendableLeads, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5) }),
+    [campId, sendableLeads, startMs, batchSize, touchGapDays]
   );
 
   // Autosave — any edit PATCHes the durable batch record after a short
@@ -595,7 +595,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const startNewUpload = () => {
     setBatchId(null); setBatchStatus("draft"); setLinkedCampaignId(null); setLeads([]); setTemplates({}); setFileName("");
     setCampaignName(`Bulk Outreach — ${today()}`);
-    campIdRef.current = mkId();
+    setCampId(mkId());
     setPhase("upload");
     setScreen("review");
   };
@@ -1344,7 +1344,6 @@ Subject: <subject line, may include {{orgName}}>
     if (!window.confirm(`Schedule ${totalTouches} email(s) across ${sendableLeads.length} organization(s), starting ${fmtWhen(new Date(startMs).toISOString())}?\n\nSends happen automatically from here via the existing send-batches cron — nothing further to do once approved.`)) return;
 
     setCommitting(true);
-    const campId = campIdRef.current;
     const nowStr = today();
 
     // Contacts go through the same durable cold-prospect import used by
