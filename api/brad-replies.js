@@ -7,6 +7,7 @@
  */
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
+import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -34,6 +35,34 @@ export default async function handler(req, res) {
         data:  { outcome: 'handled', outcomeAt: new Date() },
       })
       return res.json({ ok: true })
+    } catch (err) {
+      return res.status(500).json({ error: err.message })
+    }
+  }
+
+  if (req.method === 'POST' && req.headers['x-action'] === 'retry-notify') {
+    const { id } = req.body || {}
+    if (!id) return res.status(400).json({ error: 'id required' })
+    try {
+      const row = await prisma.agentInteraction.findUnique({ where: { id } })
+      if (!row || row.agentId !== 'brad' || row.action !== 'reply_intent') {
+        return res.status(404).json({ error: 'reply not found' })
+      }
+      const inp = row.input || {}
+      const out = row.output || {}
+      const assigned = { name: out.assignedName || 'Matt Stone', email: out.assignedTo || 'matt@st1sports.com' }
+      const slack = await notifyBradSlack(assigned, inp.contactName || inp.fromEmail, inp.fromEmail, inp.subject, inp.snippet)
+      let email = { ok: out.email === 'sent' }
+      if (out.email !== 'sent') {
+        email = await notifyBradEmail(req.headers.host, assigned, inp.contactName || inp.fromEmail, inp.fromEmail, inp.subject, inp.snippet)
+      }
+      const output = {
+        ...out,
+        slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
+        email: (email?.ok || out.email === 'sent') ? 'sent' : (email?.error || out.email || 'failed'),
+      }
+      await prisma.agentInteraction.update({ where: { id }, data: { output } })
+      return res.json({ ok: !!(slack?.ok && (email?.ok || out.email === 'sent')), slack: output.slack, email: output.email })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }

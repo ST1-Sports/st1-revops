@@ -3,7 +3,7 @@
  * Used by api/cron/brad-inbox.js and api/inbound-email.js.
  */
 import { prisma } from './prisma.js'
-import { postSlackMessage } from './slack.js'
+import { sendSlackText } from './slack.js'
 
 export async function classifyEmailIntent(subject, bodyText) {
   const apiKey = process.env.ANTHROPIC_KEY
@@ -54,24 +54,20 @@ export async function pickRep() {
 }
 
 function bradSlackChannels() {
-  return [
+  return [...new Set([
     process.env.BRAD_REPLY_SLACK_CHANNEL,
     process.env.SLACK_CHANNEL,
     process.env.SLACK_ALERT_CHANNEL,
-    'C0AQ7CMB01X',
-  ].filter(Boolean)
+    'C0AQ7CMB01X',   // #sales
+    'C09F64RK0MN',   // #all-st1-sports
+  ].filter(Boolean))]
 }
 
 export async function notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText) {
   const text = `🔥 *Brad got a positive reply — assigned to ${assigned.name}*\n*From:* ${contactName} (${fromEmail})\n*Subject:* ${subject}\n\n_"${(bodyText || '').slice(0, 200)}${(bodyText || '').length > 200 ? '…' : ''}"_`
-  const errors = []
-  for (const channel of bradSlackChannels()) {
-    const result = await postSlackMessage({ channel, text })
-    if (result.ok) return { ok: true, channel }
-    errors.push(`${channel}: ${result.error || result.reason || 'failed'}`)
-  }
-  console.warn('[brad] slack notify failed:', errors.join(' | ') || 'no channel configured')
-  return { ok: false, error: errors.join(' | ') || 'no Slack channel configured' }
+  const result = await sendSlackText({ channels: bradSlackChannels(), text })
+  if (!result.ok) console.warn('[brad] slack notify failed:', result.error)
+  return result
 }
 
 async function sendNotifyGmail({ to, subject, body }) {

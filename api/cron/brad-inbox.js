@@ -12,7 +12,7 @@
  *   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN_BRAD
  *   ANTHROPIC_KEY
  *   BRAD_ASSIGN_REPS  — "Matt Stone:matt@st1sports.com,Josh:josh@st1sports.com"
- *   SLACK_BOT_TOKEN + BRAD_REPLY_SLACK_CHANNEL  (optional)
+ *   SLACK_BOT_TOKEN (needs chat:write) or SLACK_WEBHOOK_URL / saved incoming webhook
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'

@@ -137,6 +137,9 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
   const [syncing, setSyncing]   = useState(false);
   const [slackChannel, setSlackChannel] = useState("C0AQ7CMB01X"); // #sales
   const [slackChannelName, setSlackChannelName] = useState("#sales");
+  const [slackWebhook, setSlackWebhook] = useState("");
+  const [slackWebhookSaved, setSlackWebhookSaved] = useState(false);
+  const [slackDiag, setSlackDiag] = useState(null);
   const [drafts, setDrafts]     = useState({});
   const [drafting, setDrafting] = useState(null);
   const [crmSyncResult, setCrmSyncResult] = useState(null); // { contacts, deals }
@@ -423,10 +426,13 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
       });
       const d = await r.json();
       if (d.ok) {
-        addLog(`✓ Message delivered to ${slackChannelName}`, "success");
+        addLog(`✓ Message delivered to ${slackChannelName}${d.via === "webhook" ? " via incoming webhook" : ""}`, "success");
         return true;
       }
       addLog(`Slack error: ${d.error || "unknown"}`, "error");
+      if (String(d.error || "").includes("missing_scope") || d.raw?.needed) {
+        addLog("The Slack app only has incoming-webhook, not chat:write. Add chat:write under OAuth & Permissions and reinstall, or paste the Incoming Webhook URL below.", "warn");
+      }
       return false;
     } catch(e) {
       addLog(`Slack error: ${e.message.slice(0,60)}`, "error");
@@ -1087,6 +1093,41 @@ Channel: ${slackChannelName}`);
     setTesting(null);
   };
 
+  const loadSlackDiag = useCallback(async () => {
+    try {
+      const r = await fetch("/api/slack-message");
+      const d = await r.json();
+      if (d?.ok || d?.tokenConfigured != null) {
+        setSlackDiag(d);
+        setSlackWebhookSaved(!!d.webhookConfigured);
+      }
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (tab === "slack") loadSlackDiag();
+  }, [tab, loadSlackDiag]);
+
+  const saveSlackWebhookUrl = async () => {
+    setTesting("slack-webhook");
+    try {
+      const r = await fetch("/api/slack-message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "save-webhook", url: slackWebhook.trim() }),
+      });
+      const d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.error || "Save failed");
+      setSlackWebhook("");
+      setSlackWebhookSaved(true);
+      addLog("Incoming webhook saved. Send a test message to confirm Slack.", "success");
+      await loadSlackDiag();
+    } catch (e) {
+      addLog(`Webhook: ${e.message}`, "error");
+    }
+    setTesting(null);
+  };
+
   // ─── UI ─────────────────────────────────────────────────────────────────────
   const logColor={success:B.green,warn:B.yellow,error:B.red,info:B.muted};
 
@@ -1410,6 +1451,18 @@ Channel: ${slackChannelName}`);
                 <div style={{width:32,height:3,background:"#4A154B",marginTop:7,borderRadius:2}}/>
               </div>
 
+              {slackDiag?.hint && (
+                <div style={{background:B.redBg,border:`1px solid ${B.red}30`,borderRadius:8,padding:"12px 14px",marginBottom:14}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red,letterSpacing:1.5,marginBottom:4}}>BRAD REPLY SLACK</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,lineHeight:1.5}}>{slackDiag.hint}</div>
+                  {slackDiag.lastReplyFrom && (
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:6}}>
+                      Last reply from {slackDiag.lastReplyFrom}: Slack {slackDiag.lastReplySlack || "not recorded"}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Channel config */}
               <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderTop:`3px solid #4A154B`}}>
                 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2,marginBottom:12}}>CHANNEL CONFIGURATION</div>
@@ -1428,6 +1481,19 @@ Channel: ${slackChannelName}`);
                 <div style={{background:B.greenBg,border:`1px solid ${B.green}30`,borderRadius:5,padding:"9px 11px",marginBottom:12}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,letterSpacing:1.5,marginBottom:3}}>DISCOVERED CHANNEL</div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}>#all-st1-sports (C09F64RK0MN) — your active workspace channel</div>
+                </div>
+                <div style={{marginBottom:12}}>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>INCOMING WEBHOOK URL</div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:6,lineHeight:1.45}}>
+                    The current Slack app token can only use incoming webhooks, not chat.postMessage. Paste the webhook from api.slack.com → your app → Incoming Webhooks. Brad reply alerts will use it until chat:write is added and the app is reinstalled.
+                  </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                    <input type="password" value={slackWebhook} onChange={e=>setSlackWebhook(e.target.value)}
+                      placeholder={slackWebhookSaved ? "Webhook saved — paste a new one to replace" : "https://hooks.slack.com/services/…"}
+                      style={{flex:1,minWidth:220,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12}}/>
+                    <OBtn sm onClick={saveSlackWebhookUrl} disabled={testing==="slack-webhook" || !slackWebhook.trim()}>{testing==="slack-webhook"?"SAVING...":"SAVE WEBHOOK"}</OBtn>
+                  </div>
+                  {slackWebhookSaved && <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginTop:6}}>Incoming webhook is saved on the server.</div>}
                 </div>
                 <OBtn onClick={testSlack} disabled={testing==="slack"}>{testing==="slack"?"SENDING TEST...":"SEND TEST MESSAGE"}</OBtn>
               </div>

@@ -6623,6 +6623,7 @@ const [oneOffSubject,setOneOffSubject]=useState("");
 const [oneOffBody,setOneOffBody]=useState("");
 const [bradReplies,setBradReplies]=useState([]);
 const [bradRepliesLoading,setBradRepliesLoading]=useState(false);
+const [bradNotifyRetryId,setBradNotifyRetryId]=useState(null);
 const [bradTab,setBradTab]=useState("prospect");
 const [dbContacts,setDbContacts]=useState([]);
 const [dbTotal,setDbTotal]=useState(0);
@@ -6713,6 +6714,18 @@ await fetch('/api/brad-replies',{method:'POST',headers:{'Content-Type':'applicat
 setBradReplies(rs=>rs.filter(r=>r.id!==id));
 toast("Marked handled","success");
 }catch(e){toast("Error: "+e.message,"error");}
+};
+const retryReplyNotify=async(id)=>{
+setBradNotifyRetryId(id);
+try{
+const r=await fetch('/api/brad-replies',{method:'POST',headers:{'Content-Type':'application/json','x-action':'retry-notify'},body:JSON.stringify({id})});
+const d=await r.json();
+if(!r.ok) throw new Error(d.error||"Retry failed");
+setBradReplies(rs=>rs.map(row=>row.id===id?{...row,output:{...(row.output||{}),slack:d.slack,email:d.email}}:row));
+if(d.slack==="sent") toast("Slack notification sent","success");
+else toast(d.slack||"Slack still failed","error");
+}catch(e){toast("Slack retry: "+e.message,"error");}
+setBradNotifyRetryId(null);
 };
 const sendManualEmail=async()=>{
 if(!oneOffEmail.trim()){toast("Email is required","error");return;}
@@ -8361,10 +8374,16 @@ return(
 </div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:.3,marginBottom:3}}>{inp.subject}</div>
 {inp.snippet&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,lineHeight:1.5,fontStyle:"italic"}}>"{inp.snippet.slice(0,160)}{inp.snippet.length>160?"…":""}"</div>}
+<div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:6,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:out.email==="sent"?B.green:B.muted}}>{out.email==="sent"?"Email notify sent":out.email?`Email: ${out.email}`:"Email notify not recorded"}</span>
+<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:out.slack==="sent"?B.green:B.red}}>{out.slack==="sent"?"Slack sent":out.slack?`Slack failed: ${String(out.slack).split(" | ")[0]}`:"Slack notify not recorded"}</span>
+</div>
 </div>
 <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 <button onClick={()=>{setOneOffName(inp.contactName||"");setOneOffEmail(inp.fromEmail||"");setOneOffMode("self");setTimeout(()=>document.getElementById("oneoff-subject")?.focus(),100);}}
 style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:"pointer"}}>✉ REPLY</button>
+{out.slack!=="sent"&&<button onClick={()=>retryReplyNotify(rep.id)} disabled={bradNotifyRetryId===rep.id}
+style={{background:"none",border:`1px solid ${B.orange}`,color:B.orange,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 8px",borderRadius:3,cursor:bradNotifyRetryId===rep.id?"wait":"pointer",opacity:bradNotifyRetryId===rep.id?.6:1}}>{bradNotifyRetryId===rep.id?"SENDING…":"RETRY SLACK"}</button>}
 <button onClick={()=>markReplyHandled(rep.id)}
 style={{background:B.green,color:B.white,border:"none",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,padding:"3px 10px",borderRadius:3,cursor:"pointer",letterSpacing:.3}}>✓ HANDLED</button>
 </div>
