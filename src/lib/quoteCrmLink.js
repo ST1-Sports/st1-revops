@@ -25,6 +25,70 @@ export function schoolKeyOf(c) {
   return st ? `${sch} — ${st}` : sch;
 }
 
+/** Zoho Contacts sync used to omit zohoId, so profile save never pushed and the next pull wiped Hudson edits. */
+export function zohoIdFromContact(c) {
+  if (!c) return null;
+  if (c.zohoId) return String(c.zohoId);
+  const m = String(c.id || '').match(/^zoho_[cl]_(.+)$/);
+  return m ? m[1] : null;
+}
+
+const PROFILE_KEEP = [
+  'firstName', 'lastName', 'fullName', 'email', 'phone', 'title',
+  'school', 'city', 'state', 'sport', 'schoolClass', 'numAthletes', 'numSports',
+  'priority', 'orgType', 'website',
+];
+
+const PROFILE_SAVE_MS = 15 * 60 * 1000;
+
+/** Overlay a Zoho/server contact without clobbering a profile Matt just saved. */
+export function mergeZohoContactRow(local, incoming, now = Date.now()) {
+  if (!local) return incoming;
+  if (!incoming) return local;
+  const zohoId = zohoIdFromContact(incoming) || zohoIdFromContact(local);
+  const merged = {
+    ...local,
+    ...incoming,
+    zohoId: zohoId || local.zohoId || incoming.zohoId || null,
+  };
+  const savedAt = Number(local.profileSavedAt) || 0;
+  if (savedAt && (now - savedAt) < PROFILE_SAVE_MS) {
+    for (const k of PROFILE_KEEP) {
+      if (local[k] !== undefined) merged[k] = local[k];
+    }
+    merged.profileSavedAt = savedAt;
+  }
+  return merged;
+}
+
+/** Server list wins for membership (Zoho deletes); recent local profile edits stay. */
+export function mergeContactsPreferRecentSaves(localList, serverList, now = Date.now()) {
+  if (!Array.isArray(serverList)) return localList || [];
+  const localById = new Map((localList || []).map(c => [c.id, c]));
+  return serverList.map(sc => {
+    const lc = localById.get(sc.id);
+    return lc ? mergeZohoContactRow(lc, sc, now) : sc;
+  });
+}
+
+/** Analytics / lists → CRM person deal tab, or the school page when there is no contact. */
+export function crmNavForDeal(deal, contacts) {
+  if (!deal) return null;
+  const list = contacts || [];
+  const named = String(deal.contact || '').trim().toLowerCase();
+  const contact = (deal.contactId && list.find(c => c.id === deal.contactId))
+    || (named && list.find(c => contactDisplayName(c).toLowerCase() === named))
+    || null;
+  const schoolName = typeof deal.school === 'string' ? deal.school : (deal.school?.name || '');
+  const schoolKey = contact
+    ? schoolKeyOf(contact)
+    : (deal.state && schoolName ? `${schoolName} — ${deal.state}` : schoolName);
+  const usableSchool = schoolKey && schoolKey !== '(No School)' ? schoolKey : '';
+  if (contact) return { id: contact.id, school: usableSchool || undefined, tab: 'deal' };
+  if (usableSchool) return { school: usableSchool, tab: 'deal' };
+  return null;
+}
+
 export function cleanSchoolName(key) {
   return (key || '').replace(/ — [^—]*$/, '');
 }

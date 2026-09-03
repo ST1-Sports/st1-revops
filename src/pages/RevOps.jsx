@@ -21,6 +21,10 @@ import {
   quoteDealUpdate,
   mergeAccountGroups,
   attachOpenDealsToAccountGroups,
+  zohoIdFromContact,
+  mergeZohoContactRow,
+  mergeContactsPreferRecentSaves,
+  crmNavForDeal,
 } from "../lib/quoteCrmLink.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
 const HOME_AGENT_NAME = "Scout";
@@ -382,14 +386,10 @@ integrations: {...(base.integrations||{}), ...(typeof server.integrations==="obj
 company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
 agentHistory: Array.isArray(base.agentHistory) ? base.agentHistory : (Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : []),
 campaigns:    mergeById(base.campaigns,    server.campaigns),
-// contacts is NOT union-merged like everything else here — it's meant to be
-// a live mirror of Zoho (reconciled by syncContacts, which already adds,
-// updates, AND prunes), not a set every browser independently adds to
-// forever. A union merge means any browser's stale local leftovers survive
-// every pull and get pushed right back to the server, endlessly reviving
-// contacts that were already correctly deleted — take the server's copy
-// outright (it's already the reconciled truth once any browser has synced).
-contacts:     Array.isArray(server.contacts) ? server.contacts : (base.contacts||[]),
+// Contacts stay server-authored for membership (so a Zoho delete stays
+// gone) but a profile Matt just saved must win over a stale /api/state
+// pull — otherwise Hudson email/phone edits vanish on the next sync.
+contacts:     mergeContactsPreferRecentSaves(base.contacts, server.contacts),
 contactLists: mergeById(base.contactLists, server.contactLists),
 suppressedDealIds,
 suppressedDealZohoIds,
@@ -531,14 +531,15 @@ if(!r.ok) throw new Error(`Zoho proxy ${r.status}`);
 return r.json();
 }
 async function pushActivityToZoho(contact, activityNote) {
-if (!contact?.zohoId) return;
+const zid=zohoIdFromContact(contact);
+if (!zid) return;
 try {
 await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({
 service: "crm",
 endpoint: `/Activities`,
 method: "POST",
-body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Date().toISOString().slice(0,10), Who_Id: { id: contact.zohoId }, Status: "Completed" }] }
+body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Date().toISOString().slice(0,10), Who_Id: { id: zid }, Status: "Completed" }] }
 })
 });
 } catch {}
@@ -1066,8 +1067,8 @@ fetchAllPages("/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City
 fetchAllPages("/Deals?fields=Deal_Name,Amount,Stage,Closing_Date,Account_Name,Contact_Name,Description,Modified_Time,Created_Time"),
 ]);
 dealRows=_dealRows;
-const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
-const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
+const contacts=contactRows.map(c=>({id:"zoho_c_"+c.id,zohoId:c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+const leads=leadRows.map(l=>({id:"zoho_l_"+l.id,zohoId:l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm",zohoSource:zs(l.Lead_Source),zohoStatus:zs(l.Lead_Status),rating:zs(l.Rating),confidence:"medium",outreachStatus:"new",importedAt:now}));
 const existingIds=new Set((s.contacts||[]).map(c=>c.id));
 allZoho=[...contacts,...leads];
 toAdd=allZoho.filter(c=>!existingIds.has(c.id));
@@ -1120,7 +1121,7 @@ const liveZohoIds=new Set(allZoho.map(c=>c.id));
 const isZohoSourced=(c)=>(c.id||"").startsWith("zoho_c_")||(c.id||"").startsWith("zoho_l_");
 const survivingExisting=(s.contacts||[]).filter(c=>fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id));
 const removedCount=(s.contacts||[]).length-survivingExisting.length;
-const mergedExisting=survivingExisting.map(c=>updMap.has(c.id)?{...c,...updMap.get(c.id)}:c);
+const mergedExisting=survivingExisting.map(c=>updMap.has(c.id)?mergeZohoContactRow(c,updMap.get(c.id),now):{...c,zohoId:c.zohoId||zohoIdFromContact(c)});
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
 const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase,s.invoices||[]);
@@ -1640,7 +1641,12 @@ const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,bor
 const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 function ModAnalytics() {
-const {s,setMod}=useApp();
+const {s,setMod,dispatch}=useApp();
+const openDealInCrm=(deal)=>{
+const nav=crmNavForDeal(deal,s.contacts||[]);
+if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
+else setMod("deals");
+};
 const [tab,setTab]=useState("overview");
 const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
 const campaigns=s.campaigns||[];
@@ -1685,7 +1691,7 @@ return (
 <Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
 <div style={{display:"flex",flexDirection:"column",gap:7}}>
 {deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
-<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
 <div style={{marginTop:3}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
@@ -1864,7 +1870,7 @@ return(
 {campaignDeals.map(d=>{
 const camp=campaigns.find(c=>c.id===d.campaignId);
 return(
-<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`}}>
+<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
 <div>
 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
 <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
@@ -1927,7 +1933,7 @@ return(
 {lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
 </div>
 <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
-<OBtn sm col={B.green} onClick={()=>setMod("deals")}>DEAL +</OBtn>
+<OBtn sm col={B.green} onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id,tab:"deal"});setMod("crm");}}>DEAL +</OBtn>
 </div>
 </div>
 </div>
@@ -3840,7 +3846,6 @@ const co=orders.filter(o=>o.contactId===c.id||(o.contact||"").toLowerCase()===nm
 const isRealContact=(c.id||"").startsWith("zoho_c_");
 let phase=isRealContact?"customer":"lead";
 if(co.length>0||cd.some(d=>["PO Received","Closed Won"].includes(d.stage))) phase="order";
-else if(cd.some(d=>["Quoted","Negotiating"].includes(d.stage))) phase="quote";
 else if(cd.length>0) phase="deal";
 m.set(c.id,{cd,co,phase});
 }
@@ -3850,13 +3855,13 @@ const getCD=(c)=>cdMap.get(c.id)||{cd:[],co:[],phase:"lead"};
 const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green,customer:B.green};
 useEffect(()=>{
 if(!s.crmNav) return;
-const {id,school}=s.crmNav;
+const {id,school,tab}=s.crmNav;
 if(id){
-setSelId(id);setCrmTab("overview");
+setSelId(id);setCrmTab(tab==="quote"?"deal":(tab||"overview"));
 if(school){setLeftMode("accounts");setSelSchool(school);}
 else setLeftMode("contacts");
 }
-else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
+else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);if(tab)setCrmTab(tab==="quote"?"deal":tab);}
 dispatch("SET_CRM_NAV",null);
 },[s.crmNav]);
 useEffect(()=>{
@@ -3881,7 +3886,7 @@ useEffect(()=>{ setCrmPage(1); },[search, filter, leftMode]);
 useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); },[selSchool]);
 const filtered=useMemo(()=>{
 const q=search.toLowerCase();
-const po={order:0,quote:1,deal:2,lead:3};
+const po={order:0,deal:1,quote:1,lead:2};
 return contacts.filter(c=>{
 if(c.deadStatus) return false;
 if(q&&!cName(c).toLowerCase().includes(q)&&!(c.school||"").toLowerCase().includes(q)&&!(c.email||"").toLowerCase().includes(q)) return false;
@@ -3899,16 +3904,17 @@ const sel=selId?contacts.find(c=>c.id===selId):null;
 const selCD=sel?getCD(sel):null;
 const activeDeal=selCD?.cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||selCD?.cd[0];
 useEffect(()=>{
-setCrmTab("overview");setDraft("");setDrafting(false);
+setDraft("");setDrafting(false);
 setQuoteNum(activeDeal?.quoteNumber||"");
 setTtView(false);setTtContact(null);
-setDealValueInput(String(activeDeal?.value||0));
+setDealValueInput(String(activeDeal?.value||activeDeal?.quoteAmount||0));
 setDealValueSaved(false);
 setQuoteItems(activeDeal?.quoteItems||[]);
 setOverviewEditDealId(null);
 const c=selId?(contacts.find(x=>x.id===selId)||null):null;
 if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
 setProfileDirty(false);
+if(crmTab==="quote") setCrmTab("deal");
 },[selId]);
 useEffect(()=>{
 setSmsBody("");setSmsHistory([]);
@@ -3941,11 +3947,12 @@ setTouchNote("");toast("Touch logged","success");
 const saveProfile=async()=>{
 if(!sel)return;
 const pf=profileForm;
-const patch={...pf,numAthletes:pf.numAthletes?Number(pf.numAthletes)||pf.numAthletes:undefined,numSports:pf.numSports?Number(pf.numSports)||pf.numSports:undefined};
+const zid=zohoIdFromContact(sel);
+const patch={...pf,numAthletes:pf.numAthletes?Number(pf.numAthletes)||pf.numAthletes:undefined,numSports:pf.numSports?Number(pf.numSports)||pf.numSports:undefined,profileSavedAt:Date.now(),...(zid?{zohoId:zid}:{})};
 if(patch.firstName||patch.lastName) patch.fullName=`${patch.firstName||""} ${patch.lastName||""}`.trim();
 dispatch("UPDATE_CONTACT",{id:sel.id,...patch});
 setProfileDirty(false);
-if(sel.zohoId){
+if(zid){
 setZohoSyncing(true);
 const isLead=sel.id?.startsWith("zoho_l_");
 const mod=isLead?"Leads":"Contacts";
@@ -3963,12 +3970,12 @@ accountId=sel.zohoAccountId;
 // had before those were fixed to resolve a real Account id first.
 const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:pf.school,city:pf.city,state:pf.state})});
 const d=await r.json();
-if(d.ok){accountId=d.accountId;dispatch("UPDATE_CONTACT",{id:sel.id,zohoAccountId:accountId});}
+if(d.ok){accountId=d.accountId;dispatch("UPDATE_CONTACT",{id:sel.id,zohoAccountId:accountId,profileSavedAt:Date.now()});}
 }
 }
 const fields=isLead?{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Designation:pf.title,Company:pf.school,State:pf.state,City:pf.city}:{First_Name:pf.firstName,Last_Name:pf.lastName,Email:pf.email,Phone:pf.phone,Title:pf.title,...(accountId?{Account_Name:{id:accountId}}:{}),Mailing_State:pf.state,Mailing_City:pf.city};
-await crmUpdate(mod,sel.zohoId,fields);
-if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,sel.zohoId,`Sport / primary contact sport: ${pf.sport}`);
+await crmUpdate(mod,zid,fields);
+if(pf.sport&&pf.sport!==sel.sport) await crmAddNote(mod,zid,`Sport / primary contact sport: ${pf.sport}`);
 toast("Profile saved + synced to Zoho","success");
 }catch(e){
 toast("Saved locally (Zoho sync failed)","info");
@@ -3999,8 +4006,8 @@ else toast(`No verified contacts found for the missing roles at ${school}`,"info
 }catch(e){toast(`Search error: ${e.message}`,"error");}
 setFindingStaff(false);
 };
-const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",label:"Quote"},{id:"order",label:"Order"}];
-const phaseIdx={lead:0,deal:1,quote:2,order:3,customer:3};
+const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"order",label:"Order"}];
+const phaseIdx={lead:0,deal:1,quote:1,order:2,customer:2};
 const [showBreakdown,setShowBreakdown]=useState(false);
 const [showMaintenanceTools,setShowMaintenanceTools]=useState(false);
 const [showCrmTools,setShowCrmTools]=useState(false);
@@ -4190,7 +4197,7 @@ return next;
 <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools or people…":"Search people…"} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="contacts"&&(
 <div style={{display:"flex",gap:4,marginTop:8,flexWrap:"wrap"}}>
-{[["all","All"],["mine","Mine"],["customer","Customer"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
+{[["all","All"],["mine","Mine"],["customer","Customer"],["deal","Deal"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
 <button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"4px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>
 ))}
 </div>
@@ -4343,10 +4350,11 @@ const r=await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Typ
 const d=await r.json();
 if(!d.ok){toast(d.error||"Could not resolve Zoho Account","error");setSavingAccountName(false);return;}
 schoolContacts.forEach(c=>{
-dispatch("UPDATE_CONTACT",{id:c.id,school:newName});
-if(c.zohoId){
+const zid=zohoIdFromContact(c);
+dispatch("UPDATE_CONTACT",{id:c.id,school:newName,profileSavedAt:Date.now(),...(zid?{zohoId:zid}:{})});
+if(zid){
 const isLead=(c.id||"").startsWith("zoho_l_");
-crmUpdate(isLead?"Leads":"Contacts",c.zohoId,isLead?{Company:newName}:{Account_Name:{id:d.accountId}});
+crmUpdate(isLead?"Leads":"Contacts",zid,isLead?{Company:newName}:{Account_Name:{id:d.accountId}});
 }
 });
 setSelSchool(state?`${newName} — ${state}`:newName);
@@ -4656,7 +4664,7 @@ return(
 {allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
-<div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+<div key={d.id} onClick={()=>{const c=schoolContacts.find(ct=>ct.id===d.contactId)||schoolContacts.find(ct=>cName(ct)===d.contact);if(c){setSelId(c.id);setCrmTab("deal");}}} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:(d.contactId||d.contact)?"pointer":"default"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
@@ -4664,7 +4672,7 @@ return(
 <div style={{textAlign:"right",flexShrink:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
-{d.hasUploadedPdf&&<button onClick={()=>openStoredDealPdf(d.id,d.quotePdfName)} style={{background:"none",border:"none",padding:"4px 0 0",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer"}}>Open PDF</button>}
+{d.hasUploadedPdf&&<button onClick={e=>{e.stopPropagation();openStoredDealPdf(d.id,d.quotePdfName);}} style={{background:"none",border:"none",padding:"4px 0 0",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer"}}>Open PDF</button>}
 </div>
 </div>
 ))}
@@ -4916,7 +4924,7 @@ return(
 </div>
 {/* Tabs */}
 <div style={{display:"flex",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
-{[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["quote","Quote"],["order","Order"],...(sel.phone&&isWarmContact(sel,selCD,s.invoices)?[["sms","Text"]]:[])].map(([id,label])=>(
+{[["overview","Profile"],["history","History"],["discovery","Discovery"],["deal","Deal"],["order","Order"],...(sel.phone&&isWarmContact(sel,selCD,s.invoices)?[["sms","Text"]]:[])].map(([id,label])=>(
 <button key={id} onClick={()=>setCrmTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${crmTab===id?B.orange:"transparent"}`,color:crmTab===id?B.orange:B.muted,padding:"8px 16px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",position:"relative"}}>
 {label}
 {id==="discovery"&&sel.ttCompletedAt&&<span style={{position:"absolute",top:6,right:4,width:6,height:6,borderRadius:"50%",background:B.green,display:"block"}}/>}
@@ -4936,7 +4944,7 @@ return(
 <div style={{display:"flex",gap:7,alignItems:"center"}}>
 {profileDirty&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.orange}}>Unsaved changes</span>}
 <OBtn sm onClick={saveProfile} disabled={zohoSyncing||!profileDirty}>
-{zohoSyncing?"SYNCING…":sel.zohoId?"SAVE + SYNC TO ZOHO":"SAVE"}
+{zohoSyncing?"SYNCING…":zohoIdFromContact(sel)?"SAVE + SYNC TO ZOHO":"SAVE"}
 </OBtn>
 </div>
 </div>
@@ -5010,9 +5018,9 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 </div>
 {selCD.cd.map(d=>(
 <div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
+<div onClick={()=>setCrmTab("deal")} style={{cursor:"pointer"}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
-<div style={{marginTop:2}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
+<div style={{marginTop:2,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}><Pill v={d.stage} sc={DSC} bc={DBG}/>{d.quoteNumber&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Quote #{d.quoteNumber}</span>}</div>
 </div>
 <div style={{textAlign:"right",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:2}}>
 {overviewEditDealId===d.id?(
@@ -5165,7 +5173,7 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <Lbl s={{marginBottom:5}}>Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{const prevStage=activeDeal.stage;dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");if(st==="Quoted")setCrmTab("quote");autoInvoiceOnClosedWon(activeDeal,prevStage,st,toast);}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=activeDeal.stage;dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:st});crmUpdate("Deals",activeDeal.zohoId,{Stage:st});toast("Stage updated","success");autoInvoiceOnClosedWon(activeDeal,prevStage,st,toast);}} style={{background:activeDeal.stage===st?DSC[st]:B.surface,color:activeDeal.stage===st?B.white:B.muted,border:`1px solid ${activeDeal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
 ))}
 </div>
 <div style={{display:"flex",gap:6,marginBottom:10}}>
@@ -5175,6 +5183,61 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 <OBtn onClick={doDraftEmail} disabled={drafting} style={{width:"100%"}}>{drafting?"WRITING...":"✦ DRAFT FOLLOW-UP"}</OBtn>
 {draft&&<div style={{marginTop:10,background:B.surface,borderRadius:4,padding:9}}><textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={7} style={{width:"100%",background:"transparent",border:"none",color:B.text,fontSize:11,lineHeight:1.7,resize:"vertical",boxSizing:"border-box"}}/><GBtn onClick={()=>navigator.clipboard?.writeText(draft)} style={{fontSize:10,padding:"3px 8px"}}>COPY</GBtn></div>}
 </div>
+{(()=>{
+const qSubtotal=quoteItems.reduce((a,i)=>a+(i.qty||0)*(i.rate||0),0);
+const zohoCustomer=(s.invoices||[]).find(inv=>inv.customer&&sel&&(inv.customer.toLowerCase()===(sel.school||"").toLowerCase()||(activeDeal&&inv.customer.toLowerCase()===activeDeal.school?.toLowerCase())));
+const zohoCustomerId=zohoCustomer?.customerId||null;
+const zbUrl=zohoCustomerId?`https://books.zoho.com/app/#contacts/view/${zohoCustomerId}`:"https://books.zoho.com/app/";
+const printPDF=()=>{
+const rows=quoteItems.map(i=>`<tr><td>${i.name||""}</td><td style="text-align:center">${i.qty||0}</td><td style="text-align:right">$${Number(i.rate||0).toFixed(2)}</td><td style="text-align:right">$${((i.qty||0)*(i.rate||0)).toFixed(2)}</td></tr>`).join("");
+const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote ${quoteNum||""}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:760px;margin:0 auto}h1{color:#f37321;font-size:28px;margin:0}h2{font-size:13px;font-weight:400;color:#666;margin:4px 0 0}table{width:100%;border-collapse:collapse;margin-top:28px}th{background:#f37321;color:#fff;padding:10px 12px;text-align:left;font-size:13px}td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}.total-row{font-weight:700;font-size:15px;color:#f37321}.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #f37321;padding-bottom:16px;margin-bottom:8px}.meta{font-size:12px;color:#444;margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:4px}.meta span{color:#666}footer{margin-top:40px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style></head><body><div class="header"><div><h1>ST1 SPORTS</h1><h2>Premium Athletic Equipment</h2></div><div style="text-align:right"><div style="font-size:22px;font-weight:700;color:#f37321">QUOTE</div><div style="font-size:13px;color:#666">#${quoteNum||"—"}</div><div style="font-size:12px;color:#999">${new Date().toLocaleDateString()}</div></div></div><div class="meta"><div><span>To:</span> <strong>${sel?sel.fullName||[sel.firstName,sel.lastName].filter(Boolean).join(" "):"—"}</strong></div><div><span>School/Org:</span> <strong>${activeDeal?.school||sel?.school||"—"}</strong></div><div><span>Email:</span> ${sel?.email||"—"}</div><div><span>Phone:</span> ${sel?.phone||"—"}</div></div><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}<tr class="total-row"><td colspan="3" style="text-align:right;padding-top:16px">TOTAL</td><td style="text-align:right;padding-top:16px">$${qSubtotal.toFixed(2)}</td></tr></tbody></table><div style="margin-top:20px;font-size:12px;color:#555">${activeDeal?.quoteNotes||""}</div><footer>ST1 Sports · matt@st1sports.com · 719-256-0275 · st1sports.com · This quote is valid for 30 days.</footer></body></html>`;
+const w=window.open("","_blank","width=800,height=600");
+if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),400);}
+};
+return (
+<div className="card" style={{padding:16,marginBottom:12,borderTop:`3px solid ${B.orange}`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+<Lbl>Quote — this is the deal amount</Lbl>
+{zohoCustomer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green}}>✓ Zoho account: {zohoCustomer.customer}</div>}
+</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:12}}>Line items set the pipeline value. Saving the quote updates the deal.</div>
+<div style={{marginBottom:12}}>
+<Lbl s={{marginBottom:3}}>Quote Number</Lbl>
+<input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/>
+</div>
+<Lbl s={{marginBottom:6}}>Line Items</Lbl>
+{quoteItems.length>0&&(
+<div style={{marginBottom:8}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4}}>
+{["ITEM","QTY","UNIT PRICE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+</div>
+{quoteItems.map((item,idx)=>(
+<div key={item.id||idx} style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
+<input value={item.name} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,name:e.target.value}:q))} placeholder="Item name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+<input type="number" min="1" value={item.qty} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,qty:Number(e.target.value||1)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"center"}}/>
+<input type="number" min="0" step="0.01" value={item.rate} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,rate:Number(e.target.value||0)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"right"}}/>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+<button onClick={()=>setQuoteItems(qi=>qi.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1,textAlign:"center"}}>✕</button>
+</div>
+))}
+<div style={{display:"flex",justifyContent:"flex-end",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.orange}}>Deal value: {fmt$(qSubtotal)}</div>
+</div>
+</div>
+)}
+<button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
+<div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+<div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
+<OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal,value:qSubtotal});setDealValueInput(String(qSubtotal));crmUpdate("Deals",activeDeal.zohoId,{Amount:qSubtotal});toast("Quote saved — deal value updated","success");}}>SAVE QUOTE</OBtn>
+<OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
+{activeDeal.hasUploadedPdf&&<OBtn col={B.blue} onClick={()=>openStoredDealPdf(activeDeal.id,activeDeal.quotePdfName)}>OPEN PDF</OBtn>}
+<a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
+{activeDeal.stage!=="Quoted"&&<OBtn col={B.green} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
+</div>
+{activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file — {fmt$(qSubtotal||activeDeal.quoteAmount||activeDeal.value||0)}</div>}
+</div>
+);
+})()}
 <div className="card" style={{padding:14}}>
 <Lbl s={{marginBottom:7}}>Touch History</Lbl>
 <div style={{display:"flex",gap:6,marginBottom:7}}>
@@ -5194,87 +5257,6 @@ setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});
 )}
 </div>
 )}
-{crmTab==="quote"&&(()=>{
-const qSubtotal=quoteItems.reduce((a,i)=>a+(i.qty||0)*(i.rate||0),0);
-const zohoCustomer=(s.invoices||[]).find(inv=>inv.customer&&sel&&(inv.customer.toLowerCase()===(sel.school||"").toLowerCase()||(activeDeal&&inv.customer.toLowerCase()===activeDeal.school?.toLowerCase())));
-const zohoCustomerId=zohoCustomer?.customerId||null;
-const zbUrl=zohoCustomerId?`https://books.zoho.com/app/#contacts/view/${zohoCustomerId}`:"https://books.zoho.com/app/";
-const printPDF=()=>{
-const rows=quoteItems.map(i=>`<tr><td>${i.name||""}</td><td style="text-align:center">${i.qty||0}</td><td style="text-align:right">$${Number(i.rate||0).toFixed(2)}</td><td style="text-align:right">$${((i.qty||0)*(i.rate||0)).toFixed(2)}</td></tr>`).join("");
-const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote ${quoteNum||""}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#111;max-width:760px;margin:0 auto}h1{color:#f37321;font-size:28px;margin:0}h2{font-size:13px;font-weight:400;color:#666;margin:4px 0 0}table{width:100%;border-collapse:collapse;margin-top:28px}th{background:#f37321;color:#fff;padding:10px 12px;text-align:left;font-size:13px}td{padding:9px 12px;border-bottom:1px solid #eee;font-size:13px}.total-row{font-weight:700;font-size:15px;color:#f37321}.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #f37321;padding-bottom:16px;margin-bottom:8px}.meta{font-size:12px;color:#444;margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:4px}.meta span{color:#666}footer{margin-top:40px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style></head><body><div class="header"><div><h1>ST1 SPORTS</h1><h2>Premium Athletic Equipment</h2></div><div style="text-align:right"><div style="font-size:22px;font-weight:700;color:#f37321">QUOTE</div><div style="font-size:13px;color:#666">#${quoteNum||"—"}</div><div style="font-size:12px;color:#999">${new Date().toLocaleDateString()}</div></div></div><div class="meta"><div><span>To:</span> <strong>${sel?sel.fullName||[sel.firstName,sel.lastName].filter(Boolean).join(" "):"—"}</strong></div><div><span>School/Org:</span> <strong>${activeDeal?.school||sel?.school||"—"}</strong></div><div><span>Email:</span> ${sel?.email||"—"}</div><div><span>Phone:</span> ${sel?.phone||"—"}</div></div><table><thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Unit Price</th><th style="text-align:right">Total</th></tr></thead><tbody>${rows}<tr class="total-row"><td colspan="3" style="text-align:right;padding-top:16px">TOTAL</td><td style="text-align:right;padding-top:16px">$${qSubtotal.toFixed(2)}</td></tr></tbody></table><div style="margin-top:20px;font-size:12px;color:#555">${activeDeal?.quoteNotes||""}</div><footer>ST1 Sports · matt@st1sports.com · 719-256-0275 · st1sports.com · This quote is valid for 30 days.</footer></body></html>`;
-const w=window.open("","_blank","width=800,height=600");
-if(w){w.document.write(html);w.document.close();setTimeout(()=>w.print(),400);}
-};
-return (
-<div>
-<div className="card" style={{padding:16,marginBottom:12}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-<Lbl>Quote</Lbl>
-{zohoCustomer&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.green}}>✓ Zoho account: {zohoCustomer.customer}</div>}
-</div>
-{activeDeal?(
-<>
-<div style={{marginBottom:12}}>
-<Lbl s={{marginBottom:3}}>Quote Number</Lbl>
-<input value={quoteNum} onChange={e=>setQuoteNum(e.target.value)} onBlur={()=>activeDeal&&dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNumber:quoteNum})} placeholder="Q-2025-001" style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,boxSizing:"border-box"}}/>
-</div>
-<Lbl s={{marginBottom:6}}>Line Items</Lbl>
-{quoteItems.length>0&&(
-<div style={{marginBottom:8}}>
-<div style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4}}>
-{["ITEM","QTY","UNIT PRICE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
-</div>
-{quoteItems.map((item,idx)=>(
-<div key={item.id} style={{display:"grid",gridTemplateColumns:"1fr 56px 80px 70px 24px",gap:4,marginBottom:4,alignItems:"center"}}>
-<input value={item.name} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,name:e.target.value}:q))} placeholder="Item name" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
-<input type="number" min="1" value={item.qty} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,qty:Number(e.target.value||1)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"center"}}/>
-<input type="number" min="0" step="0.01" value={item.rate} onChange={e=>setQuoteItems(qi=>qi.map((q,i)=>i===idx?{...q,rate:Number(e.target.value||0)}:q))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11,textAlign:"right"}}/>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
-<button onClick={()=>setQuoteItems(qi=>qi.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1,textAlign:"center"}}>✕</button>
-</div>
-))}
-<div style={{display:"flex",justifyContent:"flex-end",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`}}>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.orange}}>Total: {fmt$(qSubtotal)}</div>
-</div>
-</div>
-)}
-<button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
-<div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
-<div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
-<OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal});toast("Quote saved","success");}}>SAVE QUOTE</OBtn>
-<OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
-<a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
-{activeDeal.stage!=="Quoted"&&<OBtn col={B.green} onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,stage:"Quoted"});crmUpdate("Deals",activeDeal.zohoId,{Stage:"Quoted"});toast("Marked as Quoted","success");}}>MARK AS QUOTED</OBtn>}
-</div>
-{activeDeal.quoteNumber&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green}}>✓ Quote {activeDeal.quoteNumber} on file{activeDeal.quoteAmount?` — ${fmt$(activeDeal.quoteAmount)}`:""}</div>}
-</>
-):<div style={{textAlign:"center",padding:"20px 0",color:B.muted,fontSize:11}}><OBtn onClick={()=>setCrmTab("deal")}>Create a deal first →</OBtn></div>}
-</div>
-{/* Past quotes across all deals */}
-{(()=>{
-const pastDeals=(s.deals||[]).filter(d=>d.contactId===sel.id&&d.quoteNumber);
-if(pastDeals.length===0) return null;
-return(
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Quote History</Lbl>
-{pastDeals.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0)).map(d=>(
-<div key={d.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{d.quoteNumber||"—"}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.stage||""}{d.quoteAmount?` · ${fmt$(d.quoteAmount)}`:""}</div>
-</div>
-<div style={{textAlign:"right"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:d.stage==="Closed Won"?B.green:d.stage==="Closed Lost"?"#ef4444":B.orange,fontWeight:600}}>{d.quoteAmount?fmt$(d.quoteAmount):""}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>{d.updatedAt?new Date(d.updatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}):""}</div>
-</div>
-</div>
-))}
-</div>
-);
-})()}
-</div>
-);
-})()}
 {crmTab==="order"&&(
 <div>
 {selCD.co.length===0&&!showNewOrder&&<div style={{textAlign:"center",padding:"40px 0"}}><div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,marginBottom:12}}>No orders yet</div><OBtn onClick={()=>setShowNewOrder(true)}>+ CREATE ORDER</OBtn></div>}
@@ -5343,7 +5325,7 @@ const allEvents=[
 ...(activeDeal?.touchHistory||[]).map(t=>({id:t.id,text:t.note||t.type,ts:new Date(t.date+"T00:00").getTime(),author:t.author,src:"touch"})),
 ...(sel.activity||[]).filter(a=>a.type==="email"||a.type==="email_sent"||a.type==="email_opened").map(a=>({id:a.id||mkId(),text:a.subject||a.text||"Email sent",ts:a.ts||a.sentAt||Date.now(),author:a.author||a.from||"",src:"email",meta:a.status})),
 ...(sel.campaigns||[]).map(c=>({id:c.id||mkId(),text:`Added to campaign: ${c.name||c.campaignId||""}`,ts:c.addedAt||Date.now(),author:"System",src:"campaign"})),
-...(activeDeal?.quotes||[]).map(q=>({id:q.id,text:`Quote sent — ${q.title||"Untitled"} (${q.status||"draft"})`,ts:q.createdAt||Date.now(),author:q.author||"",src:"quote"})),
+...(activeDeal?.quoteNumber?[ {id:activeDeal.id+"-q",text:`Quote ${activeDeal.quoteNumber}${activeDeal.quoteAmount?` — ${fmt$(activeDeal.quoteAmount)}`:""}`,ts:activeDeal.updatedAt||Date.now(),author:"",src:"quote"} ]:[]),
 ...(s.orders||[]).filter(o=>o.contactId===sel.id).map(o=>({id:o.id,text:`Order ${o.status||"placed"} — ${o.title||"Order"}`,ts:o.createdAt||Date.now(),author:"",src:"order"})),
 ].sort((a,b)=>b.ts-a.ts);
 return(
@@ -7156,7 +7138,7 @@ const src=zs(l.Lead_Source); if(["Web Site","Website","Chat","External Referral"
 const rating=zs(l.Rating); const priority=rating==="Hot"?"high":rating==="Warm"?"medium":"low";
 return {score:Math.min(200,score),activity:acts,priority};
 };
-const contacts = contactRows.map(c=>({id:"zoho_c_"+c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
+const contacts = contactRows.map(c=>({id:"zoho_c_"+c.id,zohoId:c.id,firstName:zs(c.First_Name),lastName:zs(c.Last_Name),fullName:`${zs(c.First_Name)} ${zs(c.Last_Name)}`.trim(),email:zs(c.Email),phone:zs(c.Phone),title:zs(c.Title),school:zs(c.Account_Name),city:zs(c.Mailing_City),state:zs(c.Mailing_State),orgType:"school",source:"zoho-crm",zohoSource:zs(c.Lead_Source),confidence:"high",outreachStatus:"new",importedAt:now}));
 const leads = leadRows.map(l=>{const {score,activity,priority}=scoreLeadFromZoho(l);return{id:"zoho_l_"+l.id,firstName:zs(l.First_Name),lastName:zs(l.Last_Name),fullName:`${zs(l.First_Name)} ${zs(l.Last_Name)}`.trim(),email:zs(l.Email),phone:zs(l.Phone),title:zs(l.Title),school:zs(l.Company),city:zs(l.City),state:zs(l.State),orgType:"school",source:"zoho-crm-lead",zohoStatus:zs(l.Lead_Status),zohoSource:zs(l.Lead_Source),zohoRating:zs(l.Rating),zohoId:l.id,confidence:"medium",priority,outreachStatus:l.Lead_Status==="Customer"?"replied":l.Lead_Status==="Contacted"?"contacted":"new",score,activity,importedAt:now};});
 const all=[...contacts,...leads];
 const existing=new Set((s.contacts||[]).map(c=>c.id));

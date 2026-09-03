@@ -11,6 +11,10 @@ import {
   mergeAccountGroups,
   attachOpenDealsToAccountGroups,
   lineItemsToQuoteItems,
+  zohoIdFromContact,
+  mergeZohoContactRow,
+  mergeContactsPreferRecentSaves,
+  crmNavForDeal,
 } from './quoteCrmLink.js';
 
 const hudsonCoach = {
@@ -186,8 +190,87 @@ describe('mergeAccountGroups + attachOpenDealsToAccountGroups', () => {
 });
 
 describe('lineItemsToQuoteItems', () => {
-  it('maps API line items to the CRM quote-tab shape', () => {
+  it('maps API line items to the CRM deal quote block', () => {
     const items = lineItemsToQuoteItems([{ name: 'Ball', quantity: 3, rate: 10 }]);
     assert.deepEqual(items, [{ name: 'Ball', qty: 3, rate: 10, cost: 0, description: '' }]);
+  });
+});
+
+describe('zohoIdFromContact', () => {
+  it('reads zohoId or the zoho_c_ / zoho_l_ prefix', () => {
+    assert.equal(zohoIdFromContact({ zohoId: 'abc' }), 'abc');
+    assert.equal(zohoIdFromContact({ id: 'zoho_c_999' }), '999');
+    assert.equal(zohoIdFromContact({ id: 'zoho_l_888' }), '888');
+    assert.equal(zohoIdFromContact({ id: 'local_1' }), null);
+  });
+});
+
+describe('mergeZohoContactRow', () => {
+  it('keeps a Hudson profile save that Zoho has not caught up to', () => {
+    const now = 1_700_000_000_000;
+    const local = {
+      id: 'zoho_c_1',
+      firstName: 'Kevin',
+      email: 'kevin@hudson.k12.ia.us',
+      phone: '319-555-0100',
+      school: 'Hudson High School',
+      profileSavedAt: now - 60_000,
+    };
+    const incoming = {
+      id: 'zoho_c_1',
+      firstName: 'Kev',
+      email: 'old@hudson.k12.ia.us',
+      phone: '',
+      school: 'Hudson',
+      zohoId: '1',
+    };
+    const merged = mergeZohoContactRow(local, incoming, now);
+    assert.equal(merged.email, 'kevin@hudson.k12.ia.us');
+    assert.equal(merged.phone, '319-555-0100');
+    assert.equal(merged.school, 'Hudson High School');
+    assert.equal(merged.zohoId, '1');
+  });
+
+  it('takes Zoho once the save window expires', () => {
+    const now = 1_700_000_000_000;
+    const merged = mergeZohoContactRow(
+      { id: 'zoho_c_1', email: 'new@x.com', profileSavedAt: now - 20 * 60 * 1000 },
+      { id: 'zoho_c_1', email: 'zoho@x.com', zohoId: '1' },
+      now,
+    );
+    assert.equal(merged.email, 'zoho@x.com');
+  });
+});
+
+describe('mergeContactsPreferRecentSaves', () => {
+  it('keeps server membership and overlays a recent local save', () => {
+    const now = 1_700_000_000_000;
+    const out = mergeContactsPreferRecentSaves(
+      [{ id: 'zoho_c_1', email: 'new@x.com', profileSavedAt: now - 1000 }],
+      [{ id: 'zoho_c_1', email: 'old@x.com' }, { id: 'zoho_c_2', email: 'other@x.com' }],
+      now,
+    );
+    assert.equal(out.length, 2);
+    assert.equal(out[0].email, 'new@x.com');
+    assert.equal(out[1].email, 'other@x.com');
+  });
+});
+
+describe('crmNavForDeal', () => {
+  it('opens the Hudson coach deal tab when the deal has a contactId', () => {
+    const nav = crmNavForDeal(
+      { id: 'd1', contactId: 'c_hudson_ad', school: 'Hudson', state: 'IA' },
+      [hudsonCoach],
+    );
+    assert.equal(nav.id, 'c_hudson_ad');
+    assert.equal(nav.tab, 'deal');
+    assert.equal(nav.school, 'Hudson High School — IA');
+  });
+
+  it('falls back to the school page when there is no contact', () => {
+    const nav = crmNavForDeal({ id: 'd2', school: 'Hudson High School', state: 'IA' }, []);
+    assert.equal(nav.id, undefined);
+    assert.equal(nav.school, 'Hudson High School — IA');
+    assert.equal(nav.tab, 'deal');
   });
 });
