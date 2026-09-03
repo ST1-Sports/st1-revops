@@ -256,10 +256,14 @@ function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo }) {
         <div>
           <Lbl c={B.orange}>SEND DAY 1 FROM BRAD</Lbl>
           <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
-            {readyCount} Email 1{readyCount !== 1 ? "s" : ""} ready
+            {readyCount > 0
+              ? `${readyCount} Email 1${readyCount !== 1 ? "s" : ""} ready`
+              : "Add Day 1 copy below, then GO"}
           </div>
           <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 520, lineHeight: 1.5 }}>
-            Sends the first email for each organization still pending, from brad@shopst1sports.com. Already-sent, bounced, or empty Day 1s are skipped.
+            {readyCount > 0
+              ? "Sends the first email for each organization still pending, from brad@shopst1sports.com. Already-sent, bounced, or empty Day 1s are skipped."
+              : "Nothing sends until you write Email 1 and press GO. Pick 1 every 15 seconds now so the delay is set when you are ready."}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
@@ -1812,17 +1816,15 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          {(day1Ready.length > 0 || goRun) && (
-            <Day1GoPanel
-              readyCount={day1Ready.length}
-              pace={goPace}
-              setPace={setGoPace}
-              run={goRun}
-              onGo={startDay1Go}
-              onStop={() => { goAbortRef.current = true; }}
-              canGo={!!batchId}
-            />
-          )}
+          <Day1GoPanel
+            readyCount={day1Ready.length}
+            pace={goPace}
+            setPace={setGoPace}
+            run={goRun}
+            onGo={startDay1Go}
+            onStop={() => { goAbortRef.current = true; }}
+            canGo={!!batchId && day1Ready.length > 0}
+          />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
             <div style={{ fontSize: 11, color: B.muted }}>{sentTouchCount} of {totalTouchCount} email{totalTouchCount !== 1 ? "s" : ""} sent so far.</div>

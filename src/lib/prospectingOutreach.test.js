@@ -70,6 +70,16 @@ describe('fetchAllAreaContactIds', () => {
     const ids = await fetchAllAreaContactIds({ name: 'Iowa' }, {}, fetchImpl);
     assert.deepEqual(ids, ['1', '2']);
   });
+
+  it('stops on an empty idsOnly payload instead of paging', async () => {
+    const fetchImpl = async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      if (body.idsOnly) return { ok: true, json: async () => ({ ids: [], idsOnly: true, total: 0 }) };
+      throw new Error('should not page');
+    };
+    const ids = await fetchAllAreaContactIds({ name: 'Empty' }, {}, fetchImpl);
+    assert.deepEqual(ids, []);
+  });
 });
 
 describe('createOutreachBatchFromIds', () => {

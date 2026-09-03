@@ -71,7 +71,9 @@ export async function fetchAllAreaContactIds(area, filters = {}, fetchImpl = fet
     sportFilter: filters.sportFilter || '',
   };
   const first = await postJson(fetchImpl, '/api/contacts/area-browse', { ...bodyBase, idsOnly: true });
-  if (Array.isArray(first.ids) && first.ids.length) return [...new Set(first.ids.map(String))];
+  if (first.idsOnly === true || Array.isArray(first.ids)) {
+    return [...new Set((first.ids || []).map(String))];
+  }
 
   const PAGE = 100;
   let page = 1;

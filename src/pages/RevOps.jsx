@@ -6824,9 +6824,11 @@ setAreaContactsAllLoading(false);
 };
 const openIdsInOutreach=async(name,contactIds,busyKey)=>{
 if(listOutreachBusy) return;
+const unique=[...new Set((contactIds||[]).map(String))];
+if(unique.length>200 && !window.confirm(`Open ${unique.length.toLocaleString()} contacts in Bulk Outreach as a draft?\n\nSet MAX PER DAY and the 15-second delay there. Nothing sends until you press GO.`)) return;
 setListOutreachBusy(busyKey||name);
 try{
-const r=await createOutreachBatchFromIds({name,contactIds,createdBy:cu?.name||"",localContacts:s.contacts||[]});
+const r=await createOutreachBatchFromIds({name,contactIds:unique,createdBy:cu?.name||"",localContacts:s.contacts||[]});
 if(!r.ok){toast(r.error||"Could not open outreach","error");return;}
 toast(`${r.leadCount.toLocaleString()} emailed contacts ready in Bulk Outreach — set copy, batches, and the 15s delay`,"success");
 navigate(outreachPathForBatch(r.batch.id));
@@ -6848,6 +6850,7 @@ const key=area?.id||area?.name||"segment";
 setListOutreachBusy(key);
 try{
 const ids=opts.ids||await fetchAllAreaContactIds(area,{stateFilter:opts.stateFilter||"",sportFilter:opts.sportFilter||""});
+if(ids.length>200 && !window.confirm(`Build a list of ${ids.length.toLocaleString()} contacts and open it in Bulk Outreach as a draft?\n\nSet MAX PER DAY and the 15-second delay there. Nothing sends until you press GO.`)) return;
 const list=await createSegmentList(area,ids,opts.source||"segment");
 if(!list) return;
 const r=await createOutreachBatchFromIds({name:list.name,contactIds:list.contactIds,createdBy:cu?.name||"",localContacts:s.contacts||[]});
@@ -8771,7 +8774,10 @@ return(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:600,color:B.text}}>{list.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{(list.contactIds||[]).length} contacts</div>
 </div>
+<div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
+<OBtn sm col={B.orange} disabled={listOutreachBusy===list.id} onClick={()=>openIdsInOutreach(list.name,list.contactIds,list.id)}>{listOutreachBusy===list.id?"OPENING…":"OPEN IN OUTREACH →"}</OBtn>
 <OBtn sm col={B.teal} onClick={()=>setView("campaigns")}>START CAMPAIGN →</OBtn>
+</div>
 </div>
 ))}
 </div>
