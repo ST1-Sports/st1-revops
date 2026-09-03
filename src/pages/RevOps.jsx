@@ -27,6 +27,7 @@ import {
   crmNavForDeal,
 } from "../lib/quoteCrmLink.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
+import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -6543,7 +6544,7 @@ const SCRAPE_TASK_ID = "prospecting_scrape";
 // copied into s.contacts). Resolve against local state first, then fetch
 // whatever's missing from /api/contacts?ids=... . Used by both the Brad
 // "MY LISTS" tab and the Segments "LISTS" tab so both stay in sync.
-function ContactListCard({ list, localContacts, isOpen, onToggle, isRenaming, renameValue, onRenameStart, onRenameChange, onRenameSave, onRenameCancel, onDelete, onUseInCampaign }) {
+function ContactListCard({ list, localContacts, isOpen, onToggle, isRenaming, renameValue, onRenameStart, onRenameChange, onRenameSave, onRenameCancel, onDelete, onUseInCampaign, onUseInOutreach, outreachBusy }) {
 const [preview,setPreview]=useState(null);
 const [full,setFull]=useState(null);
 const [fullLoading,setFullLoading]=useState(false);
@@ -6609,6 +6610,7 @@ preview===null?(
 <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
 {isRenaming?(<><OBtn sm onClick={onRenameSave}>SAVE</OBtn><button onClick={onRenameCancel} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:13}}>✕</button></>):(<>
 <button onClick={onRenameStart} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>RENAME</button>
+<OBtn sm col={B.orange} onClick={onUseInOutreach} disabled={outreachBusy}>{outreachBusy?"OPENING…":"OPEN IN OUTREACH →"}</OBtn>
 <OBtn sm col={B.teal} onClick={onUseInCampaign}>USE IN CAMPAIGN →</OBtn>
 <button onClick={onDelete} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:16,padding:"2px 4px"}}>×</button>
 <span onClick={onToggle} style={{color:B.muted,fontSize:11,cursor:"pointer"}}>{isOpen?"▲":"▼"}</span>
@@ -6639,7 +6641,7 @@ preview===null?(
 );
 }
 function ModProspecting() {
-const {s,dispatch,toast,setMod,crmSyncRef}=useApp();
+const {s,dispatch,toast,setMod,crmSyncRef,cu}=useApp();
 const navigate=useNavigate();
 const location=useLocation();
 const contactMap = useMemo(()=>Object.fromEntries((s.contacts||[]).map(c=>[c.id,c])),[s.contacts]);
@@ -6763,6 +6765,7 @@ const [areaContactsSel,setAreaContactsSel]=useState(new Set());
 const [areaContactsStateF,setAreaContactsStateF]=useState('');
 const [areaContactsSportF,setAreaContactsSportF]=useState('');
 const [areaContactsAllLoading,setAreaContactsAllLoading]=useState(false);
+const [listOutreachBusy,setListOutreachBusy]=useState(null);
 const [buildingSegment,setBuildingSegment]=useState(null);
 const [buildingSegmentIsNew,setBuildingSegmentIsNew]=useState(false);
 const [buildingSegmentCount,setBuildingSegmentCount]=useState(null);
@@ -6813,13 +6816,46 @@ setAreaContactsLoading(false);
 const selectAllAreaContacts=async(area,stateF,sportF)=>{
 setAreaContactsAllLoading(true);
 try{
-const r=await fetch('/api/contacts/area-browse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sports:area.sports||[],states:area.states||[],roles:area.roles||[],page:1,limit:5000,stateFilter:stateF,sportFilter:sportF})});
-const d=await r.json();
-const ids=new Set((d.contacts||[]).map(c=>c.id));
-setAreaContactsSel(ids);
-toast(`${ids.size.toLocaleString()} contacts selected`,'success');
-}catch(e){toast('Select all failed','error');}
+const ids=await fetchAllAreaContactIds(area,{stateFilter:stateF,sportFilter:sportF});
+setAreaContactsSel(new Set(ids));
+toast(ids.length?`${ids.length.toLocaleString()} contacts selected`:"No contacts matched",ids.length?"success":"info");
+}catch(e){toast(`Select all failed: ${e.message}`,"error");}
 setAreaContactsAllLoading(false);
+};
+const openIdsInOutreach=async(name,contactIds,busyKey)=>{
+if(listOutreachBusy) return;
+setListOutreachBusy(busyKey||name);
+try{
+const r=await createOutreachBatchFromIds({name,contactIds,createdBy:cu?.name||"",localContacts:s.contacts||[]});
+if(!r.ok){toast(r.error||"Could not open outreach","error");return;}
+toast(`${r.leadCount.toLocaleString()} emailed contacts ready in Bulk Outreach — set copy, batches, and the 15s delay`,"success");
+navigate(outreachPathForBatch(r.batch.id));
+}catch(e){toast(`Outreach error: ${e.message}`,"error");}
+finally{setListOutreachBusy(null);}
+};
+const createSegmentList=async(area,ids,source="segment")=>{
+const unique=[...new Set((ids||[]).map(String))];
+if(!unique.length){toast("No contacts matched","info");return null;}
+const nm=listNameForArea(area);
+const nl={id:mkId(),name:nm,contactIds:unique,createdAt:Date.now(),source};
+dispatch("ADD_CONTACT_LIST",nl);
+toast(`List "${nm}" created with ${unique.length.toLocaleString()} contacts`,"success");
+return nl;
+};
+const createSegmentListAndOutreach=async(area,opts={})=>{
+if(listOutreachBusy) return;
+const key=area?.id||area?.name||"segment";
+setListOutreachBusy(key);
+try{
+const ids=opts.ids||await fetchAllAreaContactIds(area,{stateFilter:opts.stateFilter||"",sportFilter:opts.sportFilter||""});
+const list=await createSegmentList(area,ids,opts.source||"segment");
+if(!list) return;
+const r=await createOutreachBatchFromIds({name:list.name,contactIds:list.contactIds,createdBy:cu?.name||"",localContacts:s.contacts||[]});
+if(!r.ok){toast(r.error||"Could not open outreach","error");return;}
+toast(`${r.leadCount.toLocaleString()} emailed contacts ready in Bulk Outreach — set copy, batches, and the 15s delay`,"success");
+navigate(outreachPathForBatch(r.batch.id));
+}catch(e){toast(`Could not build list: ${e.message}`,"error");}
+finally{setListOutreachBusy(null);}
 };
 const loadBradReplies=async()=>{
 setBradRepliesLoading(true);
@@ -7560,7 +7596,8 @@ style={{background:promoting?B.border:B.purple,color:promoting?B.muted:B.white,b
 <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
 <button onClick={()=>setAreaContactsSel(s=>{const all=new Set(areaContactsList.map(c=>c.id));return areaContactsList.every(c=>s.has(c.id))&&s.size>0?new Set():all;})} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:B.muted,cursor:"pointer"}}>{areaContactsList.length>0&&areaContactsList.every(c=>areaContactsSel.has(c.id))?"DESELECT":"SELECT PAGE"}</button>
 {areaContactsTotal>areaContactsList.length&&<button onClick={()=>selectAllAreaContacts(browseArea,areaContactsStateF,areaContactsSportF)} disabled={areaContactsAllLoading} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",color:areaContactsAllLoading?B.muted:B.text,cursor:areaContactsAllLoading?"default":"pointer"}}>{areaContactsAllLoading?`SELECTING…`:`SELECT ALL ${areaContactsTotal.toLocaleString()}`}</button>}
-{areaContactsSel.size>0&&<OBtn sm onClick={()=>{const nm=`${browseArea.name} – ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;const nl={id:mkId(),name:nm,contactIds:[...areaContactsSel],createdAt:Date.now(),source:"area-browse"};dispatch("ADD_CONTACT_LIST",nl);toast(`List "${nm}" created with ${areaContactsSel.size} contacts`,"success");setAreaContactsSel(new Set());}}>✓ CREATE LIST ({areaContactsSel.size})</OBtn>}
+{areaContactsSel.size>0&&<OBtn sm onClick={()=>createSegmentList(browseArea,[...areaContactsSel],"area-browse")}>✓ CREATE LIST ({areaContactsSel.size})</OBtn>}
+<OBtn sm col={B.orange} disabled={!!listOutreachBusy||areaContactsAllLoading||!areaContactsTotal} onClick={()=>createSegmentListAndOutreach(browseArea,{ids:areaContactsSel.size? [...areaContactsSel]:null,stateFilter:areaContactsStateF,sportFilter:areaContactsSportF,source:"area-browse"})}>{listOutreachBusy===browseArea.id?"OPENING OUTREACH…":areaContactsSel.size?`LIST + OUTREACH (${areaContactsSel.size})`:`LIST + OUTREACH (${areaContactsTotal.toLocaleString()})`}</OBtn>
 </div>
 </div>
 <div style={{marginBottom:12}}>
@@ -7747,7 +7784,7 @@ return(<button key={st} onClick={()=>{if(dimmed)return;setBuildingSegment(s=>{co
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:10}}>
 {area.orgType==="clubs"?"Youth Clubs":area.orgType==="both"?"Schools + Clubs":"Schools"} · {(area.roles||[]).map(r=>typeof r==="string"?r:r?.name||String(r)).join(", ")||"default roles"} · max {area.maxOrgs||area.maxSchools||10} orgs
 </div>
-<div style={{display:"flex",gap:6}}><OBtn onClick={()=>runScrape(area)} style={{flex:1}} sm>{(areaCounts[area.id]||0)>0?"↺ FIND MORE":"⊕ PROSPECT"}</OBtn>{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={()=>{setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{flex:1}}>BROWSE {(areaCounts[area.id]||0).toLocaleString()}</OBtn>}</div>
+<div style={{display:"flex",gap:6,flexWrap:"wrap"}}><OBtn onClick={()=>runScrape(area)} style={{flex:1,minWidth:90}} sm>{(areaCounts[area.id]||0)>0?"↺ FIND MORE":"⊕ PROSPECT"}</OBtn>{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={()=>{setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{flex:1,minWidth:90}}>BROWSE {(areaCounts[area.id]||0).toLocaleString()}</OBtn>}{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.orange} disabled={!!listOutreachBusy} onClick={()=>createSegmentListAndOutreach(area)} style={{flex:1,minWidth:110}}>{listOutreachBusy===area.id?"OPENING…":"LIST + OUTREACH"}</OBtn>}</div>
 </div>
 </div>
 ))}
@@ -7770,6 +7807,8 @@ onRenameSave={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.t
 onRenameCancel={()=>setRenamingListId(null)}
 onDelete={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}}
 onUseInCampaign={()=>setView("campaigns")}
+onUseInOutreach={()=>openIdsInOutreach(list.name,list.contactIds,list.id)}
+outreachBusy={listOutreachBusy===list.id}
 />
 ))}
 </div>
@@ -8535,10 +8574,11 @@ style={{background:B.green,color:B.white,border:"none",fontSize:9,fontFamily:"'L
 </div>
 <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap"}}>
 {(areaCounts[area.id]||0)>0&&<GBtn onClick={()=>{setView("areas");setAreaContactsAreaId(area.id);setAreaContactsSel(new Set());setAreaContactsStateF('');setAreaContactsSportF('');loadAreaContacts(area,1,'','');}} style={{fontSize:9,padding:"4px 10px"}}>BROWSE</GBtn>}
-{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} onClick={async()=>{
+{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.teal} disabled={!!listOutreachBusy} onClick={async()=>{
 setAreaContactsAllLoading(true);
-try{const r=await fetch("/api/contacts/area-browse",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({sports:area.sports||[],states:area.states||[],roles:area.roles||[],page:1,limit:5000})});const d=await r.json();const ids=(d.contacts||[]).map(c=>c.id);if(ids.length>0){const nm=`${area.name} – ${new Date().toLocaleDateString("en-US",{month:"short",day:"numeric"})}`;const nl={id:mkId(),name:nm,contactIds:[...new Set(ids)],createdAt:Date.now(),source:"segment"};dispatch("ADD_CONTACT_LIST",nl);toast(`List "${nm}" created with ${ids.length} contacts`,"success");}else{toast("No contacts matched","info");}}catch(e){toast("Error: "+e.message,"error");}finally{setAreaContactsAllLoading(false);}
+try{const ids=await fetchAllAreaContactIds(area);await createSegmentList(area,ids,"segment");}catch(e){toast("Error: "+e.message,"error");}finally{setAreaContactsAllLoading(false);}
 }}>CREATE LIST</OBtn>}
+{(areaCounts[area.id]||0)>0&&<OBtn sm col={B.orange} disabled={!!listOutreachBusy} onClick={()=>createSegmentListAndOutreach(area)}>{listOutreachBusy===area.id?"OPENING…":"LIST + OUTREACH"}</OBtn>}
 <GBtn onClick={()=>{setView("areas");setBuildingSegment({...area});setBuildingSegmentIsNew(false);setBuildingSegmentCount(areaCounts[area.id]??null);}} style={{fontSize:9,padding:"4px 10px"}}>EDIT</GBtn>
 </div>
 </div>
@@ -8756,6 +8796,8 @@ onRenameSave={()=>{dispatch("UPDATE_CONTACT_LIST",{id:list.id,name:renameValue.t
 onRenameCancel={()=>setRenamingListId(null)}
 onDelete={()=>{if(window.confirm(`Delete list "${list.name}"?`))dispatch("DEL_CONTACT_LIST",list.id);}}
 onUseInCampaign={()=>setView("campaigns")}
+onUseInOutreach={()=>openIdsInOutreach(list.name,list.contactIds,list.id)}
+outreachBusy={listOutreachBusy===list.id}
 />
 ))}
 </div>

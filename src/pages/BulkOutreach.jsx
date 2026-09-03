@@ -367,6 +367,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlBatch = searchParams.get("batch") || "";
   const urlNew = searchParams.has("new");
+  const urlPace = searchParams.get("pace") || "";
   const [screen, setScreen] = useState(urlBatch || urlNew ? "review" : "list"); // list | review
   const [batches, setBatches] = useState([]);
   const [uniqueSentCount, setUniqueSentCount] = useState(0);
@@ -402,7 +403,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
   const [syncingGmail, setSyncingGmail] = useState(false);
-  const [goPace, setGoPace] = useState("now"); // now | drip
+  const [goPace, setGoPace] = useState(urlPace === "drip" ? "drip" : "now"); // now | drip
   const [goRun, setGoRun] = useState(null); // {mode,total,done,failed,current,nextIn} while GO is live
   const [exportingSent, setExportingSent] = useState(false);
   const fileRef = useRef(null);
@@ -588,6 +589,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       setExpandedStepKey(null);
       setHeldLeftAlone(false);
       setShowHeld(false);
+      if (urlPace === "drip") setGoPace("drip");
       setScreen("review");
     } catch (e) { toast(`Couldn't load batch: ${e.message}`, "error"); }
   };
@@ -1882,7 +1884,11 @@ Subject: <subject line, may include {{orgName}}>
               <Lbl s={{ marginBottom: 4 }}>DAYS BETWEEN FOLLOW-UPS</Lbl>
               <input type="number" min={1} value={touchGapDays} onChange={e => setTouchGapDays(e.target.value)} disabled={isApproved} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
             </div>
-            <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically.</div>
+            <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>
+              {String(fileName || "").startsWith("Prospecting:")
+                ? "From a Prospecting list. MAX PER DAY splits the list into batches. Day 1 GO can send 1 every 15 seconds once copy is on the emails."
+                : "Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically."}
+            </div>
           </div>
 
           {!isApproved && bulkEligible.length > 0 && (

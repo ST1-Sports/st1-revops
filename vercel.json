@@ -9,6 +9,7 @@
     "api/agent.js":                               { "maxDuration": 120 },
     "api/contacts/zoho-align-accounts.js":        { "maxDuration": 120 },
     "api/contacts/sync-books-accounts.js":        { "maxDuration": 120 },
+    "api/contacts/area-browse.js":                { "maxDuration": 60 },
     "api/crm/rebuild-deals-from-invoices.js":     { "maxDuration": 120 },
     "api/crm/import-quote-pdf.js":                { "maxDuration": 60 },
     "api/zoho-campaigns.js":                      { "maxDuration": 30 },

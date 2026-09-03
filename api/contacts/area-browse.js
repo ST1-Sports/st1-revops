@@ -5,12 +5,16 @@
  * Handles state stored as abbreviation ("IA"), full name ("Iowa"), or "City, IA".
  * Sport matching includes aliases and checks title field.
  *
- * Body: { sports, states, roles, page, limit, stateFilter, sportFilter }
+ * Body: { sports, states, roles, page, limit, stateFilter, sportFilter, idsOnly }
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { buildStatesClause } from '../_lib/stateUtils.js'
 import { buildSportsClause } from './_shared.js'
+
+export const config = {
+  maxDuration: 60,
+}
 
 export default async function handler(req, res) {
   setCors(res)
@@ -21,6 +25,7 @@ export default async function handler(req, res) {
     sports = [], states = [], roles = [],
     page = 1, limit = 50,
     stateFilter = '', sportFilter = '',
+    idsOnly = false,
   } = req.body || {}
 
   const pg = Math.max(1, parseInt(String(page), 10))
@@ -44,6 +49,16 @@ export default async function handler(req, res) {
   const where = andClauses.length === 1 ? andClauses[0] : { AND: andClauses }
 
   try {
+    if (idsOnly) {
+      const rows = await prisma.salesContact.findMany({
+        where,
+        orderBy: [{ score: 'desc' }, { updatedAt: 'desc' }],
+        select: { id: true },
+        take: 8000,
+      })
+      const ids = rows.map(r => r.id)
+      return res.json({ ids, contacts: [], total: ids.length, page: 1, pages: 1, idsOnly: true })
+    }
     const [contacts, total] = await Promise.all([
       prisma.salesContact.findMany({
         where,
