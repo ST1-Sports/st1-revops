@@ -54,6 +54,19 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { applyLeadOutcome, leadStoppedAuto } from "../../api/_lib/outreachSent.js";
+import {
+  touchHasCopy,
+  mergeLeadTags,
+  effectiveTouch,
+  leadHasPendingTouch,
+  needsEmail1Composer,
+  stepIndicesFor,
+  countPendingTouches,
+  batchScheduleSummary,
+  materializeLeadsFromTemplates,
+  buildOutreachSchedule,
+  isProspectingList,
+} from "../lib/outreachTouches.js";
 
 const B = {
   pageBg:"#F4F4F4", white:"#FFFFFF", surface:"#F8F8F8",
@@ -148,9 +161,8 @@ const GO_DRIP_MS = 15000;
 const isValidEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
 // Same guard as api/cron/send-batches.js — belt-and-suspenders against ever
 // firing the literal unfilled-in placeholder copy as a real send.
-const isPlaceholderCopy = text => /^\s*\(?personalized per organization\)?\s*$/i.test(String(text || ""));
-const touchHasCopy = t => !!(t && String(t.subject || "").trim() && String(t.body || "").trim() && !isPlaceholderCopy(t.body));
-const isDay1Pending = (lead, isTouchSent) => !!(lead.sendable && lead.email && !lead.bounced && !leadStoppedAuto(lead) && touchHasCopy(lead.touches?.[0]) && !isTouchSent(lead, 0));
+const LARGE_LIST_LEAN_SAVE = 200;
+const LEAD_PAGE_SIZE = 100;
 async function sleepAbortable(ms, aborted, onTick) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -161,21 +173,6 @@ async function sleepAbortable(ms, aborted, onTick) {
   return !aborted();
 }
 
-// Resolves {{orgName}}/{{firstName}}/{{sport}} against one lead's fields —
-// used wherever a mass-applied draft (a bulk-added follow-up, or an EMAIL
-// STEPS overwrite) gets pushed into individual leads, so what lands in each
-// lead's touches is already the real, personalized text (same as every
-// other touch in this tool), not a token that resolves later.
-const mergeLeadTags = (text, lead) => (text || "")
-  .replace(/\{\{\s*(orgName|organization|company|school)\s*\}\}/gi, lead.orgName || "your organization")
-  .replace(/\{\{\s*firstName\s*\}\}/gi, (lead.contactName && lead.contactName !== "-") ? (lead.firstName || lead.contactName.split(" ")[0]) : "there")
-  .replace(/\{\{\s*lastName\s*\}\}/gi, lead.lastName || "")
-  .replace(/\{\{\s*contactName\s*\}\}/gi, (lead.contactName && lead.contactName !== "-") ? lead.contactName : "there")
-  .replace(/\{\{\s*email\s*\}\}/gi, lead.email || "")
-  .replace(/\{\{\s*city\s*\}\}/gi, lead.city || "")
-  .replace(/\{\{\s*state\s*\}\}/gi, lead.state || "")
-  .replace(/\{\{\s*sport\s*\}\}/gi, lead.sport || "sports");
-
 async function aiCall(prompt, opts = {}) {
   const r = await fetch("/api/claude", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ model: opts.model || "claude-haiku-4-5-20251001", max_tokens: opts.tokens || 500, messages: [{ role: "user", content: prompt }] }) });
@@ -185,55 +182,6 @@ async function aiCall(prompt, opts = {}) {
   const text = (d.content || []).filter(b => b.type === "text").map(b => b.text).join("");
   if (opts.json) { try { const m = text.match(/[\[{][\s\S]*[\]}]/s); return m ? JSON.parse(m[0]) : null; } catch { return null; } }
   return text;
-}
-
-// Pure — same output given the same inputs, so the review screen's
-// "anticipated send" preview and the actual commit both call this and
-// always agree. Chunks each touch's eligible leads into batchSize-sized
-// groups, one group per business day; touch N+1 starts touchGapDays business
-// days after touch N started. Only leads that actually have content
-// authored for touch index t are included at that step — a lead with only
-// one email written simply never appears in touch 1/2's batches.
-function buildOutreachSchedule(campId, leads, { startMs, batchSize, touchGapDays }) {
-  const sendable = leads.filter(l => l.sendable && l.email && !leadStoppedAuto(l));
-  const maxTouches = Math.max(1, ...sendable.map(l => l.touches.length));
-  const scheduledBatches = {};
-  const perLeadDates = {};
-  let currentMs = startMs;
-  for (let t = 0; t < maxTouches; t++) {
-    // A touch already fired via the per-lead "SEND NOW" button (l.touches[t].sentAt)
-    // is excluded here so approving afterward never schedules a duplicate send.
-    const atThisTouch = sendable.filter(l => l.touches.length > t && !l.touches[t].sentAt);
-    if (!atThisTouch.length) continue;
-    const touchStartMs = currentMs;
-    for (let i = 0; i < atThisTouch.length; i += batchSize) {
-      const chunk = atThisTouch.slice(i, i + batchSize);
-      const bk = `${campId}-${t}-${chunk[0].id}`;
-      const batchContacts = {};
-      chunk.forEach(l => {
-        const touch = l.touches[t];
-        batchContacts[l.id] = {
-          email: l.email,
-          fullName: (l.contactName && l.contactName !== "-") ? l.contactName : l.orgName,
-          firstName: l.firstName || "", lastName: l.lastName || "",
-          school: l.orgName, sport: l.sport || "",
-          // Per-contact content override — send-batches.js prefers these
-          // over the campaign's shared touch template when present.
-          __subject: touch.subject, __body: touch.body,
-        };
-        perLeadDates[l.id] = perLeadDates[l.id] || [];
-        perLeadDates[l.id][t] = new Date(currentMs).toISOString();
-      });
-      scheduledBatches[bk] = { scheduledAt: new Date(currentMs).toISOString(), touchIdx: t, contactIds: chunk.map(l => l.id), batchContacts };
-      currentMs = nextMTBizStart(currentMs);
-    }
-    if (t < maxTouches - 1) {
-      currentMs = addBusinessDays(touchStartMs, touchGapDays);
-      const gc = getMTComp(currentMs);
-      if (gc.h < 9) { for (const off of [6, 7]) { const c = Date.UTC(gc.y, gc.mo, gc.d, 9 + off, 0, 0); if (getMTComp(c).h === 9) { currentMs = c; break; } } }
-    }
-  }
-  return { scheduledBatches, perLeadDates };
 }
 
 function fmtWhen(iso) {
@@ -401,6 +349,7 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [showIntent, setShowIntent] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [leadQuery, setLeadQuery] = useState("");
+  const [leadPage, setLeadPage] = useState(0);
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
   const [committing, setCommitting] = useState(false);
@@ -413,9 +362,12 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const fileRef = useRef(null);
   const saveTimer = useRef(null);
   const skipNextSave = useRef(false);
+  const leadsDirtyRef = useRef(false);
   const leadsRef = useRef(leads);
+  const templatesRef = useRef(templates);
   const goAbortRef = useRef(false);
   useEffect(() => { leadsRef.current = leads; }, [leads]);
+  useEffect(() => { templatesRef.current = templates; }, [templates]);
   useEffect(() => () => { goAbortRef.current = true; }, []);
 
   const loadList = async () => {
@@ -530,18 +482,31 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     return visibleLeads.filter(l => [l.orgName, l.contactName, l.email, l.city, l.sport, l.state]
       .some(v => String(v || "").toLowerCase().includes(q)));
   }, [visibleLeads, leadQuery]);
-  // Every touch position that exists across sendableLeads right now — [0],
-  // [0,1], or [0,1,2] — drives the EMAIL STEPS panel below (EMAIL 1/2/3).
-  const stepIndices = useMemo(() => {
-    const maxIdx = sendableLeads.reduce((a, l) => Math.max(a, l.touches.length - 1), -1);
-    return maxIdx < 0 ? [] : Array.from({ length: maxIdx + 1 }, (_, i) => i);
-  }, [sendableLeads]);
+  useEffect(() => { setLeadPage(0); }, [leadQuery, batchId]);
+  const leadPageCount = Math.max(1, Math.ceil(filteredVisibleLeads.length / LEAD_PAGE_SIZE));
+  const pagedVisibleLeads = useMemo(() => {
+    const page = Math.min(leadPage, leadPageCount - 1);
+    const start = page * LEAD_PAGE_SIZE;
+    return filteredVisibleLeads.slice(start, start + LEAD_PAGE_SIZE);
+  }, [filteredVisibleLeads, leadPage, leadPageCount]);
+  const stepIndices = useMemo(() => stepIndicesFor(sendableLeads, templates), [sendableLeads, templates]);
+  const scheduleSummary = useMemo(
+    () => batchScheduleSummary(sendableLeads.length, batchSize, { touchSteps: Math.max(1, stepIndices.length) }),
+    [sendableLeads.length, batchSize, stepIndices.length]
+  );
+  const showEmail1Composer = batchStatus !== "approved" && sendableLeads.length > 0 && isProspectingList(fileName);
+  const email1Ready = touchHasCopy(templates.step0) || sendableLeads.some(l => touchHasCopy(l.touches?.[0]));
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const [campId, setCampId] = useState(() => mkId());
   const preview = useMemo(
-    () => buildOutreachSchedule(campId, sendableLeads, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5) }),
-    [campId, sendableLeads, startMs, batchSize, touchGapDays]
+    () => buildOutreachSchedule(campId, sendableLeads, {
+      startMs,
+      batchSize: Math.max(1, Number(batchSize) || 25),
+      touchGapDays: Math.max(1, Number(touchGapDays) || 5),
+      templates,
+    }, { stopped: leadStoppedAuto }),
+    [campId, sendableLeads, startMs, batchSize, touchGapDays, templates]
   );
 
   // Autosave — any edit PATCHes the durable batch record after a short
@@ -559,10 +524,22 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       try {
+        const lean = leads.length >= LARGE_LIST_LEAN_SAVE && !leadsDirtyRef.current;
+        const settings = {
+          id: batchId,
+          name: campaignName,
+          templates,
+          startDt,
+          batchSize: Number(batchSize) || 25,
+          touchGapDays: Number(touchGapDays) || 5,
+        };
         const payload = batchStatus === "approved"
-          ? { id: batchId, leads, templates }
-          : { id: batchId, name: campaignName, leads, templates, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 };
+          ? (lean ? { id: batchId, templates } : { id: batchId, leads, templates })
+          : lean
+            ? settings
+            : { ...settings, leads };
         await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        if (!lean || batchStatus === "approved") leadsDirtyRef.current = false;
         setSaveStatus("saved");
       } catch (e) { setSaveStatus(null); toast(`Autosave failed: ${e.message}`, "error"); }
     }, 900);
@@ -791,13 +768,21 @@ Return JSON exactly as:
     if (!pairs.length) return;
     const byLead = new Map();
     for (const p of pairs) (byLead.get(p.leadId) || byLead.set(p.leadId, new Map()).get(p.leadId)).set(p.touchIdx, p.sentAt);
+    const tmpl = templatesRef.current || {};
     const updatedLeads = leadsRef.current.map(l => {
       const touchMap = byLead.get(l.id);
       if (!touchMap) return l;
-      return { ...l, touches: l.touches.map((t, i) => touchMap.has(i) ? { ...t, sentAt: touchMap.get(i) } : t) };
+      const touches = [...(l.touches || [])];
+      for (const [touchIdx, sentAt] of touchMap.entries()) {
+        const eff = effectiveTouch(l, touchIdx, tmpl);
+        while (touches.length <= touchIdx) touches.push({ subject: "", body: "" });
+        touches[touchIdx] = { ...(eff || touches[touchIdx] || {}), sentAt };
+      }
+      return { ...l, touches };
     });
     leadsRef.current = updatedLeads;
     setLeads(updatedLeads);
+    leadsDirtyRef.current = true;
 
     try {
       await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
@@ -891,7 +876,7 @@ Return JSON exactly as:
 
   const fireBradSend = async (lead, touchIdx) => {
     const live = leadsRef.current.find(l => l.id === lead.id) || lead;
-    const touch = live.touches[touchIdx];
+    const touch = effectiveTouch(live, touchIdx, templatesRef.current);
     if (!touch || touchSentInfo(live, touchIdx).sent || live.bounced || live.heldForEarlier || leadStoppedAuto(live) || !live.email || !touchHasCopy(touch)) {
       return { skipped: true, outcome: live.positiveIntent ? "intent" : live.manualFollowUp ? "manual" : undefined };
     }
@@ -932,7 +917,7 @@ Return JSON exactly as:
 
   const sendTouchNow = async (lead, touchIdx) => {
     if (goRun) { toast("Stop the Day 1 send first", "info"); return; }
-    const touch = lead.touches[touchIdx];
+    const touch = effectiveTouch(lead, touchIdx, templates);
     if (!touch || touchSentInfo(lead, touchIdx).sent) return;
     if (lead.bounced) { toast("This address bounced — fix the email before sending", "error"); return; }
     if (lead.positiveIntent) { toast("Positive intent — they are off the automated follow-ups", "info"); return; }
@@ -949,8 +934,8 @@ Return JSON exactly as:
   };
 
   const day1Ready = useMemo(
-    () => sendableLeads.filter(l => isDay1Pending(l, (lead, i) => touchSentInfo(lead, i).sent)),
-    [sendableLeads, linkedCampaignId, s?.campaigns]
+    () => sendableLeads.filter(l => leadHasPendingTouch(l, 0, templates) && !touchSentInfo(l, 0).sent),
+    [sendableLeads, templates, linkedCampaignId, s?.campaigns]
   );
 
   const startDay1Go = async () => {
@@ -1206,6 +1191,7 @@ Return JSON exactly as:
 
   // Edits a single touch's subject/body by hand.
   const updateTouchField = (leadId, touchIdx, field, value) => {
+    leadsDirtyRef.current = true;
     const lead = leads.find(l => l.id === leadId);
     if (!lead) return;
     const updatedTouches = lead.touches.map((tt, ti) => ti === touchIdx ? { ...tt, [field]: value } : tt);
@@ -1257,11 +1243,15 @@ Subject: <subject line>
   // don't.
   const applyBulkFollowup = (subject, body) => {
     if (!subject.trim() || !body.trim()) { toast("Write a subject and body first", "error"); return; }
-    // Count from bulkEligible (already known) rather than inside the
-    // setLeads updater — that callback runs during React's next render,
-    // not synchronously here, so a counter incremented inside it would
-    // still read 0 by the time the toast below fires.
+    const allEmpty = bulkEligible.length > 0 && bulkEligible.every(l => !(l.touches || []).length);
+    if (allEmpty) {
+      setTemplates(prev => ({ ...prev, step0: { subject: subject.trim(), body: body.trim(), label: "Email 1" } }));
+      setBulkDraft(null);
+      toast(`Email 1 saved for all ${bulkEligible.length} organization${bulkEligible.length !== 1 ? "s" : ""}`, "success");
+      return;
+    }
     const applied = bulkEligible.length;
+    leadsDirtyRef.current = true;
     setLeads(prev => prev.map(l => {
       if (!(l.sendable && l.email) || l.touches.length >= 3) return l;
       return { ...l, touches: [...l.touches, { subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() }] };
@@ -1296,14 +1286,28 @@ Subject: <subject line>
   const applyStepToAll = (stepIdx, subject, body, onlyLeadIds, saveKey) => {
     if (!subject?.trim() || !body?.trim()) { toast("Write a subject and body first", "error"); return; }
     const pool = onlyLeadIds ? new Set(onlyLeadIds) : null;
-    const targets = sendableLeads.filter(l => l.touches[stepIdx] && !l.touches[stepIdx].sentAt && (!pool || pool.has(l.id)));
+    const targets = sendableLeads.filter(l => {
+      const t = effectiveTouch(l, stepIdx, templates);
+      return t && touchHasCopy(t) && !t.sentAt && (!pool || pool.has(l.id));
+    });
     if (!targets.length) { toast(`No organizations left to update for Email ${stepIdx + 1}`, "error"); return; }
     if (!window.confirm(`Overwrite Email ${stepIdx + 1} for ${targets.length} organization(s) with this text?\n\nThis replaces whatever's currently written for each one.`)) return;
 
+    const templateOnly = targets.every(l => !(l.touches || [])[stepIdx]);
+    if (templateOnly) {
+      setTemplates(prev => ({ ...prev, [saveKey || `step${stepIdx}`]: { subject: subject.trim(), body: body.trim(), label: `Email ${stepIdx + 1}` } }));
+      toast(`Updated Email ${stepIdx + 1} for ${targets.length} organization${targets.length !== 1 ? "s" : ""}`, "success");
+      return;
+    }
+
     const targetIds = new Set(targets.map(l => l.id));
+    leadsDirtyRef.current = true;
     const updatedLeads = leads.map(l => {
       if (!targetIds.has(l.id)) return l;
-      return { ...l, touches: l.touches.map((tt, ti) => ti === stepIdx ? { ...tt, subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() } : tt) };
+      const touches = [...(l.touches || [])];
+      while (touches.length <= stepIdx) touches.push({ subject: "", body: "" });
+      touches[stepIdx] = { ...touches[stepIdx], subject: mergeLeadTags(subject, l).trim(), body: mergeLeadTags(body, l).trim() };
+      return { ...l, touches };
     });
     setLeads(updatedLeads);
     setTemplates(prev => ({ ...prev, [saveKey || `step${stepIdx}`]: { subject: subject.trim(), body: body.trim(), label: `Email ${stepIdx + 1}` } }));
@@ -1343,27 +1347,27 @@ Subject: <subject line, may include {{orgName}}>
 
   const approveAndSchedule = async () => {
     if (!sendableLeads.length) { toast("Nothing ready to schedule", "error"); return; }
-    // Excludes touches already fired via SEND NOW — those aren't being
-    // scheduled again, so they shouldn't count toward what this confirms.
-    const totalTouches = sendableLeads.reduce((a, l) => a + l.touches.filter(t => !t.sentAt).length, 0);
-    if (!totalTouches) { toast("Everything here has already been sent manually — nothing left to schedule", "error"); return; }
-    if (!window.confirm(`Schedule ${totalTouches} email(s) across ${sendableLeads.length} organization(s), starting ${fmtWhen(new Date(startMs).toISOString())}?\n\nSends happen automatically from here via the existing send-batches cron — nothing further to do once approved.`)) return;
+    const totalTouches = countPendingTouches(sendableLeads, templates, { stopped: leadStoppedAuto });
+    if (!totalTouches) {
+      if (needsEmail1Composer(leads, templates, fileName)) {
+        toast("Write Email 1 above first — subject and body are required before scheduling", "error");
+      } else {
+        toast("Everything here has already been sent manually — nothing left to schedule", "error");
+      }
+      return;
+    }
+    const materializedLeads = materializeLeadsFromTemplates(leads, templates);
+    const materializedSendable = materializedLeads.filter(l => l.sendable && l.email && !l.bounced && !l.heldForEarlier && !leadStoppedAuto(l));
+    const summary = batchScheduleSummary(materializedSendable.length, batchSize, { touchSteps: stepIndices.length || 1 });
+    if (!window.confirm(`Schedule ${totalTouches} email(s) across ${materializedSendable.length} organization(s), starting ${fmtWhen(new Date(startMs).toISOString())}?\n\nMAX PER DAY ${summary.perDay} → about ${summary.daysPerTouch} business day(s) per email step (${summary.sendableCount} contacts).\n\nSends happen automatically from here via the existing send-batches cron — nothing further to do once approved.`)) return;
 
     setCommitting(true);
+    setLeads(materializedLeads);
+    leadsRef.current = materializedLeads;
+    leadsDirtyRef.current = true;
     const nowStr = today();
 
-    // Contacts go through the same durable cold-prospect import used by
-    // Prospecting's list uploads (POST /api/contacts/import → Prisma
-    // salesContact, deduped by email) — NOT dispatch("ADD_CONTACTS", ...).
-    // The app's own dispatch wrapper deliberately strips `contacts` out of
-    // every state autosave it triggers (contacts are meant to live in that
-    // table, not the app_state JSON blob), so anything added only via
-    // dispatch would be silently wiped by the very next unrelated action.
-    // Leads with no usable email at all (pure contact-form/DM/call rows)
-    // can't go through this table (it dedupes by email) — they're durable
-    // in this batch record either way (that's the whole point of storing
-    // it), they just don't get a Prospecting contact created for them.
-    const emailLeads = leads.filter(l => l.email);
+    const emailLeads = materializedLeads.filter(l => l.email);
     const IMPORT_BATCH = 500;
     let importErr = null;
     for (let i = 0; i < emailLeads.length; i += IMPORT_BATCH) {
@@ -1383,8 +1387,8 @@ Subject: <subject line, may include {{orgName}}>
     }
     if (importErr) toast(`Contacts saved partially — import error: ${importErr}`, "info");
 
-    const { scheduledBatches } = buildOutreachSchedule(campId, sendableLeads, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5) });
-    const maxTouches = Math.max(1, ...sendableLeads.map(l => l.touches.length));
+    const { scheduledBatches } = buildOutreachSchedule(campId, materializedSendable, { startMs, batchSize: Math.max(1, Number(batchSize) || 25), touchGapDays: Math.max(1, Number(touchGapDays) || 5), templates: {} }, { stopped: leadStoppedAuto });
+    const maxTouches = Math.max(1, ...materializedSendable.map(l => l.touches.length));
     const touches = Array.from({ length: maxTouches }, (_, i) => ({ id: mkId(), step: i, dayOffset: i * (Number(touchGapDays) || 5), subject: "(personalized per organization)", body: "(personalized per organization)", channel: "email" }));
     // Enrollments/batches are fully self-contained (batchContacts embeds
     // every field the cron needs, including __subject/__body) — they don't
@@ -1400,7 +1404,7 @@ Subject: <subject line, may include {{orgName}}>
       return { contactId: l.id, step: allSent ? l.touches.length : firstUnsent, status: status || (allSent ? "done" : "active"), enrolledAt: nowStr, nextDate: nowStr, sentSteps };
     };
     const enrollments = [
-      ...sendableLeads.map(l => enrollOne(l)),
+      ...materializedSendable.map(l => enrollOne(l)),
       ...intentLeads.map(l => enrollOne(l, "interested")),
       ...manualLeads.map(l => enrollOne(l, "manual")),
     ];
@@ -1413,22 +1417,20 @@ Subject: <subject line, may include {{orgName}}>
       scheduledBatches, sentBatches: {},
       batchSize: Math.max(1, Number(batchSize) || 25),
       status: "running", createdAt: nowStr,
-      leadMeta: Object.fromEntries([...sendableLeads, ...intentLeads, ...manualLeads].map(l => [l.id, { orgName: l.orgName, angle: l.angle, priority: l.priority, whyNow: l.whyNow }])),
+      leadMeta: Object.fromEntries([...materializedSendable, ...intentLeads, ...manualLeads].map(l => [l.id, { orgName: l.orgName, angle: l.angle, priority: l.priority, whyNow: l.whyNow }])),
     };
     dispatch("ADD_CAMPAIGN", campaign);
-    dispatch("LOG", { msg: `${cu?.name || "Someone"} scheduled bulk outreach "${campaign.name}" — ${sendableLeads.length} orgs, ${totalTouches} email(s) total` });
+    dispatch("LOG", { msg: `${cu?.name || "Someone"} scheduled bulk outreach "${campaign.name}" — ${materializedSendable.length} orgs, ${totalTouches} email(s) total` });
 
-    // Lock the batch record in as approved and link it to the campaign, so
-    // it shows up as history rather than an editable draft from here on.
     try {
       await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: batchId, status: "approved", campaignId: campId, leads, name: campaignName, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 }) });
+        body: JSON.stringify({ id: batchId, status: "approved", campaignId: campId, leads: materializedLeads, templates, name: campaignName, startDt, batchSize: Number(batchSize) || 25, touchGapDays: Number(touchGapDays) || 5 }) });
     } catch (e) { toast(`Scheduled, but couldn't mark the batch approved: ${e.message}`, "info"); }
 
     setBatchStatus("approved");
     setLinkedCampaignId(campId);
     setCommitting(false);
-    toast(`Scheduled — ${sendableLeads.length} orgs, ${totalTouches} email(s)`, "success");
+    toast(`Scheduled — ${materializedSendable.length} orgs, ${totalTouches} email(s)`, "success");
   };
 
   // Lands on the exact campaign's Execute tab in Prospecting > Campaigns,
@@ -1447,7 +1449,8 @@ Subject: <subject line, may include {{orgName}}>
 
   const isApproved = batchStatus === "approved";
   const sentTouchCount = sendableLeads.reduce((a, l) => a + l.touches.filter((t, i) => touchSentInfo(l, i).sent).length, 0);
-  const totalTouchCount = sendableLeads.reduce((a, l) => a + l.touches.length, 0);
+  const pendingTouchCount = countPendingTouches(sendableLeads, templates, { stopped: leadStoppedAuto });
+  const totalTouchCount = sentTouchCount + pendingTouchCount;
   const isActive = batchStatus === "active" || sentTouchCount > 0;
   const canDelete = batchId && !isApproved && !isActive;
 
@@ -1705,6 +1708,36 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
+          {showEmail1Composer && (
+            <div style={{ background: B.white, border: `2px solid ${email1Ready ? B.green : B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+              <Lbl c={email1Ready ? B.green : B.orange}>EMAIL 1 FOR ALL {sendableLeads.length.toLocaleString()} CONTACTS</Lbl>
+              <div style={{ fontSize: 12, color: B.textMid, marginTop: 6, marginBottom: 12, lineHeight: 1.5, maxWidth: 720 }}>
+                {needsEmail1Composer(leads, templates, fileName)
+                  ? "This list came from Prospecting with no copy yet. Write Email 1 here once — it applies to everyone. Use MAX PER DAY below so you do not hit all contacts at once."
+                  : "Shared Email 1 for this list. Edits autosave; approve & schedule when ready."}
+              </div>
+              <StepEditor
+                draftKey="step0"
+                seed={templates.step0 || { subject: "", body: "" }}
+                templates={templates}
+                updateTemplateField={updateTemplateField}
+                onApply={(subject, body) => {
+                  if (!subject?.trim() || !body?.trim()) { toast("Write a subject and body first", "error"); return; }
+                  setTemplates(prev => ({ ...prev, step0: { subject: subject.trim(), body: body.trim(), label: "Email 1" } }));
+                  toast(`Email 1 saved for all ${sendableLeads.length.toLocaleString()} contacts`, "success");
+                }}
+                applyLabel={email1Ready ? "✓ EMAIL 1 SAVED" : `SAVE EMAIL 1 FOR ALL ${sendableLeads.length.toLocaleString()}`}
+                hint={<>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — filled in per contact when sent.</>}
+              />
+              {sendableLeads.length > 0 && (
+                <div style={{ marginTop: 12, fontSize: 11, color: B.textMid, background: B.surface, borderRadius: 6, padding: "10px 12px" }}>
+                  <b>{scheduleSummary.sendableCount.toLocaleString()} contacts</b> → about <b>{scheduleSummary.daysPerTouch.toLocaleString()} business day(s)</b> at <b>{scheduleSummary.perDay}/day</b> for Email 1
+                  {stepIndices.length > 1 ? ` (${scheduleSummary.totalDays.toLocaleString()} days total across ${stepIndices.length} steps)` : ""}.
+                </div>
+              )}
+            </div>
+          )}
+
           {stepIndices.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
               <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
@@ -1712,8 +1745,12 @@ Subject: <subject line, may include {{orgName}}>
               </div>
               {stepIndices.map(i => {
                 const stepKey = `step${i}`;
-                const atStep = sendableLeads.filter(l => l.touches[i]);
-                const pendingAtStep = atStep.filter(l => !l.touches[i].sentAt);
+                const tmplAtStep = touchHasCopy(templates[stepKey]) ? templates[stepKey] : null;
+                const atStep = sendableLeads.filter(l => l.touches[i] || (i === 0 && tmplAtStep && !touchHasCopy(l.touches?.[0])));
+                const pendingAtStep = atStep.filter(l => {
+                  const t = effectiveTouch(l, i, templates);
+                  return t && touchHasCopy(t) && !t.sentAt;
+                });
                 const stepOpen = expandedStepKey === stepKey;
 
                 // Groups pending touches by exact subject+body — reveals
@@ -1724,8 +1761,8 @@ Subject: <subject line, may include {{orgName}}>
                 // Already-sent touches are immutable, so they're not grouped.
                 const groups = new Map();
                 pendingAtStep.forEach(l => {
-                  const t = l.touches[i];
-                  const key = `${t.subject} ${t.body}`;
+                  const t = effectiveTouch(l, i, templates);
+                  const key = `${t.subject}\u0000${t.body}`;
                   if (!groups.has(key)) groups.set(key, { subject: t.subject, body: t.body, leadIds: [], orgNames: [] });
                   const g = groups.get(key);
                   g.leadIds.push(l.id);
@@ -1837,7 +1874,7 @@ Subject: <subject line, may include {{orgName}}>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
               <Lbl>READY TO EMAIL</Lbl>
               <div style={{ fontSize: 24, fontWeight: 700, color: B.green, marginTop: 4 }}>{sendableLeads.length}</div>
-              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{sendableLeads.reduce((a, l) => a + l.touches.length, 0)} email(s) total</div>
+              <div style={{ fontSize: 11, color: B.muted, marginTop: 2 }}>{totalTouchCount} email(s) total</div>
             </div>
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", flex: 1, minWidth: 160 }}>
               <Lbl>NEEDS ANOTHER CHANNEL</Lbl>
@@ -1887,17 +1924,24 @@ Subject: <subject line, may include {{orgName}}>
               <input type="number" min={1} value={touchGapDays} onChange={e => setTouchGapDays(e.target.value)} disabled={isApproved} style={{ width: 70, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 8px", fontSize: 11 }} />
             </div>
             <div style={{ fontSize: 11, color: B.muted, flex: 1, minWidth: 200 }}>
-              {String(fileName || "").startsWith("Prospecting:")
-                ? "From a Prospecting list. MAX PER DAY splits the list into batches. Day 1 GO can send 1 every 15 seconds once copy is on the emails."
-                : "Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically."}
+              {isProspectingList(fileName) ? (
+                <>
+                  <b>{scheduleSummary.sendableCount.toLocaleString()} contacts</b> at <b>{scheduleSummary.perDay}/day</b> → ~<b>{scheduleSummary.daysPerTouch.toLocaleString()} day(s)</b> per email step.
+                  {email1Ready ? " Email 1 is ready — approve & schedule or use Day 1 GO." : " Write Email 1 above, then set MAX PER DAY so sends are batched."}
+                </>
+              ) : (
+                "Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically."
+              )}
             </div>
           </div>
 
-          {!isApproved && bulkEligible.length > 0 && (
+          {!isApproved && bulkEligible.length > 0 && !showEmail1Composer && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, padding: "14px 18px", marginBottom: 18 }}>
               {bulkDraft ? (
                 <div style={{ background: B.orangeBg, border: `1px solid ${B.orange}30`, borderRadius: 6, padding: 10 }}>
-                  <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>FOLLOW-UP FOR ALL {bulkEligible.length} ELIGIBLE ORGANIZATIONS</div>
+                  <div style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5, marginBottom: 6 }}>
+                    {stepIndices.length === 0 ? `EMAIL 1 FOR ALL ${bulkEligible.length} ELIGIBLE ORGANIZATIONS` : `FOLLOW-UP FOR ALL ${bulkEligible.length} ELIGIBLE ORGANIZATIONS`}
+                  </div>
                   <div style={{ fontSize: 10, color: B.muted, marginBottom: 6 }}>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — each gets filled in per organization before it's added.</div>
                   <input value={bulkDraft.subject} onChange={e => setBulkDraft(d => ({ ...d, subject: e.target.value }))} placeholder="Subject" style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
                   <textarea value={bulkDraft.body} onChange={e => setBulkDraft(d => ({ ...d, body: e.target.value }))} placeholder="Body" rows={10} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", marginBottom: 6, boxSizing: "border-box" }} />
@@ -1908,9 +1952,15 @@ Subject: <subject line, may include {{orgName}}>
                 </div>
               ) : (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                  <div style={{ fontSize: 11, color: B.textMid }}>Add one follow-up email to all {bulkEligible.length} organization{bulkEligible.length !== 1 ? "s" : ""} at once, instead of one by one.</div>
+                  <div style={{ fontSize: 11, color: B.textMid }}>
+                    {stepIndices.length === 0
+                      ? `Write Email 1 for all ${bulkEligible.length} organization${bulkEligible.length !== 1 ? "s" : ""} at once.`
+                      : `Add one follow-up email to all ${bulkEligible.length} organization${bulkEligible.length !== 1 ? "s" : ""} at once, instead of one by one.`}
+                  </div>
                   <div style={{ display: "flex", gap: 6 }}>
-                    <GBtn onClick={() => setBulkDraft({ subject: "", body: "" })} style={{ fontSize: 9, padding: "6px 12px" }}>+ ADD FOLLOW-UP TO ALL</GBtn>
+                    <GBtn onClick={() => setBulkDraft({ subject: "", body: "" })} style={{ fontSize: 9, padding: "6px 12px" }}>
+                      {stepIndices.length === 0 ? "+ WRITE EMAIL 1 FOR ALL" : "+ ADD FOLLOW-UP TO ALL"}
+                    </GBtn>
                     <GBtn onClick={draftBulkFollowupWithAI} disabled={bulkDrafting} style={{ fontSize: 9, padding: "6px 12px" }}>{bulkDrafting ? "DRAFTING…" : "✦ AI DRAFT FOR ALL"}</GBtn>
                   </div>
                 </div>
@@ -1929,13 +1979,26 @@ Subject: <subject line, may include {{orgName}}>
             {filteredVisibleLeads.length === 0 && (
               <div style={{ padding: "16px", fontSize: 12, color: B.muted }}>{leadQuery.trim() ? "No organizations match that search." : "No organizations on this list."}</div>
             )}
-            {filteredVisibleLeads.map(lead => {
+            {filteredVisibleLeads.length > LEAD_PAGE_SIZE && (
+              <div style={{ padding: "8px 16px", borderBottom: `1px solid ${B.border}`, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: B.textMid }}>
+                <span>Showing {leadPage * LEAD_PAGE_SIZE + 1}–{Math.min((leadPage + 1) * LEAD_PAGE_SIZE, filteredVisibleLeads.length)} of {filteredVisibleLeads.length.toLocaleString()}</span>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <GBtn onClick={() => setLeadPage(p => Math.max(0, p - 1))} disabled={leadPage === 0} style={{ fontSize: 9, padding: "5px 10px" }}>← PREV</GBtn>
+                  <GBtn onClick={() => setLeadPage(p => Math.min(leadPageCount - 1, p + 1))} disabled={leadPage >= leadPageCount - 1} style={{ fontSize: 9, padding: "5px 10px" }}>NEXT →</GBtn>
+                </div>
+              </div>
+            )}
+            {pagedVisibleLeads.map(lead => {
               const isOpen = expandedId === lead.id;
               const dates = preview.perLeadDates[lead.id] || [];
-              const canAddMore = lead.touches.length < 3 && !isApproved && !leadStoppedAuto(lead);
+              const effectiveTouchCount = Math.max(lead.touches.length, touchHasCopy(templates.step0) && !lead.touches.length ? 1 : 0);
+              const canAddMore = effectiveTouchCount < 3 && !isApproved && !leadStoppedAuto(lead);
               const draftHere = followupDraft?.leadId === lead.id;
               const stopped = leadStoppedAuto(lead);
               const sentN = lead.touches.filter((t, i) => touchSentInfo(lead, i).sent).length;
+              const rowTouches = lead.touches.length > 0
+                ? lead.touches.map((t, i) => ({ t, i, fromTemplate: false }))
+                : (touchHasCopy(templates.step0) ? [{ t: effectiveTouch(lead, 0, templates), i: 0, fromTemplate: true }] : []);
               const rowBg = lead.bounced ? B.redBg : lead.positiveIntent ? B.tealBg : lead.manualFollowUp ? B.blueBg : B.white;
               return (
                 <div key={lead.id} style={{ borderBottom: `1px solid ${B.border}`, background: rowBg }}>
@@ -1953,7 +2016,7 @@ Subject: <subject line, may include {{orgName}}>
                       {lead.positiveIntent && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, color: B.teal, background: B.white, padding: "3px 8px", borderRadius: 8 }}>INTENT</span>}
                       {lead.manualFollowUp && <span style={{ fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, color: B.blue, background: B.white, padding: "3px 8px", borderRadius: 8 }}>MANUAL</span>}
                       {!lead.bounced && !stopped && sentN > 0 && <span style={{ fontSize: 10, color: B.green, fontWeight: 600 }}>✓ {sentN} sent</span>}
-                      {!lead.bounced && !stopped && sentN === 0 && <span style={{ fontSize: 10, color: B.muted }}>{lead.touches.length} email{lead.touches.length !== 1 ? "s" : ""}</span>}
+                      {!lead.bounced && !stopped && sentN === 0 && <span style={{ fontSize: 10, color: B.muted }}>{effectiveTouchCount} email{effectiveTouchCount !== 1 ? "s" : ""}{rowTouches[0]?.fromTemplate ? " (shared)" : ""}</span>}
                       <span style={{ color: B.muted, fontSize: 11 }}>{isOpen ? "▾" : "▸"}</span>
                     </div>
                   </div>
@@ -2000,24 +2063,25 @@ Subject: <subject line, may include {{orgName}}>
                         </div>
                       )}
                       {lead.whyNow && <div style={{ fontSize: 11, color: B.muted, fontStyle: "italic", marginBottom: 10, lineHeight: 1.5 }}>Why now: {lead.whyNow}</div>}
-                      {lead.touches.map((t, i) => {
+                      {rowTouches.map(({ t, i, fromTemplate }) => {
                         const sentInfo = touchSentInfo(lead, i);
                         const sendKey = `${lead.id}-${i}`;
                         return (
                         <div key={i} style={{ background: B.surface, border: `1px solid ${B.border}`, borderRadius: 6, padding: 10, marginBottom: 8 }}>
                           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                            <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}</span>
+                            <span style={{ fontSize: 10, fontFamily: "'Lexend Zetta',sans-serif", color: B.orange, letterSpacing: .5 }}>EMAIL {i + 1}{fromTemplate ? " — SHARED COPY" : ""}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={{ fontSize: 10, color: B.blue, fontWeight: 600 }}>Anticipated: {fmtWhen(dates[i])}</span>
-                              {i > 0 && !isApproved && !sentInfo.sent && (
-                                <button onClick={() => setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.filter((_, ti) => ti !== i) } : l))}
+                              {i > 0 && !isApproved && !sentInfo.sent && !fromTemplate && (
+                                <button onClick={() => { leadsDirtyRef.current = true; setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, touches: l.touches.filter((_, ti) => ti !== i) } : l)); }}
                                   title="Remove this email" style={{ background: "none", border: "none", color: B.red, fontSize: 11, cursor: "pointer", padding: 0 }}>✕</button>
                               )}
                             </div>
                           </div>
-                          <input value={t.subject} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "subject", e.target.value)}
+                          {fromTemplate && <div style={{ fontSize: 10, color: B.muted, marginBottom: 6 }}>Edit the shared Email 1 panel above — this preview is personalized for {lead.orgName || "this contact"}.</div>}
+                          <input value={t.subject} disabled={sentInfo.sent || fromTemplate} onChange={e => updateTouchField(lead.id, i, "subject", e.target.value)}
                             style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "7px 10px", fontSize: 13, fontWeight: 600, marginBottom: 6, boxSizing: "border-box" }} />
-                          <textarea value={t.body} disabled={sentInfo.sent} onChange={e => updateTouchField(lead.id, i, "body", e.target.value)}
+                          <textarea value={t.body} disabled={sentInfo.sent || fromTemplate} onChange={e => updateTouchField(lead.id, i, "body", e.target.value)}
                             rows={10} style={{ width: "100%", background: B.white, border: `1px solid ${B.border}`, borderRadius: 4, padding: "10px 12px", fontSize: 13, lineHeight: 1.7, resize: "vertical", boxSizing: "border-box" }} />
                           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 7 }}>
                             {sentInfo.sent ? (
@@ -2101,7 +2165,7 @@ Subject: <subject line, may include {{orgName}}>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
             <GBtn onClick={backToList}>← Back to Bulk Outreach</GBtn>
             {!isApproved && (
-              <OBtn onClick={approveAndSchedule} disabled={committing || !sendableLeads.length} style={{ padding: "10px 22px", fontSize: 12 }}>
+              <OBtn onClick={approveAndSchedule} disabled={committing || !sendableLeads.length || pendingTouchCount === 0} style={{ padding: "10px 22px", fontSize: 12 }}>
                 {committing ? "SCHEDULING…" : "✓ APPROVE & SCHEDULE"}
               </OBtn>
             )}
