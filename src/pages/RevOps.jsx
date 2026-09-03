@@ -1227,7 +1227,7 @@ input,textarea,select{font-family:'Lexend',sans-serif;outline:none}
   .rv-sync-btn{display:none!important}
   .rv-sep{display:none!important}
   .rv-crm-split{flex-direction:column!important}
-  .rv-crm-left{width:100%!important;max-height:220px!important;border-right:none!important;border-bottom:1px solid ${B.border}!important;flex-shrink:0!important}
+  .rv-crm-left{width:100%!important;max-height:42vh!important;border-right:none!important;border-bottom:1px solid ${B.border}!important;flex-shrink:0!important}
   .rv-deals-split{grid-template-columns:1fr!important}
   .rv-deal-detail{position:static!important;max-height:none!important}
   .rv-kpi-grid{grid-template-columns:repeat(2,1fr)!important}
@@ -3834,7 +3834,11 @@ const PCOL={lead:B.muted,deal:B.orange,quote:B.blue,order:B.green,customer:B.gre
 useEffect(()=>{
 if(!s.crmNav) return;
 const {id,school}=s.crmNav;
-if(id){setLeftMode("contacts");setSelId(id);setSelSchool(null);setCrmTab("overview");}
+if(id){
+setSelId(id);setCrmTab("overview");
+if(school){setLeftMode("accounts");setSelSchool(school);}
+else setLeftMode("contacts");
+}
 else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
 dispatch("SET_CRM_NAV",null);
 },[s.crmNav]);
@@ -3843,12 +3847,16 @@ if(!location.pathname.startsWith("/crm")) return;
 const p=new URLSearchParams(location.search);
 const c=p.get("c");
 const school=p.get("school");
-if(c && c!==selId){setLeftMode("contacts");setSelId(c);setSelSchool(null);}
+if(c){
+setSelId(c);
+if(school){setLeftMode("accounts");setSelSchool(school);}
+else if(!school && leftMode!=="accounts") setLeftMode("contacts");
+}
 else if(school && school!==selSchool){setLeftMode("accounts");setSelSchool(school);setSelId(null);}
 },[location.search, location.pathname]);
 useEffect(()=>{
 if(!location.pathname.startsWith("/crm")) return;
-const dest=crmPath({contactId:leftMode==="contacts"?selId:null, school:leftMode==="accounts"?selSchool:null});
+const dest=crmPath({contactId:selId||null, school:leftMode==="accounts"?selSchool:null});
 const current=`${location.pathname}${location.search}`;
 if(current!==dest) navigate(dest, {replace:!selId && !selSchool});
 },[selId, selSchool, leftMode]);
@@ -3977,6 +3985,7 @@ const PHASES=[{id:"lead",label:"Lead"},{id:"deal",label:"Deal"},{id:"quote",labe
 const phaseIdx={lead:0,deal:1,quote:2,order:3,customer:3};
 const [showBreakdown,setShowBreakdown]=useState(false);
 const [showMaintenanceTools,setShowMaintenanceTools]=useState(false);
+const [showCrmTools,setShowCrmTools]=useState(false);
 const [showDuplicates,setShowDuplicates]=useState(false);
 const sourceBreakdown=useMemo(()=>{
 const buckets={};
@@ -4021,26 +4030,45 @@ dupGroups,dupPeopleCount:dupGroups.reduce((s,g)=>s+g.contacts.length,0),
 return(
 <div className="rv-crm-split" style={{display:"flex",height:"100%",overflow:"hidden"}}>
 {/* LEFT LIST */}
-<div className="rv-crm-left" style={{width:272,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
-<div style={{padding:"14px 13px 10px",borderBottom:`1px solid ${B.border}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-<div style={{display:"flex",gap:3}}>
-{[["contacts","CONTACTS"],["accounts","ACCOUNTS"]].map(([v,l])=>(
-<button key={v} onClick={()=>{setLeftMode(v);setSelId(null);setSelSchool(null);}} style={{padding:"4px 10px",background:leftMode===v?B.orange:B.surface,color:leftMode===v?B.white:B.muted,border:`1px solid ${leftMode===v?B.orange:B.border}`,borderRadius:4,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.5,cursor:"pointer"}}>{l}</button>
+<div className="rv-crm-left" style={{width:320,background:B.white,borderRight:`1px solid ${B.border}`,display:"flex",flexDirection:"column",flexShrink:0}}>
+<div style={{padding:"12px 12px 10px",borderBottom:`1px solid ${B.border}`}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
+<div style={{display:"flex",background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:2,flex:1}}>
+{[["accounts","Accounts"],["contacts","People"]].map(([v,l])=>(
+<button key={v} onClick={()=>{
+setLeftMode(v);
+if(v==="accounts"){
+const fromSel=sel?schoolKeyOf(sel):null;
+if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
+}
+}} style={{flex:1,padding:"6px 0",background:leftMode===v?B.white: "transparent",color:leftMode===v?B.text:B.muted,border:leftMode===v?`1px solid ${B.border}`:"1px solid transparent",borderRadius:5,fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:leftMode===v?600:500,cursor:"pointer",boxShadow:leftMode===v?"0 1px 2px rgba(0,0,0,.04)":"none"}}>{l}</button>
 ))}
 </div>
-<button onClick={()=>setShowAddContact(v=>!v)} style={{background:"none",border:"none",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,cursor:"pointer",letterSpacing:1}}>+ ADD</button>
+<div style={{display:"flex",gap:4,flexShrink:0}}>
+<button onClick={()=>{
+setShowAddContact(v=>{
+const next=!v;
+if(next&&leftMode==="accounts"&&selSchool){
+const schoolName=cleanSchoolName(selSchool);
+if(schoolName&&schoolName!=="(No School)") setAddForm(f=>({...f,school:f.school||schoolName}));
+}
+return next;
+});
+}} style={{background:showAddContact?B.orange:B.white,color:showAddContact?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+<button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
 </div>
-<div style={{marginBottom:7}}>
-<div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:4}}>
-<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.leads.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> leads</span></div>
-<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.zohoContacts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> contacts</span></div>
-<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{sourceBreakdown.accounts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}> accounts</span></div>
+</div>
+{showCrmTools&&(
+<div style={{marginBottom:10,background:B.surface,border:`1px solid ${B.border}`,borderRadius:6,padding:"8px 10px"}}>
+<div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:6}}>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.accounts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}> accounts</span></div>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.zohoContacts.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}> contacts</span></div>
+<div><span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.text}}>{sourceBreakdown.leads.toLocaleString()}</span><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}> leads</span></div>
 </div>
 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-<button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} contacts total ({sourceBreakdown.zohoSynced.toLocaleString()} synced from Zoho) — {showBreakdown?"hide":"show"} breakdown</button>
-<button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move any contact with no deal/quote/order and no reply signal into the Prospecting database" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"SYNCING…":"⟳ SYNC & MOVE COLD CONTACTS"}</button>
-<button onClick={()=>setShowMaintenanceTools(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚙ maintenance tools — {showMaintenanceTools?"hide":"show"}</button>
+<button onClick={()=>setShowBreakdown(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{sourceBreakdown.total.toLocaleString()} total · {sourceBreakdown.zohoSynced.toLocaleString()} from Zoho — {showBreakdown?"hide":"breakdown"}</button>
+<button onClick={runCrmSync} disabled={crmSyncing} title="Re-sync from Zoho and move cold contacts into Prospecting" style={{background:"none",border:`1px solid ${crmSyncing?B.border:B.purple}`,color:crmSyncing?B.muted:B.purple,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend',sans-serif",fontSize:10,fontWeight:600,cursor:crmSyncing?"default":"pointer"}}>{crmSyncing?"Syncing…":"Sync Zoho"}</button>
+<button onClick={()=>setShowMaintenanceTools(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>{showMaintenanceTools?"hide danger":"danger zone"}</button>
 </div>
 {showMaintenanceTools&&(
 <div style={{marginTop:5,display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -4073,12 +4101,8 @@ return(
 )}
 </div>
 )}
-</div>
-<input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools...":"Search contacts..."} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontSize:11,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
-{leftMode==="accounts"&&(
-<button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Pulls every Zoho Books customer in as a real Account, plus their actual Contact Persons straight from Books — then, for accounts that already qualify (invoiced, or a contact who replied/scored/is already in Zoho), also pulls in other contacts at the same org from our database. Never creates an account from cold prospects." style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"5px 0",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,letterSpacing:.5,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"MATCHING…":"⟳ PULL FROM ZOHO BOOKS + MATCH ACCOUNTS"}</button>
-)}
-{leftMode==="accounts"&&noContactAccountsList&&noContactAccountsList.length>0&&(
+<button onClick={pullTeammatesIntoQualifyingAccounts} disabled={backfillingOrgs} title="Pull Zoho Books customers in as accounts and match teammates" style={{marginTop:7,width:"100%",background:"none",border:`1px solid ${backfillingOrgs?B.border:B.purple}`,color:backfillingOrgs?B.muted:B.purple,borderRadius:4,padding:"6px 0",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:backfillingOrgs?"default":"pointer"}}>{backfillingOrgs?"Matching…":"Pull from Zoho Books"}</button>
+{noContactAccountsList&&noContactAccountsList.length>0&&(
 <div style={{marginTop:8,background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 9px"}}>
 <button onClick={()=>setShowNoContactAccounts(v=>!v)} style={{background:"none",border:"none",padding:0,width:"100%",textAlign:"left",fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>⚠ {noContactAccountsList.length} invoiced account{noContactAccountsList.length!==1?"s":""} ha{noContactAccountsList.length!==1?"ve":"s"} 0 contacts — {showNoContactAccounts?"hide":"show"}</button>
 {showNoContactAccounts&&(
@@ -4143,10 +4167,13 @@ return(
 </>)}
 </div>
 )}
+</div>
+)}
+<input value={search} onChange={e=>setSearch(e.target.value)} placeholder={leftMode==="accounts"?"Search schools or people…":"Search people…"} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,borderRadius:5,padding:"8px 10px",fontSize:12,color:B.text,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"}}/>
 {leftMode==="contacts"&&(
-<div style={{display:"flex",gap:4,marginTop:7,flexWrap:"wrap"}}>
+<div style={{display:"flex",gap:4,marginTop:8,flexWrap:"wrap"}}>
 {[["all","All"],["mine","Mine"],["customer","Customer"],["deal","Deal"],["quote","Quote"],["order","Order"],["lead","Lead"]].map(([v,l])=>(
-<button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"2px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,cursor:"pointer"}}>{l}</button>
+<button key={v} onClick={()=>setFilter(v)} style={{background:filter===v?B.orange:"none",color:filter===v?B.white:B.muted,border:`1px solid ${filter===v?B.orange:B.border}`,borderRadius:99,padding:"4px 10px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>{l}</button>
 ))}
 </div>
 )}
@@ -4269,7 +4296,7 @@ return(
 onClose={()=>{setTtView(false);setTtContact(null);}}
 linkedContact={ttContact}
 />
-):leftMode==="accounts"&&selSchool?(()=>{
+):leftMode==="accounts"&&selSchool&&!sel?(()=>{
 const schoolContacts=contacts.filter(c=>contactBelongsToSchoolKey(c,selSchool));
 const coverage=computeAccountCoverage(schoolContacts);
 const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
@@ -4503,7 +4530,7 @@ const {cd,phase}=getCD(c);
 const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
 const pc=PCOL[phase];
 return(
-<div key={c.id} onClick={()=>{setLeftMode("contacts");setSelId(c.id);setSelSchool(null);}} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{background:B.white,border:`1px solid ${selId===c.id?B.orange:B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
@@ -4714,6 +4741,11 @@ return(
 <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
 <div>
+{(leftMode==="accounts"&&selSchool)?(
+<button onClick={()=>setSelId(null)} style={{display:"block",background:"none",border:"none",padding:0,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.orange,cursor:"pointer",fontWeight:600}}>← {cleanSchoolName(selSchool)}</button>
+):(()=>{const sk=schoolKeyOf(sel);const sn=cleanSchoolName(sk);return sn&&sn!=="(No School)"?(
+<button onClick={()=>{setLeftMode("accounts");setSelSchool(sk);setSelId(null);}} style={{display:"block",background:"none",border:"none",padding:0,marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.orange,cursor:"pointer",fontWeight:600}}>View account →</button>
+):null;})()}
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black}}>{cName(sel)}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>{(()=>{const t=typeof sel.title==="string"?sel.title:sel.title?.name||"";const sc=typeof sel.school==="string"?sel.school:sel.school?.name||"";return(<>{t}{t&&sc?" · ":""}{sc}{sel.state?` · ${sel.state}`:""}</>);})()}</div>
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
