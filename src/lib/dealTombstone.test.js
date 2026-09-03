@@ -2,8 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mergeById } from './appStateSync.js';
 import {
+  applyDealTombstones,
+  dealIsOrphanLocal,
+  dealIsReal,
   dealIsSuppressed,
   filterLiveDeals,
+  filterRealDeals,
   mergeIdLists,
   suppressFromRemovedDeals,
   zohoIdFromDeal,
@@ -50,5 +54,33 @@ describe('filter after mergeById', () => {
 describe('mergeIdLists', () => {
   it('unions tombstones from local and server', () => {
     assert.deepEqual(mergeIdLists(['a'], ['a', 'b'], null), ['a', 'b']);
+  });
+});
+
+describe('dealIsReal / orphans', () => {
+  const suppress = { suppressedDealIds: ['gone'], suppressedDealZohoIds: [] };
+  it('keeps Zoho-linked, pending creates, and quote-sourced deals', () => {
+    assert.equal(dealIsReal({ id: 'z', zohoId: '1' }, suppress), true);
+    assert.equal(dealIsReal({ id: 'p', zoho_synced: false }, suppress), true);
+    assert.equal(dealIsReal({ id: 'q', source: 'scout-quote' }, suppress), true);
+    assert.equal(dealIsReal({ id: 'gone', zohoId: '1' }, suppress), false);
+  });
+  it('treats old campaign leftovers with no Zoho id as orphans', () => {
+    const dudley = { id: '7ye32nt', name: 'Dudley Softballs — Greene County', notes: 'From campaign: Blitz' };
+    assert.equal(dealIsOrphanLocal(dudley), true);
+    assert.equal(dealIsReal(dudley, {}), false);
+    assert.equal(filterRealDeals([dudley, { id: 'keep', zohoId: '9' }], {}).map(d => d.id).join(), 'keep');
+  });
+});
+
+describe('applyDealTombstones', () => {
+  it('never shrinks tombstones when a stale client posts without them', () => {
+    const previous = { suppressedDealIds: ['d1'], suppressedDealZohoIds: ['z9'], deals: [] };
+    const incoming = { suppressedDealIds: [], deals: [{ id: 'd1', name: 'Hudson', zohoId: 'z9' }, { id: 'keep', zohoId: 'live' }] };
+    const next = applyDealTombstones(incoming, previous);
+    assert.deepEqual(next.suppressedDealIds, ['d1']);
+    assert.deepEqual(next.suppressedDealZohoIds, ['z9']);
+    assert.equal(next.deals.length, 1);
+    assert.equal(next.deals[0].id, 'keep');
   });
 });

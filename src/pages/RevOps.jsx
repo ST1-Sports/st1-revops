@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo, createContext
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
-import { dealIsSuppressed, filterLiveDeals, mergeIdLists, suppressFromRemovedDeals } from "../lib/dealTombstone.js";
+import { dealIsSuppressed, filterLiveDeals, filterRealDeals, mergeIdLists, suppressFromRemovedDeals } from "../lib/dealTombstone.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
@@ -418,7 +418,7 @@ const saved = localStorage.getItem(STORE);
 if (saved) {
 const p = JSON.parse(saved);
 return {...SEED,...p,
-deals:        sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]),
+deals:        filterLiveDeals(sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]), p),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
 reorders:     sanitizeLookupFields(Array.isArray(p.reorders) ? p.reorders : [], ["school","contact"]),
@@ -1642,7 +1642,7 @@ const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 function ModAnalytics() {
 const {s,setMod}=useApp();
 const [tab,setTab]=useState("overview");
-const deals=s.deals||[];
+const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
 const campaigns=s.campaigns||[];
 const contacts=s.contacts||[];
 const reps=s.reps||[];
@@ -1664,7 +1664,7 @@ return{openDeals,won,lost,openPipeline,wonTotal,activeCampaigns,hotLeads,totalCl
 const TABS=[["overview","Overview"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
 return (
 <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-<PH title="ANALYTICS" sub="Pipeline, campaigns, and lead performance"/>
+<PH title="ANALYTICS" sub="Live Zoho deals and deals created here — deleted leftovers stay gone"/>
 <div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`}}>
 {TABS.map(([id,label])=>(
 <button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
@@ -2154,7 +2154,7 @@ const executeAction=async(action,msgIdx,actionIdx)=>{
 if(action.type==="navigate"){setMod(action.target);return;}
 if(action.type==="draft_email"){const key=`${msgIdx}_${actionIdx}`;setExpandedEmail(e=>e===key?null:key);return;}
 if(action.type==="create_deal"){
-const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||""};
+const d={id:mkId(),name:action.name||action.org,school:action.org,value:parseFloat(action.value)||0,stage:action.stage||"Quoted",product:action.product||"",priority:"warm",createdAt:today(),followUpDate:"",notes:action.note||"",zoho_synced:false};
 dispatch("ADD_DEAL",d);toast(`Deal created: ${d.name}`,"success");
 pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:d.school}).then(dd=>{if(dd.dealId){dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});toast("✓ Created in Zoho CRM","success");}});
 return;
@@ -4662,7 +4662,7 @@ return(<>
 })():!sel?(
 <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
 {(()=>{
-const openDeals=(s.deals||[]).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
+const openDeals=filterRealDeals(s.deals||[],s).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
 const myDeals=openDeals.filter(d=>d.repId===cu?.id||d.assignee===cu?.id||!d.repId);
 const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
 const myPipeline=myDeals.reduce((a,d)=>a+(d.value||0),0);
@@ -5037,7 +5037,7 @@ Talk Track completed {new Date(sel.ttCompletedAt).toLocaleDateString("en-US",{mo
 <div style={{display:"flex",gap:6}}>
 <OBtn onClick={()=>{
 if(!dealForm.name) return;
-const d={id:mkId(),name:dealForm.name,contact:cName(sel),contactId:sel.id,school:sel.school||"",state:sel.state||"",value:Number(dealForm.value||0),stage:dealForm.stage,product:dealForm.product,priority:"warm",createdAt:today(),followUpDate:"",notes:"",touchHistory:[],notes_list:[]};
+const d={id:mkId(),name:dealForm.name,contact:cName(sel),contactId:sel.id,school:sel.school||"",state:sel.state||"",value:Number(dealForm.value||0),stage:dealForm.stage,product:dealForm.product,priority:"warm",createdAt:today(),followUpDate:"",notes:"",touchHistory:[],notes_list:[],zoho_synced:false};
 dispatch("ADD_DEAL",d);
 pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:d.school,accountState:d.state}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
 setShowNewDeal(false);setDealForm({name:"",value:"",stage:"Quoted",product:""});toast("Deal created","success");
@@ -5711,7 +5711,7 @@ const school=c?(typeof c.school==="string"?c.school:c.school?.name||""):q.toEmai
 const cname=c?(c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()):q.toEmail;
 const dealName=(q.subject||"").replace(/^(re:|fwd?:)\s*/gi,"").trim()||`${cname} — Quote`;
 const followUp=new Date(Date.now()+7*86400000).toISOString().slice(0,10);
-const deal={id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:followUp,notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`};
+const deal={id:mkId(),name:dealName,contact:cname,school,value:0,stage:"Quoted",product:"",priority:"medium",createdAt:todayStr,followUpDate:followUp,notes:`BCC'd from: ${q.fromEmail}\nReceived: ${q.receivedAt?.slice(0,10)||todayStr}\n\n${(q.bodyText||"").slice(0,300)}`,zoho_synced:false};
 dispatch("ADD_DEAL",deal);
 pushDealToZoho({dealName:deal.name,stage:"Quoted",closingDate:followUp,description:deal.notes,accountName:school})
 .then(dd=>{if(dd.dealId) dispatch("UPDATE_DEAL",{id:deal.id,zohoId:dd.dealId});});
@@ -7061,6 +7061,9 @@ const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
 dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+const liveDealIds=new Set(dealRows.map(zd=>zd.id));
+const deadDealIds=existingDeals.filter(d=>d.zohoId&&!liveDealIds.has(d.zohoId)).map(d=>d.id);
+if(deadDealIds.length) dispatch("REMOVE_DEALS",deadDealIds);
 return {contacts:contacts.length,leads:leads.length,deals:dealRows.length,added:toAdd.length,updated:toUpdate.length,dealsAdded,dealsUpdated};
 };
 const CONTACT_FIELDS = ["First_Name","Last_Name","Email","Phone","Title","Account_Name","Mailing_City","Mailing_State","Lead_Source","Last_Activity_Time","Modified_Time"];
@@ -10560,7 +10563,7 @@ return(
 <button onClick={()=>{
 const dealId=mkId();
 const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
-dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today()});
+dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`,createdAt:today(),updatedAt:today(),zoho_synced:false});
 pushDealToZoho({dealName:_dn,stage:"Qualified Lead",accountName:school||name,description:`Re-engaged via campaign: ${selCamp.name}. Previously closed lost.`}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:dealId,zohoId:dd.dealId});});
 toast(`New deal created for ${name}`,"success");
 }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"5px 10px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
@@ -10571,7 +10574,7 @@ toast(`New deal created for ${name}`,"success");
 <button onClick={()=>{
 const dealId=mkId();
 const _dn=`${selCamp.product||"Equipment"} — ${school||name}`;
-dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today()});
+dispatch("ADD_DEAL",{id:dealId,contactId:c.id,name:_dn,company:school||name,stage:"Qualified Lead",value:"",notes:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`,createdAt:today(),updatedAt:today(),zoho_synced:false});
 pushDealToZoho({dealName:_dn,stage:"Qualified Lead",accountName:school||name,description:`From campaign: ${selCamp.name}. Marked interested on ${today()}.`}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:dealId,zohoId:dd.dealId});});
 toast(`Deal created for ${name}`,"success");
 }} style={{background:B.teal,color:B.white,border:"none",borderRadius:5,padding:"7px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",flexShrink:0}}>

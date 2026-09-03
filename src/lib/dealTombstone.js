@@ -40,3 +40,38 @@ export function suppressFromRemovedDeals(gone, payloadIds = []) {
   const zoho = mergeIdLists((gone || []).map(zohoIdFromDeal));
   return { suppressedDealIds: ids, suppressedDealZohoIds: zoho };
 }
+
+const REAL_SOURCES = new Set(['zoho-crm', 'quote', 'scout-quote']);
+
+/** A deal that exists in Zoho, or that we just created and are still pushing. */
+export function dealIsReal(deal, suppress) {
+  if (dealIsSuppressed(deal, suppress)) return false;
+  if (zohoIdFromDeal(deal)) return true;
+  if (deal.zoho_synced === false) return true;
+  return REAL_SOURCES.has(deal.source);
+}
+
+/** Local leftover with no Zoho id and no in-flight create — not pipeline truth. */
+export function dealIsOrphanLocal(deal) {
+  if (!deal) return false;
+  if (zohoIdFromDeal(deal)) return false;
+  if (deal.zoho_synced === false) return false;
+  if (REAL_SOURCES.has(deal.source)) return false;
+  return true;
+}
+
+export function filterRealDeals(deals, suppress) {
+  return (Array.isArray(deals) ? deals : []).filter(d => dealIsReal(d, suppress));
+}
+
+/** Union tombstones (they only grow) and drop suppressed rows from a state blob. */
+export function applyDealTombstones(incoming = {}, previous = {}) {
+  const suppressedDealIds = mergeIdLists(previous.suppressedDealIds, incoming.suppressedDealIds);
+  const suppressedDealZohoIds = mergeIdLists(previous.suppressedDealZohoIds, incoming.suppressedDealZohoIds);
+  const suppress = { suppressedDealIds, suppressedDealZohoIds };
+  return {
+    suppressedDealIds,
+    suppressedDealZohoIds,
+    deals: filterLiveDeals(incoming.deals, suppress),
+  };
+}
