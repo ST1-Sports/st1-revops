@@ -41,7 +41,7 @@ export function suppressFromRemovedDeals(gone, payloadIds = []) {
   return { suppressedDealIds: ids, suppressedDealZohoIds: zoho };
 }
 
-const REAL_SOURCES = new Set(['zoho-crm', 'quote', 'scout-quote']);
+const REAL_SOURCES = new Set(['zoho-crm', 'quote', 'scout-quote', 'manual', 'uploaded-quote']);
 
 /** A deal that exists in Zoho, or that we just created and are still pushing. */
 export function dealIsReal(deal, suppress) {

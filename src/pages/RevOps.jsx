@@ -3656,6 +3656,11 @@ const [linkingCandidateId,setLinkingCandidateId]=useState(null);
 const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
+const [showAccountDeal,setShowAccountDeal]=useState(false);
+const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quoted",product:"",contactId:"",notes:""});
+const [accountPdfBusy,setAccountPdfBusy]=useState(false);
+const [accountPdfDraft,setAccountPdfDraft]=useState(null);
+const accountPdfRef=useRef(null);
 const [smsHistory,setSmsHistory]=useState([]);
 const [smsLoading,setSmsLoading]=useState(false);
 const [smsBody,setSmsBody]=useState("");
@@ -3664,6 +3669,18 @@ const contacts=s.contacts||[];
 const deals=s.deals||[];
 const orders=s.orders||[];
 const cName=(c)=>c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
+const openStoredDealPdf=async(dealId,filename)=>{
+try{
+const r=await fetch(`/api/crm/deal-pdf?dealId=${encodeURIComponent(dealId)}`);
+const d=await r.json();
+if(!d.ok||!d.pdfBase64){toast(d.error||"PDF not on file","error");return;}
+const bytes=Uint8Array.from(atob(d.pdfBase64),c=>c.charCodeAt(0));
+const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+const a=document.createElement("a");
+a.href=url;a.target="_blank";a.rel="noreferrer";a.download=filename||d.filename||"quote.pdf";
+a.click();
+}catch(e){toast(`Could not open PDF: ${e.message}`,"error");}
+};
 // schoolKeyOf / orgNamesMatch / cleanSchoolName live in quoteCrmLink.js so a
 // chat quote typed as "Hudson" lands on the existing Hudson High School row.
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
@@ -3861,6 +3878,7 @@ const current=`${location.pathname}${location.search}`;
 if(current!==dest) navigate(dest, {replace:!selId && !selSchool});
 },[selId, selSchool, leftMode]);
 useEffect(()=>{ setCrmPage(1); },[search, filter, leftMode]);
+useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); },[selSchool]);
 const filtered=useMemo(()=>{
 const q=search.toLowerCase();
 const po={order:0,quote:1,deal:2,lead:3};
@@ -4442,10 +4460,100 @@ return(
 </div>
 <div style={{flex:1,overflowY:"auto",padding:"12px 22px 30px"}}>
 {/* Action bar */}
-<div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6}}>
+<div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6,flexWrap:"wrap",alignItems:"center"}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+<OBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</OBtn>
+<GBtn sm onClick={()=>accountPdfRef.current?.click()}>{accountPdfBusy?"READING PDF…":"UPLOAD PDF"}</GBtn>
+<input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{
+const file=e.target.files?.[0];
+e.target.value="";
+if(!file) return;
+if(!file.name.toLowerCase().endsWith(".pdf")){toast("Upload a PDF","error");return;}
+if(file.size>4.5*1024*1024){toast("PDF must be under 4.5 MB","error");return;}
+setAccountPdfBusy(true);setShowAccountDeal(false);
+try{
+const pdfBase64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||"").split(",")[1]||"");r.onerror=rej;r.readAsDataURL(file);});
+const rr=await fetch("/api/crm/import-quote-pdf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfBase64,pdfName:file.name})});
+const extracted=await rr.json().catch(()=>({}));
+setAccountPdfDraft({
+pdfBase64,
+filename:file.name,
+quoteNumber:extracted.quoteNumber||"",
+name:extracted.customerName?`${extracted.customerName} — ${extracted.quoteNumber||"Quote"}`:`${schoolCleanName} — ${extracted.quoteNumber||file.name.replace(/\.pdf$/i,"")}`,
+value:extracted.total||0,
+notes:extracted.notes||"",
+lineItems:extracted.lineItems||[],
+contactId:primaryC?.id||"",
+extractError:extracted.ok?"":(extracted.error||"Could not read line items — fill in the value and save"),
+});
+}catch(err){toast(`PDF read failed: ${err.message}`,"error");}
+setAccountPdfBusy(false);
+}}/>
 </div>
+{showAccountDeal&&(
+<div className="card" style={{padding:14,marginTop:10,marginBottom:8}}>
+<Lbl s={{marginBottom:10}}>New deal</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+<div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:3}}>Deal name</Lbl><input value={accountDealForm.name} onChange={e=>setAccountDealForm(f=>({...f,name:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+<div><Lbl s={{marginBottom:3}}>Value ($)</Lbl><input type="number" value={accountDealForm.value} onChange={e=>setAccountDealForm(f=>({...f,value:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+<div><Lbl s={{marginBottom:3}}>Stage</Lbl><select value={accountDealForm.stage} onChange={e=>setAccountDealForm(f=>({...f,stage:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}>{DEAL_STAGES.map(st=><option key={st}>{st}</option>)}</select></div>
+<div><Lbl s={{marginBottom:3}}>Product</Lbl><select value={accountDealForm.product} onChange={e=>setAccountDealForm(f=>({...f,product:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">— Select —</option>{PRODUCT_CATS.map(p=><option key={p}>{p}</option>)}</select></div>
+<div><Lbl s={{marginBottom:3}}>Contact</Lbl><select value={accountDealForm.contactId} onChange={e=>setAccountDealForm(f=>({...f,contactId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">— Optional —</option>{schoolContacts.map(c=><option key={c.id} value={c.id}>{cName(c)}</option>)}</select></div>
+<div style={{gridColumn:"1/-1"}}><Lbl s={{marginBottom:3}}>Notes</Lbl><textarea value={accountDealForm.notes} onChange={e=>setAccountDealForm(f=>({...f,notes:e.target.value}))} rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
+</div>
+<div style={{display:"flex",gap:6}}>
+<OBtn sm onClick={()=>{
+if(!accountDealForm.name.trim()){toast("Deal name required","error");return;}
+const contact=schoolContacts.find(c=>c.id===accountDealForm.contactId);
+const d={id:mkId(),name:accountDealForm.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value:Number(accountDealForm.value||0),stage:accountDealForm.stage||"Quoted",product:accountDealForm.product||"",notes:accountDealForm.notes||"",createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"manual"};
+dispatch("ADD_DEAL",d);
+dispatch("LOG",{msg:`${cu?.name||"Someone"} added deal on ${schoolCleanName}: ${d.name}`});
+pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:schoolCleanName,accountCity:city,accountState:state,description:d.notes}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
+setShowAccountDeal(false);
+toast("Deal added","success");
+}}>SAVE DEAL</OBtn>
+<GBtn onClick={()=>setShowAccountDeal(false)}>Cancel</GBtn>
+</div>
+</div>
+)}
+{accountPdfDraft&&(
+<div className="card" style={{padding:14,marginTop:10,marginBottom:8,borderTop:`3px solid ${B.orange}`}}>
+<Lbl s={{marginBottom:8}}>Quote PDF — {accountPdfDraft.filename}</Lbl>
+{accountPdfDraft.extractError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:8}}>{accountPdfDraft.extractError}</div>}
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+<div><Lbl s={{marginBottom:3}}>Deal name</Lbl><input value={accountPdfDraft.name} onChange={e=>setAccountPdfDraft(p=>({...p,name:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+<div><Lbl s={{marginBottom:3}}>Quote #</Lbl><input value={accountPdfDraft.quoteNumber} onChange={e=>setAccountPdfDraft(p=>({...p,quoteNumber:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+<div><Lbl s={{marginBottom:3}}>Value ($)</Lbl><input type="number" value={accountPdfDraft.value} onChange={e=>setAccountPdfDraft(p=>({...p,value:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11,boxSizing:"border-box"}}/></div>
+<div><Lbl s={{marginBottom:3}}>Contact</Lbl><select value={accountPdfDraft.contactId} onChange={e=>setAccountPdfDraft(p=>({...p,contactId:e.target.value}))} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:11}}><option value="">— Optional —</option>{schoolContacts.map(c=><option key={c.id} value={c.id}>{cName(c)}</option>)}</select></div>
+</div>
+{(accountPdfDraft.lineItems||[]).length>0&&(
+<div style={{marginBottom:8,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>
+{(accountPdfDraft.lineItems||[]).slice(0,8).map((it,i)=><div key={i}>{it.name} × {it.qty} @ {fmt$(it.rate||0)}</div>)}
+{(accountPdfDraft.lineItems||[]).length>8&&<div>+{(accountPdfDraft.lineItems||[]).length-8} more</div>}
+</div>
+)}
+<div style={{display:"flex",gap:6}}>
+<OBtn sm onClick={async()=>{
+if(!accountPdfDraft.name.trim()){toast("Deal name required","error");return;}
+const contact=schoolContacts.find(c=>c.id===accountPdfDraft.contactId);
+const items=(accountPdfDraft.lineItems||[]).map(it=>({id:mkId(),name:it.name,qty:it.qty||1,rate:it.rate||0}));
+const value=Number(accountPdfDraft.value||0);
+const d={id:mkId(),name:accountPdfDraft.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value,stage:"Quoted",product:items[0]?.name||"",notes:accountPdfDraft.notes||`Uploaded PDF: ${accountPdfDraft.filename}`,createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"uploaded-quote",quoteNumber:accountPdfDraft.quoteNumber||"",quoteItems:items,quoteAmount:value,quotePdfName:accountPdfDraft.filename,hasUploadedPdf:true};
+dispatch("ADD_DEAL",d);
+dispatch("LOG",{msg:`${cu?.name||"Someone"} uploaded quote PDF on ${schoolCleanName}: ${d.name}`});
+try{
+const saved=await fetch("/api/crm/deal-pdf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dealId:d.id,filename:accountPdfDraft.filename,pdfBase64:accountPdfDraft.pdfBase64})}).then(r=>r.json());
+if(!saved.ok) toast(saved.error||"Deal saved — PDF file did not store","info");
+}catch(err){toast(`Deal saved — PDF store failed: ${err.message}`,"info");}
+pushDealToZoho({dealName:d.name,amount:d.value,stage:"Quoted",accountName:schoolCleanName,accountCity:city,accountState:state,description:[d.quoteNumber?`Quote ${d.quoteNumber}`:"",d.notes].filter(Boolean).join("\n")}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
+setAccountPdfDraft(null);
+toast("Quote PDF added as a deal","success");
+}}>SAVE DEAL FROM PDF</OBtn>
+<GBtn onClick={()=>setAccountPdfDraft(null)}>Cancel</GBtn>
+</div>
+</div>
+)}
 {/* ── KPI STRIP ── */}
 <div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
 <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
@@ -4544,11 +4652,11 @@ return(
 })}
 </div>
 {/* ── ALL DEALS ── */}
-{allDeals.length>0&&(<>
-<SectionHdr sub={`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`}>DEALS</SectionHdr>
+<SectionHdr sub={allDeals.length?`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`:"none yet"}>DEALS</SectionHdr>
+{allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
-<div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={d.id} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
@@ -4556,11 +4664,11 @@ return(
 <div style={{textAlign:"right",flexShrink:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,fontWeight:500}}>{fmt$(d.value||0)}</div>
+{d.hasUploadedPdf&&<button onClick={()=>openStoredDealPdf(d.id,d.quotePdfName)} style={{background:"none",border:"none",padding:"4px 0 0",fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue,cursor:"pointer"}}>Open PDF</button>}
 </div>
 </div>
 ))}
 </div>
-</>)}
 {/* ── INVOICES & PAYMENTS ── */}
 {schoolInvoices.length>0&&(<>
 <SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>

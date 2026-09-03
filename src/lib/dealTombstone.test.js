@@ -63,6 +63,8 @@ describe('dealIsReal / orphans', () => {
     assert.equal(dealIsReal({ id: 'z', zohoId: '1' }, suppress), true);
     assert.equal(dealIsReal({ id: 'p', zoho_synced: false }, suppress), true);
     assert.equal(dealIsReal({ id: 'q', source: 'scout-quote' }, suppress), true);
+    assert.equal(dealIsReal({ id: 'm', source: 'manual' }, suppress), true);
+    assert.equal(dealIsReal({ id: 'u', source: 'uploaded-quote' }, suppress), true);
     assert.equal(dealIsReal({ id: 'gone', zohoId: '1' }, suppress), false);
   });
   it('treats old campaign leftovers with no Zoho id as orphans', () => {
