@@ -63,6 +63,8 @@ import {
   stepIndicesFor,
   countPendingTouches,
   batchScheduleSummary,
+  clampGoBatchSize,
+  goBatchPreview,
   materializeLeadsFromTemplates,
   buildOutreachSchedule,
   isProspectingList,
@@ -196,8 +198,9 @@ function fmtDT(iso) {
 function Lbl({ children, c, s: sty }) { return <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: c || B.muted, letterSpacing: 1, ...sty }}>{children}</div>; }
 function OBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: disabled ? B.border : B.orange, color: disabled ? B.muted : B.white, border: "none", borderRadius: 5, padding: "8px 16px", fontSize: 11, fontFamily: "'Lexend Zetta',sans-serif", fontWeight: 700, letterSpacing: .4, cursor: disabled ? "not-allowed" : "pointer", ...sty }}>{children}</button>; }
 function GBtn({ children, onClick, disabled, style: sty }) { return <button onClick={onClick} disabled={disabled} style={{ background: B.white, color: B.textMid, border: `1px solid ${B.borderD}`, borderRadius: 5, padding: "7px 13px", fontSize: 11, fontFamily: "'Lexend',sans-serif", cursor: disabled ? "default" : "pointer", opacity: disabled ? .6 : 1, ...sty }}>{children}</button>; }
-function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo }) {
-  const dripMins = Math.max(1, Math.ceil((readyCount * GO_DRIP_MS) / 60000));
+function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo, goLimit, setGoLimit }) {
+  const { thisGo, remaining, dripMins } = goBatchPreview(readyCount, goLimit, GO_DRIP_MS);
+  const presets = [10, 25, 50, 100];
   return (
     <div style={{ background: B.orangeBg, border: `2px solid ${B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
@@ -205,28 +208,40 @@ function Day1GoPanel({ readyCount, pace, setPace, run, onGo, onStop, canGo }) {
           <Lbl c={B.orange}>SEND DAY 1 FROM BRAD</Lbl>
           <div style={{ fontSize: 13, fontWeight: 600, color: B.text, marginTop: 6 }}>
             {readyCount > 0
-              ? `${readyCount} Email 1${readyCount !== 1 ? "s" : ""} ready`
+              ? `${readyCount.toLocaleString()} Email 1${readyCount !== 1 ? "s" : ""} ready — this GO sends ${thisGo.toLocaleString()}`
               : "Add Day 1 copy below, then GO"}
           </div>
-          <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 520, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 11, color: B.textMid, marginTop: 3, maxWidth: 560, lineHeight: 1.5 }}>
             {readyCount > 0
-              ? "Sends the first email for each organization still pending, from brad@shopst1sports.com. Already-sent, bounced, or empty Day 1s are skipped."
-              : "Nothing sends until you write Email 1 and press GO. Pick 1 every 15 seconds now so the delay is set when you are ready."}
+              ? `Only the number you set next to GO goes out from brad@shopst1sports.com. ${remaining.toLocaleString()} stay waiting for the next GO.`
+              : "Nothing sends until you write Email 1, pick how many this GO, and press GO."}
           </div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Lbl c={B.orange} s={{ margin: 0 }}>THIS GO</Lbl>
+            <input type="number" min={1} max={Math.max(1, readyCount)} value={goLimit} disabled={!!run}
+              onChange={e => setGoLimit(e.target.value)}
+              style={{ width: 80, background: B.white, border: `2px solid ${B.orange}`, borderRadius: 4, padding: "6px 8px", fontSize: 14, fontWeight: 700 }} />
+            {presets.map(n => (
+              <button key={n} type="button" disabled={!!run} onClick={() => setGoLimit(String(Math.min(n, Math.max(1, readyCount))))}
+                style={{ background: Number(goLimit) === n ? B.orange : B.white, color: Number(goLimit) === n ? B.white : B.text, border: `1px solid ${B.orange}80`, borderRadius: 4, padding: "4px 8px", fontSize: 10, fontWeight: 700, cursor: run ? "default" : "pointer" }}>
+                {n}
+              </button>
+            ))}
+          </div>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: run ? "default" : "pointer" }}>
             <input type="radio" name="go-pace" checked={pace === "now"} disabled={!!run} onChange={() => setPace("now")} />
-            Send all Day 1 now
+            Send this GO now
           </label>
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: B.text, cursor: run ? "default" : "pointer" }}>
             <input type="radio" name="go-pace" checked={pace === "drip"} disabled={!!run} onChange={() => setPace("drip")} />
-            1 every 15 seconds{readyCount > 1 ? ` (~${dripMins} min)` : ""}
+            1 every 15 seconds{thisGo > 1 ? ` (~${dripMins} min for ${thisGo})` : ""}
           </label>
           <div style={{ marginTop: 2 }}>
             {run
               ? <GBtn onClick={onStop} style={{ color: B.red, borderColor: `${B.red}60`, fontWeight: 700 }}>■ STOP</GBtn>
-              : <OBtn onClick={onGo} disabled={!canGo} style={{ padding: "10px 28px", fontSize: 13 }}>▶ GO</OBtn>}
+              : <OBtn onClick={onGo} disabled={!canGo || thisGo < 1} style={{ padding: "10px 28px", fontSize: 13 }}>▶ GO {thisGo > 0 ? thisGo.toLocaleString() : ""}</OBtn>}
           </div>
         </div>
       </div>
@@ -357,6 +372,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
   const [syncingGmail, setSyncingGmail] = useState(false);
   const [goPace, setGoPace] = useState(urlPace === "drip" ? "drip" : "now"); // now | drip
+  const [goLimit, setGoLimit] = useState(25);
+  const [composingEmail2, setComposingEmail2] = useState(false);
+  const [composingEmail3, setComposingEmail3] = useState(false);
   const [goRun, setGoRun] = useState(null); // {mode,total,done,failed,current,nextIn} while GO is live
   const [exportingSent, setExportingSent] = useState(false);
   const fileRef = useRef(null);
@@ -496,6 +514,10 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   );
   const showEmail1Composer = batchStatus !== "approved" && sendableLeads.length > 0 && isProspectingList(fileName);
   const email1Ready = touchHasCopy(templates.step0) || sendableLeads.some(l => touchHasCopy(l.touches?.[0]));
+  const email2Ready = touchHasCopy(templates.step1) || sendableLeads.some(l => touchHasCopy(l.touches?.[1]));
+  const email3Ready = touchHasCopy(templates.step2) || sendableLeads.some(l => touchHasCopy(l.touches?.[2]));
+  const showEmail2Composer = showEmail1Composer && email1Ready && (composingEmail2 || email2Ready);
+  const showEmail3Composer = showEmail1Composer && email2Ready && (composingEmail3 || email3Ready);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const [campId, setCampId] = useState(() => mkId());
@@ -571,6 +593,9 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
       setHeldLeftAlone(false);
       setShowHeld(false);
       if (urlPace === "drip") setGoPace("drip");
+      setGoLimit(b.batchSize || 25);
+      setComposingEmail2(touchHasCopy((b.templates || {}).step1));
+      setComposingEmail3(touchHasCopy((b.templates || {}).step2));
       setScreen("review");
     } catch (e) { toast(`Couldn't load batch: ${e.message}`, "error"); }
   };
@@ -943,12 +968,15 @@ Return JSON exactly as:
       if (!day1Ready.length) toast("No Day 1 emails left to send", "info");
       return;
     }
-    const queue = day1Ready;
+    const thisGo = clampGoBatchSize(goLimit, day1Ready.length);
+    const queue = day1Ready.slice(0, thisGo);
+    if (!queue.length) { toast("Set THIS GO to at least 1", "error"); return; }
     const drip = goPace === "drip";
     const mins = Math.ceil((queue.length * GO_DRIP_MS) / 60000);
+    const leftover = day1Ready.length - queue.length;
     if (!window.confirm(drip
-      ? `Send ${queue.length} Day 1 email(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\nKeep this page open until it finishes.`
-      : `Send all ${queue.length} Day 1 email(s) from brad@shopst1sports.com now?`)) return;
+      ? `Send ${queue.length} of ${day1Ready.length} Day 1 email(s) from brad@shopst1sports.com, one every 15 seconds (about ${mins} minute${mins !== 1 ? "s" : ""})?\n\n${leftover.toLocaleString()} stay waiting for the next GO. Keep this page open until it finishes.`
+      : `Send ${queue.length} of ${day1Ready.length} Day 1 email(s) from brad@shopst1sports.com now?\n\n${leftover.toLocaleString()} stay waiting for the next GO.`)) return;
 
     goAbortRef.current = false;
     setGoRun({ mode: drip ? "drip" : "now", total: queue.length, done: 0, failed: 0, current: null, nextIn: 0 });
@@ -1713,8 +1741,8 @@ Subject: <subject line, may include {{orgName}}>
               <Lbl c={email1Ready ? B.green : B.orange}>EMAIL 1 FOR ALL {sendableLeads.length.toLocaleString()} CONTACTS</Lbl>
               <div style={{ fontSize: 12, color: B.textMid, marginTop: 6, marginBottom: 12, lineHeight: 1.5, maxWidth: 720 }}>
                 {needsEmail1Composer(leads, templates, fileName)
-                  ? "This list came from Prospecting with no copy yet. Write Email 1 here once — it applies to everyone. Use MAX PER DAY below so you do not hit all contacts at once."
-                  : "Shared Email 1 for this list. Edits autosave; approve & schedule when ready."}
+                  ? "This list came from Prospecting with no copy yet. Write Email 1 here once — it applies to everyone. Then pick THIS GO next to the GO button so you do not hit everyone at once."
+                  : "Shared Email 1 for this list. Edits autosave. Pick THIS GO next to GO to send a slice, or approve & schedule the rest."}
               </div>
               <StepEditor
                 draftKey="step0"
@@ -1735,6 +1763,70 @@ Subject: <subject line, may include {{orgName}}>
                   {stepIndices.length > 1 ? ` (${scheduleSummary.totalDays.toLocaleString()} days total across ${stepIndices.length} steps)` : ""}.
                 </div>
               )}
+              {email1Ready && !showEmail2Composer && (
+                <div style={{ marginTop: 14 }}>
+                  <GBtn onClick={() => setComposingEmail2(true)} style={{ fontSize: 10, padding: "8px 14px" }}>+ ADD EMAIL 2 FOR ALL</GBtn>
+                </div>
+              )}
+            </div>
+          )}
+
+          {showEmail2Composer && (
+            <div style={{ background: B.white, border: `2px solid ${email2Ready ? B.green : B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+              <Lbl c={email2Ready ? B.green : B.orange}>EMAIL 2 FOR ALL {sendableLeads.length.toLocaleString()} CONTACTS</Lbl>
+              <div style={{ fontSize: 12, color: B.textMid, marginTop: 6, marginBottom: 12, lineHeight: 1.5, maxWidth: 720 }}>
+                Follow-up after Email 1. When you approve & schedule, this waits DAYS BETWEEN FOLLOW-UPS and still uses MAX PER DAY. GO only sends Email 1.
+              </div>
+              <StepEditor
+                draftKey="step1"
+                seed={templates.step1 || { subject: "", body: "" }}
+                templates={templates}
+                updateTemplateField={updateTemplateField}
+                onApply={(subject, body) => {
+                  if (!subject?.trim() || !body?.trim()) { toast("Write a subject and body first", "error"); return; }
+                  setTemplates(prev => ({ ...prev, step1: { subject: subject.trim(), body: body.trim(), label: "Email 2" } }));
+                  setComposingEmail2(true);
+                  toast(`Email 2 saved for all ${sendableLeads.length.toLocaleString()} contacts`, "success");
+                }}
+                applyLabel={email2Ready ? "✓ EMAIL 2 SAVED" : `SAVE EMAIL 2 FOR ALL ${sendableLeads.length.toLocaleString()}`}
+                hint={<>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — filled in per contact when sent.</>}
+              />
+              <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                {!email2Ready && (
+                  <GBtn onClick={() => { setComposingEmail2(false); setTemplates(prev => { const next = { ...prev }; delete next.step1; return next; }); }} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL EMAIL 2</GBtn>
+                )}
+                {email2Ready && !showEmail3Composer && (
+                  <GBtn onClick={() => setComposingEmail3(true)} style={{ fontSize: 10, padding: "8px 14px" }}>+ ADD EMAIL 3 FOR ALL</GBtn>
+                )}
+              </div>
+            </div>
+          )}
+
+          {showEmail3Composer && (
+            <div style={{ background: B.white, border: `2px solid ${email3Ready ? B.green : B.orange}`, borderRadius: 10, padding: "16px 18px", marginBottom: 18 }}>
+              <Lbl c={email3Ready ? B.green : B.orange}>EMAIL 3 FOR ALL {sendableLeads.length.toLocaleString()} CONTACTS</Lbl>
+              <div style={{ fontSize: 12, color: B.textMid, marginTop: 6, marginBottom: 12, lineHeight: 1.5, maxWidth: 720 }}>
+                Third touch. Same gap and MAX PER DAY as Email 2 once you approve & schedule.
+              </div>
+              <StepEditor
+                draftKey="step2"
+                seed={templates.step2 || { subject: "", body: "" }}
+                templates={templates}
+                updateTemplateField={updateTemplateField}
+                onApply={(subject, body) => {
+                  if (!subject?.trim() || !body?.trim()) { toast("Write a subject and body first", "error"); return; }
+                  setTemplates(prev => ({ ...prev, step2: { subject: subject.trim(), body: body.trim(), label: "Email 3" } }));
+                  setComposingEmail3(true);
+                  toast(`Email 3 saved for all ${sendableLeads.length.toLocaleString()} contacts`, "success");
+                }}
+                applyLabel={email3Ready ? "✓ EMAIL 3 SAVED" : `SAVE EMAIL 3 FOR ALL ${sendableLeads.length.toLocaleString()}`}
+                hint={<>Use <code>{"{{orgName}}"}</code>, <code>{"{{firstName}}"}</code>, <code>{"{{sport}}"}</code> — filled in per contact when sent.</>}
+              />
+              {!email3Ready && (
+                <div style={{ marginTop: 12 }}>
+                  <GBtn onClick={() => { setComposingEmail3(false); setTemplates(prev => { const next = { ...prev }; delete next.step2; return next; }); }} style={{ fontSize: 9, padding: "6px 12px" }}>CANCEL EMAIL 3</GBtn>
+                </div>
+              )}
             </div>
           )}
 
@@ -1746,7 +1838,7 @@ Subject: <subject line, may include {{orgName}}>
               {stepIndices.map(i => {
                 const stepKey = `step${i}`;
                 const tmplAtStep = touchHasCopy(templates[stepKey]) ? templates[stepKey] : null;
-                const atStep = sendableLeads.filter(l => l.touches[i] || (i === 0 && tmplAtStep && !touchHasCopy(l.touches?.[0])));
+                const atStep = sendableLeads.filter(l => l.touches?.[i] || (tmplAtStep && !touchHasCopy(l.touches?.[i])));
                 const pendingAtStep = atStep.filter(l => {
                   const t = effectiveTouch(l, i, templates);
                   return t && touchHasCopy(t) && !t.sentAt;
@@ -1761,8 +1853,10 @@ Subject: <subject line, may include {{orgName}}>
                 // Already-sent touches are immutable, so they're not grouped.
                 const groups = new Map();
                 pendingAtStep.forEach(l => {
-                  const t = effectiveTouch(l, i, templates);
-                  const key = `${t.subject}\u0000${t.body}`;
+                  const inline = l.touches?.[i];
+                  const fromTemplate = !(inline && touchHasCopy(inline)) && tmplAtStep;
+                  const t = fromTemplate ? tmplAtStep : (inline || effectiveTouch(l, i, templates));
+                  const key = fromTemplate ? `__tmpl__${stepKey}` : `${t.subject}\u0000${t.body}`;
                   if (!groups.has(key)) groups.set(key, { subject: t.subject, body: t.body, leadIds: [], orgNames: [] });
                   const g = groups.get(key);
                   g.leadIds.push(l.id);
@@ -1861,6 +1955,8 @@ Subject: <subject line, may include {{orgName}}>
             onGo={startDay1Go}
             onStop={() => { goAbortRef.current = true; }}
             canGo={!!batchId && day1Ready.length > 0}
+            goLimit={goLimit}
+            setGoLimit={setGoLimit}
           />
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 10 }}>
@@ -1927,7 +2023,7 @@ Subject: <subject line, may include {{orgName}}>
               {isProspectingList(fileName) ? (
                 <>
                   <b>{scheduleSummary.sendableCount.toLocaleString()} contacts</b> at <b>{scheduleSummary.perDay}/day</b> → ~<b>{scheduleSummary.daysPerTouch.toLocaleString()} day(s)</b> per email step.
-                  {email1Ready ? " Email 1 is ready — approve & schedule or use Day 1 GO." : " Write Email 1 above, then set MAX PER DAY so sends are batched."}
+                  {email1Ready ? " Email 1 is ready — set THIS GO next to the GO button, then GO, or approve & schedule the rest." : " Write Email 1 above, then set THIS GO next to GO so you do not send everyone at once."}
                 </>
               ) : (
                 "Business hours only (Mon–Fri, 9am–5pm MT) — anything landing after hours rolls to the next morning automatically."

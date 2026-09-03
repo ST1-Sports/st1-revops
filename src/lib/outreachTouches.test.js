@@ -8,6 +8,8 @@ import {
   stepIndicesFor,
   countPendingTouches,
   batchScheduleSummary,
+  clampGoBatchSize,
+  goBatchPreview,
   materializeLeadsFromTemplates,
   buildOutreachSchedule,
 } from './outreachTouches.js';
@@ -68,6 +70,25 @@ describe('batchScheduleSummary', () => {
     const s = batchScheduleSummary(7000, 25);
     assert.equal(s.perDay, 25);
     assert.equal(s.daysPerTouch, 280);
+  });
+});
+
+describe('clampGoBatchSize', () => {
+  it('caps this GO at remaining ready count', () => {
+    assert.equal(clampGoBatchSize(25, 7797), 25);
+    assert.equal(clampGoBatchSize(10000, 7797), 7797);
+    assert.equal(clampGoBatchSize(0, 7797), 25);
+    assert.equal(clampGoBatchSize(50, 10), 10);
+    assert.equal(clampGoBatchSize(25, 0), 0);
+  });
+});
+
+describe('goBatchPreview', () => {
+  it('shows remaining after this GO', () => {
+    const p = goBatchPreview(7797, 25);
+    assert.equal(p.thisGo, 25);
+    assert.equal(p.remaining, 7772);
+    assert.equal(p.dripMins, 7);
   });
 });
 

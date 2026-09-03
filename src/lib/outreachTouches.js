@@ -86,6 +86,23 @@ export function countPendingTouches(leads, templates = {}, { stopped = () => fal
   return n;
 }
 
+/** How many Day 1 emails this GO will actually send. Never exceeds remaining. */
+export function clampGoBatchSize(requested, readyCount) {
+  const ready = Math.max(0, Number(readyCount) || 0);
+  const n = Math.floor(Number(requested));
+  if (!ready) return 0;
+  if (!Number.isFinite(n) || n < 1) return Math.min(25, ready);
+  return Math.min(n, ready);
+}
+
+export function goBatchPreview(readyCount, goLimit, dripMs = 15000) {
+  const ready = Math.max(0, Number(readyCount) || 0);
+  const thisGo = clampGoBatchSize(goLimit, ready);
+  const remaining = Math.max(0, ready - thisGo);
+  const dripMins = Math.max(1, Math.ceil((thisGo * dripMs) / 60000));
+  return { ready, thisGo, remaining, dripMins };
+}
+
 export function batchScheduleSummary(sendableCount, batchSize, { touchSteps = 1 } = {}) {
   const n = Math.max(0, Number(sendableCount) || 0);
   const perDay = Math.max(1, Number(batchSize) || 25);
