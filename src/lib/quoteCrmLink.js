@@ -98,11 +98,70 @@ export function schoolKeyState(key) {
   return (m?.[1] || '').trim();
 }
 
-function statesCompatible(a, b) {
+export function statesCompatible(a, b) {
   const sa = (a || '').trim().toLowerCase();
   const sb = (b || '').trim().toLowerCase();
   if (!sa || !sb) return true;
   return sa === sb;
+}
+
+/** Same key shape as schoolKeyOf, for a Prisma/Zoho account with no contact yet. */
+export function schoolKeyFromAccount(a) {
+  const name = (typeof a?.name === 'string' ? a.name : '').trim();
+  if (!name) return '';
+  const st = (a?.state || '').trim();
+  return st ? `${name} — ${st}` : name;
+}
+
+/**
+ * Accounts created in CRM (or pulled from Prisma) must show in the list even
+ * when they have zero contacts. Stamp persisted/Zoho ids onto a matching
+ * contact-derived row; otherwise add a standalone group.
+ */
+export function foldPersistedAccountsIntoGroups(groups, accounts, searchQuery = '') {
+  const out = groups || {};
+  const sq = String(searchQuery || '').toLowerCase().trim();
+  for (const a of accounts || []) {
+    const name = (a?.name || '').trim();
+    if (!name) continue;
+    if (sq) {
+      const hay = `${name} ${a.city || ''} ${a.state || ''}`.toLowerCase();
+      if (!hay.includes(sq)) continue;
+    }
+    const key = schoolKeyFromAccount(a);
+    let matchedKey = null;
+    for (const [k, g] of Object.entries(out)) {
+      if (k === key) {
+        matchedKey = k;
+        break;
+      }
+      if (!statesCompatible(schoolKeyState(k), a.state)) continue;
+      if (orgNamesMatch(g.name, name) || orgNamesMatch(cleanSchoolName(k), name)) {
+        matchedKey = k;
+        break;
+      }
+    }
+    if (matchedKey) {
+      const g = out[matchedKey];
+      g.persistedId = a.id || g.persistedId;
+      g.zohoAccountId = a.zohoAccountId || g.zohoAccountId;
+      if (!g.city && a.city) g.city = a.city;
+      if (!g.state && a.state) g.state = a.state;
+      continue;
+    }
+    out[key] = {
+      name,
+      contacts: [],
+      deals: [],
+      value: 0,
+      invoiced: false,
+      persistedId: a.id || null,
+      zohoAccountId: a.zohoAccountId || null,
+      city: a.city || '',
+      state: a.state || '',
+    };
+  }
+  return out;
 }
 
 export function contactBelongsToSchoolKey(c, selSchool) {
@@ -288,10 +347,15 @@ export function mergeAccountGroups(groups) {
       const loserKey = preferIncoming ? keepKey : k2;
 
       keep = {
+        ...winner,
         name: winner.name,
         contacts: [...(winner.contacts || []), ...(loser.contacts || [])],
         deals: dedupeDeals([...(winner.deals || []), ...(loser.deals || [])]),
         invoiced: !!(winner.invoiced || loser.invoiced),
+        persistedId: winner.persistedId || loser.persistedId,
+        zohoAccountId: winner.zohoAccountId || loser.zohoAccountId,
+        city: winner.city || loser.city || '',
+        state: winner.state || loser.state || '',
         value: 0,
       };
       keep.value = keep.deals

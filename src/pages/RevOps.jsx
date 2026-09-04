@@ -21,6 +21,9 @@ import {
   quoteDealUpdate,
   mergeAccountGroups,
   attachOpenDealsToAccountGroups,
+  schoolKeyFromAccount,
+  schoolKeyState,
+  foldPersistedAccountsIntoGroups,
   zohoIdFromContact,
   mergeZohoContactRow,
   mergeContactsPreferRecentSaves,
@@ -929,7 +932,7 @@ const skipSync = new Set([
 "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES",
 ]);
 if (!skipSync.has(action)) {
-const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 }
@@ -3640,6 +3643,10 @@ const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+const [showAddAccount,setShowAddAccount]=useState(false);
+const [addAccountForm,setAddAccountForm]=useState({name:"",city:"",state:"",website:""});
+const [addAccountBusy,setAddAccountBusy]=useState(false);
+const [persistedAccounts,setPersistedAccounts]=useState([]);
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
 const [crmPage,setCrmPage]=useState(1);
@@ -3668,6 +3675,7 @@ const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quo
 const [accountPdfBusy,setAccountPdfBusy]=useState(false);
 const [accountPdfDraft,setAccountPdfDraft]=useState(null);
 const accountPdfRef=useRef(null);
+const accountPdfCtxRef=useRef({});
 const [smsHistory,setSmsHistory]=useState([]);
 const [smsLoading,setSmsLoading]=useState(false);
 const [smsBody,setSmsBody]=useState("");
@@ -3688,6 +3696,63 @@ a.href=url;a.target="_blank";a.rel="noreferrer";a.download=filename||d.filename|
 a.click();
 }catch(e){toast(`Could not open PDF: ${e.message}`,"error");}
 };
+const upsertPersistedAccount=(acct)=>{
+if(!acct?.id) return;
+setPersistedAccounts(prev=>{
+const rest=prev.filter(a=>a.id!==acct.id&&!(acct.normalizedName&&a.normalizedName===acct.normalizedName));
+return [acct,...rest];
+});
+};
+const saveCrmAccount=async({name,city,state,website})=>{
+const r=await fetch("/api/crm/account",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,city,state,website})});
+const d=await r.json().catch(()=>({}));
+if(!r.ok||!d.ok) throw new Error(d.error||"Could not save account");
+if(d.account) upsertPersistedAccount(d.account);
+return d;
+};
+const readQuotePdfFile=async(file,{fallbackName,fallbackCity,fallbackState,fallbackContactId}={})=>{
+if(!file) return;
+if(!file.name.toLowerCase().endsWith(".pdf")){toast("Upload a PDF","error");return;}
+if(file.size>4.5*1024*1024){toast("PDF must be under 4.5 MB","error");return;}
+setAccountPdfBusy(true);setShowAccountDeal(false);
+try{
+const pdfBase64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||"").split(",")[1]||"");r.onerror=rej;r.readAsDataURL(file);});
+const rr=await fetch("/api/crm/import-quote-pdf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfBase64,pdfName:file.name})});
+const extracted=await rr.json().catch(()=>({}));
+const accountName=(extracted.customerName||fallbackName||"").trim();
+if(!fallbackName&&accountName){
+try{
+const saved=await saveCrmAccount({name:accountName,city:fallbackCity,state:fallbackState});
+const key=schoolKeyFromAccount(saved.account||{name:accountName,state:fallbackState});
+if(key){setLeftMode("accounts");setSelSchool(key);setSelId(null);}
+}catch(err){toast(`Account save: ${err.message}`,"info");}
+}else if(fallbackName){
+saveCrmAccount({name:fallbackName,city:fallbackCity,state:fallbackState}).catch(()=>{});
+}else{
+toast("PDF has no school name — add the account, then upload the quote","error");
+}
+setAccountPdfDraft({
+pdfBase64,
+filename:file.name,
+quoteNumber:extracted.quoteNumber||"",
+customerName:accountName,
+name:accountName?`${accountName} — ${extracted.quoteNumber||"Quote"}`:`${fallbackName||file.name.replace(/\.pdf$/i,"")}`,
+value:extracted.total||0,
+notes:extracted.notes||"",
+lineItems:extracted.lineItems||[],
+contactId:fallbackContactId||"",
+extractError:extracted.ok?"":(extracted.error||"Could not read line items — fill in the value and save"),
+});
+}catch(err){toast(`PDF read failed: ${err.message}`,"error");}
+setAccountPdfBusy(false);
+};
+useEffect(()=>{
+let cancelled=false;
+fetch("/api/crm/account").then(r=>r.json()).then(d=>{
+if(!cancelled&&Array.isArray(d.accounts)) setPersistedAccounts(d.accounts);
+}).catch(()=>{});
+return ()=>{cancelled=true};
+},[]);
 // schoolKeyOf / orgNamesMatch / cleanSchoolName live in quoteCrmLink.js so a
 // chat quote typed as "Hudson" lands on the existing Hudson High School row.
 const setPF=(k,v)=>{setProfileForm(f=>({...f,[k]:v}));setProfileDirty(true);};
@@ -4046,13 +4111,17 @@ contacts.filter(c=>!c.deadStatus).forEach(c=>{
 const key=schoolKeyOf(c);
 if(cleanSchoolName(key)!=="(No School)")schoolKeys.add(key);
 });
+persistedAccounts.forEach(a=>{
+const key=schoolKeyFromAccount(a);
+if(key) schoolKeys.add(key);
+});
 return {
 rows:Object.entries(buckets).sort(([,a],[,b])=>b-a),
 dead,zohoSynced,total:contacts.length,
 leads,zohoContacts,accounts:schoolKeys.size,
 dupGroups,dupPeopleCount:dupGroups.reduce((s,g)=>s+g.contacts.length,0),
 };
-},[contacts]);
+},[contacts,persistedAccounts]);
 return(
 <div className="rv-crm-split" style={{display:"flex",height:"100%",overflow:"hidden"}}>
 {/* LEFT LIST */}
@@ -4071,16 +4140,28 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 ))}
 </div>
 <div style={{display:"flex",gap:4,flexShrink:0}}>
+{leftMode==="accounts"&&(
+<>
+<button onClick={()=>{accountPdfCtxRef.current={fallbackName:selSchool?cleanSchoolName(selSchool):"",fallbackCity:"",fallbackState:selSchool?schoolKeyState(selSchool):"",fallbackContactId:""};accountPdfRef.current?.click();}} disabled={accountPdfBusy} style={{background:B.white,color:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:accountPdfBusy?"default":"pointer"}}>{accountPdfBusy?"READING…":"Upload quote"}</button>
+<input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{const file=e.target.files?.[0];e.target.value="";await readQuotePdfFile(file,accountPdfCtxRef.current||{});}}/>
+</>
+)}
 <button onClick={()=>{
+if(leftMode==="accounts"){
+setShowAddContact(false);
+setShowAddAccount(v=>!v);
+return;
+}
+setShowAddAccount(false);
 setShowAddContact(v=>{
 const next=!v;
-if(next&&leftMode==="accounts"&&selSchool){
+if(next&&selSchool){
 const schoolName=cleanSchoolName(selSchool);
 if(schoolName&&schoolName!=="(No School)") setAddForm(f=>({...f,school:f.school||schoolName}));
 }
 return next;
 });
-}} style={{background:showAddContact?B.orange:B.white,color:showAddContact?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+}} style={{background:(leftMode==="accounts"?showAddAccount:showAddContact)?B.orange:B.white,color:(leftMode==="accounts"?showAddAccount:showAddContact)?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
 <button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
 </div>
 </div>
@@ -4204,6 +4285,37 @@ return next;
 </div>
 )}
 </div>
+{showAddAccount&&leftMode==="accounts"&&(
+<div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>Creates the account in Zoho and stores it here so it comes back on refresh.</div>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
+<input value={addAccountForm.name} onChange={e=>setAddAccountForm(f=>({...f,name:e.target.value}))} placeholder="School / account name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
+<input value={addAccountForm.city} onChange={e=>setAddAccountForm(f=>({...f,city:e.target.value}))} placeholder="City" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addAccountForm.state} onChange={e=>setAddAccountForm(f=>({...f,state:e.target.value}))} placeholder="State" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addAccountForm.website} onChange={e=>setAddAccountForm(f=>({...f,website:e.target.value}))} placeholder="Website" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
+</div>
+<div style={{display:"flex",gap:5}}>
+<OBtn sm disabled={addAccountBusy||!addAccountForm.name.trim()} onClick={async()=>{
+const form={...addAccountForm};
+if(!form.name.trim()) return;
+setAddAccountBusy(true);
+try{
+const saved=await saveCrmAccount(form);
+const acct=saved.account||{name:form.name.trim(),city:form.city,state:form.state};
+const key=schoolKeyFromAccount(acct);
+setSelSchool(key);
+setSelId(null);
+setShowAddAccount(false);
+setAddAccountForm({name:"",city:"",state:"",website:""});
+if(saved.zohoAccountId) toast(`${acct.name} saved in Zoho`,"success");
+else toast(`${acct.name} saved here${saved.zohoError?` — Zoho: ${saved.zohoError}`:" — Zoho not linked yet"}`,"info");
+}catch(err){toast(err.message||"Could not save account","error");}
+setAddAccountBusy(false);
+}}>{addAccountBusy?"SAVING…":"SAVE ACCOUNT"}</OBtn>
+<GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",city:"",state:"",website:""});}}>Cancel</GBtn>
+</div>
+</div>
+)}
 {showAddContact&&(
 <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
@@ -4215,14 +4327,24 @@ return next;
 </div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
-if(!addForm.lastName) return;
-const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+const form={...addForm};
+if(!form.lastName) return;
+const c={id:mkId(),firstName:form.firstName,lastName:form.lastName,fullName:`${form.firstName} ${form.lastName}`.trim(),school:form.school,email:form.email,phone:form.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
 setShowAddContact(false);
 setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
 toast(`${c.fullName} added`,"success");
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})})
+if(form.school){
+saveCrmAccount({name:form.school}).then(saved=>{
+const key=schoolKeyFromAccount(saved.account||{name:form.school});
+if(key&&leftMode==="accounts") setSelSchool(key);
+}).catch(()=>{});
+}
+if(form.email){
+fetch("/api/contacts/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contacts:[{firstName:form.firstName,lastName:form.lastName,email:form.email,phone:form.phone,school:form.school,source:"manual"}]})}).catch(()=>{});
+}
+fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:form.firstName,Last_Name:form.lastName,Email:form.email,Phone:form.phone,Company:form.school}]}})})
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
 }} disabled={!addForm.lastName}>SAVE</OBtn>
 <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
@@ -4282,10 +4404,11 @@ if(sq&&!custName.toLowerCase().includes(sq)) return;
 if(Object.keys(groups).some(sch=>fuzzyMatch(sch,custName))) return;
 groups[custName]={name:custName,contacts:[],deals:[],value:0,invoiced:true};
 });
+foldPersistedAccountsIntoGroups(groups,persistedAccounts,search);
 const mergedGroups=mergeAccountGroups(groups);
 attachOpenDealsToAccountGroups(mergedGroups,deals);
 const schoolList=Object.entries(mergedGroups).sort(([a,ga],[b,gb])=>(gb.invoiced-ga.invoiced)||a.localeCompare(b));
-if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center"}}>No accounts found</div>;
+if(schoolList.length===0) return <div style={{padding:"24px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,textAlign:"center",lineHeight:1.5}}>No accounts yet. Use + Add to create one in Zoho, or Upload quote to open a deal.</div>;
 const pageSchools=schoolList.slice((crmPage-1)*CRM_PAGE_SIZE, crmPage*CRM_PAGE_SIZE);
 return <>
 {pageSchools.map(([key,g])=>{
@@ -4334,14 +4457,15 @@ const allDeals=schoolDeals;
 const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
-const schoolCleanName=primaryC?.school||cleanSchoolName(selSchool);
+const persisted=persistedAccounts.find(a=>schoolKeyFromAccount(a)===selSchool||orgNamesMatch(a.name,cleanSchoolName(selSchool)));
+const schoolCleanName=primaryC?.school||persisted?.name||cleanSchoolName(selSchool);
 const schoolOrgType=primaryC?.orgType||"";
 const schoolClass=primaryC?.schoolClass||"";
 const numAthletes=primaryC?.numAthletes||"";
 const numSports=primaryC?.numSports||"";
-const state=primaryC?.state||"";
-const city=primaryC?.city||"";
-const website=primaryC?.website||"";
+const state=primaryC?.state||persisted?.state||"";
+const city=primaryC?.city||persisted?.city||"";
+const website=primaryC?.website||persisted?.website||"";
 const renameAccount=async()=>{
 const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
@@ -4471,34 +4595,9 @@ return(
 {/* Action bar */}
 <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6,flexWrap:"wrap",alignItems:"center"}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
-<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+<GBtn sm onClick={()=>{setShowAddAccount(false);setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
 <OBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</OBtn>
-<GBtn sm onClick={()=>accountPdfRef.current?.click()}>{accountPdfBusy?"READING PDF…":"UPLOAD PDF"}</GBtn>
-<input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{
-const file=e.target.files?.[0];
-e.target.value="";
-if(!file) return;
-if(!file.name.toLowerCase().endsWith(".pdf")){toast("Upload a PDF","error");return;}
-if(file.size>4.5*1024*1024){toast("PDF must be under 4.5 MB","error");return;}
-setAccountPdfBusy(true);setShowAccountDeal(false);
-try{
-const pdfBase64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(String(r.result||"").split(",")[1]||"");r.onerror=rej;r.readAsDataURL(file);});
-const rr=await fetch("/api/crm/import-quote-pdf",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pdfBase64,pdfName:file.name})});
-const extracted=await rr.json().catch(()=>({}));
-setAccountPdfDraft({
-pdfBase64,
-filename:file.name,
-quoteNumber:extracted.quoteNumber||"",
-name:extracted.customerName?`${extracted.customerName} — ${extracted.quoteNumber||"Quote"}`:`${schoolCleanName} — ${extracted.quoteNumber||file.name.replace(/\.pdf$/i,"")}`,
-value:extracted.total||0,
-notes:extracted.notes||"",
-lineItems:extracted.lineItems||[],
-contactId:primaryC?.id||"",
-extractError:extracted.ok?"":(extracted.error||"Could not read line items — fill in the value and save"),
-});
-}catch(err){toast(`PDF read failed: ${err.message}`,"error");}
-setAccountPdfBusy(false);
-}}/>
+<GBtn sm onClick={()=>{accountPdfCtxRef.current={fallbackName:schoolCleanName,fallbackCity:city,fallbackState:state,fallbackContactId:primaryC?.id||""};accountPdfRef.current?.click();}}>{accountPdfBusy?"READING PDF…":"UPLOAD QUOTE PDF"}</GBtn>
 </div>
 {showAccountDeal&&(
 <div className="card" style={{padding:14,marginTop:10,marginBottom:8}}>
@@ -4776,7 +4875,31 @@ return(<>
 </div>
 </div>
 );
-})():!sel?(
+})():leftMode==="accounts"&&!sel?(
+<div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.black,marginBottom:6}}>Accounts</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.muted,maxWidth:420,lineHeight:1.45,marginBottom:16}}>Add an account to create it in Zoho and keep it here so it comes back on refresh. Or upload a quote PDF to open a deal on that school.</div>
+<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+<OBtn sm onClick={()=>setShowAddAccount(true)}>+ ADD ACCOUNT</OBtn>
+<GBtn sm onClick={()=>{accountPdfCtxRef.current={};accountPdfRef.current?.click();}}>{accountPdfBusy?"READING PDF…":"UPLOAD QUOTE PDF"}</GBtn>
+</div>
+{accountPdfDraft&&(
+<div className="card" style={{padding:14,marginTop:16,borderTop:`3px solid ${B.orange}`,maxWidth:520}}>
+<Lbl s={{marginBottom:8}}>Quote PDF — {accountPdfDraft.filename}</Lbl>
+{accountPdfDraft.extractError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.orange,marginBottom:8}}>{accountPdfDraft.extractError}</div>}
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:10}}>{accountPdfDraft.name||"Untitled"}{accountPdfDraft.value?` · ${fmt$(Number(accountPdfDraft.value)||0)}`:""}</div>
+<div style={{display:"flex",gap:6}}>
+<OBtn sm onClick={()=>{
+const n=accountPdfDraft.customerName||(accountPdfDraft.name||"").split(" — ")[0];
+if(n) setAddAccountForm(f=>({...f,name:f.name||n}));
+setShowAddAccount(true);
+}}>ADD ACCOUNT TO SAVE DEAL</OBtn>
+<GBtn onClick={()=>setAccountPdfDraft(null)}>Cancel</GBtn>
+</div>
+</div>
+)}
+</div>
+):!sel?(
 <div style={{flex:1,overflowY:"auto",padding:"22px 26px"}}>
 {(()=>{
 const openDeals=filterRealDeals(s.deals||[],s).filter(d=>!["Closed Won","Closed Lost","PO Received"].includes(d.stage));
