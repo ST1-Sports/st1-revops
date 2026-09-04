@@ -1123,7 +1123,9 @@ Channel: ${slackChannelName}`);
       if (!r.ok || !d.ok) throw new Error(d.error || "Save failed");
       setSlackWebhook("");
       setSlackWebhookSaved(true);
-      addLog("Incoming webhook saved. Send a test message to confirm Slack.", "success");
+      addLog(d.replayed
+        ? `Webhook saved. Posted ${d.replayed} missed Brad reply alert${d.replayed !== 1 ? "s" : ""} to Slack.`
+        : "Incoming webhook saved. Send a test message to confirm Slack.", "success");
       await loadSlackDiag();
     } catch (e) {
       addLog(`Webhook: ${e.message}`, "error");
@@ -1488,17 +1490,38 @@ Channel: ${slackChannelName}`);
                 <div style={{marginBottom:12}}>
                   <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:4}}>INCOMING WEBHOOK URL</div>
                   <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:6,lineHeight:1.45}}>
-                    The current Slack app token can only use incoming webhooks, not chat.postMessage. Paste the webhook from api.slack.com → your app → Incoming Webhooks. Brad reply alerts will use it until chat:write is added and the app is reinstalled.
+                    The current Slack app token cannot use chat.postMessage. Paste the Incoming Webhook from api.slack.com → your app → Incoming Webhooks (channel #sales). Saving it immediately sends every Brad reply that Slack missed.
                   </div>
                   <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
                     <input type="password" value={slackWebhook} onChange={e=>setSlackWebhook(e.target.value)}
                       placeholder={slackWebhookSaved ? "Webhook saved — paste a new one to replace" : "https://hooks.slack.com/services/…"}
                       style={{flex:1,minWidth:220,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:12}}/>
-                    <OBtn sm onClick={saveSlackWebhookUrl} disabled={testing==="slack-webhook" || !slackWebhook.trim()}>{testing==="slack-webhook"?"SAVING...":"SAVE WEBHOOK"}</OBtn>
+                    <OBtn sm onClick={saveSlackWebhookUrl} disabled={testing==="slack-webhook" || !slackWebhook.trim()}>{testing==="slack-webhook"?"SAVING...":"SAVE + SEND MISSED ALERTS"}</OBtn>
                   </div>
                   {slackWebhookSaved && <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,marginTop:6}}>Incoming webhook is saved on the server.</div>}
+                  {slackDiag?.failedBradSlack > 0 && (
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginTop:6}}>{slackDiag.failedBradSlack} Brad reply alert{slackDiag.failedBradSlack !== 1 ? "s" : ""} never made it to Slack.</div>
+                  )}
                 </div>
-                <OBtn onClick={testSlack} disabled={testing==="slack"}>{testing==="slack"?"SENDING TEST...":"SEND TEST MESSAGE"}</OBtn>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                  {slackDiag?.oauthConfigured && (
+                    <OBtn color="#4A154B" onClick={()=>{ window.location.href = "/api/slack/oauth"; }}>RECONNECT SLACK (CHAT:WRITE)</OBtn>
+                  )}
+                  <OBtn onClick={testSlack} disabled={testing==="slack"}>{testing==="slack"?"SENDING TEST...":"SEND TEST MESSAGE"}</OBtn>
+                  {slackDiag?.failedBradSlack > 0 && slackWebhookSaved && (
+                    <OBtn sm color="#4A154B" onClick={async()=>{
+                      setTesting("slack-replay");
+                      try {
+                        const r = await fetch("/api/slack-message", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ action: "replay-failed" }) });
+                        const d = await r.json();
+                        if (!r.ok) throw new Error(d.error || "Replay failed");
+                        addLog(`Posted ${d.replayed || 0} missed Brad alerts to Slack`, "success");
+                        await loadSlackDiag();
+                      } catch(e) { addLog(e.message, "error"); }
+                      setTesting(null);
+                    }}>{testing==="slack-replay"?"SENDING…":"RESEND MISSED ALERTS"}</OBtn>
+                  )}
+                </div>
               </div>
 
               {/* Alert types */}

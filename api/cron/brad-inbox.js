@@ -17,6 +17,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { classifyEmailIntent, pickRep, notifyBradSlack, notifyBradEmail, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
+import { replayFailedBradSlack, canSendBradSlack } from '../_lib/bradSlackReplay.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 
@@ -140,6 +141,10 @@ async function pollInbox(host) {
     }).catch(() => {})
     if (pa.contact && !pa.contact.pushedToZoho) await promoteContactToZoho(host, pa.contact.id)
   }))
+
+  if (await canSendBradSlack()) {
+    await replayFailedBradSlack({ limit: 15 }).catch(() => {})
+  }
 
   return { checked, intents }
 }

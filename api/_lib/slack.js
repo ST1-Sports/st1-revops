@@ -1,5 +1,5 @@
 /**
- * Shared Slack sender — chat.postMessage via SLACK_BOT_TOKEN,
+ * Shared Slack sender — chat.postMessage via bot token,
  * with incoming-webhook fallback (the live token currently only has
  * incoming-webhook, which cannot call chat.postMessage).
  */
@@ -12,6 +12,8 @@ const TOKEN_LEVEL_ERRORS = new Set([
   'token_revoked',
   'not_authed',
 ])
+
+const MEM = (key) => ({ scope_entity_key: { scope: 'org', entity: 'slack', key } })
 
 export function formatSlackError(result) {
   if (!result) return 'failed'
@@ -26,17 +28,60 @@ export function isSlackTokenError(result) {
   return !!(result && TOKEN_LEVEL_ERRORS.has(result.error))
 }
 
-export async function loadSlackWebhook() {
-  const fromEnv = process.env.BRAD_REPLY_SLACK_WEBHOOK || process.env.SLACK_WEBHOOK_URL
-  if (fromEnv) return fromEnv.trim()
-  const row = await prisma.agentMemory.findUnique({
-    where: { scope_entity_key: { scope: 'org', entity: 'slack', key: 'webhook_url' } },
-  }).catch(() => null)
+export function isSlackWebhookUrl(url) {
+  return typeof url === 'string' && /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]+$/.test(url.trim())
+}
+
+export function failedBradSlackRows(rows) {
+  return (rows || []).filter(r => (r?.output?.slack || '') !== 'sent')
+}
+
+/** Prefer webhook when the bot cannot chat.postMessage. */
+export function preferWebhookFirst(canChatPost, webhookUrl) {
+  return !!(webhookUrl && canChatPost !== true)
+}
+
+async function memGet(key) {
+  const row = await prisma.agentMemory.findUnique({ where: MEM(key) }).catch(() => null)
   return (row?.value || '').trim()
 }
 
-export function isSlackWebhookUrl(url) {
-  return typeof url === 'string' && /^https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]+$/.test(url.trim())
+async function memSet(key, value) {
+  await prisma.agentMemory.upsert({
+    where: MEM(key),
+    update: { value, updatedAt: new Date() },
+    create: { scope: 'org', entity: 'slack', key, value, agentId: 'slack', confidence: 1 },
+  })
+}
+
+export async function loadSlackWebhook() {
+  const fromEnv = process.env.BRAD_REPLY_SLACK_WEBHOOK || process.env.SLACK_WEBHOOK_URL
+  if (fromEnv) return fromEnv.trim()
+  return memGet('webhook_url')
+}
+
+export async function loadSlackBotToken() {
+  const saved = await memGet('bot_token')
+  return saved || (process.env.SLACK_BOT_TOKEN || '').trim()
+}
+
+export async function saveSlackBotToken(token) {
+  const trimmed = String(token || '').trim()
+  if (!trimmed.startsWith('xoxb-')) return { ok: false, error: 'Not a Slack bot token' }
+  await memSet('bot_token', trimmed)
+  await memSet('can_chat_post', 'unknown')
+  return { ok: true }
+}
+
+export async function loadCanChatPost() {
+  const v = await memGet('can_chat_post')
+  if (v === 'yes') return true
+  if (v === 'no') return false
+  return null
+}
+
+export async function saveCanChatPost(can) {
+  await memSet('can_chat_post', can === true ? 'yes' : can === false ? 'no' : 'unknown')
 }
 
 export async function saveSlackWebhook(url) {
@@ -44,11 +89,7 @@ export async function saveSlackWebhook(url) {
   if (!isSlackWebhookUrl(trimmed)) {
     return { ok: false, error: 'Paste a Slack incoming webhook URL (https://hooks.slack.com/services/…)' }
   }
-  await prisma.agentMemory.upsert({
-    where:  { scope_entity_key: { scope: 'org', entity: 'slack', key: 'webhook_url' } },
-    update: { value: trimmed, updatedAt: new Date() },
-    create: { scope: 'org', entity: 'slack', key: 'webhook_url', value: trimmed, agentId: 'slack', confidence: 1 },
-  })
+  await memSet('webhook_url', trimmed)
   return { ok: true }
 }
 
@@ -64,9 +105,9 @@ export async function postSlackWebhook(url, text) {
     return { ok: false, skipped: true, reason: 'Slack webhook not configured' }
   }
   const r = await fetch(url.trim(), {
-    method:  'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json; charset=utf-8' },
-    body:    JSON.stringify({ text }),
+    body: JSON.stringify({ text }),
   })
   const body = await r.text().catch(() => '')
   if (!r.ok || (body && body !== 'ok')) {
@@ -77,23 +118,23 @@ export async function postSlackWebhook(url, text) {
 
 async function joinSlackChannel(token, channel) {
   const r = await fetch('https://slack.com/api/conversations.join', {
-    method:  'POST',
+    method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
-    body:    JSON.stringify({ channel }),
+    body: JSON.stringify({ channel }),
   })
   return r.json().catch(() => ({ ok: false, error: 'invalid_json_response' }))
 }
 
 export async function postSlackMessage({ channel, text, blocks } = {}) {
-  const token = process.env.SLACK_BOT_TOKEN
+  const token = await loadSlackBotToken()
   if (!token || !channel) {
     return { ok: false, skipped: true, reason: 'SLACK_BOT_TOKEN or channel not configured' }
   }
   const post = async () => {
     const r = await fetch('https://slack.com/api/chat.postMessage', {
-      method:  'POST',
+      method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json; charset=utf-8' },
-      body:    JSON.stringify({ channel, text, ...(blocks ? { blocks } : {}) }),
+      body: JSON.stringify({ channel, text, ...(blocks ? { blocks } : {}) }),
     })
     return r.json().catch(() => ({ ok: false, error: 'invalid_json_response' }))
   }
@@ -102,16 +143,27 @@ export async function postSlackMessage({ channel, text, blocks } = {}) {
     const joined = await joinSlackChannel(token, channel)
     if (joined.ok) data = await post()
   }
+  if (!data.ok && data.error === 'missing_scope') await saveCanChatPost(false)
+  if (data.ok) await saveCanChatPost(true)
   if (!data.ok) console.warn('[slack] send failed:', formatSlackError(data))
   return data
 }
 
 /**
- * Post via chat.postMessage, then the incoming webhook if the bot token
- * cannot write (missing_scope / incoming-webhook-only installs).
+ * Incoming webhook first when the bot cannot chat.postMessage (production
+ * token only has incoming-webhook). Then try API channels.
  */
 export async function sendSlackText({ channel, text, blocks, channels } = {}) {
   const tried = []
+  const webhook = await loadSlackWebhook()
+  const canPost = await loadCanChatPost()
+
+  if (preferWebhookFirst(canPost, webhook)) {
+    const result = await postSlackWebhook(webhook, text)
+    if (result.ok) return { ok: true, channel: 'webhook', via: 'webhook' }
+    tried.push(`webhook: ${formatSlackError(result)}`)
+  }
+
   const list = [...new Set((channels?.length ? channels : [channel]).filter(Boolean))]
   for (const ch of list) {
     const result = await postSlackMessage({ channel: ch, text, blocks })
@@ -119,13 +171,13 @@ export async function sendSlackText({ channel, text, blocks, channels } = {}) {
     tried.push(`${ch}: ${formatSlackError(result)}`)
     if (result.skipped || isSlackTokenError(result)) break
   }
-  const webhook = await loadSlackWebhook()
-  if (webhook) {
+
+  if (webhook && !tried.some(t => t.startsWith('webhook:'))) {
     const result = await postSlackWebhook(webhook, text)
     if (result.ok) return { ok: true, channel: 'webhook', via: 'webhook' }
     tried.push(`webhook: ${formatSlackError(result)}`)
-  } else if (tried.some(t => t.includes('missing_scope'))) {
-    tried.push('webhook: not configured — add chat:write and reinstall, or paste the Incoming Webhook URL')
+  } else if (!webhook && tried.some(t => t.includes('missing_scope'))) {
+    tried.push('webhook: not configured — paste the Incoming Webhook URL on Brad or Integrations → Slack')
   }
   return { ok: false, error: tried.join(' | ') || 'no Slack channel configured' }
 }

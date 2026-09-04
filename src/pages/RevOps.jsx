@@ -6748,6 +6748,8 @@ const [oneOffBody,setOneOffBody]=useState("");
 const [bradReplies,setBradReplies]=useState([]);
 const [bradRepliesLoading,setBradRepliesLoading]=useState(false);
 const [bradNotifyRetryId,setBradNotifyRetryId]=useState(null);
+const [bradSlackWebhook,setBradSlackWebhook]=useState("");
+const [bradSlackSaving,setBradSlackSaving]=useState(false);
 const [bradTab,setBradTab]=useState("prospect");
 const [dbContacts,setDbContacts]=useState([]);
 const [dbTotal,setDbTotal]=useState(0);
@@ -6887,6 +6889,19 @@ if(d.slack==="sent") toast("Slack notification sent","success");
 else toast(d.slack||"Slack still failed","error");
 }catch(e){toast("Slack retry: "+e.message,"error");}
 setBradNotifyRetryId(null);
+};
+const saveBradSlackWebhook=async()=>{
+if(!bradSlackWebhook.trim()){toast("Paste the Slack Incoming Webhook URL","error");return;}
+setBradSlackSaving(true);
+try{
+const r=await fetch("/api/slack-message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save-webhook",url:bradSlackWebhook.trim()})});
+const d=await r.json();
+if(!r.ok||!d.ok) throw new Error(d.error||"Save failed");
+setBradSlackWebhook("");
+await loadBradReplies();
+toast(d.replayed?`Slack connected — posted ${d.replayed} missed alert${d.replayed!==1?"s":""}`:"Slack webhook saved","success");
+}catch(e){toast("Slack webhook: "+e.message,"error");}
+setBradSlackSaving(false);
 };
 const sendManualEmail=async()=>{
 if(!oneOffEmail.trim()){toast("Email is required","error");return;}
@@ -8528,6 +8543,21 @@ setEnrollingContact(null);
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
 <button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
 </div>
+{bradReplies.some(r=>(r.output||{}).slack!=="sent")&&(
+<div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:10}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:6,lineHeight:1.45}}>
+Slack alerts are not posting. The Slack app only has incoming-webhook. Paste the Incoming Webhook URL from api.slack.com → your app → Incoming Webhooks (pick #sales). Saving it sends every missed reply to Slack now.
+</div>
+<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+<input type="password" value={bradSlackWebhook} onChange={e=>setBradSlackWebhook(e.target.value)} placeholder="https://hooks.slack.com/services/…"
+style={{flex:1,minWidth:220,background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"6px 8px",fontSize:12}}/>
+<button onClick={saveBradSlackWebhook} disabled={bradSlackSaving||!bradSlackWebhook.trim()}
+style={{background:bradSlackSaving||!bradSlackWebhook.trim()?B.border:B.orange,color:bradSlackSaving||!bradSlackWebhook.trim()?B.muted:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:bradSlackSaving?"wait":"pointer"}}>
+{bradSlackSaving?"SAVING…":"SAVE + SEND MISSED SLACK ALERTS"}
+</button>
+</div>
+</div>
+)}
 <div style={{display:"flex",flexDirection:"column",gap:8}}>
 {bradReplies.map(rep=>{
 const inp=rep.input||{};const out=rep.output||{};
