@@ -10,6 +10,8 @@ import {
   findExistingQuoteDeal,
   mergeAccountGroups,
   attachOpenDealsToAccountGroups,
+  schoolKeyFromAccount,
+  foldPersistedAccountsIntoGroups,
   lineItemsToQuoteItems,
   zohoIdFromContact,
   mergeZohoContactRow,
@@ -186,6 +188,82 @@ describe('mergeAccountGroups + attachOpenDealsToAccountGroups', () => {
       'Lincoln High School — TX': { name: 'Lincoln High School', contacts: [{ id: 'tx', school: 'Lincoln High School', state: 'TX' }], deals: [], value: 0 },
     };
     assert.equal(Object.keys(mergeAccountGroups(groups)).length, 2);
+  });
+
+  it('keeps persisted/Zoho ids when folding a stub into the full school name', () => {
+    const groups = {
+      'Hudson High School — IA': {
+        name: 'Hudson High School',
+        contacts: [hudsonCoach],
+        deals: [],
+        value: 0,
+        invoiced: false,
+      },
+      Hudson: {
+        name: 'Hudson',
+        contacts: [],
+        deals: [],
+        value: 0,
+        invoiced: false,
+        persistedId: 'acct_1',
+        zohoAccountId: 'z_acc',
+        city: 'Hudson',
+        state: 'IA',
+      },
+    };
+    const merged = mergeAccountGroups(groups);
+    const g = merged['Hudson High School — IA'];
+    assert.equal(g.persistedId, 'acct_1');
+    assert.equal(g.zohoAccountId, 'z_acc');
+    assert.equal(g.city, 'Hudson');
+  });
+});
+
+describe('schoolKeyFromAccount + foldPersistedAccountsIntoGroups', () => {
+  it('keys an account the same way as a contact at that school', () => {
+    assert.equal(schoolKeyFromAccount({ name: 'Hudson High School', state: 'IA' }), 'Hudson High School — IA');
+    assert.equal(schoolKeyFromAccount({ name: 'Hudson High School' }), 'Hudson High School');
+    assert.equal(schoolKeyFromAccount({ name: '  ' }), '');
+  });
+
+  it('adds a zero-contact row so a newly created account is visible', () => {
+    const groups = {};
+    foldPersistedAccountsIntoGroups(groups, [
+      { id: 'a1', name: 'New Prairie High School', city: 'New Carlisle', state: 'IN', zohoAccountId: 'z9' },
+    ]);
+    const g = groups['New Prairie High School — IN'];
+    assert.ok(g);
+    assert.equal(g.contacts.length, 0);
+    assert.equal(g.zohoAccountId, 'z9');
+    assert.equal(g.city, 'New Carlisle');
+  });
+
+  it('stamps Zoho id onto the existing Hudson High School row instead of adding a second account', () => {
+    const groups = {
+      'Hudson High School — IA': {
+        name: 'Hudson High School',
+        contacts: [hudsonCoach],
+        deals: [],
+        value: 0,
+        invoiced: false,
+      },
+    };
+    foldPersistedAccountsIntoGroups(groups, [
+      { id: 'a1', name: 'Hudson', state: 'IA', zohoAccountId: 'z_h' },
+    ]);
+    assert.equal(Object.keys(groups).length, 1);
+    assert.equal(groups['Hudson High School — IA'].zohoAccountId, 'z_h');
+    assert.equal(groups['Hudson High School — IA'].persistedId, 'a1');
+  });
+
+  it('honors the search box so Tools counts stay filterable', () => {
+    const groups = {};
+    foldPersistedAccountsIntoGroups(groups, [
+      { id: 'a1', name: 'Hudson High School', state: 'IA' },
+      { id: 'a2', name: 'Lincoln High School', state: 'TX' },
+    ], 'hudson');
+    assert.ok(groups['Hudson High School — IA']);
+    assert.equal(groups['Lincoln High School — TX'], undefined);
   });
 });
 
