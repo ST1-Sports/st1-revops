@@ -23,12 +23,14 @@ const OOO_SUBJECT = [
 const OOO_BODY = [
   /\bi\s+am\s+(currently\s+)?out\s+of\s+(the\s+)?office\b/i,
   /\bi(?:'m| am)\s+currently\s+away\b/i,
-  /\bi(?:'ll| will)\s+be\s+out\s+of\s+(the\s+)?office\b/i,
-  /\bi\s+am\s+away\s+from\s+(the\s+)?(office|email)\b/i,
+  /\bi(?:'ll| will)\s+be\s+(out\s+of\s+(the\s+)?office|away)\b/i,
+  /\bi\s+am\s+(not\s+in|away\s+from)\s+(the\s+)?(office|email|desk)\b/i,
   /\blimited\s+access\s+to\s+(e-?mail|my\s+inbox)\b/i,
   /\bthis\s+is\s+an\s+automatic(?:ally\s+generated)?\s+(reply|response)\b/i,
   /\bautomatic\s+reply(?:\s+from)?\b/i,
-  /\bi\s+am\s+on\s+(annual\s+|parental\s+|medical\s+)?leave\b/i,
+  /\bi\s+am\s+on\s+(annual\s+|parental\s+|maternity\s+|medical\s+)?leave\b/i,
+  /\bmailbox\s+is\s+unattended\b/i,
+  /\bi\s+am\s+unavailable\s+until\b/i,
 ]
 
 const WARMUP_HOSTS = [
@@ -53,9 +55,23 @@ const WARMUP_TEXT = [
   /\bmailbox\s+warm(?:ing|[- ]?up)\b/i,
   /\bdeliverability\s+network\b/i,
   /\bthis\s+(message|email)\s+is\s+(part\s+of\s+)?(an?\s+)?(automated\s+)?warm[- ]?up\b/i,
-  /\bsent\s+(via|by|from)\s+(an?\s+)?(instantly|mailwarm|folderly|mailreach|warmy|lemwarm|warmup inbox)\b/i,
+  /\bsent\s+(via|by|from)\s+(an?\s+)?(instantly|mailwarm|folderly|mailreach|warmy|lemwarm|warmup inbox|smartlead)\b/i,
   /\binstantly\.ai\s+warm[- ]?up\b/i,
+  /\b(instantly|mailwarm|folderly|mailreach|warmy|lemwarm|smartlead|trulyinbox)\b/i,
 ]
+
+/** Instantly puts the same mixed letter+digit tag in the subject and at the bottom of the copy. */
+function instantlyWarmupTag(subject, body) {
+  const sub = String(subject || '').trim()
+  const bod = String(body || '')
+  const bracket = sub.match(/\[([a-zA-Z0-9]{5,12})\]\s*$/)
+  const raw = bracket?.[1] || (sub.split(/\s+/).filter(Boolean).pop() || '')
+  const tag = raw.replace(/^[\[(]+|[^\w]+$/g, '')
+  if (tag.length < 5 || tag.length > 12) return false
+  if (!/[a-z]/i.test(tag) || !/\d/.test(tag)) return false
+  if (/^st1/i.test(tag)) return false
+  return bod.includes(tag)
+}
 
 function headerValue(headers, name) {
   if (!headers) return ''
@@ -91,9 +107,16 @@ export function junkReplyReason({ subject = '', body = '', fromEmail = '', heade
 
   const hay = `${subject}\n${body}`
   if (WARMUP_TEXT.some(re => re.test(hay))) return 'warmup'
+  if (instantlyWarmupTag(subject, body)) return 'warmup'
   if (OOO_SUBJECT.some(re => re.test(subject))) return 'ooo'
   if (OOO_BODY.some(re => re.test(body))) return 'ooo'
   return null
+}
+
+/** Pending Brad row that should appear in Prospecting → needs follow-up. */
+export function isBradFollowUpReply(row) {
+  if (!row || row.outcome !== 'pending') return false
+  return !junkReplyFromStored(row)
 }
 
 export function isJunkInboundReply(input) {
