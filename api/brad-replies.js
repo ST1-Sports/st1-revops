@@ -8,6 +8,7 @@
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
 import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
+import { junkReplyFromStored, isBradFollowUpReply } from './_lib/junkReply.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -16,11 +17,18 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await prisma.agentInteraction.findMany({
-        where: { agentId: 'brad', action: 'reply_intent' },
+        where: { agentId: 'brad', action: 'reply_intent', outcome: 'pending' },
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      return res.json({ replies: rows })
+      const junkIds = rows.filter(r => junkReplyFromStored(r)).map(r => r.id)
+      if (junkIds.length) {
+        await prisma.agentInteraction.updateMany({
+          where: { id: { in: junkIds } },
+          data: { outcome: 'ignored_junk', outcomeAt: new Date() },
+        }).catch(() => {})
+      }
+      return res.json({ replies: rows.filter(isBradFollowUpReply) })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }
@@ -47,6 +55,13 @@ export default async function handler(req, res) {
       const row = await prisma.agentInteraction.findUnique({ where: { id } })
       if (!row || row.agentId !== 'brad' || row.action !== 'reply_intent') {
         return res.status(404).json({ error: 'reply not found' })
+      }
+      if (junkReplyFromStored(row)) {
+        await prisma.agentInteraction.update({
+          where: { id },
+          data: { outcome: 'ignored_junk', outcomeAt: new Date() },
+        }).catch(() => {})
+        return res.json({ ok: true, slack: 'skipped', email: 'skipped', ignored: 'junk' })
       }
       const inp = row.input || {}
       const out = row.output || {}

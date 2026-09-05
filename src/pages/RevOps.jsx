@@ -28,6 +28,7 @@ import {
 } from "../lib/quoteCrmLink.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
+import { isBradFollowUpReply } from "../lib/junkReply.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -6867,7 +6868,7 @@ setBradRepliesLoading(true);
 try{
 const r=await fetch('/api/brad-replies');
 const d=await r.json();
-setBradReplies((d.replies||[]).filter(r=>r.outcome==='pending'));
+setBradReplies((d.replies||[]).filter(isBradFollowUpReply));
 }catch{}
 setBradRepliesLoading(false);
 };
@@ -8537,13 +8538,13 @@ setEnrollingContact(null);
 </div>
 {bradTab==="prospect"&&<div>
 {/* Positive reply queue */}
-{bradReplies.length>0&&(
+{bradReplies.filter(isBradFollowUpReply).length>0&&(
 <div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
 <button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
 </div>
-{bradReplies.some(r=>(r.output||{}).slack!=="sent")&&(
+{bradReplies.filter(isBradFollowUpReply).some(r=>(r.output||{}).slack!=="sent")&&(
 <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:10}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:6,lineHeight:1.45}}>
 Slack alerts are not posting. The Slack app only has incoming-webhook. Paste the Incoming Webhook URL from api.slack.com → your app → Incoming Webhooks (pick #sales). Saving it sends every missed reply to Slack now.
@@ -8559,7 +8560,7 @@ style={{background:bradSlackSaving||!bradSlackWebhook.trim()?B.border:B.orange,c
 </div>
 )}
 <div style={{display:"flex",flexDirection:"column",gap:8}}>
-{bradReplies.map(rep=>{
+{bradReplies.filter(isBradFollowUpReply).map(rep=>{
 const inp=rep.input||{};const out=rep.output||{};
 return(
 <div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`,flexWrap:"wrap"}}>
@@ -9685,7 +9686,7 @@ if(candidates.length){
 // +50 "replied" score that pushes a contact toward a real Zoho record.
 // Classify before crediting it, same INTENT/PASS check Brad's inbound-
 // email pipeline already uses for exactly this reason.
-const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||""};});
+const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||"",fromEmail:c.email||""};});
 const cls=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify-intent",items})}).then(r=>r.json()).catch(()=>({results:[]}));
 candidates.forEach(({e},i)=>{
 if((cls.results||[])[i]==="INTENT"){markReplied(campId,e.contactId);found++;}
