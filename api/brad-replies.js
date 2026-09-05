@@ -8,6 +8,7 @@
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
 import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
+import { junkReplyFromStored } from './_lib/junkReply.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -20,7 +21,15 @@ export default async function handler(req, res) {
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      return res.json({ replies: rows })
+      const junkIds = rows.filter(r => r.outcome === 'pending' && junkReplyFromStored(r)).map(r => r.id)
+      if (junkIds.length) {
+        await prisma.agentInteraction.updateMany({
+          where: { id: { in: junkIds } },
+          data: { outcome: 'ignored_junk', outcomeAt: new Date() },
+        }).catch(() => {})
+      }
+      const junk = new Set(junkIds)
+      return res.json({ replies: rows.filter(r => !junk.has(r.id) && !junkReplyFromStored(r)) })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }

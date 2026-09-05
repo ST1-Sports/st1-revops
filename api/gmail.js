@@ -130,7 +130,7 @@ export default async function handler(req, res) {
     const { items } = req.body || {};
     if (!Array.isArray(items)) return res.status(400).json({ error: "items array required" });
     const results = await Promise.all(
-      items.slice(0, 30).map(it => classifyEmailIntent(it.subject || "", it.snippet || ""))
+      items.slice(0, 30).map(it => classifyEmailIntent(it.subject || "", it.snippet || "", { fromEmail: it.from || it.fromEmail || "" }))
     );
     return res.json({ results });
   }

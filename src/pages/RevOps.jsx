@@ -9685,7 +9685,7 @@ if(candidates.length){
 // +50 "replied" score that pushes a contact toward a real Zoho record.
 // Classify before crediting it, same INTENT/PASS check Brad's inbound-
 // email pipeline already uses for exactly this reason.
-const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||""};});
+const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||"",fromEmail:c.email||""};});
 const cls=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify-intent",items})}).then(r=>r.json()).catch(()=>({results:[]}));
 candidates.forEach(({e},i)=>{
 if((cls.results||[])[i]==="INTENT"){markReplied(campId,e.contactId);found++;}

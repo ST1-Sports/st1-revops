@@ -40,7 +40,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
   try {
     const contact = await prisma.salesContact.findUnique({ where: { email: fromEmail } }).catch(() => null)
 
-    const verdict = await classifyEmailIntent(subject, bodyText)
+    const verdict = await classifyEmailIntent(subject, bodyText, { fromEmail })
     if (verdict !== 'INTENT') return
 
     const assigned    = await pickRep()
