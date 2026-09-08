@@ -3,12 +3,15 @@
  *
  * Upgrades the client-side agent to a proper agentic loop with:
  * - Real-time web search (Anthropic web_search_20250305, executes automatically)
- * - Live Zoho CRM context (fresh deals + contacts fetched server-side)
+ * - Live Zoho CRM context (fresh deals + contacts/leads fetched server-side)
+ * - Live Zoho Books context (recent invoices + estimates)
+ * - Query-specific retrieval over local app state: price lists, orders/store sales,
+ *   invoices, reorders, campaigns, activity, contacts, deals, RFPs
  * - Tool proposals (create_deal, add_contact, send_email, add_to_nurture)
  *   returned in the actions array for user to confirm before execution
  *
  * POST body:
- *   { messages: ConversationMessage[], localContext: { deals, contacts, rfps, invoices, sequences } }
+ *   { messages: ConversationMessage[], localContext: { deals, contacts, rfps, invoices, orders, reorders, campaigns, sequences, activity, priceLists } }
  *
  * Response:
  *   { message, actions, suggestions, liveZoho: bool, searchUsed: bool }
@@ -298,6 +301,53 @@ async function fetchZohoInventory() {
   }
 }
 
+async function fetchZohoBooksContext() {
+  try {
+    const orgId = process.env.ZOHO_ORG_ID;
+    if (!orgId) return { invoices: [], quotes: [], ok: false };
+    const token = await getZohoToken();
+    const headers = { Authorization: `Zoho-oauthtoken ${token}` };
+    const [invoicesRes, quotesRes] = await Promise.allSettled([
+      fetchWithTimeout(
+        `https://www.zohoapis.com/books/v3/invoices?organization_id=${orgId}&per_page=50&sort_column=date&sort_order=D`,
+        { headers }
+      ),
+      fetchWithTimeout(
+        `https://www.zohoapis.com/books/v3/estimates?organization_id=${orgId}&per_page=50&sort_column=created_time&sort_order=D`,
+        { headers }
+      ),
+    ]);
+
+    const invoicesData = invoicesRes.status === "fulfilled" && invoicesRes.value.ok ? await invoicesRes.value.json() : {};
+    const quotesData = quotesRes.status === "fulfilled" && quotesRes.value.ok ? await quotesRes.value.json() : {};
+    const invoices = (invoicesData.invoices || []).map(inv => ({
+      id: inv.invoice_id,
+      number: inv.invoice_number || "",
+      customer: inv.customer_name || "",
+      customerId: inv.customer_id || "",
+      status: inv.status || "",
+      date: inv.date || "",
+      dueDate: inv.due_date || "",
+      total: Number(inv.total) || 0,
+      balance: Number(inv.balance) || 0,
+      source: "Zoho Books",
+    }));
+    const quotes = (quotesData.estimates || []).map(q => ({
+      id: q.estimate_id,
+      number: q.estimate_number || "",
+      customer: q.customer_name || "",
+      status: q.status || "",
+      date: q.date || "",
+      expiryDate: q.expiry_date || "",
+      total: Number(q.total) || 0,
+      source: "Zoho Books",
+    }));
+    return { invoices, quotes, ok: true };
+  } catch {
+    return { invoices: [], quotes: [], ok: false };
+  }
+}
+
 const DEFAULT_CATALOG = [
   { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-39AL", name: "Aluminum Hurdle 39\"", category: "Hurdles", unit: "each", cost: 224, price: 280 },
   { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-30AL", name: "Aluminum Hurdle 30\"", category: "Hurdles", unit: "each", cost: 212, price: 265 },
@@ -358,6 +408,10 @@ function detectSports(text = "") {
     .map(([sport]) => sport);
 }
 
+function catalogIntent(text = "") {
+  return /\b(price|pricing|catalog|sku|item|items|product|products|inventory|cost|map|list|lists)\b/i.test(text);
+}
+
 function catalogSport(item) {
   const joined = normalizeText(`${item.sport || ""} ${item.supplierName || ""} ${item.category || ""} ${item.name || ""} ${item.description || ""} ${item.notes || ""}`);
   for (const [sport, terms] of Object.entries(SPORT_KEYWORDS)) {
@@ -404,7 +458,11 @@ function buildCatalog(localCtx = {}, inventory = []) {
 function rankCatalogMatches(catalog, query, limit = 45) {
   const tokens = queryTokens(query);
   const requestedSports = detectSports(query);
-  if (!tokens.length && !requestedSports.length) return [];
+  if (!tokens.length && !requestedSports.length) {
+    return catalogIntent(query)
+      ? catalog.filter(item => Number(item.price || item.rate || item.cost || 0) > 0).slice(0, limit)
+      : [];
+  }
 
   return catalog
     .map(item => {
@@ -422,6 +480,159 @@ function rankCatalogMatches(catalog, query, limit = 45) {
     .filter(item => item._score > 0)
     .sort((a, b) => b._score - a._score || Number(b.price || 0) - Number(a.price || 0))
     .slice(0, limit);
+}
+
+function recordText(record, aliases = "") {
+  return normalizeText(`${aliases} ${JSON.stringify(record || {})}`);
+}
+
+function rankRecords(records = [], query = "", aliases = "", limit = 8) {
+  const tokens = queryTokens(query);
+  if (!Array.isArray(records) || !records.length) return [];
+  const sports = detectSports(query);
+  const terms = tokens.length ? tokens : sports.map(normalizeText);
+
+  return records
+    .map(record => {
+      const haystack = recordText(record, aliases);
+      const words = new Set(haystack.split(/\s+/).map(singularize));
+      let score = 0;
+      for (const token of terms) {
+        if (words.has(token)) score += 8;
+        else if (haystack.includes(token)) score += 2;
+      }
+      for (const sport of sports) {
+        if (haystack.includes(normalizeText(sport))) score += 8;
+      }
+      if (!terms.length) score = 1;
+      return { record, _score: score };
+    })
+    .filter(x => x._score > 0)
+    .sort((a, b) => b._score - a._score)
+    .slice(0, limit)
+    .map(x => x.record);
+}
+
+function mapZohoDeal(d) {
+  return {
+    id: d.id,
+    name: d.Deal_Name || "",
+    school: typeof d.Account_Name === "string" ? d.Account_Name : d.Account_Name?.name || "",
+    value: Number(d.Amount) || 0,
+    stage: d.Stage || "",
+    closeDate: d.Closing_Date || "",
+    source: "Zoho CRM Deal",
+  };
+}
+
+function mapZohoPerson(r, module) {
+  return {
+    id: r.id,
+    fullName: `${r.First_Name || ""} ${r.Last_Name || ""}`.trim(),
+    firstName: r.First_Name || "",
+    lastName: r.Last_Name || "",
+    title: r.Title || "",
+    school: typeof r.Account_Name === "string" ? r.Account_Name : r.Account_Name?.name || r.Company || "",
+    city: r.City || "",
+    state: r.State || "",
+    email: r.Email || "",
+    phone: r.Phone || "",
+    status: r.Lead_Status || "",
+    rating: r.Rating || "",
+    source: module,
+  };
+}
+
+function summarizeRecord(record, fields) {
+  return fields
+    .map(([label, key, fmt]) => {
+      const raw = typeof key === "function" ? key(record) : record?.[key];
+      if (raw == null || raw === "" || (Array.isArray(raw) && raw.length === 0)) return "";
+      return `${label}: ${fmt ? fmt(raw) : raw}`;
+    })
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function money(value) {
+  const n = Number(value) || 0;
+  return `$${Math.round(n).toLocaleString()}`;
+}
+
+function retrieveAgentData(localCtx = {}, zoho = {}, books = {}, query = "", relevantCatalog = []) {
+  const liveDeals = (zoho.deals || []).map(mapZohoDeal);
+  const livePeople = [
+    ...(zoho.leads || []).map(l => mapZohoPerson(l, "Zoho CRM Lead")),
+    ...(zoho.contacts || []).map(c => mapZohoPerson(c, "Zoho CRM Contact")),
+  ];
+  const localPeople = localCtx.contacts || [];
+
+  const retrieval = {
+    priceMatches: relevantCatalog.slice(0, 12),
+    deals: rankRecords([...(localCtx.deals || []), ...liveDeals], query, "deal pipeline opportunity account school quote sales", 8),
+    people: rankRecords([...localPeople, ...livePeople], query, "lead contact prospect customer coach athletic director school CRM", 10),
+    invoices: rankRecords([...(localCtx.invoices || []), ...(books.invoices || [])], query, "invoice invoices zoho books paid overdue balance sale sales purchase customer line item", 10),
+    orders: rankRecords(localCtx.orders || [], query, "order orders store sale sales purchase fulfillment customer product item email", 10),
+    reorders: rankRecords(localCtx.reorders || [], query, "reorder reorders restock renewal previous order last order customer product season", 8),
+    quotes: rankRecords([...(localCtx.quotes || []), ...(books.quotes || [])], query, "quote quotes estimate estimates proposal pricing customer product", 10),
+    campaigns: rankRecords([...(localCtx.campaigns || []), ...(localCtx.sequences || [])], query, "campaign campaigns sequence outreach email nurture enrollment touch", 8),
+    activity: rankRecords(localCtx.activity || [], query, "activity log note action history sent email quote order call follow up", 8),
+  };
+
+  const customerTerms = ["customer", "school", "account", "history", "profile", "bought", "ordered", "invoice", "quote"];
+  const shouldProfile = customerTerms.some(term => normalizeText(query).includes(term));
+  if (shouldProfile) {
+    const names = new Set();
+    for (const rec of [...retrieval.deals, ...retrieval.people, ...retrieval.invoices, ...retrieval.orders, ...retrieval.quotes]) {
+      const name = rec.school || rec.customer || rec.company || rec.org || rec.name;
+      if (name && String(name).length > 2) names.add(String(name).toLowerCase());
+    }
+    retrieval.customerProfiles = [...names].slice(0, 5).map(name => {
+      const includesName = rec => recordText(rec).includes(name);
+      return {
+        name,
+        contacts: (localCtx.contacts || []).filter(includesName).slice(0, 4),
+        deals: (localCtx.deals || []).filter(includesName).slice(0, 4),
+        invoices: [...(localCtx.invoices || []), ...(books.invoices || [])].filter(includesName).slice(0, 4),
+        orders: (localCtx.orders || []).filter(includesName).slice(0, 4),
+        quotes: [...(localCtx.quotes || []), ...(books.quotes || [])].filter(includesName).slice(0, 4),
+      };
+    });
+  } else {
+    retrieval.customerProfiles = [];
+  }
+
+  return retrieval;
+}
+
+function formatRetrievalSection(retrieval) {
+  const lines = [];
+  const addSection = (title, rows, formatter) => {
+    if (!rows?.length) return;
+    lines.push(`\n${title}`);
+    rows.forEach((row, idx) => lines.push(`${idx + 1}. ${formatter(row)}`));
+  };
+
+  addSection("PRICE/CATALOG MATCHES", retrieval.priceMatches, item => formatCatalogSuggestion(item));
+  addSection("DEALS", retrieval.deals, d => summarizeRecord(d, [["Name","name"],["School","school"],["Stage","stage"],["Value","value",money],["Product","product"],["Source","source"]]));
+  addSection("LEADS/CONTACTS", retrieval.people, p => summarizeRecord(p, [["Name", r => r.fullName || `${r.firstName || ""} ${r.lastName || ""}`.trim()],["Title","title"],["School","school"],["State","state"],["Email","email"],["Status", r => r.zohoStatus || r.status || r.outreachStatus],["Source","source"]]));
+  addSection("INVOICES / SALES HISTORY", retrieval.invoices, inv => summarizeRecord(inv, [["Number", r => r.number || r.invoice_number],["Customer", r => r.customer || r.customer_name],["Status","status"],["Date", r => r.date || r.dueDate],["Total","total",money],["Balance","balance",money],["Items", r => (r.items || []).map(i => i.name || i.item_name).filter(Boolean).join(", ")],["Source","source"]]));
+  addSection("ORDERS / STORE SALES", retrieval.orders, order => summarizeRecord(order, [["Name","name"],["Customer", r => r.school || r.contact],["Stage","stage"],["Value","value",money],["Items", r => (r.items || []).map(i => i.name).filter(Boolean).join(", ")],["Source","source"],["Notes","notes"]]));
+  addSection("REORDER OPPORTUNITIES", retrieval.reorders, r => summarizeRecord(r, [["School","school"],["Contact","contact"],["Sport","sport"],["Last order","lastOrderDate"],["Items", r2 => (r2.lastItems || []).join(", ")],["Value","lastOrderValue",money],["Status","status"]]));
+  addSection("QUOTES / ESTIMATES", retrieval.quotes, q => summarizeRecord(q, [["Number", r => r.number || r.estimate_number],["Customer", r => r.customer || r.customer_name],["Status","status"],["Date","date"],["Total","total",money],["Source","source"]]));
+  addSection("CAMPAIGNS / SEQUENCES", retrieval.campaigns, c => summarizeRecord(c, [["Name", r => r.name || r.campaign_name],["Product","product"],["Status","status"],["Active", r => r.activeCount || r.active_count],["Enrollments", r => r.enrollmentCount || (r.enrollments || []).length],["Notes","notes"]]));
+  addSection("ACTIVITY LOG", retrieval.activity, a => summarizeRecord(a, [["When", r => r.ts ? new Date(r.ts).toISOString().slice(0, 10) : ""],["Message", r => r.msg || r.note || r.action],["User","userId"]]));
+
+  if (retrieval.customerProfiles?.length) {
+    lines.push("\nCUSTOMER PROFILE ROLLUPS");
+    for (const profile of retrieval.customerProfiles) {
+      lines.push(`- ${profile.name}: ${profile.contacts.length} contacts, ${profile.deals.length} deals, ${profile.invoices.length} invoices, ${profile.orders.length} orders, ${profile.quotes.length} quotes`);
+    }
+  }
+
+  return lines.length
+    ? lines.join("\n")
+    : "No matching records found in local app state, live Zoho CRM, live Zoho Books, or loaded price lists for this query.";
 }
 
 function latestUserText(messages = []) {
@@ -491,7 +702,7 @@ function applyQuoteGuardrails(actions, query, relevantCatalog) {
 }
 
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho, inventory = [], relevantCatalog = []) {
+function buildSystemPrompt(localCtx, zoho, inventory = [], relevantCatalog = [], retrieval = null, books = { invoices: [], quotes: [], ok: false }) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
@@ -512,6 +723,10 @@ function buildSystemPrompt(localCtx, zoho, inventory = [], relevantCatalog = [])
   const zohoSection = zoho.ok && (zoho.deals.length || zoho.contacts.length || zoho.leads.length)
     ? `\n=== LIVE ZOHO CRM (${new Date().toLocaleTimeString()}) ===\nDeals: ${zoho.deals.length ? zoho.deals.map(d => `${d.Deal_Name} (${d.Account_Name}) — ${d.Stage} — $${d.Amount||"?"}`).join(" | ") : "None returned"}\nContacts: ${zoho.contacts.length ? zoho.contacts.slice(0,6).map(c => `${c.First_Name||""} ${c.Last_Name||""} / ${c.Title||""} @ ${c.Account_Name||""}`).join(" | ") : "None returned"}\nLeads: ${zoho.leads.length ? zoho.leads.slice(0,12).map(l => `${l.First_Name||""} ${l.Last_Name||""} / ${l.Title||""} @ ${l.Company||""}${l.State?`, ${l.State}`:""} — ${l.Lead_Status||"status unknown"}${l.Rating?` — ${l.Rating}`:""}`).join(" | ") : "None returned"}\n`
     : "\n(Zoho CRM not connected — using local data)\n";
+
+  const booksSection = books.ok && (books.invoices.length || books.quotes.length)
+    ? `\n=== LIVE ZOHO BOOKS ===\nRecent invoices: ${books.invoices.length ? books.invoices.slice(0,10).map(i => `${i.number || i.id} — ${i.customer} — ${i.status} — $${i.total || 0}${i.balance ? ` (${i.balance} balance)` : ""}`).join(" | ") : "None returned"}\nRecent quotes/estimates: ${books.quotes.length ? books.quotes.slice(0,10).map(q => `${q.number || q.id} — ${q.customer} — ${q.status} — $${q.total || 0}`).join(" | ") : "None returned"}\n`
+    : "\n(Zoho Books invoices/quotes not connected or no recent records returned)\n";
 
   const relevantCatalogSection = relevantCatalog.length
     ? `\n=== QUERY-RELEVANT PRICE/CATALOG MATCHES ===\n${relevantCatalog.map((i, idx) => {
@@ -539,7 +754,11 @@ ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 
 ${zohoSection}
+${booksSection}
 ${relevantCatalogSection}
+=== AGENT DATA RETRIEVAL RESULTS ===
+${retrieval ? formatRetrievalSection(retrieval) : "No retrieval results generated for this turn."}
+
 === LOCAL PIPELINE ===
 ${open.length} open deals · $${Math.round(pipeline).toLocaleString()} total · ${overdue.length} overdue · ${hot.length} hot 🔥
 ${overdue.slice(0,5).map(d=>`OVERDUE: ${d.name} (${d.school||""}) — ${d.stage}`).join("\n")}
@@ -614,6 +833,12 @@ Every email draft, campaign sequence, and customer-facing response must reflect 
 
 === ROUTING — CHOOSE THE RIGHT ACTION ===
 For every message, first classify the intent, then act:
+
+DATA ACCESS RULES:
+- AGENT DATA RETRIEVAL RESULTS is the freshest query-specific lookup across local app state, uploaded price lists, live Zoho CRM, live Zoho Books, orders/store sales, reorders, campaigns, and activity logs.
+- For questions about leads, contacts, customers, sales, invoices, orders, quotes, reorders, campaigns, or prices, use AGENT DATA RETRIEVAL RESULTS before the general summary sections.
+- State the source of important facts in plain language: "from Zoho Books invoices", "from local orders", "from uploaded price list", or "from Zoho CRM Leads".
+- If retrieval says no matching records were found, say that clearly and ask whether to broaden the search or sync/import data. Never invent customers, invoices, orders, or prices.
 
 RESPOND DIRECTLY (no tools) when:
 - User asks a question answerable from the context above (pipeline status, deal details, contact lookup, AR balance, RFP status, pricing from price list)
@@ -790,13 +1015,18 @@ async function _handler(req, res) {
     return res.status(400).json({ error: "messages array required" });
   }
 
-  // Fetch fresh Zoho context + inventory in parallel
-  const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
+  // Fetch fresh Zoho context + inventory/Books records in parallel
+  const [zoho, inventory, books] = await Promise.all([
+    fetchZohoContext(),
+    fetchZohoInventory(),
+    fetchZohoBooksContext(),
+  ]);
   const userQuery = latestUserText(rawMessages);
   const catalog = buildCatalog(localContext, inventory);
   const relevantCatalog = rankCatalogMatches(catalog, userQuery);
+  const retrieval = retrieveAgentData(localContext, zoho, books, userQuery, relevantCatalog);
 
-  const system = buildSystemPrompt(localContext, zoho, inventory, relevantCatalog);
+  const system = buildSystemPrompt(localContext, zoho, inventory, relevantCatalog, retrieval, books);
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({

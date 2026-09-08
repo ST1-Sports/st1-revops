@@ -94,6 +94,25 @@ const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+const agentCtxText = v => { try { return JSON.stringify(v||{}).toLowerCase(); } catch { return String(v||"").toLowerCase(); } };
+const agentCtxTokens = q => String(q||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(w=>w.length>2&&!["the","and","for","with","from","this","that","show","find","look","looking","need","want","what","how","can","you","make","sure"].includes(w));
+const rankForAgentContext=(rows=[],query="",aliases="",limit=120)=>{
+  const arr=Array.isArray(rows)?rows:[];
+  const tokens=agentCtxTokens(query);
+  if(!tokens.length)return arr.slice(0,limit);
+  const scored=arr.map((row,idx)=>{
+    const txt=`${agentCtxText(row)} ${String(aliases||"").toLowerCase()}`;
+    const score=tokens.reduce((n,t)=>{
+      const singular=t.endsWith("s")&&t.length>3?t.slice(0,-1):t;
+      return n+(txt.includes(t)||txt.includes(singular)?1:0);
+    },0);
+    return{row,idx,score};
+  });
+  const matches=scored.filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.idx-b.idx).map(x=>x.row);
+  const seen=new Set(matches);
+  const fill=arr.filter(x=>!seen.has(x)).slice(0,Math.max(0,limit-matches.length));
+  return[...matches.slice(0,limit),...fill].slice(0,limit);
+};
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
@@ -1809,19 +1828,40 @@ function ModHome() {
     const apiMsgs=nextHistory.slice(-20).map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
     const allContacts=s.contacts||[];
-    const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
-    const unscoredContacts=allContacts.filter(c=>!(c.score||0)).slice(0,20);
+    const ctxRows=(rows,aliases,limit)=>rankForAgentContext(rows,msg,aliases,limit);
     const localContext={
-      deals:(s.deals||[]).slice(0,60),
-      contacts:[...scoredContacts,...unscoredContacts],
-      rfps:(s.rfps||[]).slice(0,20),
-      invoices:(s.invoices||[]).slice(0,20),
+      deals:ctxRows(s.deals||[],"deal pipeline opportunity quote sales school",60),
+      contacts:ctxRows(allContacts,"lead contact prospect customer coach athletic director school",120),
+      rfps:ctxRows(s.rfps||[],"rfp bid proposal due product school",20),
+      invoices:ctxRows(s.invoices||[],"invoice invoices zoho books paid overdue balance sale sales customer product item",120).map(inv=>({
+        id:inv.id,zohoId:inv.zohoId,number:inv.number,customer:inv.customer,customerId:inv.customerId,
+        status:inv.status,date:inv.date,dueDate:inv.dueDate,total:inv.total||0,balance:inv.balance||0,source:inv.source||"",
+        items:(inv.items||[]).slice(0,12).map(it=>({name:it.name||it.item_name||"",qty:it.qty||it.quantity||0,rate:it.rate||0,total:it.total||it.item_total||0})),
+      })),
+      orders:ctxRows(s.orders||[],"order orders store sale sales purchase fulfillment customer product item email",120).map(o=>({
+        id:o.id,name:o.name,contact:o.contact,contactId:o.contactId,school:o.school,email:o.email,
+        value:o.value||0,stage:o.stage,source:o.source||"",createdAt:o.createdAt,updatedAt:o.updatedAt,
+        invoiceNumber:o.invoiceNumber,zohoInvoiceId:o.zohoInvoiceId,notes:o.notes||"",
+        items:(o.items||[]).slice(0,12).map(it=>({name:it.name||"",description:it.description||"",qty:it.qty||1,rate:it.rate||0})),
+      })),
+      reorders:ctxRows(s.reorders||[],"reorder reorders restock renewal previous order last order customer product season",120).map(r=>({
+        id:r.id,school:r.school,contact:r.contact,state:r.state,sport:r.sport,lastOrderDate:r.lastOrderDate,
+        lastItems:r.lastItems||[],lastOrderValue:r.lastOrderValue||0,status:r.status,source:r.source||"",
+      })),
+      campaigns:ctxRows(s.campaigns||[],"campaign campaigns sequence outreach email nurture enrollment touch",30).map(c=>({
+        id:c.id,name:c.name,product:c.product,status:c.status,createdAt:c.createdAt,scheduledSendAt:c.scheduledSendAt,
+        enrollmentCount:(c.enrollments||[]).length,
+        activeCount:(c.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(c.touches||[]).slice(0,5).map(t=>({subject:t.subject,delay:t.delay,day:t.day,channel:t.channel})),
+        notes:c.notes||"",
+      })),
       sequences:(s.sequences||[]).slice(0,10).map(seq=>({
         id:seq.id,name:seq.name,status:seq.status,
         enrollmentCount:(seq.enrollments||[]).length,
         activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
         touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
       })),
+      activity:(s.activity||[]).slice(0,100).map(a=>({id:a.id,ts:a.ts,userId:a.userId,msg:a.msg||a.note||a.action||""})),
       priceLists:(s.priceLists||[]).map(pl=>({
         id:pl.id,
         name:pl.name,
@@ -1831,7 +1871,7 @@ function ModHome() {
         source:pl.source||"",
         notes:pl.notes||"",
         itemCount:(pl.items||[]).length,
-        items:(pl.items||[]).slice(0,120).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0,notes:it.notes||""})),
+        items:rankForAgentContext(pl.items||[],msg,`${pl.name||""} ${pl.supplierName||""} ${pl.competitorName||""} ${pl.notes||""}`,120).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0,notes:it.notes||""})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
       brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
@@ -13442,9 +13482,46 @@ function ModAgent() {
     const userEntry={role:"user",content:msg,ts:Date.now()};
     const nextHistory=[...history,userEntry];
     setHistory(nextHistory);
+    const ctxRows=(rows,aliases,limit)=>rankForAgentContext(rows,msg,aliases,limit);
     const localContext={
-      deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],
-      invoices:s.invoices||[],sequences:s.sequences||[]
+      deals:ctxRows(s.deals||[],"deal pipeline opportunity quote sales school",100),
+      contacts:ctxRows(s.contacts||[],"lead contact prospect customer coach athletic director school",160),
+      rfps:ctxRows(s.rfps||[],"rfp bid proposal due product school",40),
+      invoices:ctxRows(s.invoices||[],"invoice invoices zoho books paid overdue balance sale sales customer product item",120).map(inv=>({
+        id:inv.id,zohoId:inv.zohoId,number:inv.number,customer:inv.customer,customerId:inv.customerId,
+        status:inv.status,date:inv.date,dueDate:inv.dueDate,total:inv.total||0,balance:inv.balance||0,source:inv.source||"",
+        items:(inv.items||[]).slice(0,12).map(it=>({name:it.name||it.item_name||"",qty:it.qty||it.quantity||0,rate:it.rate||0,total:it.total||it.item_total||0})),
+      })),
+      orders:ctxRows(s.orders||[],"order orders store sale sales purchase fulfillment customer product item email",120).map(o=>({
+        id:o.id,name:o.name,contact:o.contact,contactId:o.contactId,school:o.school,email:o.email,
+        value:o.value||0,stage:o.stage,source:o.source||"",createdAt:o.createdAt,updatedAt:o.updatedAt,
+        invoiceNumber:o.invoiceNumber,zohoInvoiceId:o.zohoInvoiceId,notes:o.notes||"",
+        items:(o.items||[]).slice(0,12).map(it=>({name:it.name||"",description:it.description||"",qty:it.qty||1,rate:it.rate||0})),
+      })),
+      reorders:ctxRows(s.reorders||[],"reorder reorders restock renewal previous order last order customer product season",120).map(r=>({
+        id:r.id,school:r.school,contact:r.contact,state:r.state,sport:r.sport,lastOrderDate:r.lastOrderDate,
+        lastItems:r.lastItems||[],lastOrderValue:r.lastOrderValue||0,status:r.status,source:r.source||"",
+      })),
+      campaigns:ctxRows(s.campaigns||[],"campaign campaigns sequence outreach email nurture enrollment touch",30).map(c=>({
+        id:c.id,name:c.name,product:c.product,status:c.status,createdAt:c.createdAt,scheduledSendAt:c.scheduledSendAt,
+        enrollmentCount:(c.enrollments||[]).length,
+        activeCount:(c.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(c.touches||[]).slice(0,5).map(t=>({subject:t.subject,delay:t.delay,day:t.day,channel:t.channel})),
+        notes:c.notes||"",
+      })),
+      sequences:(s.sequences||[]).slice(0,20).map(seq=>({
+        id:seq.id,name:seq.name,status:seq.status,
+        enrollmentCount:(seq.enrollments||[]).length,
+        activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
+      })),
+      activity:(s.activity||[]).slice(0,100).map(a=>({id:a.id,ts:a.ts,userId:a.userId,msg:a.msg||a.note||a.action||""})),
+      priceLists:(s.priceLists||[]).map(pl=>({
+        id:pl.id,name:pl.name,type:pl.type,supplierName:pl.supplierName||"",competitorName:pl.competitorName||"",
+        source:pl.source||"",notes:pl.notes||"",itemCount:(pl.items||[]).length,
+        items:rankForAgentContext(pl.items||[],msg,`${pl.name||""} ${pl.supplierName||""} ${pl.competitorName||""} ${pl.notes||""}`,120).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0,notes:it.notes||""})),
+      })),
+      competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
     };
     const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     try {
