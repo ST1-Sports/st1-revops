@@ -170,10 +170,14 @@ const TOOLS = [
           items: {
             type: "object",
             properties: {
+              item_id:     { type: "string", description: "Zoho Books item_id when the line item came from active Zoho inventory" },
               name:        { type: "string" },
               description: { type: "string" },
               quantity:    { type: "number" },
               rate:        { type: "number", description: "Price per unit after margin" },
+              unit:        { type: "string", description: "Unit of measure, e.g. each, dozen, set" },
+              source:      { type: "string", description: "Price source used, e.g. uploaded price list, seed catalog, Zoho Books" },
+              confidence:  { type: "string", enum: ["high", "medium", "low"], description: "Confidence in the item/price match" },
             },
             required: ["name", "quantity", "rate"],
           },
@@ -246,7 +250,7 @@ async function fetchZohoContext() {
   try {
     const token = await getZohoToken();
     const hdrs = { headers: { Authorization: `Zoho-oauthtoken ${token}` } };
-    const [dealsRes, contactsRes] = await Promise.allSettled([
+    const [dealsRes, contactsRes, leadsRes] = await Promise.allSettled([
       fetchWithTimeout(
         "https://www.zohoapis.com/crm/v3/Deals?fields=Deal_Name,Account_Name,Amount,Stage,Closing_Date,id&per_page=25&sort_by=Modified_Time&sort_order=desc",
         hdrs
@@ -255,12 +259,17 @@ async function fetchZohoContext() {
         "https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,id&per_page=20&sort_by=Modified_Time&sort_order=desc",
         hdrs
       ),
+      fetchWithTimeout(
+        "https://www.zohoapis.com/crm/v3/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,id&per_page=30&sort_by=Modified_Time&sort_order=desc",
+        hdrs
+      ),
     ]);
     const deals    = dealsRes.status === "fulfilled" && dealsRes.value.ok    ? (await dealsRes.value.json()).data || []    : [];
     const contacts = contactsRes.status === "fulfilled" && contactsRes.value.ok ? (await contactsRes.value.json()).data || [] : [];
-    return { deals, contacts, ok: true };
+    const leads    = leadsRes.status === "fulfilled" && leadsRes.value.ok    ? (await leadsRes.value.json()).data || []    : [];
+    return { deals, contacts, leads, ok: true };
   } catch {
-    return { deals: [], contacts: [], ok: false };
+    return { deals: [], contacts: [], leads: [], ok: false };
   }
 }
 
@@ -271,24 +280,218 @@ async function fetchZohoInventory() {
     if (!orgId) return [];
     const token = await getZohoToken();
     const res = await fetchWithTimeout(
-      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=50&filter_by=Status.Active`,
+      `https://www.zohoapis.com/books/v3/items?organization_id=${orgId}&per_page=200&filter_by=Status.Active`,
       { headers: { Authorization: `Zoho-oauthtoken ${token}` } }
     );
     if (!res.ok) return [];
     const data = await res.json();
     return (data.items || []).map(i => ({
-      name: i.name,
-      rate: parseFloat(i.rate || i.selling_price || 0),
-      sku:  i.sku  || "",
-      unit: i.unit || "",
+      item_id:     i.item_id,
+      name:        i.name,
+      description: i.description || "",
+      rate:        parseFloat(i.rate || i.selling_price || 0),
+      sku:         i.sku  || "",
+      unit:        i.unit || "",
     }));
   } catch {
     return [];
   }
 }
 
+const DEFAULT_CATALOG = [
+  { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-39AL", name: "Aluminum Hurdle 39\"", category: "Hurdles", unit: "each", cost: 224, price: 280 },
+  { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-30AL", name: "Aluminum Hurdle 30\"", category: "Hurdles", unit: "each", cost: 212, price: 265 },
+  { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-SB", name: "Starting Blocks Aluminum", category: "Sprint", unit: "each", cost: 156, price: 195 },
+  { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-HH39", name: "Steel Hurdle 39\" High Boy", category: "Hurdles", unit: "each", cost: 248, price: 315 },
+  { source: "Seed Catalog", supplierName: "Gill Athletics", sport: "Track & Field", sku: "GA-SP8", name: "Soft Shot Put 8lb Girls", category: "Throws", unit: "each", cost: 112, price: 154 },
+  { source: "Seed Catalog", supplierName: "Gill Athletics", sport: "Track & Field", sku: "GA-SP12", name: "Soft Shot Put 12lb Boys", category: "Throws", unit: "each", cost: 118, price: 154 },
+  { source: "Seed Catalog", supplierName: "Gill Athletics", sport: "Track & Field", sku: "GA-DM16", name: "Discus 1.6kg HS Men", category: "Throws", unit: "each", cost: 70.4, price: 88 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-DOL1", name: "DOL-1 Official Game Ball", category: "Game Balls", unit: "dozen", cost: 52, price: 72 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-D1", name: "D1 Pro Game Ball", category: "Game Balls", unit: "dozen", cost: 66, price: 88 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-OB", name: "D1-OB Official Baseball", category: "Game Balls", unit: "dozen", cost: 58, price: 78 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-BP", name: "DBX-1 BP Ball", category: "Practice Balls", unit: "dozen", cost: 24, price: 34 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-SB", name: "DSB-1 Softball 12\"", category: "Softballs", unit: "dozen", cost: 44, price: 60 },
+  { source: "Seed Catalog", supplierName: "Diamond Baseballs", sport: "Baseball/Softball", sku: "DIA-HEL", name: "DBX-1 Batter Helmet", category: "Helmets", unit: "each", cost: 98, price: 125 },
+  { source: "Seed Catalog", supplierName: "Wilson / DeMarini", sport: "Baseball/Softball", sku: "WIL-A2000", name: "A2000 1786 11.5\" Glove", category: "Gloves", unit: "each", cost: 169, price: 282, map: 282 },
+  { source: "Seed Catalog", supplierName: "Wilson / DeMarini", sport: "Baseball/Softball", sku: "DEM-VOO1", name: "DeMarini Voodoo One BBCOR", category: "Bats BBCOR", unit: "each", cost: 179, price: 299, map: 299 },
+  { source: "Seed Catalog", supplierName: "Molten Volleyballs", sport: "Volleyball", sku: "MOL-V5M5", name: "V5M5000 Game Ball", category: "Game Balls", unit: "each", cost: 52, price: 68, map: 68 },
+  { source: "Seed Catalog", supplierName: "Molten Volleyballs", sport: "Volleyball", sku: "MOL-V5M4", name: "V5M4500 Practice Ball", category: "Practice Balls", unit: "each", cost: 38, price: 49, map: 49 },
+  { source: "Seed Catalog", supplierName: "FinishLynx / Lynx", sport: "Timing Systems", sku: "FL-1A205U", name: "Capture Button + USB Cord", category: "Hardware", unit: "each", cost: 398, price: 498 },
+  { source: "Seed Catalog", supplierName: "FinishLynx / Lynx", sport: "Timing Systems", sku: "FL-EV", name: "EtherLynx Vision Camera", category: "Cameras", unit: "each", cost: 3200, price: 3995 },
+];
+
+const SPORT_KEYWORDS = {
+  "Baseball/Softball": ["baseball", "baseballs", "softball", "softballs", "diamond", "bat", "bats", "glove", "gloves", "helmet", "helmets", "bbcor", "fastpitch", "game ball", "game balls", "bp ball", "bp balls"],
+  Basketball: ["basketball", "basketballs", "basket"],
+  Volleyball: ["volleyball", "volleyballs", "volley"],
+  Football: ["football", "footballs"],
+  "Track & Field": ["track", "field", "hurdle", "hurdles", "starting block", "starting blocks", "shot put", "shot puts", "discus", "javelin", "relay", "baton", "batons", "throws", "spikes"],
+  "Cross Country": ["cross country", "xc"],
+  Wrestling: ["wrestling", "wrestle"],
+};
+
+const STOP_WORDS = new Set(["the","and","for","with","from","this","that","into","onto","quote","quotes","build","create","estimate","price","pricing","list","lists","look","looking","find","show","need","want","some","about","what","should","would","could","please","customer","school","team","program"]);
+
+function normalizeText(value = "") {
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function singularize(token) {
+  if (token.endsWith("ies") && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (token.endsWith("ses") && token.length > 4) return token.slice(0, -2);
+  if (token.endsWith("s") && token.length > 3) return token.slice(0, -1);
+  return token;
+}
+
+function queryTokens(text = "") {
+  return normalizeText(text)
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(singularize)
+    .filter(t => t.length > 2 && !STOP_WORDS.has(t));
+}
+
+function detectSports(text = "") {
+  const norm = normalizeText(text);
+  return Object.entries(SPORT_KEYWORDS)
+    .filter(([, terms]) => terms.some(term => norm.includes(normalizeText(term))))
+    .map(([sport]) => sport);
+}
+
+function catalogSport(item) {
+  const joined = normalizeText(`${item.sport || ""} ${item.supplierName || ""} ${item.category || ""} ${item.name || ""} ${item.description || ""} ${item.notes || ""}`);
+  for (const [sport, terms] of Object.entries(SPORT_KEYWORDS)) {
+    if (terms.some(term => joined.includes(normalizeText(term)))) return sport;
+  }
+  return item.sport || "";
+}
+
+function buildCatalog(localCtx = {}, inventory = []) {
+  const uploaded = (localCtx.priceLists || []).flatMap(pl => (pl.items || []).map(it => ({
+    source: pl.source || pl.name || "Uploaded price list",
+    listName: pl.name || "",
+    listType: pl.type || "own",
+    supplierName: pl.supplierName || pl.competitorName || pl.name || "",
+    competitorName: pl.competitorName || "",
+    name: it.name || "",
+    sku: it.sku || "",
+    category: it.category || "",
+    unit: it.unit || "each",
+    cost: Number(it.cost) || 0,
+    price: Number(it.price) || 0,
+    map: Number(it.map) || 0,
+    notes: it.notes || pl.notes || "",
+  })));
+
+  const zoho = inventory.map(it => ({
+    source: "Zoho Books active inventory",
+    item_id: it.item_id,
+    name: it.name || "",
+    sku: it.sku || "",
+    category: "",
+    unit: it.unit || "each",
+    cost: 0,
+    price: Number(it.rate) || 0,
+    description: it.description || "",
+  }));
+
+  return [...uploaded, ...DEFAULT_CATALOG, ...zoho].map(item => ({
+    ...item,
+    sport: catalogSport(item),
+  }));
+}
+
+function rankCatalogMatches(catalog, query, limit = 45) {
+  const tokens = queryTokens(query);
+  const requestedSports = detectSports(query);
+  if (!tokens.length && !requestedSports.length) return [];
+
+  return catalog
+    .map(item => {
+      const haystack = normalizeText(`${item.name} ${item.sku} ${item.category} ${item.supplierName} ${item.description || ""} ${item.notes || ""} ${item.sport || ""}`);
+      let score = 0;
+      for (const token of tokens) {
+        if (haystack.split(/\s+/).includes(token)) score += 8;
+        else if (haystack.includes(token)) score += 2;
+      }
+      if (requestedSports.includes(item.sport)) score += 25;
+      if (item.listType === "own" || item.source === "Zoho Books active inventory") score += 4;
+      if (Number(item.price) > 0) score += 2;
+      return { ...item, _score: score };
+    })
+    .filter(item => item._score > 0)
+    .sort((a, b) => b._score - a._score || Number(b.price || 0) - Number(a.price || 0))
+    .slice(0, limit);
+}
+
+function latestUserText(messages = []) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return String(messages[i].content || "");
+  }
+  return "";
+}
+
+function quoteIntent(text = "") {
+  return /\b(quote|estimate|price\s*(this|it)?\s*out|cost\s*(this|it)?\s*out|build\s+a\s+quote|create\s+a\s+quote)\b/i.test(text);
+}
+
+function formatCatalogSuggestion(item) {
+  const price = Number(item.price || item.rate || 0);
+  return `${item.name}${item.sku ? ` [${item.sku}]` : ""}${item.unit ? ` (${item.unit})` : ""}${price > 0 ? ` — $${price.toFixed(2)}` : ""}`;
+}
+
+function validateQuoteAction(action, query, relevantCatalog = []) {
+  if (!action || action.type !== "create_quote") return { ok: true };
+  const requestedSports = detectSports(query);
+  if (!requestedSports.length) return { ok: true };
+
+  const issues = [];
+  const lineItems = Array.isArray(action.line_items) ? action.line_items : [];
+  for (const li of lineItems) {
+    const itemText = `${li.name || ""} ${li.description || ""}`;
+    const itemSports = detectSports(itemText);
+    const conflicts = itemSports.filter(sport => !requestedSports.includes(sport));
+    if (conflicts.length) {
+      issues.push(`"${li.name || "line item"}" appears to be ${conflicts.join("/")} while the request is for ${requestedSports.join("/")}`);
+    }
+  }
+
+  if (!issues.length) return { ok: true };
+  const suggested = relevantCatalog
+    .filter(item => requestedSports.includes(item.sport))
+    .slice(0, 5)
+    .map(formatCatalogSuggestion);
+
+  return { ok: false, issues, suggested, requestedSports };
+}
+
+function applyQuoteGuardrails(actions, query, relevantCatalog) {
+  if (!quoteIntent(query)) return { actions, message: null };
+
+  const kept = [];
+  const blocked = [];
+  for (const action of actions) {
+    const result = validateQuoteAction(action, query, relevantCatalog);
+    if (result.ok) kept.push(action);
+    else blocked.push(result);
+  }
+
+  if (!blocked.length) return { actions: kept, message: null };
+
+  const suggestions = [...new Set(blocked.flatMap(b => b.suggested || []))];
+  const issueText = blocked.flatMap(b => b.issues).join("; ");
+  const suggestionText = suggestions.length
+    ? `\n\nRelevant catalog matches I found:\n${suggestions.map(s => `- ${s}`).join("\n")}`
+    : "";
+
+  return {
+    actions: kept,
+    message: `I caught a product mismatch before creating the quote: ${issueText}. I will not substitute another sport's item for the requested product.${suggestionText}\n\nConfirm the customer and quantity you want quoted, or give me the exact SKU, and I will build the correct quote.`,
+  };
+}
+
 // ── SYSTEM PROMPT BUILDER ────────────────────────────────────────────────────
-function buildSystemPrompt(localCtx, zoho, inventory = []) {
+function buildSystemPrompt(localCtx, zoho, inventory = [], relevantCatalog = []) {
   const deals    = localCtx.deals    || [];
   const contacts = localCtx.contacts || [];
   const rfps     = localCtx.rfps     || [];
@@ -306,15 +509,37 @@ function buildSystemPrompt(localCtx, zoho, inventory = []) {
   const activeRfps = rfps.filter(r => !["Won","Lost","No Bid"].includes(r.stage));
   const topContacts = [...contacts].filter(c => (c.score||0) > 0).sort((a,b) => (b.score||0)-(a.score||0)).slice(0,8);
 
-  const zohoSection = zoho.ok && zoho.deals.length
-    ? `\n=== LIVE ZOHO CRM (${new Date().toLocaleTimeString()}) ===\nDeals: ${zoho.deals.map(d => `${d.Deal_Name} (${d.Account_Name}) — ${d.Stage} — $${d.Amount||"?"}`).join(" | ")}\nContacts: ${zoho.contacts.slice(0,6).map(c => `${c.First_Name||""} ${c.Last_Name} / ${c.Title||""} @ ${c.Account_Name||""}`).join(" | ")}\n`
+  const zohoSection = zoho.ok && (zoho.deals.length || zoho.contacts.length || zoho.leads.length)
+    ? `\n=== LIVE ZOHO CRM (${new Date().toLocaleTimeString()}) ===\nDeals: ${zoho.deals.length ? zoho.deals.map(d => `${d.Deal_Name} (${d.Account_Name}) — ${d.Stage} — $${d.Amount||"?"}`).join(" | ") : "None returned"}\nContacts: ${zoho.contacts.length ? zoho.contacts.slice(0,6).map(c => `${c.First_Name||""} ${c.Last_Name||""} / ${c.Title||""} @ ${c.Account_Name||""}`).join(" | ") : "None returned"}\nLeads: ${zoho.leads.length ? zoho.leads.slice(0,12).map(l => `${l.First_Name||""} ${l.Last_Name||""} / ${l.Title||""} @ ${l.Company||""}${l.State?`, ${l.State}`:""} — ${l.Lead_Status||"status unknown"}${l.Rating?` — ${l.Rating}`:""}`).join(" | ") : "None returned"}\n`
     : "\n(Zoho CRM not connected — using local data)\n";
+
+  const relevantCatalogSection = relevantCatalog.length
+    ? `\n=== QUERY-RELEVANT PRICE/CATALOG MATCHES ===\n${relevantCatalog.map((i, idx) => {
+        const price = Number(i.price || i.rate || 0);
+        const cost = Number(i.cost || 0);
+        const parts = [
+          `${idx + 1}. ${i.name}${i.sku ? ` [${i.sku}]` : ""}`,
+          i.item_id ? `Zoho item_id: ${i.item_id}` : "",
+          i.sport ? `sport: ${i.sport}` : "",
+          i.category ? `category: ${i.category}` : "",
+          i.supplierName ? `supplier: ${i.supplierName}` : "",
+          i.source ? `source: ${i.source}` : "",
+          i.unit ? `unit: ${i.unit}` : "",
+          cost > 0 ? `cost: $${cost.toFixed(2)}` : "",
+          price > 0 ? `sell/rate: $${price.toFixed(2)}` : "",
+          i.map > 0 ? `MAP: $${Number(i.map).toFixed(2)}` : "",
+          i.notes ? `notes: ${i.notes}` : "",
+        ].filter(Boolean);
+        return parts.join(" — ");
+      }).join("\n")}\nUse these query-relevant rows first. If none match the requested sport/product exactly, ask a clarifying question instead of substituting a nearby sport.\n`
+    : "\n=== QUERY-RELEVANT PRICE/CATALOG MATCHES ===\nNo exact price-list or catalog match was found for this query. If the user is asking for a quote or price, say that explicitly and ask what exact product/SKU to use rather than guessing.\n";
 
   return `You are the ST1 Sports RevOps AI Agent — a senior sales & outreach strategist with full visibility into the pipeline, contacts, and business context.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 
 ${zohoSection}
+${relevantCatalogSection}
 === LOCAL PIPELINE ===
 ${open.length} open deals · $${Math.round(pipeline).toLocaleString()} total · ${overdue.length} overdue · ${hot.length} hot 🔥
 ${overdue.slice(0,5).map(d=>`OVERDUE: ${d.name} (${d.school||""}) — ${d.stage}`).join("\n")}
@@ -417,6 +642,15 @@ USE propose_create_campaign_sequence when:
 
 USE propose_create_quote when:
 - User asks to "build a quote", "create an estimate", or "price this out" with specific products and a customer
+- Match the requested product and sport exactly from QUERY-RELEVANT PRICE/CATALOG MATCHES first. Baseball/baseballs means Baseball/Softball catalog items, never basketballs or generic balls.
+- If the query lacks customer, quantity, or an exact enough item, ask for the missing detail instead of proposing a quote action.
+- If using a Zoho Books item, include its exact item_id in the line item when available.
+- Include source and confidence in notes, e.g. "Based on Diamond Baseballs price list" or "Estimated — confirm with Matt before sending."
+
+LEAD / CONTACT LOOKUPS:
+- When the user asks to find, look for, prioritize, or work leads, use LIVE ZOHO CRM Leads plus TOP CONTACTS first.
+- Distinguish Leads from Contacts in your answer. Mention status/rating/source when available.
+- If there are not enough matches in the provided CRM context, say that and suggest using CRM search/import rather than inventing names.
 
 USE propose_flag_deal when:
 - User says a deal is urgent, high priority, or mentions a hot lead
@@ -449,6 +683,8 @@ IMPORTANT BEHAVIORS:
 - Always personalize emails with real names, real school names, real products
 - Be specific and tactical — use actual deal names, contact names, dollar amounts from context
 - Flag 🔥 when you see genuine urgency or high value
+- Do not infer a product from a similar word fragment. "Baseball" and "basketball" are different products. "Game ball" must still match the user's sport.
+- If context is thin or missing, ask one focused clarifying question and state what information is missing.
 
 AUTOMATION — ALWAYS DO THIS:
 - When you propose_draft_email, ALWAYS also propose_log_note (summarizing the outreach) AND propose_schedule_followup (3 business days out) in the SAME response. Never draft an email without the follow-up chain.
@@ -556,8 +792,11 @@ async function _handler(req, res) {
 
   // Fetch fresh Zoho context + inventory in parallel
   const [zoho, inventory] = await Promise.all([fetchZohoContext(), fetchZohoInventory()]);
+  const userQuery = latestUserText(rawMessages);
+  const catalog = buildCatalog(localContext, inventory);
+  const relevantCatalog = rankCatalogMatches(catalog, userQuery);
 
-  const system = buildSystemPrompt(localContext, zoho, inventory);
+  const system = buildSystemPrompt(localContext, zoho, inventory, relevantCatalog);
 
   // Convert history to Anthropic format
   const messages = rawMessages.map(m => ({
@@ -629,9 +868,11 @@ async function _handler(req, res) {
       return { type: typeMap[t.name] || t.name, ...t.input };
     });
 
-  const actions     = [...proposedActions, ...(parsed?.actions || [])];
+  const actionsBeforeGuardrails = [...proposedActions, ...(parsed?.actions || [])];
+  const guarded = applyQuoteGuardrails(actionsBeforeGuardrails, userQuery, relevantCatalog);
+  const actions = guarded.actions;
   const suggestions = parsed?.suggestions || [];
-  const message     = parsed?.message || finalText;
+  const message     = guarded.message || parsed?.message || finalText;
 
   return res.json({ message, actions, suggestions, liveZoho: zoho.ok, searchUsed });
 }
