@@ -206,8 +206,6 @@ function mergeServerState(base, server) {
     priceLists:   mergeById(base.priceLists,   server.priceLists),
     competeIntel: {...(base.competeIntel||{}), ...(server.competeIntel||{})},
     battlecards:  {...(base.battlecards||{}),  ...(server.battlecards||{})},
-    integrations: {...(base.integrations||{}), ...(server.integrations||{})},
-    company:      {...(base.company||{}),      ...(server.company||{})},
   };
 }
 
