@@ -18,6 +18,7 @@
  */
 
 import { getZohoToken } from './_lib/zoho-token.js';
+import { prisma } from './_lib/prisma.js';
 
 export const config = { maxDuration: 120 };
 
@@ -259,11 +260,11 @@ async function fetchZohoContext() {
         hdrs
       ),
       fetchWithTimeout(
-        "https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,id&per_page=20&sort_by=Modified_Time&sort_order=desc",
+        "https://www.zohoapis.com/crm/v3/Contacts?fields=First_Name,Last_Name,Email,Phone,Title,Account_Name,id&per_page=100&sort_by=Modified_Time&sort_order=desc",
         hdrs
       ),
       fetchWithTimeout(
-        "https://www.zohoapis.com/crm/v3/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,id&per_page=30&sort_by=Modified_Time&sort_order=desc",
+        "https://www.zohoapis.com/crm/v3/Leads?fields=First_Name,Last_Name,Email,Phone,Title,Company,City,State,Lead_Source,Lead_Status,Rating,No_of_Calls,No_of_Chats,Last_Activity_Time,id&per_page=100&sort_by=Modified_Time&sort_order=desc",
         hdrs
       ),
     ]);
@@ -348,6 +349,102 @@ async function fetchZohoBooksContext() {
   }
 }
 
+async function fetchPersistedState() {
+  try {
+    const setting = await prisma.setting.findUnique({ where: { key: "app_state" } });
+    return setting?.value && typeof setting.value === "object" ? setting.value : {};
+  } catch {
+    return {};
+  }
+}
+
+async function fetchStoreProducts() {
+  try {
+    const products = await prisma.product.findMany({
+      orderBy: { updatedAt: "desc" },
+      take: 150,
+      select: {
+        id: true,
+        name: true,
+        price: true,
+        regular_price: true,
+        sale_price: true,
+        stock_status: true,
+        short_description: true,
+        categories: true,
+        tags: true,
+        brand: true,
+        permalink: true,
+      },
+    });
+    return products.map(p => ({
+      id: p.id,
+      name: p.name || "",
+      price: Number.parseFloat(p.sale_price || p.price || p.regular_price || "0") || 0,
+      stockStatus: p.stock_status || "",
+      description: p.short_description || "",
+      categories: Array.isArray(p.categories) ? p.categories : [],
+      tags: Array.isArray(p.tags) ? p.tags : [],
+      brand: p.brand || "",
+      permalink: p.permalink || "",
+      source: "WooCommerce/store product catalog",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function mergeByIdOrSignature(primary = [], fallback = []) {
+  const out = [];
+  const seen = new Set();
+  for (const item of [...primary, ...fallback]) {
+    if (!item || typeof item !== "object") continue;
+    const key = item.id || item.zohoId || item.number || item.name || JSON.stringify(item).slice(0, 120);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function normalizeIntelEntries(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => ({ name: item.name || item.competitor_name || "", summary: item.summary || item.intel || "" }))
+      .filter(item => item.name);
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value).map(([name, summary]) => ({ name, summary: String(summary || "") }));
+  }
+  return [];
+}
+
+function mergeAgentContext(clientCtx = {}, persisted = {}) {
+  const keys = ["deals", "contacts", "rfps", "invoices", "orders", "reorders", "campaigns", "sequences", "priceLists", "quotes", "activity"];
+  const merged = { ...persisted, ...clientCtx };
+  for (const key of keys) {
+    merged[key] = mergeByIdOrSignature(clientCtx[key] || [], persisted[key] || []);
+  }
+  const priceLists = new Map();
+  for (const pl of persisted.priceLists || []) priceLists.set(pl.id || pl.name, pl);
+  for (const pl of clientCtx.priceLists || []) {
+    const key = pl.id || pl.name;
+    const base = priceLists.get(key) || {};
+    priceLists.set(key, {
+      ...base,
+      ...pl,
+      items: mergeByIdOrSignature(pl.items || [], base.items || []),
+    });
+  }
+  merged.priceLists = [...priceLists.values()];
+  const intelMap = {};
+  for (const entry of normalizeIntelEntries(persisted.competeIntel)) intelMap[entry.name] = entry.summary;
+  for (const entry of normalizeIntelEntries(clientCtx.competeIntel)) intelMap[entry.name] = entry.summary;
+  merged.competeIntel = Object.entries(intelMap).map(([name, summary]) => ({ name, summary }));
+  merged.brandVoice = clientCtx.brandVoice || persisted.brandVoice || "";
+  return merged;
+}
+
 const DEFAULT_CATALOG = [
   { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-39AL", name: "Aluminum Hurdle 39\"", category: "Hurdles", unit: "each", cost: 224, price: 280 },
   { source: "Seed Catalog", supplierName: "Blazer Athletic", sport: "Track & Field", sku: "BL-30AL", name: "Aluminum Hurdle 30\"", category: "Hurdles", unit: "each", cost: 212, price: 265 },
@@ -420,7 +517,15 @@ function catalogSport(item) {
   return item.sport || "";
 }
 
-function buildCatalog(localCtx = {}, inventory = []) {
+function flattenNames(value) {
+  if (!Array.isArray(value)) return "";
+  return value
+    .map(item => typeof item === "string" ? item : item?.name || item?.slug || "")
+    .filter(Boolean)
+    .join(", ");
+}
+
+function buildCatalog(localCtx = {}, inventory = [], storeProducts = []) {
   const uploaded = (localCtx.priceLists || []).flatMap(pl => (pl.items || []).map(it => ({
     source: pl.source || pl.name || "Uploaded price list",
     listName: pl.name || "",
@@ -449,7 +554,19 @@ function buildCatalog(localCtx = {}, inventory = []) {
     description: it.description || "",
   }));
 
-  return [...uploaded, ...DEFAULT_CATALOG, ...zoho].map(item => ({
+  const store = storeProducts.map(p => ({
+    source: p.source || "WooCommerce/store product catalog",
+    item_id: `store_${p.id}`,
+    name: p.name || "",
+    sku: "",
+    category: flattenNames(p.categories),
+    unit: "each",
+    cost: 0,
+    price: Number(p.price) || 0,
+    description: [p.description, flattenNames(p.tags), p.brand, p.stockStatus, p.permalink].filter(Boolean).join(" | "),
+  }));
+
+  return [...uploaded, ...DEFAULT_CATALOG, ...zoho, ...store].map(item => ({
     ...item,
     sport: catalogSport(item),
   }));
@@ -1010,19 +1127,23 @@ async function _handler(req, res) {
   const apiKey = process.env.ANTHROPIC_KEY;
   if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_KEY not configured" });
 
-  const { messages: rawMessages, localContext = {} } = req.body || {};
+  const { messages: rawMessages, localContext: rawLocalContext = {} } = req.body || {};
   if (!Array.isArray(rawMessages) || !rawMessages.length) {
     return res.status(400).json({ error: "messages array required" });
   }
 
-  // Fetch fresh Zoho context + inventory/Books records in parallel
-  const [zoho, inventory, books] = await Promise.all([
+  const userQuery = latestUserText(rawMessages);
+
+  // Fetch fresh Zoho context + persisted app/store records in parallel
+  const [zoho, inventory, books, persistedState, storeProducts] = await Promise.all([
     fetchZohoContext(),
     fetchZohoInventory(),
     fetchZohoBooksContext(),
+    fetchPersistedState(),
+    fetchStoreProducts(),
   ]);
-  const userQuery = latestUserText(rawMessages);
-  const catalog = buildCatalog(localContext, inventory);
+  const localContext = mergeAgentContext(rawLocalContext, persistedState);
+  const catalog = buildCatalog(localContext, inventory, storeProducts);
   const relevantCatalog = rankCatalogMatches(catalog, userQuery);
   const retrieval = retrieveAgentData(localContext, zoho, books, userQuery, relevantCatalog);
 
