@@ -7,12 +7,34 @@ const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 
-// Kick off background downloads for the most-used panels as soon as the app
-// shell renders, so they're already cached when the user clicks into them.
-function usePrefetchPanels() {
+// Prefetch heavier panels only after the shell has had time to become interactive.
+function usePrefetchPanels(enabled=true) {
   useEffect(() => {
-    import('./CommandCenter.jsx');
-  }, []);
+    if (!enabled || typeof window === "undefined") return;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (connection?.saveData || /2g/i.test(connection?.effectiveType || "")) return;
+    let cancelled = false;
+    const preload = () => {
+      if (!cancelled) import('./CommandCenter.jsx').catch(()=>{});
+    };
+    const idleId = window.requestIdleCallback
+      ? window.requestIdleCallback(preload, { timeout: 7000 })
+      : setTimeout(preload, 4500);
+    return () => {
+      cancelled = true;
+      if (window.cancelIdleCallback && typeof idleId === "number") window.cancelIdleCallback(idleId);
+      else clearTimeout(idleId);
+    };
+  }, [enabled]);
+}
+
+function useDebouncedValue(value, delay=250) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
 }
 
 // ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
@@ -35,6 +57,11 @@ class ErrBound extends Component {
     // Auto-reload on chunk load failures (stale browser cache after deploy)
     if(err?.message?.includes("Failed to fetch dynamically imported module")){
       window.location.reload();
+    }
+  }
+  componentDidUpdate(prevProps){
+    if(prevProps.resetKey!==this.props.resetKey && this.state.err){
+      this.setState({err:null});
     }
   }
   render(){
@@ -94,6 +121,51 @@ const dUntil = (d) => Math.ceil((new Date(d)-Date.now())/86400000);
 const fmt$   = (n) => "$"+Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "$"+Math.round(n||0).toLocaleString(); };
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+const agentCtxText = v => { try { return JSON.stringify(v||{}).toLowerCase(); } catch { return String(v||"").toLowerCase(); } };
+const agentCtxTokens = q => String(q||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(w=>w.length>2&&!["the","and","for","with","from","this","that","show","find","look","looking","need","want","what","how","can","you","make","sure"].includes(w));
+const firstMatches=(rows=[],limit=4,predicate=()=>false)=>{
+  const out=[];
+  for(const row of rows||[]){
+    if(predicate(row)){
+      out.push(row);
+      if(out.length>=limit) break;
+    }
+  }
+  return out;
+};
+const SKIP_IMMEDIATE_SYNC = new Set([
+  "LOGIN",                           // session-only, not persisted
+  "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
+  "UPDATE_CAMPAIGN",                 // fires per-email during batch sends; debounce covers it
+  "UPDATE_CAMPAIGN_TOUCH",           // fires on every keystroke in touch editor
+  "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
+]);
+const rankForAgentContext=(rows=[],query="",aliases="",limit=120)=>{
+  const arr=Array.isArray(rows)?rows:[];
+  const tokens=agentCtxTokens(query);
+  if(!tokens.length)return arr.slice(0,limit);
+  const scored=arr.map((row,idx)=>{
+    const txt=`${agentCtxText(row)} ${String(aliases||"").toLowerCase()}`;
+    const score=tokens.reduce((n,t)=>{
+      const singular=t.endsWith("s")&&t.length>3?t.slice(0,-1):t;
+      return n+(txt.includes(t)||txt.includes(singular)?1:0);
+    },0);
+    return{row,idx,score};
+  });
+  const matches=scored.filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.idx-b.idx).map(x=>x.row);
+  const seen=new Set(matches);
+  const fill=arr.filter(x=>!seen.has(x)).slice(0,Math.max(0,limit-matches.length));
+  return[...matches.slice(0,limit),...fill].slice(0,limit);
+};
+const serverStatePayload=(state={})=>{
+  const {currentUserId: _cid, ...toSync}=state||{};
+  return {
+    ...toSync,
+    agentHistory:Array.isArray(toSync.agentHistory)?toSync.agentHistory.slice(-40):[],
+    contacts:Array.isArray(toSync.contacts)?toSync.contacts:[],
+  };
+};
+const clearLegacyRevOpsLocal=()=>{try{localStorage.removeItem(STORE);}catch{}};
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
@@ -162,6 +234,10 @@ function mergeServerState(base, server) {
     rfps:         mergeById(base.rfps,         server.rfps),
     invoices:     mergeById(base.invoices,     server.invoices),
     reorders:     mergeById(base.reorders,     server.reorders),
+    sequences:    mergeById(base.sequences,    server.sequences),
+    prospectAreas:mergeById(base.prospectAreas,server.prospectAreas),
+    appUsers:     mergeById(base.appUsers,     server.appUsers),
+    pendingBriefActions: mergeById(base.pendingBriefActions, server.pendingBriefActions),
     strategies:   mergeById(base.strategies,   server.strategies),
     brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
     socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
@@ -172,17 +248,20 @@ function mergeServerState(base, server) {
     alerts:       mergeById(base.alerts,       server.alerts),
     activity:     mergeById(base.activity,     server.activity),
     priceLists:   mergeById(base.priceLists,   server.priceLists),
+    competeIntel: {...(base.competeIntel||{}), ...(server.competeIntel||{})},
+    battlecards:  {...(base.battlecards||{}),  ...(server.battlecards||{})},
   };
 }
 
 function useStore() {
-  const saveTimer = useRef(null);
   const serverTimer = useRef(null);
   const pollTimer = useRef(null);
+  const hasLegacyLocalState = useRef(false);
   const [s, setRaw] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE);
       if (saved) {
+        hasLegacyLocalState.current = true;
         const p = JSON.parse(saved);
         return {...SEED,...p,
           deals:        Array.isArray(p.deals)        ? p.deals        : [],
@@ -229,28 +308,23 @@ function useStore() {
       .then(r => r.json())
       .then(d => {
         if (d.state && typeof d.state === "object") {
-          // Strip contacts + agentHistory from server state before merging:
-          // contacts come from Zoho sync (can be thousands of records — too large to round-trip
-          // through the server state), agentHistory is session-only.
-          const {contacts: _sc, agentHistory: _sah, ...serverClean} = d.state;
           setRaw(prev => {
-            const merged = mergeServerState(prev, serverClean);
-            // Defer localStorage write to avoid blocking the main thread
-            setTimeout(() => {
-              try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
-            }, 0);
-            // Push back stripped payload so server stays small
-            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = merged;
-            fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({state: toSync})}).catch(()=>{});
+            const merged = mergeServerState(prev, d.state);
+            if (hasLegacyLocalState.current) {
+              fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({state: serverStatePayload(merged)})})
+                .then(() => { hasLegacyLocalState.current = false; clearLegacyRevOpsLocal(); })
+                .catch(()=>{});
+            }
             return merged;
           });
         } else {
-          // Server empty — push local state up so other devices can see it (without contacts)
+          // Server empty — push the in-memory state up so other devices can see it.
           setRaw(prev => {
-            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = prev;
             fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({state: toSync})}).catch(()=>{});
+              body: JSON.stringify({state: serverStatePayload(prev)})})
+              .then(clearLegacyRevOpsLocal)
+              .catch(()=>{});
             return prev;
           });
         }
@@ -263,30 +337,36 @@ function useStore() {
   // Mount: initial sync
   useEffect(() => { pullFromServer(); }, []);
 
-  // Poll every 2 minutes — picks up changes from other devices/staff members
+  // Poll for changes from other devices/staff members; slow down while hidden.
   useEffect(() => {
-    pollTimer.current = setInterval(pullFromServer, 120000);
-    return () => clearInterval(pollTimer.current);
+    const schedule = () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      pollTimer.current = setInterval(pullFromServer, hidden ? 300000 : 120000);
+    };
+    const onVisibility = () => {
+      schedule();
+      if (document.visibilityState !== "hidden") pullFromServer();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [pullFromServer]);
 
-  const set = useCallback((fn) => {
+  const set = useCallback((fn, opts={}) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
-      // Save to localStorage (debounced) — use requestIdleCallback when available
-      // to avoid blocking the main thread on large state objects
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {} };
-        if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
-        else doSave();
-      }, 300);
-      // Debounced server sync — catches any state changes not covered by dispatch's immediate sync
-      // Strip contacts (synced from Zoho) and agentHistory (large, session-only) to keep payload small
+      if (opts.skipServerDebounce) return next;
+      // Debounced server sync — catches any state changes not covered by dispatch's immediate sync.
       if (serverTimer.current) clearTimeout(serverTimer.current);
       serverTimer.current = setTimeout(() => {
-        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({state: toSync})}).catch(()=>{});
+          body: JSON.stringify({state: serverStatePayload(next)})})
+          .then(clearLegacyRevOpsLocal)
+          .catch(()=>{});
       }, 2500);
       return next;
     });
@@ -603,28 +683,24 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
 
   const dispatch = useCallback((action, payload) => {
+    const shouldSyncNow = !SKIP_IMMEDIATE_SYNC.has(action);
     set(prev => {
       const next = reducer(prev, action, payload);
       // Sync to server immediately for every action that mutates persistent data.
       // Only skip high-frequency events (SCORE_CONTACT fires once per email send)
       // and bulk-replace actions that come from Zoho/external syncs — the 2.5s
       // debounced fallback in set() handles those.
-      const skipSync = new Set([
-        "LOGIN",                           // session-only, not persisted
-        "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
-        "UPDATE_CAMPAIGN",                 // fires per-email during batch sends; debounce covers it
-        "UPDATE_CAMPAIGN_TOUCH",           // fires on every keystroke in touch editor
-        "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
-      ]);
-      if (!skipSync.has(action)) {
-        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
+      if (shouldSyncNow) {
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({state: toSync})}).catch(()=>{});
+          body: JSON.stringify({state: serverStatePayload(next)})})
+          .then(clearLegacyRevOpsLocal)
+          .catch(()=>{});
       }
       return next;
-    });
+    }, { skipServerDebounce: shouldSyncNow });
   }, [set]);
 
   const toast = useCallback((msg, type="info") => {
@@ -633,7 +709,7 @@ export default function App() {
     setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 4000);
   }, []);
 
-  const cu = (() => {
+  const cu = useMemo(() => {
     if (s.currentUserId === "__owner__") {
       return { id:"__owner__", name:"Admin", email:"", initials:"AD", color:B.orange, role:"owner", isAdmin:true };
     }
@@ -642,9 +718,9 @@ export default function App() {
     const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
     const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
     return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
-  })();
+  }, [s.currentUserId, s.reps, s.appUsers]);
   const crmSyncRef = useRef(null);
-  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer};
+  const ctx = useMemo(() => ({s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer}), [s, dispatch, toast, cu, mod, lastSynced, syncing, pullFromServer]);
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
@@ -739,9 +815,32 @@ export default function App() {
     {id:"integrations",  icon:"⚡", label:"Integrations"},
     ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
+  ],[s.alerts,s.reorders,s.deals,s.contacts,cu?.isAdmin]);
 
-  usePrefetchPanels();
+  usePrefetchPanels(Boolean(s.currentUserId));
+
+  const searchResults = useMemo(() => {
+    const q = debouncedSearchQuery.trim().toLowerCase();
+    if (!showSearch || q.length < 2) return null;
+    const schoolText = v => (typeof v === "string" ? v : v?.name || "").toLowerCase();
+    const contacts = firstMatches(s.contacts, 4, c => (
+      (c.fullName||"").toLowerCase().includes(q) ||
+      (c.email||"").toLowerCase().includes(q) ||
+      schoolText(c.school).includes(q)
+    ));
+    const deals = firstMatches(s.deals, 4, d => (
+      (d.name||"").toLowerCase().includes(q) ||
+      (d.contact||"").toLowerCase().includes(q) ||
+      (d.school||"").toLowerCase().includes(q)
+    ));
+    const campaigns = firstMatches(s.campaigns, 4, c => (c.name||"").toLowerCase().includes(q));
+    const orders = firstMatches(s.orders, 4, o => (
+      (o.name||"").toLowerCase().includes(q) ||
+      (o.contact||"").toLowerCase().includes(q) ||
+      (o.school||"").toLowerCase().includes(q)
+    ));
+    return { q, contacts, deals, campaigns, orders, total:contacts.length+deals.length+campaigns.length+orders.length };
+  }, [showSearch, debouncedSearchQuery, s.contacts, s.deals, s.campaigns, s.orders]);
 
   if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
@@ -866,15 +965,13 @@ export default function App() {
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{navLabel(mod).toUpperCase()}</div>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
               {(()=>{
-                let st={};
-                try{st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");}catch{}
                 const intg = s.integrations||{};
                 return [
-                  ["Books",    st.books    || !!intg.zohoToken],
-                  ["CRM",      st.crm      || !!intg.zohoCrmToken],
-                  ["Campaigns",st.campaigns],
-                  ["Gmail",    st.gmail    || !!intg.gmailToken],
-                  ["Slack",    st.slack    !== false && !!intg.slackChannel],
+                  ["Books",    !!intg.zohoToken],
+                  ["CRM",      !!intg.zohoCrmToken],
+                  ["Campaigns",!!intg.campaigns],
+                  ["Gmail",    !!intg.gmailToken],
+                  ["Slack",    !!intg.slackChannel],
                 ].map(([l,v])=>(
                   <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
                     <div className={v?"":"blink"} style={{width:6,height:6,borderRadius:"50%",background:v?B.green:B.muted}}/>
@@ -910,7 +1007,7 @@ export default function App() {
           </header>
 
           <main style={{flex:1,overflowY:"auto",background:B.pageBg,display:"flex",flexDirection:"column"}}>
-            <ErrBound key={mod}>
+            <ErrBound resetKey={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
             {mod==="crm"          && <ModCRM/>}
@@ -920,6 +1017,7 @@ export default function App() {
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="social"      && <ModSocial/>}
+            {mod==="calendar"    && <ModCalendar/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
@@ -947,13 +1045,8 @@ export default function App() {
                 <input autoFocus value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Search contacts, deals, campaigns, orders..." style={{flex:1,border:"none",outline:"none",fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,background:"transparent"}}/>
                 <button onClick={()=>setShowSearch(false)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer",padding:"2px 6px"}}>✕</button>
               </div>
-              {searchQuery.trim().length>=2&&(()=>{
-                const q=searchQuery.trim().toLowerCase();
-                const contacts=(s.contacts||[]).filter(c=>(c.fullName||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase().includes(q)).slice(0,4);
-                const deals=(s.deals||[]).filter(d=>(d.name||"").toLowerCase().includes(q)||(d.contact||"").toLowerCase().includes(q)||(d.school||"").toLowerCase().includes(q)).slice(0,4);
-                const campaigns=(s.campaigns||[]).filter(c=>(c.name||"").toLowerCase().includes(q)).slice(0,4);
-                const orders=(s.orders||[]).filter(o=>(o.name||"").toLowerCase().includes(q)||(o.contact||"").toLowerCase().includes(q)||(o.school||"").toLowerCase().includes(q)).slice(0,4);
-                const total=contacts.length+deals.length+campaigns.length+orders.length;
+              {searchResults&&(()=>{
+                const {contacts, deals, campaigns, orders, total} = searchResults;
                 if(!total) return <div style={{padding:"28px 16px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No results for "{searchQuery}"</div>;
                 const Grp=({title,items,go,getLabel,getSub})=>items.length>0?(
                   <div>
@@ -1024,7 +1117,7 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
       <div className="fu" style={{width:360,background:B.white,border:`1px solid ${B.border}`,borderRadius:12,padding:30,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
         <div style={{textAlign:"center",marginBottom:26}}>
           <div style={{width:50,height:50,background:B.orange,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
@@ -1088,7 +1181,7 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
-const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+const GBtn=React.memo(function GBtn({children,onClick,disabled,style={}}){return <button onClick={onClick} disabled={disabled} style={{background:B.white,color:disabled?B.muted:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
@@ -1713,7 +1806,7 @@ function ModHome() {
         customer_name:action.customer_name,
         contact_person:action.contact_person||"",
         email:action.email||"",
-        line_items:(action.line_items||[]).map(li=>({name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0})),
+        line_items:(action.line_items||[]).map(li=>({item_id:li.item_id||undefined,name:li.name,description:li.description||"",quantity:Number(li.quantity)||1,rate:Number(li.rate)||0,unit:li.unit||undefined})),
         notes:action.notes||"",
         send_email:!!(action.send_email&&action.email),
       })});
@@ -1809,27 +1902,50 @@ function ModHome() {
     const apiMsgs=nextHistory.slice(-20).map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     // Truncate before sending — large Redux stores can exceed Vercel's 4.5MB body limit
     const allContacts=s.contacts||[];
-    const scoredContacts=[...allContacts].filter(c=>(c.score||0)>0).sort((a,b)=>(b.score||0)-(a.score||0)).slice(0,40);
-    const unscoredContacts=allContacts.filter(c=>!(c.score||0)).slice(0,20);
+    const ctxRows=(rows,aliases,limit)=>rankForAgentContext(rows,msg,aliases,limit);
     const localContext={
-      deals:(s.deals||[]).slice(0,60),
-      contacts:[...scoredContacts,...unscoredContacts],
-      rfps:(s.rfps||[]).slice(0,20),
-      invoices:(s.invoices||[]).slice(0,20),
+      deals:ctxRows(s.deals||[],"deal pipeline opportunity quote sales school",60),
+      contacts:ctxRows(allContacts,"lead contact prospect customer coach athletic director school",120),
+      rfps:ctxRows(s.rfps||[],"rfp bid proposal due product school",20),
+      invoices:ctxRows(s.invoices||[],"invoice invoices zoho books paid overdue balance sale sales customer product item",120).map(inv=>({
+        id:inv.id,zohoId:inv.zohoId,number:inv.number,customer:inv.customer,customerId:inv.customerId,
+        status:inv.status,date:inv.date,dueDate:inv.dueDate,total:inv.total||0,balance:inv.balance||0,source:inv.source||"",
+        items:(inv.items||[]).slice(0,12).map(it=>({name:it.name||it.item_name||"",qty:it.qty||it.quantity||0,rate:it.rate||0,total:it.total||it.item_total||0})),
+      })),
+      orders:ctxRows(s.orders||[],"order orders store sale sales purchase fulfillment customer product item email",120).map(o=>({
+        id:o.id,name:o.name,contact:o.contact,contactId:o.contactId,school:o.school,email:o.email,
+        value:o.value||0,stage:o.stage,source:o.source||"",createdAt:o.createdAt,updatedAt:o.updatedAt,
+        invoiceNumber:o.invoiceNumber,zohoInvoiceId:o.zohoInvoiceId,notes:o.notes||"",
+        items:(o.items||[]).slice(0,12).map(it=>({name:it.name||"",description:it.description||"",qty:it.qty||1,rate:it.rate||0})),
+      })),
+      reorders:ctxRows(s.reorders||[],"reorder reorders restock renewal previous order last order customer product season",120).map(r=>({
+        id:r.id,school:r.school,contact:r.contact,state:r.state,sport:r.sport,lastOrderDate:r.lastOrderDate,
+        lastItems:r.lastItems||[],lastOrderValue:r.lastOrderValue||0,status:r.status,source:r.source||"",
+      })),
+      campaigns:ctxRows(s.campaigns||[],"campaign campaigns sequence outreach email nurture enrollment touch",30).map(c=>({
+        id:c.id,name:c.name,product:c.product,status:c.status,createdAt:c.createdAt,scheduledSendAt:c.scheduledSendAt,
+        enrollmentCount:(c.enrollments||[]).length,
+        activeCount:(c.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(c.touches||[]).slice(0,5).map(t=>({subject:t.subject,delay:t.delay,day:t.day,channel:t.channel})),
+        notes:c.notes||"",
+      })),
       sequences:(s.sequences||[]).slice(0,10).map(seq=>({
         id:seq.id,name:seq.name,status:seq.status,
         enrollmentCount:(seq.enrollments||[]).length,
         activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
         touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
       })),
+      activity:(s.activity||[]).slice(0,100).map(a=>({id:a.id,ts:a.ts,userId:a.userId,msg:a.msg||a.note||a.action||""})),
       priceLists:(s.priceLists||[]).map(pl=>({
         id:pl.id,
         name:pl.name,
         type:pl.type,
+        supplierName:pl.supplierName||"",
         competitorName:pl.competitorName||"",
         source:pl.source||"",
+        notes:pl.notes||"",
         itemCount:(pl.items||[]).length,
-        items:(pl.items||[]).slice(0,50).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0})),
+        items:rankForAgentContext(pl.items||[],msg,`${pl.name||""} ${pl.supplierName||""} ${pl.competitorName||""} ${pl.notes||""}`,120).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0,notes:it.notes||""})),
       })),
       competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
       brandVoice:`ST1 owns 5 unoccupied brand positions: (1) WARM CONFIDENCE — approachable, teal/earth tone, zero competitors here; (2) ATHLETE IDENTITY — speak to the kid, not the admin; (3) HUMAN CONTACT — "Someone picks up the phone" — no one else claims this; (4) ALL-SPORT BREADTH — one contact, every sport your school runs; (5) EXCLUSIVE CULTURE — graphic tee drops as named collections (I Hit Dingers, Oppo Taco). VOICE: warm, direct, short sentences, athlete-aware. Sign as: ST1 Sports | matt@st1sports.com | 719-256-0275 | st1sports.com. AVOID: "2-week turnaround", "no minimums", "lowest prices", "hope this finds you well", generic inspiration, social proof as personality, corporate we-language.`,
@@ -2459,41 +2575,13 @@ function TalkTrack({onClose,linkedContact}){
     fetch("/api/admin/questions")
       .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
       .catch(()=>{});
-    const existing=sessionStorage.getItem("ttSessionId");
-    if(existing){
-      fetch(`/api/sessions/${existing}?repId=${cu?.id||""}`)
-        .then(r=>r.ok?r.json():null)
-        .then(d=>{
-          if(d?.session){
-            const sess=d.session;
-            setSessionId(sess.id);sessRef.current=sess.id;
-            setAnswers(sess.answers||{});
-            setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
-            if(sess.sponsorshipGuaranteedMin!=null) setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax});
-            if(sess.schoolClass||sess.numAthletes||sess.numSports) setCalcInputs(ci=>({
-              schoolClass:sess.schoolClass||ci.schoolClass,
-              numSports:String(sess.numSports||ci.numSports||""),
-              numAthletes:String(sess.numAthletes||ci.numAthletes||""),
-              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:ci.hasOnlineStore,
-              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:ci.hasBoosterClub,
-            }));
-            if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
-              setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
-            }
-          } else {
-            doCreateSession();
-          }
-        }).catch(()=>doCreateSession());
-    } else {
-      doCreateSession();
-    }
+    doCreateSession();
   },[]);
 
   const doCreateSession=()=>{
     fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
       .then(r=>r.json()).then(d=>{
         setSessionId(d.session.id);sessRef.current=d.session.id;
-        sessionStorage.setItem("ttSessionId",d.session.id);
       }).catch(()=>{});
   };
 
@@ -2575,7 +2663,7 @@ function TalkTrack({onClose,linkedContact}){
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             {saving&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>saving…</span>}
-            <GBtn sm onClick={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}>✕ EXIT</GBtn>
+            <GBtn sm onClick={onClose}>✕ EXIT</GBtn>
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center"}}>
@@ -2644,7 +2732,6 @@ function TalkTrack({onClose,linkedContact}){
             ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)}>NEXT →</OBtn>
             :<OBtn col={B.green} onClick={()=>{
               if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
-              sessionStorage.removeItem("ttSessionId");
               // Sync completion + pains back to Redux + Zoho CRM
               if(linked?.id){
                 const now=new Date().toISOString();
@@ -5290,9 +5377,15 @@ function ModProspecting() {
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
   const [editing,setEditing]=useState(null);
+  const areasSigRef=useRef("");
 
   // Sync areas to store whenever they change
-  useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
+  useEffect(()=>{
+    const sig=JSON.stringify((areas||[]).map(a=>({id:a.id,name:a.name,regions:a.regions,states:a.states,sports:a.sports,orgType:a.orgType,roles:a.roles,maxOrgs:a.maxOrgs,active:a.active})));
+    if(sig===areasSigRef.current) return;
+    areasSigRef.current=sig;
+    dispatch("SET_PROSPECT_AREAS",areas);
+  },[areas,dispatch]);
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
   const importFileRef=useRef();
@@ -7190,7 +7283,7 @@ function ModMarketing() {
   useEffect(()=>{batchSentMapRef.current=batchSentMap;},[batchSentMap]);
   useEffect(()=>{sendingRef.current=sending;},[sending]);
   // 15-second ticker for countdown display
-  useEffect(()=>{const id=setInterval(()=>setNowTick(Date.now()),15000);return()=>clearInterval(id);},[]);
+  useEffect(()=>{const id=setInterval(()=>{if(document.visibilityState!=="hidden")setNowTick(Date.now());},15000);return()=>clearInterval(id);},[]);
   // Scheduled send engine — fires due batches during Mon-Fri 9am-5pm
   useEffect(()=>{
     const isWorkingHours=()=>{const d=new Date();const h=d.getHours();const wd=d.getDay();return wd>=1&&wd<=5&&h>=9&&h<17;};
@@ -9593,8 +9686,8 @@ function ModMarketing() {
                       dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches});
                       // Immediate DB save — don't wait for debounce (set-and-forget)
                       const _uc=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches}:c);
-                      const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc})})})
+                        .then(clearLegacyRevOpsLocal).catch(()=>{});
                     };
 
                     const handleScheduleClick=()=>{
@@ -9756,8 +9849,8 @@ function ModMarketing() {
                                 const newScheduledBatches2={...(selCamp.scheduledBatches||{}),...campBatches};
                                 dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2});
                                 const _uc2=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2}:c);
-                                const{currentUserId:_cid2,contacts:_cc2,agentHistory:_ah2,..._ts2}={...s,campaigns:_uc2};
-                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts2})}).catch(()=>{});
+                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc2})})})
+                                  .then(clearLegacyRevOpsLocal).catch(()=>{});
                               };
                               const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
                               const clearSchedule=()=>{
@@ -9904,8 +9997,8 @@ function ModMarketing() {
                                           const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
                                           dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
                                           const _uc=(campaignsRef.current||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:ns,sentBatches:ns2}:c);
-                                          const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc})})})
+                                            .then(clearLegacyRevOpsLocal).catch(()=>{});
                                         }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
                                           ↺ RESEND AT 9AM MT
                                         </button>
@@ -11005,6 +11098,8 @@ function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
   const [genRunning,setGenRunning]=useState(false);
   const [showModal,setShowModal]=useState(false);
 
+  useEffect(()=>{setBgImg(value||"");},[value]);
+
   const addText=()=>{
     const id=mkId();
     setLayers(ls=>[...ls,{id,type:"text",x:Math.round(CW/2-80),y:CH-80,w:160,h:44,content:"ST1 Sports",fontSize:22,color:"#FFFFFF",bgColor:"rgba(0,0,0,0.55)",bgPad:6,fontWeight:"bold"}]);
@@ -11272,58 +11367,126 @@ function ModSocial() {
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
-  const [editingPost,setEditingPost]=useState(null); // post being edited in modal
-  const [syncingStats,setSyncingStats]=useState(false);
+  const [publerSetup,setPublerSetup]=useState({loading:true,error:"",profiles:[]});
 
   const campaigns=s.campaigns||[];
 
   // Combine standalone + campaign social posts (scheduled drafts + published)
-  const standalonePosts=(s.socialPosts||[]).map(p=>({...p,_source:"standalone"}));
+  const stripPostMeta=p=>{const{_source,_campaignId,_campaignName,...clean}=p||{};return clean;};
+  const campaignPostIds=new Set(campaigns.flatMap(c=>(c.socialPosts||[]).map(p=>p.id)));
+  const standalonePosts=(s.socialPosts||[])
+    .filter(p=>!p.campaignId||!campaignPostIds.has(p.id))
+    .map(p=>({...p,_source:"standalone"}));
   const campaignDraftPosts=campaigns.flatMap(c=>
     (c.socialDrafts||[])
       .filter(p=>(p.scheduledDate||p.date))
-      .map(p=>({...p,date:p.scheduledDate||p.date,status:"scheduled",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
+      .map(p=>({...p,date:p.scheduledDate||p.date,status:"draft",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
   );
   const campaignPosts=campaigns.flatMap(c=>
     (c.socialPosts||[]).map(p=>({...p,_source:"campaign",_campaignId:c.id,_campaignName:c.name}))
   );
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
+  const upsertCampaignPost=(campId,post)=>{
+    const camp=campaigns.find(c=>c.id===campId);
+    if(!camp)return;
+    const clean=stripPostMeta({...post,campaignId:campId});
+    const posts=(camp.socialPosts||[]).filter(p=>p.id!==clean.id);
+    dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...posts,clean]});
+  };
+  const updatePostById=(postId,updates={})=>{
+    dispatch("UPDATE_SOCIAL_POST",{id:postId,...updates});
+    campaigns.forEach(c=>{
+      if((c.socialPosts||[]).some(p=>p.id===postId)){
+        dispatch("UPDATE_CAMPAIGN",{...c,socialPosts:(c.socialPosts||[]).map(p=>p.id===postId?{...p,...updates}:p)});
+      }
+    });
+  };
+  const updatePostRecord=(post,updates={})=>{
+    const updated={...stripPostMeta(post),...updates};
+    const campId=post?._campaignId||post?.campaignId||"";
+    if(campId) upsertCampaignPost(campId,updated);
+    if(!campId||post?._source==="standalone") dispatch("UPDATE_SOCIAL_POST",{id:updated.id,...updates});
+  };
+  const deletePostEverywhere=(post)=>{
+    const postId=post?.id;
+    if(!postId)return;
+    dispatch("DELETE_SOCIAL_POST",postId);
+    campaigns.forEach(c=>{
+      if((c.socialPosts||[]).some(p=>p.id===postId)){
+        dispatch("UPDATE_CAMPAIGN",{...c,socialPosts:(c.socialPosts||[]).filter(p=>p.id!==postId)});
+      }
+    });
+  };
 
   const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
+  const configuredPublerPlatforms=new Set((publerSetup.profiles||[]).filter(p=>p.connected!==false).map(p=>p.service));
+  const missingSelectedPlatforms=(platforms||[]).filter(p=>configuredPublerPlatforms.size>0&&!configuredPublerPlatforms.has(p));
+  const publerReady=!publerSetup.loading&&!publerSetup.error;
+  const imageWillBeSkipped=!!imageUrl&&(!imageUrl.startsWith("https://")||imageUrl.startsWith("data:"));
+
+  useEffect(()=>{
+    let cancelled=false;
+    const readApiJson=async(r)=>{
+      const text=await r.text();
+      try{return JSON.parse(text);}catch{
+        return {error: r.status===404 ? "Social API is not available here — deploy or run vercel dev with PUBLER_API_KEY." : `Publer API unavailable (${r.status||"network"})`};
+      }
+    };
+    const loadPublerSetup=async()=>{
+      try{
+        const testRes=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})});
+        const test=await readApiJson(testRes);
+        if(cancelled)return;
+        if(test.error||test.ok===false){setPublerSetup({loading:false,error:test.error||"Publer connection failed",profiles:[]});return;}
+        const profRes=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})});
+        const prof=await readApiJson(profRes);
+        if(cancelled)return;
+        setPublerSetup({loading:false,error:prof.error||"",profiles:Array.isArray(prof.profiles)?prof.profiles:[]});
+      }catch(e){
+        if(!cancelled)setPublerSetup({loading:false,error:e.message,profiles:[]});
+      }
+    };
+    loadPublerSetup();
+    return()=>{cancelled=true;};
+  },[]);
 
   const generateCaption=async()=>{
     setGenRunning(true);
-    const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
-    const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
-    const target=lengthTargets[postLength];
-    const effectiveChars=Math.min(target.chars,hardLimit);
-    const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
-    const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
-    const direction=caption.trim();
-    const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
-    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-    const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
-    const prompt=direction
-      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
-    const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
-    if(r) setCaption(r);
-    setGenRunning(false);
+    try{
+      const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
+      const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
+      const target=lengthTargets[postLength];
+      const effectiveChars=Math.min(target.chars,hardLimit);
+      const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
+      const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
+      const direction=caption.trim();
+      const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
+      const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+      const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
+      const prompt=direction
+        ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+        :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
+      const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
+      if(r) setCaption(r);
+    }catch(e){toast(`AI writing failed: ${e.message}`,"error");}
+    finally{setGenRunning(false);}
   };
 
   // Generate separate per-platform captions with hashtags
   const generatePerPlatform=async()=>{
     if(!platforms.length) return;
     setGenRunning(true); setPlatformVariants(null);
-    const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
-    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-    const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
-    const r=await aiCall(task,{tokens:900});
-    if(r){
-      try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
-    }
-    setGenRunning(false);
+    try{
+      const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
+      const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+      const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
+      const r=await aiCall(task,{tokens:900});
+      if(r){
+        try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
+      }
+    }catch(e){toast(`Platform copy failed: ${e.message}`,"error");}
+    finally{setGenRunning(false);}
   };
 
   // AI image generator: topic+mood → AI prompt → Ideogram image
@@ -11346,7 +11509,9 @@ function ModSocial() {
   };
 
   // Poll Publer job status until done, then update post state with result
-  const checkPublerJob=async(postId,jobId,isScheduled)=>{
+  const checkPublerJob=async(postRef,jobId,isScheduled)=>{
+    const postId=typeof postRef==="object"?postRef.id:postRef;
+    const applyUpdate=updates=>typeof postRef==="object"?updatePostRecord(postRef,updates):updatePostById(postId,updates);
     for(let i=0;i<8;i++){
       await new Promise(r=>setTimeout(r,i===0?3000:4000));
       try{
@@ -11355,10 +11520,10 @@ function ModSocial() {
         if(d.done){
           if(d.failures?.length){
             const msg=d.failures.join(" | ");
-            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"local_only",publerError:msg});
+            applyUpdate({status:"local_only",publerError:msg});
             toast(`Publer failed: ${msg}`,"error");
           }else{
-            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"scheduled",publerError:null});
+            applyUpdate({status:isScheduled?"scheduled":"published",publerError:null});
             toast(isScheduled?"Scheduled in Publer — check your calendar!":"Queued in Publer — posts in ~2 min, check your calendar!","success");
           }
           return;
@@ -11366,13 +11531,28 @@ function ModSocial() {
       }catch{}
     }
     // Timed out — assume success if we got a job_id (Publer queued it)
-    dispatch("UPDATE_SOCIAL_POST",{id:postId,status:isScheduled?"scheduled":"published",publerError:null});
+    applyUpdate({status:isScheduled?"scheduled":"published",publerError:null});
     toast("Sent to Publer (confirm in your Publer calendar)","success");
+  };
+
+  const buildSocialPost=(status="draft")=>({id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status,postType,campaignId:linkedCampId||""});
+  const clearComposer=()=>{setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");};
+  const saveDraft=()=>{
+    if(!caption.trim()){toast("Caption is required","error");return;}
+    const post=buildSocialPost("draft");
+    if(linkedCampId)upsertCampaignPost(linkedCampId,post);
+    else dispatch("ADD_SOCIAL_POST",post);
+    clearComposer();
+    setTab("posts");
+    toast("Draft saved","success");
   };
 
   const submitPost=async()=>{
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
+    if(publerSetup.loading){toast("Checking Publer connection — try again in a moment","info");return;}
+    if(publerSetup.error){toast(`Publer is not connected: ${publerSetup.error}`,"error");return;}
+    if(missingSelectedPlatforms.length){toast(`No Publer account connected for: ${missingSelectedPlatforms.join(", ")}`,"error");return;}
     if(scheduleAt){
       const tzOff=new Date().getTimezoneOffset();
       const tzSign=tzOff<=0?"+":"-";
@@ -11391,12 +11571,10 @@ function ModSocial() {
     const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
     const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`:null;
-    const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
-    dispatch("ADD_SOCIAL_POST",post);
+    const post=buildSocialPost("pending");
     if(linkedCampId){
-      const camp=campaigns.find(c=>c.id===linkedCampId);
-      if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-    }
+      upsertCampaignPost(linkedCampId,post);
+    }else dispatch("ADD_SOCIAL_POST",post);
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
@@ -11404,23 +11582,23 @@ function ModSocial() {
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
         const jobId=data.postIds?.[0];
-        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
-        if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
+        updatePostRecord(post,{status:"scheduled",publerPostIds:data.postIds||[],publerError:null});
         if(data._missing) toast(`⚠ ${data._missing}`,"warn");
+        if(data._warning) toast(`⚠ ${data._warning}`,"warn");
         toast("Sent to Publer — checking result…","info");
         // Poll job status in background to confirm success or surface failure
-        if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);
-        else{dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
+        if(jobId) checkPublerJob({...post,publerPostIds:data.postIds||[]},jobId,!!scheduleAt);
+        else{updatePostRecord(post,{status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
       }else{
         const errMsg=data.error||"Publer rejected the post";
-        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
-        toast(`Saved locally — Publer failed: ${errMsg.slice(0,120)}`,"warn");
+        updatePostRecord(post,{status:"local_only",publerError:errMsg});
+        toast(`Saved in app — Publer failed: ${errMsg.slice(0,120)}`,"warn");
       }
     }catch(err){
-      dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
-      toast(`Saved locally — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
+      updatePostRecord(post,{status:"local_only",publerError:err.message});
+      toast(`Saved in app — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
     }
-    setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+    clearComposer();
     setTab("posts");
     setPosting(false);
   };
@@ -11455,8 +11633,8 @@ function ModSocial() {
           <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
             <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
-              {["all","scheduled","published","draft"].map(st=>(
-                <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st.toUpperCase()}</button>
+              {["all","pending","scheduled","published","local_only","draft"].map(st=>(
+                <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st==="local_only"?"FAILED":st.toUpperCase()}</button>
               ))}
             </div>
             <select value={filterPlatform} onChange={e=>setFilterPlatform(e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"5px 8px",fontSize:11,color:B.text}}>
@@ -11474,7 +11652,7 @@ function ModSocial() {
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filtered.map(p=>{
                 const isLocalOnly=p.status==="local_only";
-                const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
+                const sc={pending:B.yellow,scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
                 const retryPost=async()=>{
                   if(!(p.caption||"").trim()){toast("No caption to send","error");return;}
                   try{
@@ -11493,17 +11671,17 @@ function ModSocial() {
                     if(ok){
                       const jobId=data.postIds?.[0];
                       const isFakeId=jobId?.startsWith("publer-submitted-");
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
+                      updatePostById(p.id,{status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
                       if(isFakeId||!jobId){
                         toast("Sent to Publer — check your calendar to confirm","success");
                       }else{
                         toast("Sent to Publer — checking result…","info");
-                        checkPublerJob(p.id,jobId,false);
+                        checkPublerJob(p,jobId,false);
                       }
                     }else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:msg});
+                      updatePostById(p.id,{status:"local_only",publerError:msg});
                       toast(msg,"error");
                     }
                   }catch(e){toast("Publer unreachable: "+e.message,"error");}
@@ -11539,7 +11717,7 @@ function ModSocial() {
                       return;
                     }
                   }
-                  dispatch("UPDATE_SOCIAL_POST",{id:p.id,caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
+                  updatePostRecord(p,{caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
                   setEditingPostId(null);
                   toast("Post updated — click Retry to re-send to Publer","info");
                 };
@@ -11580,9 +11758,7 @@ function ModSocial() {
                       </div>
                       <div style={{display:"flex",gap:4,flexShrink:0}}>
                         <button onClick={()=>{if(isEditing){setEditingPostId(null);}else{setEditingPostId(p.id);setEditDraft({caption:p.caption||"",platforms:p.platforms||[],scheduleAt:p.date||"",scheduleTime:p.time||"09:00"});}}} style={{background:isEditing?"none":B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{isEditing?"✕":"EDIT"}</button>
-                        {p._source==="standalone"&&(
-                          <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
-                        )}
+                        <button onClick={()=>{if(window.confirm("Delete this post?"))deletePostEverywhere(p);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
                       </div>
                     </div>
                     {isEditing&&(
@@ -11614,6 +11790,14 @@ function ModSocial() {
         <div style={{maxWidth:640}}>
           <div className="card" style={{padding:22}}>
             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:18}}>NEW POST</div>
+            <div style={{background:publerReady?B.greenBg:publerSetup.loading?B.surface:B.redBg,border:`1px solid ${publerReady?B.green:publerSetup.loading?B.border:B.red}30`,borderRadius:6,padding:"9px 12px",marginBottom:16,fontFamily:"'Lexend',sans-serif",fontSize:11,color:publerReady?B.green:publerSetup.loading?B.muted:B.red,lineHeight:1.5}}>
+              {publerSetup.loading
+                ?"Checking Publer connection..."
+                :publerSetup.error
+                  ?`Publer not connected: ${publerSetup.error}`
+                  :`Publer ready · ${(publerSetup.profiles||[]).length} connected account${(publerSetup.profiles||[]).length===1?"":"s"}`}
+              {missingSelectedPlatforms.length>0&&<div style={{marginTop:4,color:B.red}}>Missing selected account: {missingSelectedPlatforms.join(", ")}</div>}
+            </div>
             {/* Platforms */}
             <div style={{marginBottom:16}}>
               <Lbl s={{marginBottom:8}}>PLATFORMS</Lbl>
@@ -11752,6 +11936,11 @@ function ModSocial() {
               )}
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
+              {imageWillBeSkipped&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow,background:B.yellowBg,border:`1px solid ${B.yellow}30`,borderRadius:4,padding:"7px 9px",marginTop:8,lineHeight:1.4}}>
+                  This image is not a public HTTPS URL, so Publer will receive a text-only post. Use an AI-generated hosted image or paste a hosted image URL.
+                </div>
+              )}
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
@@ -11790,9 +11979,12 @@ function ModSocial() {
               </div>
             </div>
             {!platforms.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:10}}>Select at least one platform</div>}
-            <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length} style={{width:"100%",justifyContent:"center"}}>
-              {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
-            </OBtn>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <GBtn onClick={saveDraft} disabled={posting||!caption.trim()} style={{justifyContent:"center"}}>SAVE DRAFT</GBtn>
+              <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length||publerSetup.loading||!!publerSetup.error||missingSelectedPlatforms.length>0} style={{width:"100%",justifyContent:"center"}}>
+                {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
+              </OBtn>
+            </div>
           </div>
         </div>
       )}
@@ -12140,8 +12332,7 @@ function ModAds() {
     <div style={{padding:"22px 26px"}}>
       <PH title="AD ENGINE" sub="Product campaigns, AI image generation, Meta ad copy, and asset management" action={(()=>{
           try {
-            const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-            const contacts = Array.isArray(store.contacts)?store.contacts:[];
+            const contacts = Array.isArray(s.contacts)?s.contacts:[];
             const now = Date.now();
             const cold = contacts.filter(c=>{
               if(!c.email)return false;
@@ -13440,9 +13631,46 @@ function ModAgent() {
     const userEntry={role:"user",content:msg,ts:Date.now()};
     const nextHistory=[...history,userEntry];
     setHistory(nextHistory);
+    const ctxRows=(rows,aliases,limit)=>rankForAgentContext(rows,msg,aliases,limit);
     const localContext={
-      deals:s.deals||[],contacts:s.contacts||[],rfps:s.rfps||[],
-      invoices:s.invoices||[],sequences:s.sequences||[]
+      deals:ctxRows(s.deals||[],"deal pipeline opportunity quote sales school",100),
+      contacts:ctxRows(s.contacts||[],"lead contact prospect customer coach athletic director school",160),
+      rfps:ctxRows(s.rfps||[],"rfp bid proposal due product school",40),
+      invoices:ctxRows(s.invoices||[],"invoice invoices zoho books paid overdue balance sale sales customer product item",120).map(inv=>({
+        id:inv.id,zohoId:inv.zohoId,number:inv.number,customer:inv.customer,customerId:inv.customerId,
+        status:inv.status,date:inv.date,dueDate:inv.dueDate,total:inv.total||0,balance:inv.balance||0,source:inv.source||"",
+        items:(inv.items||[]).slice(0,12).map(it=>({name:it.name||it.item_name||"",qty:it.qty||it.quantity||0,rate:it.rate||0,total:it.total||it.item_total||0})),
+      })),
+      orders:ctxRows(s.orders||[],"order orders store sale sales purchase fulfillment customer product item email",120).map(o=>({
+        id:o.id,name:o.name,contact:o.contact,contactId:o.contactId,school:o.school,email:o.email,
+        value:o.value||0,stage:o.stage,source:o.source||"",createdAt:o.createdAt,updatedAt:o.updatedAt,
+        invoiceNumber:o.invoiceNumber,zohoInvoiceId:o.zohoInvoiceId,notes:o.notes||"",
+        items:(o.items||[]).slice(0,12).map(it=>({name:it.name||"",description:it.description||"",qty:it.qty||1,rate:it.rate||0})),
+      })),
+      reorders:ctxRows(s.reorders||[],"reorder reorders restock renewal previous order last order customer product season",120).map(r=>({
+        id:r.id,school:r.school,contact:r.contact,state:r.state,sport:r.sport,lastOrderDate:r.lastOrderDate,
+        lastItems:r.lastItems||[],lastOrderValue:r.lastOrderValue||0,status:r.status,source:r.source||"",
+      })),
+      campaigns:ctxRows(s.campaigns||[],"campaign campaigns sequence outreach email nurture enrollment touch",30).map(c=>({
+        id:c.id,name:c.name,product:c.product,status:c.status,createdAt:c.createdAt,scheduledSendAt:c.scheduledSendAt,
+        enrollmentCount:(c.enrollments||[]).length,
+        activeCount:(c.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(c.touches||[]).slice(0,5).map(t=>({subject:t.subject,delay:t.delay,day:t.day,channel:t.channel})),
+        notes:c.notes||"",
+      })),
+      sequences:(s.sequences||[]).slice(0,20).map(seq=>({
+        id:seq.id,name:seq.name,status:seq.status,
+        enrollmentCount:(seq.enrollments||[]).length,
+        activeCount:(seq.enrollments||[]).filter(e=>e.status==="active").length,
+        touches:(seq.touches||[]).map(t=>({subject:t.subject,day:t.day})),
+      })),
+      activity:(s.activity||[]).slice(0,100).map(a=>({id:a.id,ts:a.ts,userId:a.userId,msg:a.msg||a.note||a.action||""})),
+      priceLists:(s.priceLists||[]).map(pl=>({
+        id:pl.id,name:pl.name,type:pl.type,supplierName:pl.supplierName||"",competitorName:pl.competitorName||"",
+        source:pl.source||"",notes:pl.notes||"",itemCount:(pl.items||[]).length,
+        items:rankForAgentContext(pl.items||[],msg,`${pl.name||""} ${pl.supplierName||""} ${pl.competitorName||""} ${pl.notes||""}`,120).map(it=>({name:it.name,sku:it.sku||"",category:it.category||"",unit:it.unit||"",cost:it.cost||0,price:it.price||0,map:it.map||0,notes:it.notes||""})),
+      })),
+      competeIntel:Object.entries(s.competeIntel||{}).slice(0,10).map(([name,text])=>({name,summary:(text||"").slice(0,400)})),
     };
     const apiMsgs=nextHistory.map(m=>({role:m.role==="user"?"user":"assistant",content:m.role==="user"?m.content:(m.raw||m.content||"")}));
     try {
@@ -15353,7 +15581,7 @@ function ModSettings() {
 
       <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
         <Lbl c={B.green} s={{marginBottom:11}}>Data Management</Lbl>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All data persists in your browser's localStorage across sessions. Export a backup before clearing.</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All durable RevOps data is stored in the shared server state and syncs across devices. Export a backup before clearing.</div>
         <div style={{display:"flex",gap:7}}>
           <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
           <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>

@@ -16,7 +16,7 @@ export const config = {
   api: { bodyParser: { sizeLimit: "8mb" } },
 };
 
-// Fields that should never be synced (local-session only)
+// Fields that should never be synced (session-only)
 const EXCLUDE_KEYS = new Set(["currentUserId"]);
 
 function sanitize(state) {
@@ -24,7 +24,8 @@ function sanitize(state) {
   const out = {};
   for (const [k, v] of Object.entries(state)) {
     if (EXCLUDE_KEYS.has(k)) continue;
-    // Trim agent history to last 40 to keep payload reasonable
+    // Trim agent history to last 40 to keep payload reasonable. Chat sessions
+    // are also persisted separately through /api/chat.
     if (k === "agentHistory" && Array.isArray(v)) {
       out[k] = v.slice(-40);
       continue;

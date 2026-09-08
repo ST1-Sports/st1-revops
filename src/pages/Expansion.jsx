@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { loadServerState, updateServerState, mergeById } from "../lib/serverState.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -337,7 +338,48 @@ Return JSON:
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-export default function ExpansionPlaybook({ s={}, dispatch=()=>{}, toast=()=>{} }) {
+export default function ExpansionPlaybook({ s: incomingState={}, dispatch: incomingDispatch=()=>{}, toast=()=>{} }) {
+  const hasExternalState = Array.isArray(incomingState.strategies);
+  const [standaloneState, setStandaloneState] = useState({ strategies:[], contacts:[], deals:[] });
+  const saveTimerRef = useRef(null);
+  const persistStandaloneState = useCallback((next, immediate=false) => {
+    clearTimeout(saveTimerRef.current);
+    const save = () => updateServerState(state => ({
+      ...state,
+      strategies: mergeById(state.strategies, next.strategies),
+      activity: mergeById(state.activity, next.activity),
+    })).catch(() => {});
+    if (immediate) save();
+    else saveTimerRef.current = setTimeout(save, 700);
+  }, []);
+  const standaloneDispatch = useCallback((type, payload={}) => {
+    setStandaloneState(prev => {
+      let next = prev;
+      if (type === "ADD_STRATEGY") {
+        next = { ...prev, strategies: mergeById(prev.strategies, [payload]) };
+      } else if (type === "UPDATE_STRATEGY") {
+        next = { ...prev, strategies: (prev.strategies||[]).map(x => x.id === payload.id ? { ...x, ...payload } : x) };
+      } else if (type === "LOG") {
+        next = { ...prev, activity: [{ id:`act_${Date.now()}`, ts:new Date().toISOString(), ...(payload||{}) }, ...(prev.activity||[])].slice(0, 100) };
+      }
+      persistStandaloneState(next, payload?.status === "done" || payload?.status === "error");
+      return next;
+    });
+  }, [persistStandaloneState]);
+  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
+  useEffect(() => {
+    if (hasExternalState) return;
+    loadServerState().then(state => {
+      setStandaloneState({
+        strategies: Array.isArray(state.strategies) ? state.strategies : [],
+        contacts: Array.isArray(state.contacts) ? state.contacts : [],
+        deals: Array.isArray(state.deals) ? state.deals : [],
+        activity: Array.isArray(state.activity) ? state.activity : [],
+      });
+    }).catch(() => {});
+  }, [hasExternalState]);
+  const s = hasExternalState ? incomingState : standaloneState;
+  const dispatch = hasExternalState ? incomingDispatch : standaloneDispatch;
   const [selectedState, setSelectedState] = useState("WI");
   const [config, setConfig] = useState({
     state:"WI", sports:["Track & Field"], priority:PRIORITIES[0],
@@ -555,7 +597,6 @@ export default function ExpansionPlaybook({ s={}, dispatch=()=>{}, toast=()=>{} 
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
         button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}

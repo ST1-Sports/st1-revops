@@ -71,6 +71,34 @@ function parseSuccess(data, scheduled) {
   return null;
 }
 
+function normalizePlatform(value) {
+  const v = String(value || "").toLowerCase().trim();
+  if (v === "x") return "twitter";
+  return v;
+}
+
+async function fetchAccountMap(apiKey, workspaceId) {
+  const { ok, data } = await publerRequest("/accounts", "GET", null, apiKey, workspaceId);
+  if (!ok) return {};
+  const accounts = Array.isArray(data) ? data : (data.data || data.accounts || []);
+  return accounts.reduce((acc, account) => {
+    const service = normalizePlatform(account.provider || account.platform || account.type || account.service);
+    if (service && account.id && !acc[service]) acc[service] = String(account.id);
+    return acc;
+  }, {});
+}
+
+async function resolveWorkspaceId(apiKey) {
+  if (process.env.PUBLER_WORKSPACE_ID) return process.env.PUBLER_WORKSPACE_ID;
+  try {
+    const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const workspaces = ok ? (Array.isArray(data) ? data : (data.data || data.workspaces || [])) : [];
+    return workspaces[0]?.id ? String(workspaces[0].id) : "";
+  } catch {
+    return "";
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -86,7 +114,7 @@ export default async function handler(req, res) {
   // ── Check job status ───────────────────────────────────────────────────────
   if (action === "job-status") {
     if (!jobId) return res.status(400).json({ error: "jobId required" });
-    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    const workspaceId = await resolveWorkspaceId(apiKey);
     try {
       const { ok, data } = await publerRequest(`/job_status/${jobId}`, "GET", null, apiKey, workspaceId);
       const failures = data.payload?.failures;
@@ -108,7 +136,7 @@ export default async function handler(req, res) {
   // ── List posts (debug) ────────────────────────────────────────────────────
   // Queries scheduled + failed + draft so we can see what's landing
   if (action === "list-posts") {
-    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    const workspaceId = await resolveWorkspaceId(apiKey);
     try {
       // Query all three states to get full picture
       const [sched, failed, drafts] = await Promise.all([
@@ -191,11 +219,12 @@ export default async function handler(req, res) {
     }
   }
 
-  // Workspace required for all posting actions
-  const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+  // Workspace for account/posting actions. Prefer explicit env config, but fall
+  // back to the first accessible Publer workspace so setup is not brittle.
+  const workspaceId = await resolveWorkspaceId(apiKey);
   if (!workspaceId) {
     return res.status(400).json({
-      error: "PUBLER_WORKSPACE_ID not configured — click Test Connection, copy the workspace ID shown, then add it to Vercel env vars.",
+      error: "No Publer workspace available — click Test Connection, confirm the API key can access a workspace, or add PUBLER_WORKSPACE_ID to Vercel env vars.",
     });
   }
 
@@ -209,7 +238,7 @@ export default async function handler(req, res) {
         ok: true,
         profiles: accounts.map(a => ({
           id: String(a.id),
-          service: (a.provider || a.platform || a.type || a.service || "").toLowerCase(),
+          service: normalizePlatform(a.provider || a.platform || a.type || a.service),
           name: a.name || a.username || a.display_name,
           avatar: a.picture || a.avatar,
           connected: !a.needs_reconnect,
@@ -221,7 +250,7 @@ export default async function handler(req, res) {
   }
 
   // ── Debug ─────────────────────────────────────────────────────────────────────
-  if (action === "debug-post") {
+  if (action === "debug-post" || action === "debug_post") {
     const BASE = "https://app.publer.com/api/v1";
 
     const { data: wsData }  = await publerRequest("/workspaces", "GET", null, apiKey);
@@ -444,6 +473,17 @@ export default async function handler(req, res) {
 
   const activePlatforms = (platforms || []).filter(Boolean);
 
+  // Fresh workspace ID + connected account discovery. Env IDs remain overrides,
+  // but connected Publer accounts can now work without per-platform env vars.
+  let effectiveWsId = workspaceId;
+  let discoveredAccountMap = {};
+  try {
+    const { data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const ws = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
+    if (ws[0]?.id) effectiveWsId = String(ws[0].id);
+    discoveredAccountMap = await fetchAccountMap(apiKey, effectiveWsId);
+  } catch {}
+
   const publicMediaUrls = (mediaUrls || []).filter(
     u => typeof u === "string" && u.startsWith("https://") && !u.startsWith("data:")
   );
@@ -466,7 +506,8 @@ export default async function handler(req, res) {
   const bulkPosts = [];
 
   for (const platform of activePlatforms) {
-    const accountId = platformMap[platform];
+    const key = normalizePlatform(platform);
+    const accountId = platformMap[key] || discoveredAccountMap[key];
     if (!accountId) { missingAccounts.push(platform); continue; }
     bulkPosts.push({
       content: postText,
@@ -492,17 +533,9 @@ export default async function handler(req, res) {
   if (!bulkPosts.length) {
     const missing = missingAccounts.join(", ");
     return res.status(400).json({
-      error: `No account IDs configured for: ${missing}. In Settings → Load Accounts, copy the IDs, then add PUBLER_ACCOUNT_FACEBOOK / PUBLER_ACCOUNT_INSTAGRAM (etc.) to Vercel env vars.`,
+      error: `No connected Publer accounts found for: ${missing}. Connect those accounts in Publer, or add PUBLER_ACCOUNT_FACEBOOK / PUBLER_ACCOUNT_INSTAGRAM (etc.) to Vercel env vars.`,
     });
   }
-
-  // Fresh workspace ID
-  let effectiveWsId = workspaceId;
-  try {
-    const { data: wsData } = await publerRequest("/workspaces", "GET", null, apiKey);
-    const ws = Array.isArray(wsData) ? wsData : (wsData?.data || wsData?.workspaces || []);
-    if (ws[0]?.id) effectiveWsId = String(ws[0].id);
-  } catch {}
 
   try {
     const allPostIds = [];

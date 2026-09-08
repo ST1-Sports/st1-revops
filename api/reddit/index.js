@@ -7,7 +7,7 @@
  *   { ok: true, data: {...} }  or  { error: "msg", status: 400|500 }
  *
  * Feature flag check is the first thing done in every action handler:
- * if REDDIT_ENABLED !== "true", all actions except "status" return 403.
+ * if REDDIT_AUTOMATION_ENABLED !== "true", all actions except "status" return 403.
  *
  * Actions:
  *   status          — return current feature flag state (always allowed)
@@ -46,7 +46,7 @@ function resolveFlags() {
     postingEnabled:  process.env.REDDIT_POSTING_ENABLED    === 'true',
     dryRun:          process.env.REDDIT_DRY_RUN            === 'true',
     dailyPostLimit:  parseInt(process.env.REDDIT_DAILY_POST_LIMIT  || '3', 10),
-    minThreadScore:  parseInt(process.env.REDDIT_MIN_THREAD_SCORE  || '5',  10),
+    minThreadScore:  parseInt(process.env.REDDIT_MIN_THREAD_SCORE  || '0',  10),
   };
 }
 
@@ -129,13 +129,25 @@ export default async function handler(req, res) {
 
       // mark-done: user manually posted the reply — record it and hide from queue
       case 'mark-done': {
-        const { threadId } = body;
+        const { threadId, replyId } = body;
         if (!threadId) return err(res, 'threadId is required', 400);
         const db = getPrisma();
+        const postedAt = new Date();
         await db.redditThread.update({
           where: { id: threadId },
           data:  { status: 'POSTED' },
         });
+        if (replyId) {
+          await db.redditReply.update({
+            where: { id: replyId },
+            data: { approvedAt: postedAt, postedAt, approvedBy: body.approvedBy || 'manual' },
+          }).catch(() => null);
+        } else {
+          await db.redditReply.updateMany({
+            where: { threadId, variant: 1 },
+            data: { approvedAt: postedAt, postedAt, approvedBy: body.approvedBy || 'manual' },
+          });
+        }
         return ok(res, { done: true, threadId });
       }
 
@@ -168,10 +180,10 @@ export default async function handler(req, res) {
           pResults.errors.push({ step: 'ingest', error: e.message });
         }
 
-        // Evaluate pending threads (up to 5 to stay under 30s timeout)
+        // Evaluate pending threads in a small batch to stay under function timeout.
         const db = getPrisma();
         const pending = await db.redditThread.findMany({
-          where: { status: 'PENDING' }, take: 5, orderBy: { ingestedAt: 'desc' },
+          where: { status: 'PENDING' }, take: 3, orderBy: { ingestedAt: 'desc' },
         });
         for (const thread of pending) {
           try {
@@ -183,6 +195,20 @@ export default async function handler(req, res) {
             }
           } catch (e) {
             pResults.errors.push({ step: 'evaluate', threadId: thread.id, error: e.message });
+          }
+        }
+        const awaitingReplies = await db.redditThread.findMany({
+          where: { status: 'EVALUATED' },
+          take: 3,
+          orderBy: { ingestedAt: 'desc' },
+          include: { replies: true },
+        });
+        for (const thread of awaitingReplies.filter(t => !t.replies?.length && t.evaluation?.decision === 'REPLY')) {
+          try {
+            const rs = await generateReplies(thread.id);
+            if (!rs.skip) pResults.generated++;
+          } catch (e) {
+            pResults.errors.push({ step: 'generate', threadId: thread.id, error: e.message });
           }
         }
         return ok(res, pResults);

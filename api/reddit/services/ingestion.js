@@ -35,14 +35,14 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
   const candidates = [];
   const db = dryRun ? null : getPrisma();
 
-  // Search each subreddit × keyword pair (capped at 20 pairs to stay under timeout)
+  // Search each subreddit × keyword pair (capped to keep manual scans responsive)
   const pairs = [];
   for (const sub of subreddits) {
     for (const kw of keywords) {
       pairs.push({ sub, kw });
-      if (pairs.length >= 20) break;
+      if (pairs.length >= 12) break;
     }
-    if (pairs.length >= 20) break;
+    if (pairs.length >= 12) break;
   }
 
   for (const { sub, kw } of pairs) {

@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getAllPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
-
-const CUSTOM_TOOLS_KEY = 'st1_custom_tools'
+import { getAllPlugins, initPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
 
 const B = {
   white:    '#FFFFFF',
@@ -108,7 +106,7 @@ export default function ToolManager() {
 
   function reload() { setPlugins(getAllPlugins()) }
 
-  useEffect(() => { reload() }, [])
+  useEffect(() => { initPlugins().then(reload) }, [])
 
   function handleToggle(plugin) {
     setPluginEnabled(plugin.id, plugin.enabled === false ? true : false)
@@ -138,10 +136,6 @@ export default function ToolManager() {
       roles:        ['admin'],
       custom:       true,
     }
-    try {
-      const existing = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-      localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify([...existing, tool]))
-    } catch {}
     registerPlugin(tool)
     reload()
     setForm(EMPTY_FORM)

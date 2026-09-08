@@ -1,8 +1,10 @@
-import React, { useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
-import ToolManagerComponent from '../components/ToolManager.jsx'
-import AdHubModule from '../components/AdHubModule.jsx'
-import AnalyticsWidget from '../components/AnalyticsWidget.jsx'
+import { loadServerState, updateServerState } from '../lib/serverState.js'
+
+const ToolManagerComponent = lazy(() => import('../components/ToolManager.jsx'))
+const AdHubModule = lazy(() => import('../components/AdHubModule.jsx'))
+const AnalyticsWidget = lazy(() => import('../components/AnalyticsWidget.jsx'))
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -26,16 +28,15 @@ const B = {
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function getStoredRole() {
-  try {
-    const raw = localStorage.getItem('st1_revops_v2')
-    if (!raw) return 'sales_rep'
-    const s = JSON.parse(raw)
-    const all = [...(s.reps || []), ...(s.appUsers || [])]
-    const user = all.find(r => r.id === s.currentUserId)
-    return user?.role || 'sales_rep'
-  } catch {
-    return 'sales_rep'
-  }
+  return 'sales_rep'
+}
+
+function PanelFallback() {
+  return (
+    <div style={{ padding: 28, fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted }}>
+      Loading module...
+    </div>
+  )
 }
 
 // ─── MODULE DEFINITIONS ───────────────────────────────────────────────────────
@@ -403,7 +404,7 @@ function SocialModule({ userRole }) {
         }),
       })
       const d = await r.json()
-      if (d.ok || d.postIds || d.jobId) {
+      if ((d.status === 'success' || d.status === 'scheduled' || d.postIds?.length || d.jobId) && !d.error) {
         setPostResult({ ok: true, scheduled: !!scheduleDate, platforms: selPlatforms })
       } else {
         throw new Error(d.error || 'Post failed — check Publer connection in Settings')
@@ -702,7 +703,7 @@ function parseQuote(text) {
 const fmt$ = n => '$' + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
 
 function QuoteModule({ userRole }) {
-  const [query,      setQuery]      = useState(()=>{ const p=sessionStorage.getItem("st1_quote_prefill"); if(p){sessionStorage.removeItem("st1_quote_prefill");return p;} return ""; })
+  const [query,      setQuery]      = useState("")
   const [loading,    setLoading]    = useState(false)
   const [items,      setItems]      = useState(null)   // [{vendor,sku,description,unitPrice,qty}]
   const [notes,      setNotes]      = useState('')
@@ -905,7 +906,6 @@ function QuoteModule({ userRole }) {
 }
 
 // ─── MODULE 5: RESEARCH & INTEL ──────────────────────────────────────────────
-const INTEL_KEY = 'st1_intel'
 
 function linkify(text) {
   const urlRe = /(https?:\/\/[^\s)>\]]+)/g
@@ -926,9 +926,13 @@ function ResearchModule({ userRole }) {
   const [loading, setLoading] = useState(false)
   const [err,     setErr]     = useState('')
   const [saved,   setSaved]   = useState(false)
-  const [history, setHistory] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(INTEL_KEY) || '[]') } catch { return [] }
-  })
+  const [history, setHistory] = useState([])
+
+  useEffect(() => {
+    loadServerState()
+      .then(state => setHistory(Array.isArray(state.researchIntel) ? state.researchIntel : []))
+      .catch(() => {})
+  }, [])
 
   async function handleRun() {
     if (!query.trim()) return
@@ -951,15 +955,15 @@ function ResearchModule({ userRole }) {
       savedAt:   new Date().toISOString(),
     }
     const next = [entry, ...history].slice(0, 50)
-    localStorage.setItem(INTEL_KEY, JSON.stringify(next))
     setHistory(next)
+    updateServerState(state => ({ ...state, researchIntel: next })).catch(() => {})
     setSaved(true)
   }
 
   function handleDelete(id) {
     const next = history.filter(e => e.id !== id)
-    localStorage.setItem(INTEL_KEY, JSON.stringify(next))
     setHistory(next)
+    updateServerState(state => ({ ...state, researchIntel: next })).catch(() => {})
   }
 
   const paragraphs = output ? output.split(/\n{2,}/) : []
@@ -1041,8 +1045,6 @@ function ResearchModule({ userRole }) {
 }
 
 // ─── MODULE 6: FINANCIAL SUMMARIES ───────────────────────────────────────────
-const REVOPS_STORE = 'st1_revops_v2'
-
 const REPORT_TYPES = [
   { id: 'monthly-pl',     label: 'Monthly P&L Overview' },
   { id: 'outstanding-ar', label: 'Outstanding Invoices (AR)' },
@@ -1050,9 +1052,7 @@ const REPORT_TYPES = [
   { id: 'open-quotes',    label: 'Open vs Closed Quotes' },
 ]
 
-function buildFinanceContext(reportType) {
-  let store = {}
-  try { store = JSON.parse(localStorage.getItem(REVOPS_STORE) || '{}') } catch {}
+function buildFinanceContext(reportType, store = {}) {
   const deals    = Array.isArray(store.deals)    ? store.deals    : []
   const invoices = Array.isArray(store.invoices) ? store.invoices : []
   const contacts = Array.isArray(store.contacts) ? store.contacts : []
@@ -1107,7 +1107,8 @@ function FinancialModule({ userRole }) {
   async function handleRun() {
     setLoading(true); setErr(''); setOutput('')
     try {
-      const ctx  = buildFinanceContext(reportType)
+      const state = await loadServerState()
+      const ctx  = buildFinanceContext(reportType, state)
       const label = REPORT_TYPES.find(r => r.id === reportType)?.label || reportType
       const task = `Generate a ${label} financial summary for ST1 Sports. Here is the raw data:\n\n${ctx || 'No data available in the local store yet.'}\n\nProvide an executive-ready narrative summary with key insights, trends, and recommended actions. Format clearly with sections.`
       const res  = await routeTask({ task, input: '', userRole })
@@ -1159,7 +1160,7 @@ function ToolManagerModule() {
   return (
     <div>
       <ModHeader icon="⚙" label="Tool Manager" desc="Configure plugins, manage API keys, and control which tools each role can access." />
-      <ToolManagerComponent />
+      <Suspense fallback={<PanelFallback />}><ToolManagerComponent /></Suspense>
     </div>
   )
 }
@@ -1290,8 +1291,8 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
-  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} />
-  if (mod.id === 'analytics')    return <AnalyticsWidget />
+  if (mod.id === 'ad-hub')       return <Suspense fallback={<PanelFallback />}><AdHubModule userRole={userRole} /></Suspense>
+  if (mod.id === 'analytics')    return <Suspense fallback={<PanelFallback />}><AnalyticsWidget /></Suspense>
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }
