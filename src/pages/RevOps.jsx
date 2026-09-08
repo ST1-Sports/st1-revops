@@ -11427,12 +11427,20 @@ function ModSocial() {
 
   useEffect(()=>{
     let cancelled=false;
+    const readApiJson=async(r)=>{
+      const text=await r.text();
+      try{return JSON.parse(text);}catch{
+        return {error: r.status===404 ? "Social API is not available here — deploy or run vercel dev with PUBLER_API_KEY." : `Publer API unavailable (${r.status||"network"})`};
+      }
+    };
     const loadPublerSetup=async()=>{
       try{
-        const test=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
+        const testRes=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})});
+        const test=await readApiJson(testRes);
         if(cancelled)return;
         if(test.error||test.ok===false){setPublerSetup({loading:false,error:test.error||"Publer connection failed",profiles:[]});return;}
-        const prof=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
+        const profRes=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})});
+        const prof=await readApiJson(profRes);
         if(cancelled)return;
         setPublerSetup({loading:false,error:prof.error||"",profiles:Array.isArray(prof.profiles)?prof.profiles:[]});
       }catch(e){
