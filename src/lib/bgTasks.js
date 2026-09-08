@@ -8,29 +8,9 @@
  */
 
 const _tasks = {};
-let _persistTimer = null;
-
-// ── Hydrate from localStorage on module load ──────────────────────────────────
-try {
-  const saved = JSON.parse(localStorage.getItem('st1_bg_tasks_v2') || '{}');
-  // Only keep tasks from the last 2 hours to avoid stale data
-  const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-  Object.entries(saved).forEach(([id, t]) => {
-    if (t.startedAt > cutoff) _tasks[id] = t;
-  });
-} catch {}
 
 function _persist(immediate = false) {
-  if (immediate) {
-    if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
-    try { localStorage.setItem('st1_bg_tasks_v2', JSON.stringify(_tasks)); } catch {}
-    return;
-  }
-  if (_persistTimer) clearTimeout(_persistTimer);
-  _persistTimer = setTimeout(() => {
-    _persistTimer = null;
-    try { localStorage.setItem('st1_bg_tasks_v2', JSON.stringify(_tasks)); } catch {}
-  }, 500);
+  void immediate;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

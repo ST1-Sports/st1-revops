@@ -8,6 +8,7 @@
  */
 
 import { aiCall } from '../api.js'
+import { loadServerState, updateServerState, clearLegacyLocalKeys } from '../serverState.js'
 
 const CUSTOM_TOOLS_KEY = 'st1_custom_tools'
 const PREFS_KEY        = 'st1_tool_prefs'
@@ -211,20 +212,17 @@ function buildHandler(tool) {
 }
 
 // ── Bootstrap: apply persisted prefs then load custom tools ───────────────────
-try {
-  const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')
+loadServerState().then(state => {
+  const prefs = state.toolPrefs || {}
   for (const [id, enabled] of Object.entries(prefs)) {
     const p = _byId.get(id)
     if (p) p.enabled = enabled
   }
-} catch {}
-
-try {
-  const customs = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-  for (const t of Array.isArray(customs) ? customs : []) {
+  for (const t of Array.isArray(state.customTools) ? state.customTools : []) {
     _upsert({ ...t, handler: buildHandler(t) })
   }
-} catch {}
+  clearLegacyLocalKeys([PREFS_KEY, CUSTOM_TOOLS_KEY])
+}).catch(() => {})
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export function getPlugin(capability, userRole = 'sales_rep') {
@@ -242,25 +240,26 @@ export function getAllPlugins() {
 
 export function registerPlugin(plugin) {
   _upsert({ ...plugin, handler: plugin.handler ?? buildHandler(plugin) })
+  if (plugin.custom) {
+    updateServerState(state => {
+      const existing = Array.isArray(state.customTools) ? state.customTools : []
+      const without = existing.filter(t => t.id !== plugin.id)
+      return { ...state, customTools: [...without, plugin] }
+    }).catch(() => {})
+  }
 }
 
 export function setPluginEnabled(id, enabled) {
   const plugin = _byId.get(id)
   if (!plugin) return
   plugin.enabled = enabled
-  try {
-    const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')
-    prefs[id] = enabled
-    localStorage.setItem(PREFS_KEY, JSON.stringify(prefs))
-  } catch {}
-  if (plugin.custom) {
-    try {
-      const saved = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-      localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify(
-        saved.map(t => t.id === id ? { ...t, enabled } : t)
-      ))
-    } catch {}
-  }
+  updateServerState(state => ({
+    ...state,
+    toolPrefs: { ...(state.toolPrefs || {}), [id]: enabled },
+    customTools: Array.isArray(state.customTools)
+      ? state.customTools.map(t => t.id === id ? { ...t, enabled } : t)
+      : [],
+  })).catch(() => {})
 }
 
 export function deleteCustomTool(id) {
@@ -271,8 +270,8 @@ export function deleteCustomTool(id) {
     const i = list.findIndex(p => p.id === id)
     if (i >= 0) list.splice(i, 1)
   }
-  try {
-    const saved = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-    localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify(saved.filter(t => t.id !== id)))
-  } catch {}
+  updateServerState(state => ({
+    ...state,
+    customTools: Array.isArray(state.customTools) ? state.customTools.filter(t => t.id !== id) : [],
+  })).catch(() => {})
 }

@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { loadServerState, updateServerState, mergeById } from "../lib/serverState.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
 const B = {
@@ -196,35 +197,23 @@ function buildOutputCSV(originalCsvText, items) {
   return out.join("\n");
 }
 
-// ── RevOps store helpers (RFPTool is a standalone route — read/write localStorage directly) ──
-const REVOPS_STORE = "st1_revops_v2";
-
-function lsReadRfps() {
-  try { const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}"); return Array.isArray(p.rfps)?p.rfps:[]; }
-  catch { return []; }
-}
+// ── RevOps store helpers (RFPTool is a standalone route — use /api/state) ──
 function lsSaveRfp(record) {
-  try {
-    const raw=localStorage.getItem(REVOPS_STORE)||"{}";
-    const store=JSON.parse(raw);
-    const rfps=Array.isArray(store.rfps)?store.rfps:[];
-    const idx=rfps.findIndex(r=>r.id===record.id);
-    if(idx>=0) rfps[idx]={...rfps[idx],...record};
-    else rfps.unshift(record);
-    localStorage.setItem(REVOPS_STORE,JSON.stringify({...store,rfps}));
-  } catch(e) { console.warn("lsSaveRfp",e); }
+  updateServerState(state => ({ ...state, rfps: mergeById(state.rfps || [], [record]) }))
+    .catch(e => console.warn("saveRfp", e));
 }
-function lsReadCatalog() {
-  try {
-    const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}");
-    const products=[];
-    (p.suppliers||[]).forEach(sup=>{
-      (sup.products||[]).forEach(prod=>{
-        products.push({sku:prod.sku,brand:sup.name,name:prod.name,category:prod.category,cost:prod.cost,ourPrice:prod.ourPrice,map:prod.map});
-      });
-    });
-    return products;
-  } catch { return []; }
+function catalogFromState(state = {}) {
+  return (state.priceLists || []).flatMap(list =>
+    (list.items || []).map(item => ({
+      sku: item.sku,
+      brand: list.supplierName || list.name,
+      name: item.name,
+      category: item.category,
+      cost: item.cost,
+      ourPrice: item.price,
+      map: item.map,
+    }))
+  );
 }
 
 const RFP_STATUS_LABELS=[["New",B.blue],["In Process",B.orange],["Bid",B.green],["No Bid",B.muted]];
@@ -247,7 +236,7 @@ export default function RFPAutomation() {
   const [coverLetter,setCoverLetter]= useState("");
   const [complianceFlags, setComplianceFlags] = useState([]);
 
-  // RFP tracker record (persisted to RevOps store via localStorage)
+  // RFP tracker record (persisted to shared server state)
   const [rfpRecordId, setRfpRecordId] = useState(null);
   const [rfpStatus,   setRfpStatus]   = useState("New");
 
@@ -260,12 +249,17 @@ export default function RFPAutomation() {
   const [approved,   setApproved]   = useState(false);
   const [generating, setGenerating] = useState(false);
   const [altOpen,    setAltOpen]    = useState(new Set()); // item IDs with alternatives expanded
+  const [serverCatalog,setServerCatalog]=useState([]);
 
   const pdfInputRef = useRef();
   const xlsxInputRef = useRef();
   const abortRef    = useRef(false);
 
   const addLog = (msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,149)]);
+
+  useEffect(()=>{
+    loadServerState().then(state=>setServerCatalog(catalogFromState(state))).catch(()=>{});
+  },[]);
 
   // ── RFP TRACKER HELPERS ───────────────────────────────────────────────────
   const changeStatus = (status, recordId=rfpRecordId) => {
@@ -532,7 +526,7 @@ IMPORTANT: Extract from the PRODUCT LISTING section of the document. There may b
     addLog(`✓ ${withState.length} line items extracted (${withState.filter(i=>i.canBid!==false).length} biddable)`,"success");
 
     // ── STEP 4.5: Match against ST1 catalog ──────────────────────────────
-    const catalog = lsReadCatalog();
+    const catalog = serverCatalog;
     if(catalog.length>0 && !abortRef.current) {
       const biddableForMatch = withState.filter(i=>i.canBid!==false);
       addLog(`Step 4.5/5 — Matching ${biddableForMatch.length} items against ${catalog.length}-product catalog...`);

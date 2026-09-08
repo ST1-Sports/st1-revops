@@ -113,6 +113,15 @@ const rankForAgentContext=(rows=[],query="",aliases="",limit=120)=>{
   const fill=arr.filter(x=>!seen.has(x)).slice(0,Math.max(0,limit-matches.length));
   return[...matches.slice(0,limit),...fill].slice(0,limit);
 };
+const serverStatePayload=(state={})=>{
+  const {currentUserId: _cid, ...toSync}=state||{};
+  return {
+    ...toSync,
+    agentHistory:Array.isArray(toSync.agentHistory)?toSync.agentHistory.slice(-40):[],
+    contacts:Array.isArray(toSync.contacts)?toSync.contacts:[],
+  };
+};
+const clearLegacyRevOpsLocal=()=>{try{localStorage.removeItem(STORE);}catch{}};
 
 // ─── SEED DATA ────────────────────────────────────────────────────────────────
 const SEED = {
@@ -195,7 +204,6 @@ function mergeServerState(base, server) {
 }
 
 function useStore() {
-  const saveTimer = useRef(null);
   const serverTimer = useRef(null);
   const pollTimer = useRef(null);
   const [s, setRaw] = useState(() => {
@@ -248,28 +256,21 @@ function useStore() {
       .then(r => r.json())
       .then(d => {
         if (d.state && typeof d.state === "object") {
-          // Strip contacts + agentHistory from server state before merging:
-          // contacts come from Zoho sync (can be thousands of records — too large to round-trip
-          // through the server state), agentHistory is session-only.
-          const {contacts: _sc, agentHistory: _sah, ...serverClean} = d.state;
           setRaw(prev => {
-            const merged = mergeServerState(prev, serverClean);
-            // Defer localStorage write to avoid blocking the main thread
-            setTimeout(() => {
-              try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
-            }, 0);
-            // Push back stripped payload so server stays small
-            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = merged;
+            const merged = mergeServerState(prev, d.state);
             fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({state: toSync})}).catch(()=>{});
+              body: JSON.stringify({state: serverStatePayload(merged)})})
+              .then(clearLegacyRevOpsLocal)
+              .catch(()=>{});
             return merged;
           });
         } else {
-          // Server empty — push local state up so other devices can see it (without contacts)
+          // Server empty — push the in-memory state up so other devices can see it.
           setRaw(prev => {
-            const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = prev;
             fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({state: toSync})}).catch(()=>{});
+              body: JSON.stringify({state: serverStatePayload(prev)})})
+              .then(clearLegacyRevOpsLocal)
+              .catch(()=>{});
             return prev;
           });
         }
@@ -291,21 +292,13 @@ function useStore() {
   const set = useCallback((fn) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
-      // Save to localStorage (debounced) — use requestIdleCallback when available
-      // to avoid blocking the main thread on large state objects
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {} };
-        if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
-        else doSave();
-      }, 300);
-      // Debounced server sync — catches any state changes not covered by dispatch's immediate sync
-      // Strip contacts (synced from Zoho) and agentHistory (large, session-only) to keep payload small
+      // Debounced server sync — catches any state changes not covered by dispatch's immediate sync.
       if (serverTimer.current) clearTimeout(serverTimer.current);
       serverTimer.current = setTimeout(() => {
-        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({state: toSync})}).catch(()=>{});
+          body: JSON.stringify({state: serverStatePayload(next)})})
+          .then(clearLegacyRevOpsLocal)
+          .catch(()=>{});
       }, 2500);
       return next;
     });
@@ -638,9 +631,10 @@ export default function App() {
         "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
       ]);
       if (!skipSync.has(action)) {
-        const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-          body: JSON.stringify({state: toSync})}).catch(()=>{});
+          body: JSON.stringify({state: serverStatePayload(next)})})
+          .then(clearLegacyRevOpsLocal)
+          .catch(()=>{});
       }
       return next;
     });
@@ -885,15 +879,13 @@ export default function App() {
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:2}}>{navLabel(mod).toUpperCase()}</div>
             <div style={{display:"flex",gap:12,alignItems:"center"}}>
               {(()=>{
-                let st={};
-                try{st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}");}catch{}
                 const intg = s.integrations||{};
                 return [
-                  ["Books",    st.books    || !!intg.zohoToken],
-                  ["CRM",      st.crm      || !!intg.zohoCrmToken],
-                  ["Campaigns",st.campaigns],
-                  ["Gmail",    st.gmail    || !!intg.gmailToken],
-                  ["Slack",    st.slack    !== false && !!intg.slackChannel],
+                  ["Books",    !!intg.zohoToken],
+                  ["CRM",      !!intg.zohoCrmToken],
+                  ["Campaigns",!!intg.campaigns],
+                  ["Gmail",    !!intg.gmailToken],
+                  ["Slack",    !!intg.slackChannel],
                 ].map(([l,v])=>(
                   <div key={l} style={{display:"flex",alignItems:"center",gap:4}}>
                     <div className={v?"":"blink"} style={{width:6,height:6,borderRadius:"50%",background:v?B.green:B.muted}}/>
@@ -2501,41 +2493,13 @@ function TalkTrack({onClose,linkedContact}){
     fetch("/api/admin/questions")
       .then(r=>r.json()).then(d=>setQuestions((d.questions||[]).filter(q=>q.isActive)))
       .catch(()=>{});
-    const existing=sessionStorage.getItem("ttSessionId");
-    if(existing){
-      fetch(`/api/sessions/${existing}?repId=${cu?.id||""}`)
-        .then(r=>r.ok?r.json():null)
-        .then(d=>{
-          if(d?.session){
-            const sess=d.session;
-            setSessionId(sess.id);sessRef.current=sess.id;
-            setAnswers(sess.answers||{});
-            setPains(Array.isArray(sess.confirmedPains)?sess.confirmedPains:[]);
-            if(sess.sponsorshipGuaranteedMin!=null) setCalcResult({guaranteedMin:sess.sponsorshipGuaranteedMin,upsideMax:sess.sponsorshipUpsideMax});
-            if(sess.schoolClass||sess.numAthletes||sess.numSports) setCalcInputs(ci=>({
-              schoolClass:sess.schoolClass||ci.schoolClass,
-              numSports:String(sess.numSports||ci.numSports||""),
-              numAthletes:String(sess.numAthletes||ci.numAthletes||""),
-              hasOnlineStore:sess.hasOnlineStore!=null?sess.hasOnlineStore:ci.hasOnlineStore,
-              hasBoosterClub:sess.hasBoosterClub!=null?sess.hasBoosterClub:ci.hasBoosterClub,
-            }));
-            if(!linkedContact&&(sess.crmContactId||sess.crmLeadId)){
-              setLinked({id:sess.crmContactId||sess.crmLeadId,module:sess.crmModule,name:""});
-            }
-          } else {
-            doCreateSession();
-          }
-        }).catch(()=>doCreateSession());
-    } else {
-      doCreateSession();
-    }
+    doCreateSession();
   },[]);
 
   const doCreateSession=()=>{
     fetch("/api/sessions",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown"})})
       .then(r=>r.json()).then(d=>{
         setSessionId(d.session.id);sessRef.current=d.session.id;
-        sessionStorage.setItem("ttSessionId",d.session.id);
       }).catch(()=>{});
   };
 
@@ -2617,7 +2581,7 @@ function TalkTrack({onClose,linkedContact}){
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             {saving&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted}}>saving…</span>}
-            <GBtn sm onClick={()=>{sessionStorage.removeItem("ttSessionId");onClose();}}>✕ EXIT</GBtn>
+            <GBtn sm onClick={onClose}>✕ EXIT</GBtn>
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center"}}>
@@ -2686,7 +2650,6 @@ function TalkTrack({onClose,linkedContact}){
             ?<OBtn onClick={()=>setPhaseIdx(i=>i+1)}>NEXT →</OBtn>
             :<OBtn col={B.green} onClick={()=>{
               if(sessRef.current) fetch(`/api/sessions/${sessRef.current}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:cu?.id||"unknown",status:"COMPLETE"})}).catch(()=>{});
-              sessionStorage.removeItem("ttSessionId");
               // Sync completion + pains back to Redux + Zoho CRM
               if(linked?.id){
                 const now=new Date().toISOString();
@@ -9635,8 +9598,8 @@ function ModMarketing() {
                       dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches});
                       // Immediate DB save — don't wait for debounce (set-and-forget)
                       const _uc=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches,sentBatches:updSentBatches}:c);
-                      const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                      fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc})})})
+                        .then(clearLegacyRevOpsLocal).catch(()=>{});
                     };
 
                     const handleScheduleClick=()=>{
@@ -9798,8 +9761,8 @@ function ModMarketing() {
                                 const newScheduledBatches2={...(selCamp.scheduledBatches||{}),...campBatches};
                                 dispatch("UPDATE_CAMPAIGN",{id:selCamp.id,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2});
                                 const _uc2=(s.campaigns||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:newScheduledBatches2,sentBatches:updSentBatches2}:c);
-                                const{currentUserId:_cid2,contacts:_cc2,agentHistory:_ah2,..._ts2}={...s,campaigns:_uc2};
-                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts2})}).catch(()=>{});
+                                fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc2})})})
+                                  .then(clearLegacyRevOpsLocal).catch(()=>{});
                               };
                               const handleSchedClick=()=>{setSchedStatus('applying');setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);};
                               const clearSchedule=()=>{
@@ -9946,8 +9909,8 @@ function ModMarketing() {
                                           const ns2={...(fc.sentBatches||{})};delete ns2[batchKey];
                                           dispatch("UPDATE_CAMPAIGN",{...fc,scheduledBatches:ns,sentBatches:ns2});
                                           const _uc=(campaignsRef.current||[]).map(c=>c.id===selCamp.id?{...c,scheduledBatches:ns,sentBatches:ns2}:c);
-                                          const{currentUserId:_cid,contacts:_cc,agentHistory:_ah,..._ts}={...s,campaigns:_uc};
-                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:_ts})}).catch(()=>{});
+                                          fetch("/api/state",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:serverStatePayload({...s,campaigns:_uc})})})
+                                            .then(clearLegacyRevOpsLocal).catch(()=>{});
                                         }} style={{background:B.orange,color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
                                           ↺ RESEND AT 9AM MT
                                         </button>
@@ -12182,8 +12145,7 @@ function ModAds() {
     <div style={{padding:"22px 26px"}}>
       <PH title="AD ENGINE" sub="Product campaigns, AI image generation, Meta ad copy, and asset management" action={(()=>{
           try {
-            const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-            const contacts = Array.isArray(store.contacts)?store.contacts:[];
+            const contacts = Array.isArray(s.contacts)?s.contacts:[];
             const now = Date.now();
             const cold = contacts.filter(c=>{
               if(!c.email)return false;
@@ -15432,7 +15394,7 @@ function ModSettings() {
 
       <div className="card" style={{padding:16,borderTop:`3px solid ${B.green}`}}>
         <Lbl c={B.green} s={{marginBottom:11}}>Data Management</Lbl>
-        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All data persists in your browser's localStorage across sessions. Export a backup before clearing.</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.textMid,lineHeight:1.7,marginBottom:11}}>All durable RevOps data is stored in the shared server state and syncs across devices. Export a backup before clearing.</div>
         <div style={{display:"flex",gap:7}}>
           <GBtn onClick={()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(s)],{type:"application/json"}));a.download=`st1_backup_${today()}.json`;a.click();toast("Backup exported","success");}}>↓ EXPORT BACKUP</GBtn>
           <button onClick={()=>{if(window.confirm("Reset all data to demo state? Cannot be undone.")){dispatch("RESET");toast("Reset to demo","success");}}} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>RESET TO DEMO</button>

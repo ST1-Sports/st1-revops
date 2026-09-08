@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { getAllPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
 
-const CUSTOM_TOOLS_KEY = 'st1_custom_tools'
-
 const B = {
   white:    '#FFFFFF',
   surface:  '#F8F7F5',
@@ -138,10 +136,6 @@ export default function ToolManager() {
       roles:        ['admin'],
       custom:       true,
     }
-    try {
-      const existing = JSON.parse(localStorage.getItem(CUSTOM_TOOLS_KEY) || '[]')
-      localStorage.setItem(CUSTOM_TOOLS_KEY, JSON.stringify([...existing, tool]))
-    } catch {}
     registerPlugin(tool)
     reload()
     setForm(EMPTY_FORM)

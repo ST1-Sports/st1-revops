@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import ToolManager from "../components/ToolManager.jsx";
+import { loadServerState, updateServerState, mergeById, clearLegacyLocalKeys } from "../lib/serverState.js";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -59,18 +60,7 @@ async function aiText(prompt) {
 // ─── PERSISTENCE ──────────────────────────────────────────────────────────────
 const STORE_KEY = "st1_integrations_v1";
 const STATUS_KEY = "st1_integrations_status_v1";
-function loadCreds() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)||"{}"); } catch { return {}; }
-}
-function saveCreds(creds) {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(creds)); } catch {}
-}
-function loadStatus() {
-  try { return JSON.parse(localStorage.getItem(STATUS_KEY)||"{}"); } catch { return {}; }
-}
-function saveStatus(status) {
-  try { localStorage.setItem(STATUS_KEY, JSON.stringify(status)); } catch {}
-}
+const LEGACY_INTEGRATION_KEYS = [STORE_KEY, STATUS_KEY, "st1_cold_lead_listkey", "st1_ads_status_v1", "st1_ls_embed", "st1_ad_links", "st1_ad_metrics"];
 
 // ─── SEED DATA for demo when not connected ────────────────────────────────────
 const DEMO_INVOICES = [
@@ -92,20 +82,9 @@ const DEMO_PRODUCTS = [
 // ════════════════════════════════════════════════════════════════════════════
 export default function IntegrationsHub() {
   const [tab, setTab]     = useState("overview");
-  const [creds, setCreds] = useState(loadCreds);
-  const [status, setStatus] = useState(() => {
-    const saved = loadStatus();
-    const cr    = loadCreds();
-    return {
-      slack: true,
-      books: false,
-      crm:   false,
-      woo:   false,
-      ...saved,
-      // Restore WooCommerce automatically if credentials are saved
-      ...(cr.wooKey && cr.wooSecret ? {woo: true} : {}),
-    };
-  });
+  const [creds, setCreds] = useState({});
+  const [status, setStatus] = useState({slack:true,books:false,crm:false,woo:false});
+  const [revopsState,setRevopsState]=useState({});
   const [testing,  setTesting]  = useState(null);
   const [log, setLog]     = useState([]);
   const [invoices,setInvoices]  = useState(DEMO_INVOICES);
@@ -122,7 +101,7 @@ export default function IntegrationsHub() {
   // Zoho Campaigns
   const [mailingLists, setMailingLists] = useState([]);
   const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [coldLeadListKey, setColdLeadListKey] = useState(() => { try { return localStorage.getItem("st1_cold_lead_listkey")||""; } catch { return ""; } });
+  const [coldLeadListKey, setColdLeadListKey] = useState("");
   const [coldLeadSyncing, setColdLeadSyncing] = useState(false);
   const [coldLeadSyncResult, setColdLeadSyncResult] = useState(null);
   const [zohoEmailCampaigns, setZohoEmailCampaigns] = useState([]);
@@ -130,13 +109,13 @@ export default function IntegrationsHub() {
   const [newListName, setNewListName] = useState("Cold Leads — Promo Offers");
 
   // Ad platforms + Instantly
-  const [adsStatus, setAdsStatus]   = useState(() => { try { const s=JSON.parse(localStorage.getItem("st1_ads_status_v1")||"{}"); return (Date.now()-(s.ts||0))<3600000?s:{}; } catch { return {}; } });
+  const [adsStatus, setAdsStatus]   = useState({});
   const [adsLoading, setAdsLoading] = useState(false);
   const [instStatus, setInstStatus] = useState(null);
   const [instCampaigns, setInstCampaigns] = useState([]);
-  const [lsEmbedUrl, setLsEmbedUrl]   = useState(() => { try { return localStorage.getItem("st1_ls_embed")||""; } catch { return ""; } });
-  const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
-  const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
+  const [lsEmbedUrl, setLsEmbedUrl]   = useState("");
+  const [adLinks, setAdLinks]         = useState({});
+  const [adMetrics, setAdMetrics]     = useState({});
 
   // Zoho Social
   const [socialPortals, setSocialPortals] = useState([]);
@@ -147,7 +126,7 @@ export default function IntegrationsHub() {
   const [testPostChannels, setTestPostChannels] = useState([]);
   const [socialPosting, setSocialPosting] = useState(false);
   const [socialPostResult, setSocialPostResult] = useState(null);
-  const [gmailStatus, setGmailStatus] = useState(() => !!(loadStatus().gmail));
+  const [gmailStatus, setGmailStatus] = useState(false);
   const [emailMessages, setEmailMessages] = useState([]);
   const [emailOpps, setEmailOpps]   = useState([]);
   const [emailScanning, setEmailScanning] = useState(false);
@@ -156,31 +135,52 @@ export default function IntegrationsHub() {
   const addLog = useCallback((msg,type="info") => setLog(l=>[{id:uid(),msg,type,ts:Date.now()},...l.slice(0,99)]), []);
 
   // ── REVOPS STORE BRIDGE ─────────────────────────────────────────────────────
-  // Write contacts or deals directly into the RevOps localStorage store
-  const REVOPS_KEY = "st1_revops_v2";
-  function pushToRevOps(key, items) {
-    try {
-      const store = JSON.parse(localStorage.getItem(REVOPS_KEY)||"{}");
-      const existing = Array.isArray(store[key]) ? store[key] : [];
+  async function pushToRevOps(key, items) {
+    let added = 0;
+    const nextState = await updateServerState(state => {
+      const existing = Array.isArray(state[key]) ? state[key] : [];
       const existingIds = new Set(existing.map(x=>x.id));
       const toAdd = items.filter(x => x.id && !existingIds.has(x.id));
-      if (!toAdd.length) return 0;
-      store[key] = [...toAdd, ...existing];
-      localStorage.setItem(REVOPS_KEY, JSON.stringify(store));
-      return toAdd.length;
-    } catch { return 0; }
+      added = toAdd.length;
+      return {...state,[key]:mergeById(existing,toAdd)};
+    });
+    setRevopsState(nextState);
+    return added;
   }
 
-  // Save creds to localStorage whenever they change
-  useEffect(()=>saveCreds(creds),[creds]);
-  useEffect(()=>saveStatus(status),[status]);
+  const saveIntegrationPrefs = useCallback((patch)=>{
+    updateServerState(state=>({
+      ...state,
+      integrations:{...(state.integrations||{}),...patch},
+    })).then(next=>setRevopsState(next)).catch(()=>{});
+  },[]);
+
+  useEffect(()=>{
+    loadServerState().then(state=>{
+      setRevopsState(state);
+      const intg=state.integrations||{};
+      setStatus(s=>({...s,...(intg.status||{})}));
+      setCreds(intg.creds||{});
+      setColdLeadListKey(intg.coldLeadListKey||"");
+      setAdsStatus(intg.adsStatus||{});
+      setLsEmbedUrl(intg.lsEmbedUrl||"");
+      setAdLinks(intg.adLinks||{});
+      setAdMetrics(intg.adMetrics||{});
+      setGmailStatus(!!intg.status?.gmail);
+      clearLegacyLocalKeys(LEGACY_INTEGRATION_KEYS);
+    }).catch(()=>{});
+  },[]);
 
   // Auto-verify Gmail silently on mount
   useEffect(()=>{
     if(gmailStatus) return; // already connected
     fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:1})})
       .then(r=>r.json()).then(d=>{
-        if(!d.error){ setGmailStatus(true); saveStatus({...loadStatus(),gmail:true}); setStatus(s=>({...s,gmail:true})); }
+        if(!d.error){
+          setGmailStatus(true);
+          setStatus(s=>({...s,gmail:true}));
+          saveIntegrationPrefs({status:{...status,gmail:true}});
+        }
       }).catch(()=>{});
   // eslint-disable-next-line
   },[]);
@@ -278,7 +278,7 @@ export default function IntegrationsHub() {
         await loadMailingLists();
         if (data.listkey) {
           setColdLeadListKey(data.listkey);
-          try { localStorage.setItem("st1_cold_lead_listkey", data.listkey); } catch {}
+          saveIntegrationPrefs({coldLeadListKey:data.listkey});
         }
       }
     } catch(e) { addLog(`Create list: ${e.message.slice(0,100)}`, "error"); }
@@ -290,9 +290,8 @@ export default function IntegrationsHub() {
     setColdLeadSyncing(true);
     setColdLeadSyncResult(null);
     try {
-      // Read contacts from RevOps localStorage, filter cold ones
-      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-      const contacts = Array.isArray(store.contacts) ? store.contacts : [];
+      const state = Object.keys(revopsState).length ? revopsState : await loadServerState();
+      const contacts = Array.isArray(state.contacts) ? state.contacts : [];
       const now = Date.now();
       const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
       const coldContacts = contacts.filter(c => {
@@ -506,7 +505,7 @@ export default function IntegrationsHub() {
         importedAt: Date.now(),
       }));
       const all = [...contacts, ...leads];
-      const added = pushToRevOps("contacts", all);
+      const added = await pushToRevOps("contacts", all);
       setCrmSyncResult(prev=>({...(prev||{}), contacts:all.length, contactsAdded:added}));
       addLog(`✓ Pulled ${contacts.length} contacts + ${leads.length} leads — ${added} new added to RevOps`,"success");
     } catch(e) {
@@ -536,7 +535,7 @@ export default function IntegrationsHub() {
         createdAt: today,
         source:"zoho-crm",
       }));
-      const added = pushToRevOps("deals", deals);
+      const added = await pushToRevOps("deals", deals);
       setCrmSyncResult(prev=>({...(prev||{}), deals:deals.length, dealsAdded:added}));
       addLog(`✓ Pulled ${deals.length} deals — ${added} new added to RevOps`,"success");
     } catch(e) {
@@ -575,7 +574,8 @@ export default function IntegrationsHub() {
       const d = await r.json();
       if(d.error) throw new Error(d.error);
       setGmailStatus(true);
-      saveStatus({...loadStatus(), gmail:true});
+      setStatus(s=>({...s,gmail:true}));
+      saveIntegrationPrefs({status:{...status,gmail:true}});
       setStatus(s=>({...s,gmail:true}));
       addLog("✓ Gmail connected","success");
     } catch(e) {
@@ -590,7 +590,7 @@ export default function IntegrationsHub() {
       const r = await fetch("/api/ads/status");
       const d = await r.json();
       setAdsStatus(d);
-      try { localStorage.setItem("st1_ads_status_v1", JSON.stringify({...d,ts:Date.now()})); } catch {}
+      saveIntegrationPrefs({adsStatus:{...d,ts:Date.now()}});
       const connected = Object.values(d).filter(v=>v?.status==="connected").length;
       addLog(`Ad platforms: ${connected} connected`, connected>0?"success":"info");
     } catch(e) {
@@ -648,7 +648,7 @@ export default function IntegrationsHub() {
     setEmailScanning(false);
   };
 
-  const createDealFromEmail = (opp) => {
+  const createDealFromEmail = async (opp) => {
     const deal = {
       id: "email_"+uid(),
       name: opp.dealName||opp.org||opp.customerName||"Email Lead",
@@ -662,7 +662,7 @@ export default function IntegrationsHub() {
       followUpDate: "",
       source: "email-scan",
     };
-    const added = pushToRevOps("deals", [deal]);
+    const added = await pushToRevOps("deals", [deal]);
     addLog(`✓ Deal created: "${deal.name}"${added?" — added to RevOps":" (already exists)"}`, "success");
     setEmailOpps(prev=>prev.map(o=>o.emailId===opp.emailId?{...o,created:true}:o));
   };
@@ -1256,8 +1256,7 @@ Channel: ${slackChannelName}`);
                   </div>
                   {(()=>{
                     try {
-                      const store = JSON.parse(localStorage.getItem("st1_revops_v2")||"{}");
-                      const contacts = Array.isArray(store.contacts) ? store.contacts : [];
+                      const contacts = Array.isArray(revopsState.contacts) ? revopsState.contacts : [];
                       const now = Date.now();
                       const cold = contacts.filter(c => {
                         if (!c.email) return false;
@@ -1282,7 +1281,7 @@ Channel: ${slackChannelName}`);
                     <div style={{display:"flex",gap:8,alignItems:"center"}}>
                       <select
                         value={coldLeadListKey}
-                        onChange={e=>{setColdLeadListKey(e.target.value);try{localStorage.setItem("st1_cold_lead_listkey",e.target.value);}catch{}}}
+                        onChange={e=>{setColdLeadListKey(e.target.value);saveIntegrationPrefs({coldLeadListKey:e.target.value});}}
                         style={{flex:1,background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 9px",fontSize:11}}
                       >
                         <option value="">— Select a list —</option>
@@ -1422,7 +1421,7 @@ Channel: ${slackChannelName}`);
                             <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:2}}>{l.listname}</div>
                             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:18,color:B.orange}}>{l.subscribers.toLocaleString()}</div>
                             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:6}}>SUBSCRIBERS</div>
-                            <button onClick={()=>{setColdLeadListKey(l.listkey);try{localStorage.setItem("st1_cold_lead_listkey",l.listkey);}catch{};}} style={{background:coldLeadListKey===l.listkey?B.orange:B.surface,color:coldLeadListKey===l.listkey?B.white:B.muted,border:`1px solid ${coldLeadListKey===l.listkey?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
+                            <button onClick={()=>{setColdLeadListKey(l.listkey);saveIntegrationPrefs({coldLeadListKey:l.listkey});}} style={{background:coldLeadListKey===l.listkey?B.orange:B.surface,color:coldLeadListKey===l.listkey?B.white:B.muted,border:`1px solid ${coldLeadListKey===l.listkey?B.orange:B.border}`,borderRadius:3,padding:"3px 8px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>
                               {coldLeadListKey===l.listkey?"✓ COLD LEAD LIST":"USE FOR COLD LEADS"}
                             </button>
                           </div>
@@ -1769,9 +1768,9 @@ Channel: ${slackChannelName}`);
           {/* ── ADS ── */}
           {tab==="ads"&&<AdsTab
             adsStatus={adsStatus} adsLoading={adsLoading} loadAdsStatus={loadAdsStatus}
-            lsEmbedUrl={lsEmbedUrl} setLsEmbedUrl={v=>{setLsEmbedUrl(v);try{localStorage.setItem("st1_ls_embed",v);}catch{}}}
-            adLinks={adLinks} setAdLinks={v=>{setAdLinks(v);try{localStorage.setItem("st1_ad_links",JSON.stringify(v));}catch{}}}
-            adMetrics={adMetrics} setAdMetrics={v=>{setAdMetrics(v);try{localStorage.setItem("st1_ad_metrics",JSON.stringify(v));}catch{}}}
+            lsEmbedUrl={lsEmbedUrl} setLsEmbedUrl={v=>{setLsEmbedUrl(v);saveIntegrationPrefs({lsEmbedUrl:v});}}
+            adLinks={adLinks} setAdLinks={v=>{setAdLinks(v);saveIntegrationPrefs({adLinks:v});}}
+            adMetrics={adMetrics} setAdMetrics={v=>{setAdMetrics(v);saveIntegrationPrefs({adMetrics:v});}}
             B={B} OBtn={OBtn}
           />}
 
@@ -2123,7 +2122,8 @@ function AyrsharePanel({addLog}) {
       if (data.ok) {
         setTestResult({ok:true, user: data.user, workspaces: data.workspaces||[], firstWorkspaceId: data.firstWorkspaceId});
         addLog("Publer connected ✓","success");
-        try { const st=JSON.parse(localStorage.getItem("st1_integrations_status_v1")||"{}"); localStorage.setItem("st1_integrations_status_v1",JSON.stringify({...st,social:true})); } catch {}
+        setStatus(s=>({...s,social:true}));
+        saveIntegrationPrefs({status:{...status,social:true}});
       } else {
         setTestResult({ok:false, error: data.error || "Connection failed"});
         addLog(`Publer: ${data.error}`,"error");
