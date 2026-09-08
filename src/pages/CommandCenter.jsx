@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { routeTask } from '../lib/aiRouter.js'
-import ToolManagerComponent from '../components/ToolManager.jsx'
-import AdHubModule from '../components/AdHubModule.jsx'
-import AnalyticsWidget from '../components/AnalyticsWidget.jsx'
 import { loadServerState, updateServerState } from '../lib/serverState.js'
+
+const ToolManagerComponent = lazy(() => import('../components/ToolManager.jsx'))
+const AdHubModule = lazy(() => import('../components/AdHubModule.jsx'))
+const AnalyticsWidget = lazy(() => import('../components/AnalyticsWidget.jsx'))
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
 const B = {
@@ -28,6 +29,14 @@ const B = {
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function getStoredRole() {
   return 'sales_rep'
+}
+
+function PanelFallback() {
+  return (
+    <div style={{ padding: 28, fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.muted }}>
+      Loading module...
+    </div>
+  )
 }
 
 // ─── MODULE DEFINITIONS ───────────────────────────────────────────────────────
@@ -1151,7 +1160,7 @@ function ToolManagerModule() {
   return (
     <div>
       <ModHeader icon="⚙" label="Tool Manager" desc="Configure plugins, manage API keys, and control which tools each role can access." />
-      <ToolManagerComponent />
+      <Suspense fallback={<PanelFallback />}><ToolManagerComponent /></Suspense>
     </div>
   )
 }
@@ -1282,8 +1291,8 @@ function ActivePanel({ mod, userRole }) {
   if (mod.id === 'price-intel')  return <PriceIntelModule   userRole={userRole} />
   if (mod.id === 'research')     return <ResearchModule     userRole={userRole} />
   if (mod.id === 'finance')      return <FinancialModule    userRole={userRole} />
-  if (mod.id === 'ad-hub')       return <AdHubModule       userRole={userRole} />
-  if (mod.id === 'analytics')    return <AnalyticsWidget />
+  if (mod.id === 'ad-hub')       return <Suspense fallback={<PanelFallback />}><AdHubModule userRole={userRole} /></Suspense>
+  if (mod.id === 'analytics')    return <Suspense fallback={<PanelFallback />}><AnalyticsWidget /></Suspense>
   if (mod.id === 'tool-manager') return <ToolManagerModule />
   return <PlaceholderPanel mod={mod} />
 }

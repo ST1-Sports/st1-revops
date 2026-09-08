@@ -127,6 +127,7 @@ export default function IntegrationsHub() {
   const [socialPosting, setSocialPosting] = useState(false);
   const [socialPostResult, setSocialPostResult] = useState(null);
   const [gmailStatus, setGmailStatus] = useState(false);
+  const [prefsHydrated, setPrefsHydrated] = useState(false);
   const [emailMessages, setEmailMessages] = useState([]);
   const [emailOpps, setEmailOpps]   = useState([]);
   const [emailScanning, setEmailScanning] = useState(false);
@@ -168,22 +169,29 @@ export default function IntegrationsHub() {
       setAdMetrics(intg.adMetrics||{});
       setGmailStatus(!!intg.status?.gmail);
       clearLegacyLocalKeys(LEGACY_INTEGRATION_KEYS);
-    }).catch(()=>{});
+      setPrefsHydrated(true);
+    }).catch(()=>{setPrefsHydrated(true);});
   },[]);
 
-  // Auto-verify Gmail silently on mount
+  // Auto-verify Gmail after preferences load and the page is idle.
   useEffect(()=>{
-    if(gmailStatus) return; // already connected
-    fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:1})})
-      .then(r=>r.json()).then(d=>{
-        if(!d.error){
-          setGmailStatus(true);
-          setStatus(s=>({...s,gmail:true}));
-          saveIntegrationPrefs({status:{...status,gmail:true}});
-        }
-      }).catch(()=>{});
-  // eslint-disable-next-line
-  },[]);
+    if(!prefsHydrated || gmailStatus) return; // already connected
+    let cancelled=false;
+    const probe=()=>fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list",maxResults:1})})
+        .then(r=>r.json()).then(d=>{
+          if(!cancelled&&!d.error){
+            setGmailStatus(true);
+            setStatus(s=>({...s,gmail:true}));
+            saveIntegrationPrefs({status:{...status,gmail:true}});
+          }
+        }).catch(()=>{});
+    const idleId=window.requestIdleCallback?window.requestIdleCallback(probe,{timeout:5000}):setTimeout(probe,2500);
+    return()=>{
+      cancelled=true;
+      if(window.cancelIdleCallback&&typeof idleId==="number")window.cancelIdleCallback(idleId);
+      else clearTimeout(idleId);
+    };
+  },[prefsHydrated,gmailStatus,saveIntegrationPrefs,status]);
 
   const setC = (k,v) => setCreds(c=>({...c,[k]:v}));
 
@@ -785,7 +793,6 @@ Channel: ${slackChannelName}`);
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,fontFamily:"'Lexend',sans-serif",color:B.text}}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');
         *{box-sizing:border-box;margin:0;padding:0}
         ::-webkit-scrollbar{width:4px;height:4px} ::-webkit-scrollbar-thumb{background:${B.orange};border-radius:2px}
         button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s} button:hover{opacity:.82} button:active{transform:scale(.97)}

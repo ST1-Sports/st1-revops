@@ -73,8 +73,26 @@ export function GA4Widget({ autoRefreshSeconds = 60 }) {
 
   useEffect(() => {
     load()
-    const id = setInterval(load, autoRefreshSeconds * 1000)
-    return () => clearInterval(id)
+    let id = null
+    const start = () => {
+      if (id || document.visibilityState === 'hidden') return
+      id = setInterval(load, autoRefreshSeconds * 1000)
+    }
+    const stop = () => {
+      if (!id) return
+      clearInterval(id)
+      id = null
+    }
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') stop()
+      else { load(); start() }
+    }
+    start()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [load, autoRefreshSeconds])
 
   const topPageMax   = data?.topPages?.[0]?.activeUsers  || 1

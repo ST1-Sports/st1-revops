@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { getAllPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
+import { getAllPlugins, initPlugins, registerPlugin, setPluginEnabled, deleteCustomTool } from '../lib/plugins/index.js'
 
 const B = {
   white:    '#FFFFFF',
@@ -106,7 +106,7 @@ export default function ToolManager() {
 
   function reload() { setPlugins(getAllPlugins()) }
 
-  useEffect(() => { reload() }, [])
+  useEffect(() => { initPlugins().then(reload) }, [])
 
   function handleToggle(plugin) {
     setPluginEnabled(plugin.id, plugin.enabled === false ? true : false)

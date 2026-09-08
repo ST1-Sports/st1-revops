@@ -189,6 +189,7 @@ const BUILT_INS = [
 ]
 
 for (const p of BUILT_INS) _upsert(p)
+let bootstrapPromise = null
 
 // ── Custom tool handler factory ───────────────────────────────────────────────
 function buildHandler(tool) {
@@ -212,20 +213,26 @@ function buildHandler(tool) {
 }
 
 // ── Bootstrap: apply persisted prefs then load custom tools ───────────────────
-loadServerState().then(state => {
-  const prefs = state.toolPrefs || {}
-  for (const [id, enabled] of Object.entries(prefs)) {
-    const p = _byId.get(id)
-    if (p) p.enabled = enabled
+export function initPlugins() {
+  if (!bootstrapPromise) {
+    bootstrapPromise = loadServerState().then(state => {
+      const prefs = state.toolPrefs || {}
+      for (const [id, enabled] of Object.entries(prefs)) {
+        const p = _byId.get(id)
+        if (p) p.enabled = enabled
+      }
+      for (const t of Array.isArray(state.customTools) ? state.customTools : []) {
+        _upsert({ ...t, handler: buildHandler(t) })
+      }
+      clearLegacyLocalKeys([PREFS_KEY, CUSTOM_TOOLS_KEY])
+    }).catch(() => { bootstrapPromise = null })
   }
-  for (const t of Array.isArray(state.customTools) ? state.customTools : []) {
-    _upsert({ ...t, handler: buildHandler(t) })
-  }
-  clearLegacyLocalKeys([PREFS_KEY, CUSTOM_TOOLS_KEY])
-}).catch(() => {})
+  return bootstrapPromise
+}
 
 // ── Public API ────────────────────────────────────────────────────────────────
 export function getPlugin(capability, userRole = 'sales_rep') {
+  void initPlugins()
   const list = _byCap.get(capability) || []
   return (
     list.find(p => p.enabled !== false && (!p.roles || p.roles.includes(userRole))) ||
@@ -235,6 +242,7 @@ export function getPlugin(capability, userRole = 'sales_rep') {
 }
 
 export function getAllPlugins() {
+  void initPlugins()
   return [..._byId.values()]
 }
 

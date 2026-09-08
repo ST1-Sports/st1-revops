@@ -28,6 +28,15 @@ function usePrefetchPanels(enabled=true) {
   }, [enabled]);
 }
 
+function useDebouncedValue(value, delay=250) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
 // ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
 function PanelLoader() {
   return (
@@ -48,6 +57,11 @@ class ErrBound extends Component {
     // Auto-reload on chunk load failures (stale browser cache after deploy)
     if(err?.message?.includes("Failed to fetch dynamically imported module")){
       window.location.reload();
+    }
+  }
+  componentDidUpdate(prevProps){
+    if(prevProps.resetKey!==this.props.resetKey && this.state.err){
+      this.setState({err:null});
     }
   }
   render(){
@@ -323,10 +337,23 @@ function useStore() {
   // Mount: initial sync
   useEffect(() => { pullFromServer(); }, []);
 
-  // Poll every 2 minutes — picks up changes from other devices/staff members
+  // Poll for changes from other devices/staff members; slow down while hidden.
   useEffect(() => {
-    pollTimer.current = setInterval(pullFromServer, 120000);
-    return () => clearInterval(pollTimer.current);
+    const schedule = () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+      pollTimer.current = setInterval(pullFromServer, hidden ? 300000 : 120000);
+    };
+    const onVisibility = () => {
+      schedule();
+      if (document.visibilityState !== "hidden") pullFromServer();
+    };
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [pullFromServer]);
 
   const set = useCallback((fn, opts={}) => {
@@ -656,6 +683,7 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 250);
 
   const dispatch = useCallback((action, payload) => {
     const shouldSyncNow = !SKIP_IMMEDIATE_SYNC.has(action);
@@ -802,7 +830,7 @@ export default function App() {
     return "";
   };
   const searchResults = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = debouncedSearchQuery.trim().toLowerCase();
     if (!showSearch || q.length < 2) return null;
     const schoolText = v => (typeof v === "string" ? v : v?.name || "").toLowerCase();
     const contacts = firstMatches(s.contacts, 4, c => (
@@ -822,7 +850,7 @@ export default function App() {
       (o.school||"").toLowerCase().includes(q)
     ));
     return { q, contacts, deals, campaigns, orders, total:contacts.length+deals.length+campaigns.length+orders.length };
-  }, [showSearch, searchQuery, s.contacts, s.deals, s.campaigns, s.orders]);
+  }, [showSearch, debouncedSearchQuery, s.contacts, s.deals, s.campaigns, s.orders]);
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -978,7 +1006,7 @@ export default function App() {
           </header>
 
           <main style={{flex:1,overflowY:"auto",background:B.pageBg,display:"flex",flexDirection:"column"}}>
-            <ErrBound key={mod}>
+            <ErrBound resetKey={mod}>
             {mod==="analytics"   && <ModAnalytics/>}
             {mod==="briefing"    && <ModHome/>}
             {mod==="crm"          && <ModCRM/>}
@@ -1087,7 +1115,7 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 
   return (
     <div style={{minHeight:"100vh",background:B.pageBg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"'Lexend',sans-serif"}}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Russo+One&family=Lexend+Zetta:wght@700;900&family=Lexend:wght@300;400;500&display=swap');*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
+      <style>{`*{box-sizing:border-box;margin:0;padding:0}button{cursor:pointer;font-family:'Lexend',sans-serif;transition:all .12s}button:hover{opacity:.82}input{font-family:'Lexend',sans-serif;outline:none}@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes shk{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}.fu{animation:fu .3s}.shk{animation:shk .3s}`}</style>
       <div className="fu" style={{width:360,background:B.white,border:`1px solid ${B.border}`,borderRadius:12,padding:30,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
         <div style={{textAlign:"center",marginBottom:26}}>
           <div style={{width:50,height:50,background:B.orange,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
@@ -5347,9 +5375,15 @@ function ModProspecting() {
   const [view,setView]=useState("areas");
   const [areas,setAreas]=useState((s.prospectAreas||[]).length>0?s.prospectAreas:[DEFAULT_AREA]);
   const [editing,setEditing]=useState(null);
+  const areasSigRef=useRef("");
 
   // Sync areas to store whenever they change
-  useEffect(()=>{ dispatch("SET_PROSPECT_AREAS",areas); },[JSON.stringify(areas)]);
+  useEffect(()=>{
+    const sig=JSON.stringify((areas||[]).map(a=>({id:a.id,name:a.name,regions:a.regions,states:a.states,sports:a.sports,orgType:a.orgType,roles:a.roles,maxOrgs:a.maxOrgs,active:a.active})));
+    if(sig===areasSigRef.current) return;
+    areasSigRef.current=sig;
+    dispatch("SET_PROSPECT_AREAS",areas);
+  },[areas,dispatch]);
   const [activeArea,setActiveArea]=useState(null);
   const abortRef=useRef(false);
   const importFileRef=useRef();
@@ -7247,7 +7281,7 @@ function ModMarketing() {
   useEffect(()=>{batchSentMapRef.current=batchSentMap;},[batchSentMap]);
   useEffect(()=>{sendingRef.current=sending;},[sending]);
   // 15-second ticker for countdown display
-  useEffect(()=>{const id=setInterval(()=>setNowTick(Date.now()),15000);return()=>clearInterval(id);},[]);
+  useEffect(()=>{const id=setInterval(()=>{if(document.visibilityState!=="hidden")setNowTick(Date.now());},15000);return()=>clearInterval(id);},[]);
   // Scheduled send engine — fires due batches during Mon-Fri 9am-5pm
   useEffect(()=>{
     const isWorkingHours=()=>{const d=new Date();const h=d.getHours();const wd=d.getDay();return wd>=1&&wd<=5&&h>=9&&h<17;};

@@ -6,7 +6,7 @@
  * if no plugin is found for the classified capability or user role.
  */
 
-import { getPlugin } from './plugins/index.js'
+import { getPlugin, initPlugins } from './plugins/index.js'
 
 const IS_DEV   = typeof import.meta !== 'undefined' && import.meta.env?.DEV
 const DEV_KEY  = typeof import.meta !== 'undefined' ? (import.meta.env?.VITE_ANTHROPIC_KEY || '') : ''
@@ -82,7 +82,7 @@ function normalise(raw) {
  * @returns {Promise<{ output, metadata, pluginUsed: string, capability: string }>}
  */
 export async function routeTask({ task, input, userRole = 'sales_rep' }) {
-  const capability = await classify(task)
+  const [capability] = await Promise.all([classify(task), initPlugins()])
   const plugin     = resolvePlugin(capability, userRole)
   const raw        = await plugin.handler(task, input)
   const { output, metadata } = normalise(raw)
@@ -108,7 +108,7 @@ export async function routeTask({ task, input, userRole = 'sales_rep' }) {
  * @returns {AsyncGenerator<{ text: string, done: boolean, pluginUsed: string, capability: string, metadata?: object }>}
  */
 export async function* routeTaskStream({ task, input, userRole = 'sales_rep' }) {
-  const capability = await classify(task)
+  const [capability] = await Promise.all([classify(task), initPlugins()])
   const plugin     = resolvePlugin(capability, userRole)
 
   // Non-text capabilities don't stream — execute and yield once
