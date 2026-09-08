@@ -242,10 +242,12 @@ function mergeServerState(base, server) {
 function useStore() {
   const serverTimer = useRef(null);
   const pollTimer = useRef(null);
+  const hasLegacyLocalState = useRef(false);
   const [s, setRaw] = useState(() => {
     try {
       const saved = localStorage.getItem(STORE);
       if (saved) {
+        hasLegacyLocalState.current = true;
         const p = JSON.parse(saved);
         return {...SEED,...p,
           deals:        Array.isArray(p.deals)        ? p.deals        : [],
@@ -294,10 +296,12 @@ function useStore() {
         if (d.state && typeof d.state === "object") {
           setRaw(prev => {
             const merged = mergeServerState(prev, d.state);
-            fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
-              body: JSON.stringify({state: serverStatePayload(merged)})})
-              .then(clearLegacyRevOpsLocal)
-              .catch(()=>{});
+            if (hasLegacyLocalState.current) {
+              fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({state: serverStatePayload(merged)})})
+                .then(() => { hasLegacyLocalState.current = false; clearLegacyRevOpsLocal(); })
+                .catch(()=>{});
+            }
             return merged;
           });
         } else {
