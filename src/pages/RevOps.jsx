@@ -7,12 +7,25 @@ const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
 const RedditPage     = lazy(() => import('./Reddit.jsx'))
 const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 
-// Kick off background downloads for the most-used panels as soon as the app
-// shell renders, so they're already cached when the user clicks into them.
-function usePrefetchPanels() {
+// Prefetch heavier panels only after the shell has had time to become interactive.
+function usePrefetchPanels(enabled=true) {
   useEffect(() => {
-    import('./CommandCenter.jsx');
-  }, []);
+    if (!enabled || typeof window === "undefined") return;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (connection?.saveData || /2g/i.test(connection?.effectiveType || "")) return;
+    let cancelled = false;
+    const preload = () => {
+      if (!cancelled) import('./CommandCenter.jsx').catch(()=>{});
+    };
+    const idleId = window.requestIdleCallback
+      ? window.requestIdleCallback(preload, { timeout: 7000 })
+      : setTimeout(preload, 4500);
+    return () => {
+      cancelled = true;
+      if (window.cancelIdleCallback && typeof idleId === "number") window.cancelIdleCallback(idleId);
+      else clearTimeout(idleId);
+    };
+  }, [enabled]);
 }
 
 // ─── PANEL LOADER (suspense fallback) ────────────────────────────────────────
@@ -96,6 +109,23 @@ const fmt$K  = (n) => { if(n>=1000) return "$"+(n/1000).toFixed(1)+"K"; return "
 const fmtD   = (d) => d ? new Date(d+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
 const agentCtxText = v => { try { return JSON.stringify(v||{}).toLowerCase(); } catch { return String(v||"").toLowerCase(); } };
 const agentCtxTokens = q => String(q||"").toLowerCase().replace(/[^a-z0-9]+/g," ").split(/\s+/).filter(w=>w.length>2&&!["the","and","for","with","from","this","that","show","find","look","looking","need","want","what","how","can","you","make","sure"].includes(w));
+const firstMatches=(rows=[],limit=4,predicate=()=>false)=>{
+  const out=[];
+  for(const row of rows||[]){
+    if(predicate(row)){
+      out.push(row);
+      if(out.length>=limit) break;
+    }
+  }
+  return out;
+};
+const SKIP_IMMEDIATE_SYNC = new Set([
+  "LOGIN",                           // session-only, not persisted
+  "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
+  "UPDATE_CAMPAIGN",                 // fires per-email during batch sends; debounce covers it
+  "UPDATE_CAMPAIGN_TOUCH",           // fires on every keystroke in touch editor
+  "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
+]);
 const rankForAgentContext=(rows=[],query="",aliases="",limit=120)=>{
   const arr=Array.isArray(rows)?rows:[];
   const tokens=agentCtxTokens(query);
@@ -295,9 +325,10 @@ function useStore() {
     return () => clearInterval(pollTimer.current);
   }, [pullFromServer]);
 
-  const set = useCallback((fn) => {
+  const set = useCallback((fn, opts={}) => {
     setRaw(prev => {
       const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
+      if (opts.skipServerDebounce) return next;
       // Debounced server sync — catches any state changes not covered by dispatch's immediate sync.
       if (serverTimer.current) clearTimeout(serverTimer.current);
       serverTimer.current = setTimeout(() => {
@@ -623,27 +654,21 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
 
   const dispatch = useCallback((action, payload) => {
+    const shouldSyncNow = !SKIP_IMMEDIATE_SYNC.has(action);
     set(prev => {
       const next = reducer(prev, action, payload);
       // Sync to server immediately for every action that mutates persistent data.
       // Only skip high-frequency events (SCORE_CONTACT fires once per email send)
       // and bulk-replace actions that come from Zoho/external syncs — the 2.5s
       // debounced fallback in set() handles those.
-      const skipSync = new Set([
-        "LOGIN",                           // session-only, not persisted
-        "SCORE_CONTACT",                   // fires ~25x per batch send — debounce covers it
-        "UPDATE_CAMPAIGN",                 // fires per-email during batch sends; debounce covers it
-        "UPDATE_CAMPAIGN_TOUCH",           // fires on every keystroke in touch editor
-        "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES", // bulk external syncs
-      ]);
-      if (!skipSync.has(action)) {
+      if (shouldSyncNow) {
         fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
           body: JSON.stringify({state: serverStatePayload(next)})})
           .then(clearLegacyRevOpsLocal)
           .catch(()=>{});
       }
       return next;
-    });
+    }, { skipServerDebounce: shouldSyncNow });
   }, [set]);
 
   const toast = useCallback((msg, type="info") => {
@@ -652,7 +677,7 @@ export default function App() {
     setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 4000);
   }, []);
 
-  const cu = (() => {
+  const cu = useMemo(() => {
     if (s.currentUserId === "__owner__") {
       return { id:"__owner__", name:"Admin", email:"", initials:"AD", color:B.orange, role:"owner", isAdmin:true };
     }
@@ -661,9 +686,9 @@ export default function App() {
     const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
     const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
     return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
-  })();
+  }, [s.currentUserId, s.reps, s.appUsers]);
   const crmSyncRef = useRef(null);
-  const ctx = {s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer};
+  const ctx = useMemo(() => ({s, dispatch, toast, cu, mod, setMod, crmSyncRef, lastSynced, syncing, pullFromServer}), [s, dispatch, toast, cu, mod, lastSynced, syncing, pullFromServer]);
   useEffect(()=>{
     if(!s.currentUserId) return;
     const SIX_H=6*60*60*1000;
@@ -758,9 +783,9 @@ export default function App() {
     {id:"integrations",  icon:"⚡", label:"Integrations"},
     ...(cu?.isAdmin ? [{id:"admin", icon:"◐", label:"Admin Panel"}] : []),
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  ],[s.alerts,s.reorders,s.deals,s.rfps,cu?.isAdmin]);
+  ],[s.alerts,s.reorders,s.deals,s.contacts,cu?.isAdmin]);
 
-  usePrefetchPanels();
+  usePrefetchPanels(Boolean(s.currentUserId));
 
   if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
 
@@ -772,6 +797,28 @@ export default function App() {
     }
     return "";
   };
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!showSearch || q.length < 2) return null;
+    const schoolText = v => (typeof v === "string" ? v : v?.name || "").toLowerCase();
+    const contacts = firstMatches(s.contacts, 4, c => (
+      (c.fullName||"").toLowerCase().includes(q) ||
+      (c.email||"").toLowerCase().includes(q) ||
+      schoolText(c.school).includes(q)
+    ));
+    const deals = firstMatches(s.deals, 4, d => (
+      (d.name||"").toLowerCase().includes(q) ||
+      (d.contact||"").toLowerCase().includes(q) ||
+      (d.school||"").toLowerCase().includes(q)
+    ));
+    const campaigns = firstMatches(s.campaigns, 4, c => (c.name||"").toLowerCase().includes(q));
+    const orders = firstMatches(s.orders, 4, o => (
+      (o.name||"").toLowerCase().includes(q) ||
+      (o.contact||"").toLowerCase().includes(q) ||
+      (o.school||"").toLowerCase().includes(q)
+    ));
+    return { q, contacts, deals, campaigns, orders, total:contacts.length+deals.length+campaigns.length+orders.length };
+  }, [showSearch, searchQuery, s.contacts, s.deals, s.campaigns, s.orders]);
 
   return (
     <AppCtx.Provider value={ctx}>
@@ -964,13 +1011,8 @@ export default function App() {
                 <input autoFocus value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} placeholder="Search contacts, deals, campaigns, orders..." style={{flex:1,border:"none",outline:"none",fontFamily:"'Lexend',sans-serif",fontSize:14,color:B.text,background:"transparent"}}/>
                 <button onClick={()=>setShowSearch(false)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer",padding:"2px 6px"}}>✕</button>
               </div>
-              {searchQuery.trim().length>=2&&(()=>{
-                const q=searchQuery.trim().toLowerCase();
-                const contacts=(s.contacts||[]).filter(c=>(c.fullName||"").toLowerCase().includes(q)||(c.email||"").toLowerCase().includes(q)||(typeof c.school==="string"?c.school:c.school?.name||"").toLowerCase().includes(q)).slice(0,4);
-                const deals=(s.deals||[]).filter(d=>(d.name||"").toLowerCase().includes(q)||(d.contact||"").toLowerCase().includes(q)||(d.school||"").toLowerCase().includes(q)).slice(0,4);
-                const campaigns=(s.campaigns||[]).filter(c=>(c.name||"").toLowerCase().includes(q)).slice(0,4);
-                const orders=(s.orders||[]).filter(o=>(o.name||"").toLowerCase().includes(q)||(o.contact||"").toLowerCase().includes(q)||(o.school||"").toLowerCase().includes(q)).slice(0,4);
-                const total=contacts.length+deals.length+campaigns.length+orders.length;
+              {searchResults&&(()=>{
+                const {contacts, deals, campaigns, orders, total} = searchResults;
                 if(!total) return <div style={{padding:"28px 16px",textAlign:"center",fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.muted}}>No results for "{searchQuery}"</div>;
                 const Grp=({title,items,go,getLabel,getSub})=>items.length>0?(
                   <div>

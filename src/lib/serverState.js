@@ -1,9 +1,25 @@
-export async function loadServerState() {
+let stateCache = null;
+let stateCacheAt = 0;
+let stateLoadPromise = null;
+const STATE_CACHE_MS = 1000;
+
+export async function loadServerState(options = {}) {
   try {
-    const res = await fetch("/api/state");
-    const data = await res.json();
-    return data?.state && typeof data.state === "object" ? data.state : {};
+    const force = Boolean(options.force);
+    if (!force && stateCache && Date.now() - stateCacheAt < STATE_CACHE_MS) return stateCache;
+    if (!force && stateLoadPromise) return stateLoadPromise;
+    stateLoadPromise = fetch("/api/state")
+      .then(res => res.json())
+      .then(data => {
+        const state = data?.state && typeof data.state === "object" ? data.state : {};
+        stateCache = state;
+        stateCacheAt = Date.now();
+        return state;
+      })
+      .finally(() => { stateLoadPromise = null; });
+    return await stateLoadPromise;
   } catch {
+    stateLoadPromise = null;
     return {};
   }
 }
@@ -20,11 +36,13 @@ export async function saveServerState(state) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ state: payload }),
   });
+  stateCache = payload;
+  stateCacheAt = Date.now();
   return payload;
 }
 
 export async function updateServerState(updater) {
-  const current = await loadServerState();
+  const current = await loadServerState({ force: true });
   const next = typeof updater === "function" ? updater(current) : { ...current, ...(updater || {}) };
   return saveServerState(next);
 }

@@ -180,6 +180,7 @@ export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
   const hydratedRef = useRef(false);
+  const saveTimerRef = useRef(null);
   const [tab,       setTab]       = useState("dashboard");
   const [selSupplier, setSelSupplier] = useState(null);
   const [selProduct,  setSelProduct]  = useState(null);
@@ -211,10 +212,14 @@ export default function PriceListManager({ onMakeQuote } = {}) {
 
   useEffect(() => {
     if (!hydratedRef.current) return;
-    updateServerState(state => ({
-      ...state,
-      priceTool: { suppliers, deals, updatedAt: new Date().toISOString() },
-    })).catch(() => {});
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      updateServerState(state => ({
+        ...state,
+        priceTool: { suppliers, deals, updatedAt: new Date().toISOString() },
+      })).catch(() => {});
+    }, 700);
+    return () => clearTimeout(saveTimerRef.current);
   }, [suppliers, deals]);
 
   // Build flat product map

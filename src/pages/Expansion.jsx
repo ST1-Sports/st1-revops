@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { loadServerState, updateServerState, mergeById } from "../lib/serverState.js";
 
 // ─── ST1 BRAND ────────────────────────────────────────────────────────────────
@@ -341,6 +341,17 @@ Return JSON:
 export default function ExpansionPlaybook({ s: incomingState={}, dispatch: incomingDispatch=()=>{}, toast=()=>{} }) {
   const hasExternalState = Array.isArray(incomingState.strategies);
   const [standaloneState, setStandaloneState] = useState({ strategies:[], contacts:[], deals:[] });
+  const saveTimerRef = useRef(null);
+  const persistStandaloneState = useCallback((next, immediate=false) => {
+    clearTimeout(saveTimerRef.current);
+    const save = () => updateServerState(state => ({
+      ...state,
+      strategies: mergeById(state.strategies, next.strategies),
+      activity: mergeById(state.activity, next.activity),
+    })).catch(() => {});
+    if (immediate) save();
+    else saveTimerRef.current = setTimeout(save, 700);
+  }, []);
   const standaloneDispatch = useCallback((type, payload={}) => {
     setStandaloneState(prev => {
       let next = prev;
@@ -351,14 +362,11 @@ export default function ExpansionPlaybook({ s: incomingState={}, dispatch: incom
       } else if (type === "LOG") {
         next = { ...prev, activity: [{ id:`act_${Date.now()}`, ts:new Date().toISOString(), ...(payload||{}) }, ...(prev.activity||[])].slice(0, 100) };
       }
-      updateServerState(state => ({
-        ...state,
-        strategies: mergeById(state.strategies, next.strategies),
-        activity: mergeById(state.activity, next.activity),
-      })).catch(() => {});
+      persistStandaloneState(next, payload?.status === "done" || payload?.status === "error");
       return next;
     });
-  }, []);
+  }, [persistStandaloneState]);
+  useEffect(() => () => clearTimeout(saveTimerRef.current), []);
   useEffect(() => {
     if (hasExternalState) return;
     loadServerState().then(state => {
