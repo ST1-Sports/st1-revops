@@ -190,6 +190,10 @@ function mergeServerState(base, server) {
     rfps:         mergeById(base.rfps,         server.rfps),
     invoices:     mergeById(base.invoices,     server.invoices),
     reorders:     mergeById(base.reorders,     server.reorders),
+    sequences:    mergeById(base.sequences,    server.sequences),
+    prospectAreas:mergeById(base.prospectAreas,server.prospectAreas),
+    appUsers:     mergeById(base.appUsers,     server.appUsers),
+    pendingBriefActions: mergeById(base.pendingBriefActions, server.pendingBriefActions),
     strategies:   mergeById(base.strategies,   server.strategies),
     brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
     socialPosts:  mergeById(base.socialPosts,  server.socialPosts),
@@ -200,6 +204,10 @@ function mergeServerState(base, server) {
     alerts:       mergeById(base.alerts,       server.alerts),
     activity:     mergeById(base.activity,     server.activity),
     priceLists:   mergeById(base.priceLists,   server.priceLists),
+    competeIntel: {...(base.competeIntel||{}), ...(server.competeIntel||{})},
+    battlecards:  {...(base.battlecards||{}),  ...(server.battlecards||{})},
+    integrations: {...(base.integrations||{}), ...(server.integrations||{})},
+    company:      {...(base.company||{}),      ...(server.company||{})},
   };
 }
 

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import * as bgTasks from "../lib/bgTasks.js";
+import { loadServerState, updateServerState } from "../lib/serverState.js";
 
 const IMPORT_TASK_ID = "price_import";
 
@@ -178,6 +179,7 @@ async function callClaudeMsg(messages, sys="", tokens=4000) {
 export default function PriceListManager({ onMakeQuote } = {}) {
   const [suppliers, setSuppliers] = useState(SEED_SUPPLIERS);
   const [deals,     setDeals]     = useState(SEED_DEALS);
+  const hydratedRef = useRef(false);
   const [tab,       setTab]       = useState("dashboard");
   const [selSupplier, setSelSupplier] = useState(null);
   const [selProduct,  setSelProduct]  = useState(null);
@@ -197,6 +199,23 @@ export default function PriceListManager({ onMakeQuote } = {}) {
   const [filterSupplier, setFilterSupplier] = useState("all");
   const [filterStatus,   setFilterStatus]   = useState("all");
   const fileInputRef = useRef();
+
+  useEffect(() => {
+    loadServerState().then(state => {
+      const saved = state.priceTool || {};
+      if (Array.isArray(saved.suppliers) && saved.suppliers.length) setSuppliers(saved.suppliers);
+      if (Array.isArray(saved.deals)) setDeals(saved.deals);
+      hydratedRef.current = true;
+    }).catch(() => { hydratedRef.current = true; });
+  }, []);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    updateServerState(state => ({
+      ...state,
+      priceTool: { suppliers, deals, updatedAt: new Date().toISOString() },
+    })).catch(() => {});
+  }, [suppliers, deals]);
 
   // Build flat product map
   const productMap = {};
