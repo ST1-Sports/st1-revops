@@ -1016,6 +1016,7 @@ export default function App() {
             {mod==="reorder"     && <ModReorder/>}
             {mod==="prospecting" && <ModProspecting/>}
             {mod==="social"      && <ModSocial/>}
+            {mod==="calendar"    && <ModCalendar/>}
             {mod==="marketing"   && <ModMarketing/>}
             {mod==="compete"     && <ModCompete/>}
             {mod==="agent"       && <ModAgent/>}
@@ -1179,7 +1180,7 @@ function Login({dispatch, reps=[], appUsers=[]}) {
 const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}><div><div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3,lineHeight:1.1}}>{title}</div>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{sub}</div>}<div style={{width:30,height:3,background:B.orange,marginTop:7,borderRadius:2}}/></div>{action}</div>;});
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
-const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+const GBtn=React.memo(function GBtn({children,onClick,disabled,style={}}){return <button onClick={onClick} disabled={disabled} style={{background:B.white,color:disabled?B.muted:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const Pill=React.memo(function Pill({v,sc,bc}){const c=(sc||{})[v]||B.muted;const bg=(bc||{})[v]||B.surface;return <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c,background:bg,padding:"2px 6px",borderRadius:3,letterSpacing:.5,whiteSpace:"nowrap"}}>{v?.toUpperCase()}</span>;});
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
@@ -11096,6 +11097,8 @@ function SocialImageEditor({value, onChange, brandAssets, toast, onSaveAsset}) {
   const [genRunning,setGenRunning]=useState(false);
   const [showModal,setShowModal]=useState(false);
 
+  useEffect(()=>{setBgImg(value||"");},[value]);
+
   const addText=()=>{
     const id=mkId();
     setLayers(ls=>[...ls,{id,type:"text",x:Math.round(CW/2-80),y:CH-80,w:160,h:44,content:"ST1 Sports",fontSize:22,color:"#FFFFFF",bgColor:"rgba(0,0,0,0.55)",bgPad:6,fontWeight:"bold"}]);
@@ -11363,8 +11366,7 @@ function ModSocial() {
   // Filters
   const [filterStatus,setFilterStatus]=useState("all");
   const [filterPlatform,setFilterPlatform]=useState("all");
-  const [editingPost,setEditingPost]=useState(null); // post being edited in modal
-  const [syncingStats,setSyncingStats]=useState(false);
+  const [publerSetup,setPublerSetup]=useState({loading:true,error:"",profiles:[]});
 
   const campaigns=s.campaigns||[];
 
@@ -11377,7 +11379,7 @@ function ModSocial() {
   const campaignDraftPosts=campaigns.flatMap(c=>
     (c.socialDrafts||[])
       .filter(p=>(p.scheduledDate||p.date))
-      .map(p=>({...p,date:p.scheduledDate||p.date,status:"scheduled",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
+      .map(p=>({...p,date:p.scheduledDate||p.date,status:"draft",_source:"campaign_draft",_campaignId:c.id,_campaignName:c.name}))
   );
   const campaignPosts=campaigns.flatMap(c=>
     (c.socialPosts||[]).map(p=>({...p,_source:"campaign",_campaignId:c.id,_campaignName:c.name}))
@@ -11417,39 +11419,65 @@ function ModSocial() {
   };
 
   const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
+  const configuredPublerPlatforms=new Set((publerSetup.profiles||[]).filter(p=>p.connected!==false).map(p=>p.service));
+  const missingSelectedPlatforms=(platforms||[]).filter(p=>configuredPublerPlatforms.size>0&&!configuredPublerPlatforms.has(p));
+  const publerReady=!publerSetup.loading&&!publerSetup.error;
+  const imageWillBeSkipped=!!imageUrl&&(!imageUrl.startsWith("https://")||imageUrl.startsWith("data:"));
+
+  useEffect(()=>{
+    let cancelled=false;
+    const loadPublerSetup=async()=>{
+      try{
+        const test=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"test"})}).then(r=>r.json());
+        if(cancelled)return;
+        if(test.error||test.ok===false){setPublerSetup({loading:false,error:test.error||"Publer connection failed",profiles:[]});return;}
+        const prof=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"profiles"})}).then(r=>r.json());
+        if(cancelled)return;
+        setPublerSetup({loading:false,error:prof.error||"",profiles:Array.isArray(prof.profiles)?prof.profiles:[]});
+      }catch(e){
+        if(!cancelled)setPublerSetup({loading:false,error:e.message,profiles:[]});
+      }
+    };
+    loadPublerSetup();
+    return()=>{cancelled=true;};
+  },[]);
 
   const generateCaption=async()=>{
     setGenRunning(true);
-    const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
-    const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
-    const target=lengthTargets[postLength];
-    const effectiveChars=Math.min(target.chars,hardLimit);
-    const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
-    const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
-    const direction=caption.trim();
-    const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
-    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-    const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
-    const prompt=direction
-      ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
-      :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
-    const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
-    if(r) setCaption(r);
-    setGenRunning(false);
+    try{
+      const hardLimit=platforms.length?Math.min(...platforms.map(p=>PLATFORM_LIMITS[p]||3000)):3000;
+      const lengthTargets={short:{words:30,chars:200},medium:{words:80,chars:500},long:{words:180,chars:1200}};
+      const target=lengthTargets[postLength];
+      const effectiveChars=Math.min(target.chars,hardLimit);
+      const platformNote=hardLimit<500?` IMPORTANT: ${platforms.find(p=>PLATFORM_LIMITS[p]===hardLimit)} has a ${hardLimit}-character limit — stay well under it.`:"";
+      const lengthGuide=`around ${target.words} words / ${effectiveChars} characters max${platformNote}`;
+      const direction=caption.trim();
+      const topicCtx=topic.trim()?`Topic: ${topic.trim()}.`:"";
+      const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+      const strict=`\n\nRETURN ONLY THE FINISHED POST TEXT. No explanations, no bullet points, no character counts. Just the post.`;
+      const prompt=direction
+        ?`Rewrite and improve this social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nKeep the same core message.\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}\n\nDraft to improve:\n${direction}`
+        :`Write a social media post for ST1 Sports (athletic equipment company). ${ST1}\n${topicCtx} ${productCtx}\nPlatforms: ${platforms.join(", ")||"general social"}.\nTone: ${tone} — ${TONE_GUIDE[tone]}\nLength: ${lengthGuide}.${strict}`;
+      const r=await aiCall(prompt,{tokens:postLength==="long"?500:postLength==="medium"?300:150});
+      if(r) setCaption(r);
+    }catch(e){toast(`AI writing failed: ${e.message}`,"error");}
+    finally{setGenRunning(false);}
   };
 
   // Generate separate per-platform captions with hashtags
   const generatePerPlatform=async()=>{
     if(!platforms.length) return;
     setGenRunning(true); setPlatformVariants(null);
-    const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
-    const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
-    const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
-    const r=await aiCall(task,{tokens:900});
-    if(r){
-      try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
-    }
-    setGenRunning(false);
+    try{
+      const topicCtx=topic.trim()||caption.trim()||"ST1 Sports athletic equipment";
+      const productCtx=product.trim()?`Product: ${product.trim()}.`:"";
+      const task=`Write optimized social media posts for ${platforms.join(", ")} about: ${topicCtx}. ${productCtx} ST1 Sports athletic equipment brand. Tone: ${tone} — ${TONE_GUIDE[tone]} Include platform-appropriate hashtags (5–10 per platform). Return JSON only: {${platforms.map(p=>`"${p.toLowerCase()}":{"caption":"...","hashtags":["#..."]}`).join(",")}}`;
+      const r=await aiCall(task,{tokens:900});
+      if(r){
+        try{const m=r.match(/\{[\s\S]*\}/);if(m)setPlatformVariants(JSON.parse(m[0]));}catch{}
+      }
+    }catch(e){toast(`Platform copy failed: ${e.message}`,"error");}
+    finally{setGenRunning(false);}
   };
 
   // AI image generator: topic+mood → AI prompt → Ideogram image
@@ -11498,9 +11526,24 @@ function ModSocial() {
     toast("Sent to Publer (confirm in your Publer calendar)","success");
   };
 
+  const buildSocialPost=(status="draft")=>({id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status,postType,campaignId:linkedCampId||""});
+  const clearComposer=()=>{setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");};
+  const saveDraft=()=>{
+    if(!caption.trim()){toast("Caption is required","error");return;}
+    const post=buildSocialPost("draft");
+    if(linkedCampId)upsertCampaignPost(linkedCampId,post);
+    else dispatch("ADD_SOCIAL_POST",post);
+    clearComposer();
+    setTab("posts");
+    toast("Draft saved","success");
+  };
+
   const submitPost=async()=>{
     if(!platforms.length){toast("Select at least one platform","error");return;}
     if(!caption.trim()){toast("Caption is required","error");return;}
+    if(publerSetup.loading){toast("Checking Publer connection — try again in a moment","info");return;}
+    if(publerSetup.error){toast(`Publer is not connected: ${publerSetup.error}`,"error");return;}
+    if(missingSelectedPlatforms.length){toast(`No Publer account connected for: ${missingSelectedPlatforms.join(", ")}`,"error");return;}
     if(scheduleAt){
       const tzOff=new Date().getTimezoneOffset();
       const tzSign=tzOff<=0?"+":"-";
@@ -11519,7 +11562,7 @@ function ModSocial() {
     const tzH=String(Math.floor(Math.abs(tzOff)/60)).padStart(2,"0");
     const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`:null;
-    const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
+    const post=buildSocialPost("pending");
     if(linkedCampId){
       upsertCampaignPost(linkedCampId,post);
     }else dispatch("ADD_SOCIAL_POST",post);
@@ -11530,8 +11573,9 @@ function ModSocial() {
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
         const jobId=data.postIds?.[0];
-        updatePostRecord(post,{status:"local_only",publerPostIds:data.postIds||[],publerError:null});
+        updatePostRecord(post,{status:"scheduled",publerPostIds:data.postIds||[],publerError:null});
         if(data._missing) toast(`⚠ ${data._missing}`,"warn");
+        if(data._warning) toast(`⚠ ${data._warning}`,"warn");
         toast("Sent to Publer — checking result…","info");
         // Poll job status in background to confirm success or surface failure
         if(jobId) checkPublerJob({...post,publerPostIds:data.postIds||[]},jobId,!!scheduleAt);
@@ -11545,7 +11589,7 @@ function ModSocial() {
       updatePostRecord(post,{status:"local_only",publerError:err.message});
       toast(`Saved in app — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
     }
-    setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
+    clearComposer();
     setTab("posts");
     setPosting(false);
   };
@@ -11580,7 +11624,7 @@ function ModSocial() {
           <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
             <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
-              {["all","scheduled","published","local_only","draft"].map(st=>(
+              {["all","pending","scheduled","published","local_only","draft"].map(st=>(
                 <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st==="local_only"?"FAILED":st.toUpperCase()}</button>
               ))}
             </div>
@@ -11599,7 +11643,7 @@ function ModSocial() {
             <div style={{display:"flex",flexDirection:"column",gap:8}}>
               {filtered.map(p=>{
                 const isLocalOnly=p.status==="local_only";
-                const sc={scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
+                const sc={pending:B.yellow,scheduled:B.blue,published:B.green,draft:B.muted,local_only:B.red}[p.status]||B.muted;
                 const retryPost=async()=>{
                   if(!(p.caption||"").trim()){toast("No caption to send","error");return;}
                   try{
@@ -11737,6 +11781,14 @@ function ModSocial() {
         <div style={{maxWidth:640}}>
           <div className="card" style={{padding:22}}>
             <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black,letterSpacing:.2,marginBottom:18}}>NEW POST</div>
+            <div style={{background:publerReady?B.greenBg:publerSetup.loading?B.surface:B.redBg,border:`1px solid ${publerReady?B.green:publerSetup.loading?B.border:B.red}30`,borderRadius:6,padding:"9px 12px",marginBottom:16,fontFamily:"'Lexend',sans-serif",fontSize:11,color:publerReady?B.green:publerSetup.loading?B.muted:B.red,lineHeight:1.5}}>
+              {publerSetup.loading
+                ?"Checking Publer connection..."
+                :publerSetup.error
+                  ?`Publer not connected: ${publerSetup.error}`
+                  :`Publer ready · ${(publerSetup.profiles||[]).length} connected account${(publerSetup.profiles||[]).length===1?"":"s"}`}
+              {missingSelectedPlatforms.length>0&&<div style={{marginTop:4,color:B.red}}>Missing selected account: {missingSelectedPlatforms.join(", ")}</div>}
+            </div>
             {/* Platforms */}
             <div style={{marginBottom:16}}>
               <Lbl s={{marginBottom:8}}>PLATFORMS</Lbl>
@@ -11875,6 +11927,11 @@ function ModSocial() {
               )}
               <SocialImageEditor value={imageUrl} onChange={setImageUrl} brandAssets={s.brandAssets||[]} toast={toast}
                 onSaveAsset={(url,prompt)=>dispatch("ADD_BRAND_ASSET",{id:mkId(),url,name:prompt||"AI Social Image",type:"social",createdAt:today()})}/>
+              {imageWillBeSkipped&&(
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.yellow,background:B.yellowBg,border:`1px solid ${B.yellow}30`,borderRadius:4,padding:"7px 9px",marginTop:8,lineHeight:1.4}}>
+                  This image is not a public HTTPS URL, so Publer will receive a text-only post. Use an AI-generated hosted image or paste a hosted image URL.
+                </div>
+              )}
             </div>
             {/* Link */}
             <div style={{marginBottom:14}}>
@@ -11913,9 +11970,12 @@ function ModSocial() {
               </div>
             </div>
             {!platforms.length&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red,marginBottom:10}}>Select at least one platform</div>}
-            <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length} style={{width:"100%",justifyContent:"center"}}>
-              {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
-            </OBtn>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <GBtn onClick={saveDraft} disabled={posting||!caption.trim()} style={{justifyContent:"center"}}>SAVE DRAFT</GBtn>
+              <OBtn onClick={submitPost} disabled={posting||!caption.trim()||!platforms.length||publerSetup.loading||!!publerSetup.error||missingSelectedPlatforms.length>0} style={{width:"100%",justifyContent:"center"}}>
+                {posting?"POSTING…":(scheduleAt?`🗓 SCHEDULE FOR ${scheduleAt}`:"📣 POST NOW")}
+              </OBtn>
+            </div>
           </div>
         </div>
       )}

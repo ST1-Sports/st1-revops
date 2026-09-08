@@ -18,11 +18,16 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { PrismaClient } = require('@prisma/client');
 const { load } = require('../prompt-loader');
 const { validateEvaluatorResult, parseJson } = require('../validators');
+const { ensureThreadContext } = require('./thread-context');
 
 let prisma;
 function getPrisma() {
   if (!prisma) prisma = new PrismaClient();
   return prisma;
+}
+
+function anthropicKey() {
+  return process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
 }
 
 /**
@@ -42,19 +47,21 @@ async function evaluateThread(threadDbId, opts = {}) {
   const { subredditRules = '', topComments = '', dryRun = false } = opts;
   const db = getPrisma();
 
-  const thread = await db.redditThread.findUnique({ where: { id: threadDbId } });
+  let thread = await db.redditThread.findUnique({ where: { id: threadDbId } });
   if (!thread) throw new Error(`Thread not found: ${threadDbId}`);
+  const enriched = await ensureThreadContext(db, thread);
+  thread = enriched.thread;
 
   const { system, user } = load('eval', {
     subreddit_rules: subredditRules || 'No specific rules provided.',
     title:           thread.title,
     body:            thread.body || '(no body text)',
-    top_comments:    topComments || '(no comments fetched)',
+    top_comments:    topComments || enriched.topCommentsText || '(no comments fetched)',
     subreddit:       thread.subreddit,
     author:          thread.author,
   });
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
+  const client = new Anthropic({ apiKey: anthropicKey() });
 
   const message = await client.messages.create({
     model:      process.env.ANTHROPIC_MODEL_FOR_REDDIT_EVALUATION || 'claude-sonnet-4-6',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 
 const C = {
   bg:       '#F2F2F0',
@@ -101,6 +101,7 @@ export default function Reddit() {
   const [marking,   setMarking]   = useState(null) // threadId being marked
   const [actErr,    setActErr]    = useState(null)
   const [statusInfo,setStatusInfo]= useState(null)
+  const initialThreadIdRef = useRef(new URLSearchParams(window.location.search).get('thread'))
 
   const api = useCallback(async (body) => {
     const r = await fetch('/api/reddit', {
@@ -130,8 +131,13 @@ export default function Reddit() {
       const list = d.threads || []
       setThreads(list)
       // Auto-select first actionable thread
+      const requested = initialThreadIdRef.current
+      const deepLinked = requested ? list.find(t => t.id === requested) : null
       const first = list.find(t => t.replies?.length && !['POSTED','REJECTED','SKIPPED'].includes(t.status))
-      if (first && !sel) setSel(first)
+      if (deepLinked || (first && !sel)) {
+        setSel(deepLinked || first)
+        initialThreadIdRef.current = null
+      }
     } catch (e) {
       console.error('[Reddit] load error:', e)
       setScanMsg(e.message)
@@ -172,10 +178,10 @@ export default function Reddit() {
     }
   }
 
-  const markDone = async (threadId) => {
+  const markDone = async (threadId, replyId) => {
     setMarking(threadId); setActErr(null)
     try {
-      await api({ action: 'mark-done', threadId })
+      await api({ action: 'mark-done', threadId, replyId })
       await loadThreads()
     } catch (e) { setActErr(e.message) }
     setMarking(null)
@@ -533,7 +539,7 @@ export default function Reddit() {
                             ↗ Open Thread
                           </button>
                           <div style={{ flex: 1 }} />
-                          <button onClick={() => markDone(sel.id)} disabled={marking === sel.id}
+                          <button onClick={() => markDone(sel.id, selReply?.id)} disabled={marking === sel.id}
                             title="Mark as replied — removes from queue"
                             style={{ background: C.greenBg, color: C.green, border: `1px solid ${C.green}40`,
                               borderRadius: 5, padding: '9px 14px', fontSize: 10, cursor: marking === sel.id ? 'not-allowed' : 'pointer',

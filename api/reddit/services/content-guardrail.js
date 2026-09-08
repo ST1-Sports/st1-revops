@@ -23,6 +23,10 @@ function getPrisma() {
   return prisma;
 }
 
+function anthropicKey() {
+  return process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
+}
+
 /**
  * Run the content guardrail on a specific reply.
  *
@@ -56,7 +60,7 @@ async function checkContent(replyDbId, opts = {}) {
     recent_replies_last_14_days: recentRepliesText,
   });
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
+  const client = new Anthropic({ apiKey: anthropicKey() });
 
   const message = await client.messages.create({
     model:      process.env.ANTHROPIC_MODEL_FOR_REDDIT_GUARDRAIL || 'claude-sonnet-4-6',

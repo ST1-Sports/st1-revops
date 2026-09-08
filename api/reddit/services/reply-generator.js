@@ -17,11 +17,16 @@ const Anthropic = require('@anthropic-ai/sdk');
 const { PrismaClient } = require('@prisma/client');
 const { load } = require('../prompt-loader');
 const { validateGeneratedReplySet, parseJson, isSkipResponse } = require('../validators');
+const { ensureThreadContext } = require('./thread-context');
 
 let prisma;
 function getPrisma() {
   if (!prisma) prisma = new PrismaClient();
   return prisma;
+}
+
+function anthropicKey() {
+  return process.env.ANTHROPIC_KEY || process.env.ANTHROPIC_API_KEY;
 }
 
 /**
@@ -49,8 +54,10 @@ async function generateReplies(threadDbId, opts = {}) {
   } = opts;
 
   const db = getPrisma();
-  const thread = await db.redditThread.findUnique({ where: { id: threadDbId } });
+  let thread = await db.redditThread.findUnique({ where: { id: threadDbId } });
   if (!thread) throw new Error(`Thread not found: ${threadDbId}`);
+  const enriched = await ensureThreadContext(db, thread);
+  thread = enriched.thread;
 
   const ev = thread.evaluation;
   if (!ev) throw new Error(`Thread ${threadDbId} has no evaluation — run evaluateThread first`);
@@ -60,7 +67,7 @@ async function generateReplies(threadDbId, opts = {}) {
     subreddit_rules:      subredditRules || 'No specific rules provided.',
     title:                thread.title,
     body:                 thread.body || '(no body text)',
-    top_comments:         topComments  || '(no comments fetched)',
+    top_comments:         topComments  || enriched.topCommentsText || '(no comments fetched)',
     decision:             ev.decision       ?? '',
     fit_score:            String(ev.fit_score   ?? ''),
     promo_risk:           String(ev.promo_risk  ?? ''),
@@ -71,7 +78,7 @@ async function generateReplies(threadDbId, opts = {}) {
     allow_links:          String(allowLinks),
   });
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_KEY });
+  const client = new Anthropic({ apiKey: anthropicKey() });
 
   const message = await client.messages.create({
     model:      process.env.ANTHROPIC_MODEL_FOR_REDDIT_REPLY_GENERATION || 'claude-sonnet-4-6',
@@ -83,17 +90,24 @@ async function generateReplies(threadDbId, opts = {}) {
   const raw = message.content?.[0]?.text || '';
 
   if (isSkipResponse(raw)) {
+    if (!dryRun) {
+      await db.redditThread.update({
+        where: { id: threadDbId },
+        data: { status: 'SKIPPED' },
+      });
+    }
     return { skip: true };
   }
 
   const replySet = parseAndValidate(raw, threadDbId);
 
   if (!dryRun) {
-    await db.redditReply.create({
-      data: { threadId: threadDbId, variant: 1, content: replySet.primary_reply },
-    });
-    await db.redditReply.create({
-      data: { threadId: threadDbId, variant: 2, content: replySet.safer_reply },
+    await db.redditReply.deleteMany({ where: { threadId: threadDbId, variant: { in: [1, 2] } } });
+    await db.redditReply.createMany({
+      data: [
+        { threadId: threadDbId, variant: 1, content: replySet.primary_reply },
+        { threadId: threadDbId, variant: 2, content: replySet.safer_reply },
+      ],
     });
   }
 

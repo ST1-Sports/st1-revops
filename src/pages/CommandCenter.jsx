@@ -404,7 +404,7 @@ function SocialModule({ userRole }) {
         }),
       })
       const d = await r.json()
-      if (d.ok || d.postIds || d.jobId) {
+      if ((d.status === 'success' || d.status === 'scheduled' || d.postIds?.length || d.jobId) && !d.error) {
         setPostResult({ ok: true, scheduled: !!scheduleDate, platforms: selPlatforms })
       } else {
         throw new Error(d.error || 'Post failed — check Publer connection in Settings')

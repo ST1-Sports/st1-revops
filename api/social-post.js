@@ -88,6 +88,17 @@ async function fetchAccountMap(apiKey, workspaceId) {
   }, {});
 }
 
+async function resolveWorkspaceId(apiKey) {
+  if (process.env.PUBLER_WORKSPACE_ID) return process.env.PUBLER_WORKSPACE_ID;
+  try {
+    const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
+    const workspaces = ok ? (Array.isArray(data) ? data : (data.data || data.workspaces || [])) : [];
+    return workspaces[0]?.id ? String(workspaces[0].id) : "";
+  } catch {
+    return "";
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
@@ -103,7 +114,7 @@ export default async function handler(req, res) {
   // ── Check job status ───────────────────────────────────────────────────────
   if (action === "job-status") {
     if (!jobId) return res.status(400).json({ error: "jobId required" });
-    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    const workspaceId = await resolveWorkspaceId(apiKey);
     try {
       const { ok, data } = await publerRequest(`/job_status/${jobId}`, "GET", null, apiKey, workspaceId);
       const failures = data.payload?.failures;
@@ -125,7 +136,7 @@ export default async function handler(req, res) {
   // ── List posts (debug) ────────────────────────────────────────────────────
   // Queries scheduled + failed + draft so we can see what's landing
   if (action === "list-posts") {
-    const workspaceId = process.env.PUBLER_WORKSPACE_ID;
+    const workspaceId = await resolveWorkspaceId(apiKey);
     try {
       // Query all three states to get full picture
       const [sched, failed, drafts] = await Promise.all([
@@ -210,14 +221,7 @@ export default async function handler(req, res) {
 
   // Workspace for account/posting actions. Prefer explicit env config, but fall
   // back to the first accessible Publer workspace so setup is not brittle.
-  let workspaceId = process.env.PUBLER_WORKSPACE_ID;
-  if (!workspaceId) {
-    try {
-      const { ok, data } = await publerRequest("/workspaces", "GET", null, apiKey);
-      const workspaces = ok ? (Array.isArray(data) ? data : (data.data || data.workspaces || [])) : [];
-      if (workspaces[0]?.id) workspaceId = String(workspaces[0].id);
-    } catch {}
-  }
+  const workspaceId = await resolveWorkspaceId(apiKey);
   if (!workspaceId) {
     return res.status(400).json({
       error: "No Publer workspace available — click Test Connection, confirm the API key can access a workspace, or add PUBLER_WORKSPACE_ID to Vercel env vars.",
@@ -246,7 +250,7 @@ export default async function handler(req, res) {
   }
 
   // ── Debug ─────────────────────────────────────────────────────────────────────
-  if (action === "debug-post") {
+  if (action === "debug-post" || action === "debug_post") {
     const BASE = "https://app.publer.com/api/v1";
 
     const { data: wsData }  = await publerRequest("/workspaces", "GET", null, apiKey);

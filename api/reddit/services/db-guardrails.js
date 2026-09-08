@@ -3,7 +3,7 @@
  *
  * Runs before evaluation to determine whether a candidate thread should be
  * processed. Checks (in order):
- *   1. Minimum score threshold (REDDIT_MIN_THREAD_SCORE, default 5)
+ *   1. Minimum score threshold (REDDIT_MIN_THREAD_SCORE, default 0 for RSS)
  *   2. Subreddit mute list
  *   3. Keyword mute list
  *   4. Deduplication — thread already exists in DB
@@ -35,7 +35,7 @@ async function checkGuardrails(thread, flags) {
   let rateLimited = false;
 
   const db = getPrisma();
-  const minScore = flags.minThreadScore ?? 5;
+  const minScore = flags.minThreadScore ?? 0;
 
   if (thread.score < minScore) {
     failures.push(`Thread score ${thread.score} is below minimum ${minScore}`);
