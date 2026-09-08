@@ -185,6 +185,20 @@ export default async function handler(req, res) {
             pResults.errors.push({ step: 'evaluate', threadId: thread.id, error: e.message });
           }
         }
+        const awaitingReplies = await db.redditThread.findMany({
+          where: { status: 'EVALUATED' },
+          take: 5,
+          orderBy: { ingestedAt: 'desc' },
+          include: { replies: true },
+        });
+        for (const thread of awaitingReplies.filter(t => !t.replies?.length && t.evaluation?.decision === 'REPLY')) {
+          try {
+            const rs = await generateReplies(thread.id);
+            if (!rs.skip) pResults.generated++;
+          } catch (e) {
+            pResults.errors.push({ step: 'generate', threadId: thread.id, error: e.message });
+          }
+        }
         return ok(res, pResults);
       }
 

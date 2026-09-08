@@ -100,17 +100,33 @@ export default function Reddit() {
   const [filter,    setFilter]    = useState('review') // review | all | posted | rejected
   const [marking,   setMarking]   = useState(null) // threadId being marked
   const [actErr,    setActErr]    = useState(null)
+  const [statusInfo,setStatusInfo]= useState(null)
+
+  const api = useCallback(async (body) => {
+    const r = await fetch('/api/reddit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok || d.error) throw new Error(d.error || `Reddit API failed (${r.status})`)
+    return d
+  }, [])
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const d = await api({ action: 'status' })
+      setStatusInfo(d)
+    } catch (e) {
+      setStatusInfo({ error: e.message })
+    }
+  }, [api])
 
   // ── load threads from DB ────────────────────────────────────────────────────
   const loadThreads = useCallback(async () => {
     setLoading(true)
     try {
-      const r = await fetch('/api/reddit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'threads', limit: 100 }),
-      })
-      const d = await r.json()
+      const d = await api({ action: 'threads', limit: 100 })
       const list = d.threads || []
       setThreads(list)
       // Auto-select first actionable thread
@@ -118,12 +134,13 @@ export default function Reddit() {
       if (first && !sel) setSel(first)
     } catch (e) {
       console.error('[Reddit] load error:', e)
+      setScanMsg(e.message)
     } finally {
       setLoading(false)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [api]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { loadThreads() }, [loadThreads])
+  useEffect(() => { loadStatus(); loadThreads() }, [loadStatus, loadThreads])
 
   // When threads reload, keep selection current
   useEffect(() => {
@@ -135,17 +152,16 @@ export default function Reddit() {
 
   // ── run pipeline ────────────────────────────────────────────────────────────
   const runPipeline = async () => {
+    if (statusInfo?.flags && !statusInfo.flags.enabled) {
+      setScanMsg('Reddit automation is disabled. Set REDDIT_AUTOMATION_ENABLED=true, then redeploy.')
+      return
+    }
     setScanning(true)
     setScanMsg('Claude is searching Reddit and evaluating opportunities…')
     try {
-      const r = await fetch('/api/reddit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'pipeline' }),
-      })
-      const d = await r.json()
+      const d = await api({ action: 'pipeline' })
       const msg = d.ok
-        ? `Found ${d.ingested} new threads · Evaluated ${d.evaluated} · ${d.generated} ready to review`
+        ? `Found ${d.ingested} new threads · Evaluated ${d.evaluated} · ${d.generated} ready to review${d.errors?.length ? ` · ${d.errors.length} issue(s)` : ''}`
         : (d.error || 'Pipeline ran with errors')
       setScanMsg(msg)
       await loadThreads()
@@ -154,16 +170,6 @@ export default function Reddit() {
     } finally {
       setScanning(false)
     }
-  }
-
-  // ── actions ─────────────────────────────────────────────────────────────────
-  const api = async (body) => {
-    const r = await fetch('/api/reddit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    return r.json()
   }
 
   const markDone = async (threadId) => {
@@ -199,6 +205,18 @@ export default function Reddit() {
 
   const lastScanTime = threads[0]?.ingestedAt
   const selReply = sel?.replies?.find(r => r.variant === variant) || sel?.replies?.[0]
+  const flags = statusInfo?.flags || null
+  const env = statusInfo?.env || {}
+  const redditDisabled = flags && !flags.enabled
+  const requiredSetup = [
+    redditDisabled && 'REDDIT_AUTOMATION_ENABLED=true',
+  ].filter(Boolean)
+  const optionalSetup = [
+    !env.hasClientId && 'REDDIT_CLIENT_ID',
+    !env.hasClientSecret && 'REDDIT_CLIENT_SECRET',
+    !env.hasRefreshToken && 'REDDIT_REFRESH_TOKEN',
+  ].filter(Boolean)
+  const canScan = !redditDisabled
 
   // ── render ───────────────────────────────────────────────────────────────────
   return (
@@ -221,13 +239,25 @@ export default function Reddit() {
                 {lastScanTime ? `Last scan: ${fmtDate(lastScanTime)}` : 'No scans yet'}
               </div>
             </div>
-            <button onClick={runPipeline} disabled={scanning}
-              style={{ background: scanning ? C.muted : C.orange, color: '#fff', border: 'none',
-                borderRadius: 5, padding: '6px 12px', fontSize: 9, fontWeight: 700, cursor: scanning ? 'not-allowed' : 'pointer',
+            <button onClick={runPipeline} disabled={scanning || !canScan}
+              style={{ background: (scanning || !canScan) ? C.muted : C.orange, color: '#fff', border: 'none',
+                borderRadius: 5, padding: '6px 12px', fontSize: 9, fontWeight: 700, cursor: (scanning || !canScan) ? 'not-allowed' : 'pointer',
                 fontFamily: "'Lexend Zetta',sans-serif", letterSpacing: .3, whiteSpace: 'nowrap' }}>
               {scanning ? '⟳ Scanning…' : '⟳ Scan Now'}
             </button>
           </div>
+
+          {statusInfo && (statusInfo.error || requiredSetup.length > 0 || optionalSetup.length > 0) && (
+            <div style={{ fontSize: 10, color: redditDisabled ? C.red : '#b45309',
+              background: redditDisabled ? '#fef2f2' : '#fffbeb', border: `1px solid ${redditDisabled ? '#fecaca' : '#fde68a'}`,
+              borderRadius: 5, padding: '7px 9px', marginBottom: 8, lineHeight: 1.45 }}>
+              {statusInfo.error
+                ? `Status check failed: ${statusInfo.error}`
+                : requiredSetup.length
+                  ? `Setup needed: ${requiredSetup.join(', ')}`
+                  : `Optional Reddit posting setup missing: ${optionalSetup.join(', ')}. Scanning still works via public Reddit RSS.`}
+            </div>
+          )}
 
           {scanMsg && (
             <div style={{ fontSize: 10, color: C.blue, background: C.blueBg, borderRadius: 4,
@@ -335,9 +365,9 @@ export default function Reddit() {
                 : 'Select a thread from the left to review Claude\'s reply recommendation.'}
             </div>
             {threads.length === 0 && (
-              <button onClick={runPipeline} disabled={scanning}
-                style={{ background: C.orange, color: '#fff', border: 'none', borderRadius: 6,
-                  padding: '10px 22px', fontSize: 12, fontWeight: 700, cursor: scanning ? 'not-allowed' : 'pointer',
+              <button onClick={runPipeline} disabled={scanning || !canScan}
+                style={{ background: !canScan ? C.muted : C.orange, color: '#fff', border: 'none', borderRadius: 6,
+                  padding: '10px 22px', fontSize: 12, fontWeight: 700, cursor: (scanning || !canScan) ? 'not-allowed' : 'pointer',
                   fontFamily: "'Lexend Zetta',sans-serif" }}>
                 {scanning ? '⟳ Scanning…' : '⟳ Scan Reddit Now'}
               </button>

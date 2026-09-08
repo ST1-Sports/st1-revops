@@ -11369,7 +11369,11 @@ function ModSocial() {
   const campaigns=s.campaigns||[];
 
   // Combine standalone + campaign social posts (scheduled drafts + published)
-  const standalonePosts=(s.socialPosts||[]).map(p=>({...p,_source:"standalone"}));
+  const stripPostMeta=p=>{const{_source,_campaignId,_campaignName,...clean}=p||{};return clean;};
+  const campaignPostIds=new Set(campaigns.flatMap(c=>(c.socialPosts||[]).map(p=>p.id)));
+  const standalonePosts=(s.socialPosts||[])
+    .filter(p=>!p.campaignId||!campaignPostIds.has(p.id))
+    .map(p=>({...p,_source:"standalone"}));
   const campaignDraftPosts=campaigns.flatMap(c=>
     (c.socialDrafts||[])
       .filter(p=>(p.scheduledDate||p.date))
@@ -11380,6 +11384,37 @@ function ModSocial() {
   );
   const allPosts=[...standalonePosts,...campaignPosts,...campaignDraftPosts]
     .sort((a,b)=>(b.createdAt||b.date||"").localeCompare(a.createdAt||a.date||""));
+  const upsertCampaignPost=(campId,post)=>{
+    const camp=campaigns.find(c=>c.id===campId);
+    if(!camp)return;
+    const clean=stripPostMeta({...post,campaignId:campId});
+    const posts=(camp.socialPosts||[]).filter(p=>p.id!==clean.id);
+    dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...posts,clean]});
+  };
+  const updatePostById=(postId,updates={})=>{
+    dispatch("UPDATE_SOCIAL_POST",{id:postId,...updates});
+    campaigns.forEach(c=>{
+      if((c.socialPosts||[]).some(p=>p.id===postId)){
+        dispatch("UPDATE_CAMPAIGN",{...c,socialPosts:(c.socialPosts||[]).map(p=>p.id===postId?{...p,...updates}:p)});
+      }
+    });
+  };
+  const updatePostRecord=(post,updates={})=>{
+    const updated={...stripPostMeta(post),...updates};
+    const campId=post?._campaignId||post?.campaignId||"";
+    if(campId) upsertCampaignPost(campId,updated);
+    if(!campId||post?._source==="standalone") dispatch("UPDATE_SOCIAL_POST",{id:updated.id,...updates});
+  };
+  const deletePostEverywhere=(post)=>{
+    const postId=post?.id;
+    if(!postId)return;
+    dispatch("DELETE_SOCIAL_POST",postId);
+    campaigns.forEach(c=>{
+      if((c.socialPosts||[]).some(p=>p.id===postId)){
+        dispatch("UPDATE_CAMPAIGN",{...c,socialPosts:(c.socialPosts||[]).filter(p=>p.id!==postId)});
+      }
+    });
+  };
 
   const TONE_GUIDE={Hype:"Energetic, exciting, exclamation points, pump-up energy.",Professional:"Professional but engaging, credible, clear value.",Educational:"Informative, adds value, teaches something useful."};
 
@@ -11437,7 +11472,9 @@ function ModSocial() {
   };
 
   // Poll Publer job status until done, then update post state with result
-  const checkPublerJob=async(postId,jobId,isScheduled)=>{
+  const checkPublerJob=async(postRef,jobId,isScheduled)=>{
+    const postId=typeof postRef==="object"?postRef.id:postRef;
+    const applyUpdate=updates=>typeof postRef==="object"?updatePostRecord(postRef,updates):updatePostById(postId,updates);
     for(let i=0;i<8;i++){
       await new Promise(r=>setTimeout(r,i===0?3000:4000));
       try{
@@ -11446,10 +11483,10 @@ function ModSocial() {
         if(d.done){
           if(d.failures?.length){
             const msg=d.failures.join(" | ");
-            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"local_only",publerError:msg});
+            applyUpdate({status:"local_only",publerError:msg});
             toast(`Publer failed: ${msg}`,"error");
           }else{
-            dispatch("UPDATE_SOCIAL_POST",{id:postId,status:"scheduled",publerError:null});
+            applyUpdate({status:isScheduled?"scheduled":"published",publerError:null});
             toast(isScheduled?"Scheduled in Publer — check your calendar!":"Queued in Publer — posts in ~2 min, check your calendar!","success");
           }
           return;
@@ -11457,7 +11494,7 @@ function ModSocial() {
       }catch{}
     }
     // Timed out — assume success if we got a job_id (Publer queued it)
-    dispatch("UPDATE_SOCIAL_POST",{id:postId,status:isScheduled?"scheduled":"published",publerError:null});
+    applyUpdate({status:isScheduled?"scheduled":"published",publerError:null});
     toast("Sent to Publer (confirm in your Publer calendar)","success");
   };
 
@@ -11483,11 +11520,9 @@ function ModSocial() {
     const tzM=String(Math.abs(tzOff)%60).padStart(2,"0");
     const scheduleDateTime=scheduleAt?`${scheduleAt}T${scheduleTime}:00${tzSign}${tzH}:${tzM}`:null;
     const post={id:mkId(),createdAt:today(),date:scheduleAt||today(),time:scheduleTime,platforms,caption,imageUrl:imageUrl||"",link:linkUrl||"",status:"local_only",postType,campaignId:linkedCampId||""};
-    dispatch("ADD_SOCIAL_POST",post);
     if(linkedCampId){
-      const camp=campaigns.find(c=>c.id===linkedCampId);
-      if(camp) dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]),post]});
-    }
+      upsertCampaignPost(linkedCampId,post);
+    }else dispatch("ADD_SOCIAL_POST",post);
     try{
       const r=await fetch("/api/social-post",{method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({post:caption,platforms,mediaUrls:imageUrl?[imageUrl]:undefined,scheduleDate:scheduleDateTime||undefined,isStory:postType==="story",link:linkUrl||undefined})});
@@ -11495,21 +11530,20 @@ function ModSocial() {
       const isSuccess=(data.status==="success"||data.status==="scheduled")&&!data.error;
       if(isSuccess){
         const jobId=data.postIds?.[0];
-        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerPostIds:data.postIds||[],publerError:null});
-        if(linkedCampId){const camp=campaigns.find(c=>c.id===linkedCampId);if(camp)dispatch("UPDATE_CAMPAIGN",{...camp,socialPosts:[...(camp.socialPosts||[]).filter(p=>p.id!==post.id),{...post,status:"local_only"}]});}
+        updatePostRecord(post,{status:"local_only",publerPostIds:data.postIds||[],publerError:null});
         if(data._missing) toast(`⚠ ${data._missing}`,"warn");
         toast("Sent to Publer — checking result…","info");
         // Poll job status in background to confirm success or surface failure
-        if(jobId) checkPublerJob(post.id,jobId,!!scheduleAt);
-        else{dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
+        if(jobId) checkPublerJob({...post,publerPostIds:data.postIds||[]},jobId,!!scheduleAt);
+        else{updatePostRecord(post,{status:scheduleAt?"scheduled":"published"});toast(scheduleAt?"Scheduled!":"Published!","success");}
       }else{
         const errMsg=data.error||"Publer rejected the post";
-        dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:errMsg});
-        toast(`Saved locally — Publer failed: ${errMsg.slice(0,120)}`,"warn");
+        updatePostRecord(post,{status:"local_only",publerError:errMsg});
+        toast(`Saved in app — Publer failed: ${errMsg.slice(0,120)}`,"warn");
       }
     }catch(err){
-      dispatch("UPDATE_SOCIAL_POST",{id:post.id,status:"local_only",publerError:err.message});
-      toast(`Saved locally — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
+      updatePostRecord(post,{status:"local_only",publerError:err.message});
+      toast(`Saved in app — Publer unreachable: ${err.message.slice(0,60)}`,"warn");
     }
     setCaption("");setPlatforms([]);setImageUrl("");setScheduleAt("");setLinkUrl("");setLinkedCampId("");
     setTab("posts");
@@ -11546,8 +11580,8 @@ function ModSocial() {
           <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
             <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,letterSpacing:1}}>{allPosts.length} TOTAL</div>
             <div style={{display:"flex",gap:4,marginLeft:"auto"}}>
-              {["all","scheduled","published","draft"].map(st=>(
-                <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st.toUpperCase()}</button>
+              {["all","scheduled","published","local_only","draft"].map(st=>(
+                <button key={st} onClick={()=>setFilterStatus(st)} style={{background:filterStatus===st?B.orange:B.white,color:filterStatus===st?B.white:B.muted,border:`1px solid ${filterStatus===st?B.orange:B.border}`,borderRadius:3,padding:"4px 9px",fontSize:9,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{st==="local_only"?"FAILED":st.toUpperCase()}</button>
               ))}
             </div>
             <select value={filterPlatform} onChange={e=>setFilterPlatform(e.target.value)} style={{background:B.surface,border:`1px solid ${B.border}`,borderRadius:3,padding:"5px 8px",fontSize:11,color:B.text}}>
@@ -11584,17 +11618,17 @@ function ModSocial() {
                     if(ok){
                       const jobId=data.postIds?.[0];
                       const isFakeId=jobId?.startsWith("publer-submitted-");
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
+                      updatePostById(p.id,{status:"scheduled",publerError:null,publerPostIds:data.postIds||[]});
                       if(isFakeId||!jobId){
                         toast("Sent to Publer — check your calendar to confirm","success");
                       }else{
                         toast("Sent to Publer — checking result…","info");
-                        checkPublerJob(p.id,jobId,false);
+                        checkPublerJob(p,jobId,false);
                       }
                     }else{
                       const detail=data.detail?JSON.stringify(data.detail).slice(0,200):"";
                       const msg=(data.error||"Publer rejected post")+(detail?` — ${detail}`:"");
-                      dispatch("UPDATE_SOCIAL_POST",{id:p.id,status:"local_only",publerError:msg});
+                      updatePostById(p.id,{status:"local_only",publerError:msg});
                       toast(msg,"error");
                     }
                   }catch(e){toast("Publer unreachable: "+e.message,"error");}
@@ -11630,7 +11664,7 @@ function ModSocial() {
                       return;
                     }
                   }
-                  dispatch("UPDATE_SOCIAL_POST",{id:p.id,caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
+                  updatePostRecord(p,{caption:editDraft.caption,platforms:editDraft.platforms||p.platforms,date:editDraft.scheduleAt||p.date,time:editDraft.scheduleTime||p.time,status:"local_only",publerError:"Edited — click Retry to re-send to Publer"});
                   setEditingPostId(null);
                   toast("Post updated — click Retry to re-send to Publer","info");
                 };
@@ -11671,9 +11705,7 @@ function ModSocial() {
                       </div>
                       <div style={{display:"flex",gap:4,flexShrink:0}}>
                         <button onClick={()=>{if(isEditing){setEditingPostId(null);}else{setEditingPostId(p.id);setEditDraft({caption:p.caption||"",platforms:p.platforms||[],scheduleAt:p.date||"",scheduleTime:p.time||"09:00"});}}} style={{background:isEditing?"none":B.surface,border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>{isEditing?"✕":"EDIT"}</button>
-                        {p._source==="standalone"&&(
-                          <button onClick={()=>{if(window.confirm("Delete this post?"))dispatch("DELETE_SOCIAL_POST",p.id);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
-                        )}
+                        <button onClick={()=>{if(window.confirm("Delete this post?"))deletePostEverywhere(p);}} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"4px 8px",fontSize:9,fontFamily:"'Lexend',sans-serif",color:B.muted,cursor:"pointer"}}>✕</button>
                       </div>
                     </div>
                     {isEditing&&(
