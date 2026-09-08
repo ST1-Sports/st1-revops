@@ -819,16 +819,6 @@ export default function App() {
 
   usePrefetchPanels(Boolean(s.currentUserId));
 
-  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
-
-  // Helper: find nav item label (including inside group children)
-  const navLabel = (id) => {
-    for (const n of NAV) {
-      if (n.id === id) return n.label;
-      if (n.children) { const c = n.children.find(ch=>ch.id===id); if(c) return c.label; }
-    }
-    return "";
-  };
   const searchResults = useMemo(() => {
     const q = debouncedSearchQuery.trim().toLowerCase();
     if (!showSearch || q.length < 2) return null;
@@ -851,6 +841,17 @@ export default function App() {
     ));
     return { q, contacts, deals, campaigns, orders, total:contacts.length+deals.length+campaigns.length+orders.length };
   }, [showSearch, debouncedSearchQuery, s.contacts, s.deals, s.campaigns, s.orders]);
+
+  if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
+
+  // Helper: find nav item label (including inside group children)
+  const navLabel = (id) => {
+    for (const n of NAV) {
+      if (n.id === id) return n.label;
+      if (n.children) { const c = n.children.find(ch=>ch.id===id); if(c) return c.label; }
+    }
+    return "";
+  };
 
   return (
     <AppCtx.Provider value={ctx}>
