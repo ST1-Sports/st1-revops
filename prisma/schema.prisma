@@ -1104,6 +1104,7 @@ model TeamStorePayable {
   amount          Decimal  @db.Decimal(12, 2)          // stored payable amount — the source of truth for what's owed, never recomputed from live cost data
   platformPaid    Boolean  @default(false)             // upstream payables[].paid — a flag only, no date/reference/amount behind it
   payoutMethod    String?
+  payoutEnabled   Boolean? // upstream payables[].payoutEnabled — false here is a real exception (see flagExceptions), not a permission gate we control
   storeName       String?
   orderPaidAt     DateTime?
   syncedAt        DateTime @default(now())

@@ -152,6 +152,7 @@ async function upsertOrder(detail, decorationCosts) {
       amount: p.amount ?? 0,
       platformPaid: !!p.paid,
       payoutMethod: p.payoutMethod ?? null,
+      payoutEnabled: p.payoutEnabled === undefined ? null : !!p.payoutEnabled,
       storeName: fields.storeName,
       orderPaidAt: fields.paidAt,
       syncedAt: new Date(),
