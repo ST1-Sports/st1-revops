@@ -36,6 +36,7 @@ const IntegrationsPage = lazy(() => import('./Integrations.jsx'))
 const TeamStoresPage = lazy(() => import('./TeamStores.jsx'))
 const FlagshipStorePage = lazy(() => import('./FlagshipStore.jsx'))
 const BulkOutreachPage = lazy(() => import('./BulkOutreach.jsx'))
+const TeamStoreStatementPage = lazy(() => import('./TeamStoreStatement.jsx'))
 function usePrefetchPanels() {
 useEffect(() => {
 import('./CommandCenter.jsx');
@@ -1176,6 +1177,7 @@ const NAV = useMemo(()=>[
 {id:"expansion",   icon:"◉", label:"Expansion Playbook"},
 {id:"_s_finance"},
 {id:"finance",     icon:"⬡", label:"Finance"},
+{id:"team-store-statement", icon:"⬢", label:"TS Settlement Statement"},
 {id:"_s_system"},
 {id:"activity",      icon:"≡", label:"Activity"},
 {id:"settings",      icon:"⚙", label:"Settings"},
@@ -1438,6 +1440,7 @@ animation:syncing?"pulse 1s infinite":undefined}}/>
 {/* ── Inline tools (formerly separate pages) ── */}
 {mod==="integrations"&&<Suspense fallback={<PanelLoader/>}><IntegrationsPage/></Suspense>}
 {mod==="finance"     && <ModFinance/>}
+{mod==="team-store-statement" &&<Suspense fallback={<PanelLoader/>}><TeamStoreStatementPage s={s} dispatch={dispatch} toast={toast} cu={cu} setMod={setMod}/></Suspense>}
 {mod==="reddit"      &&<Suspense fallback={<PanelLoader/>}><RedditPage/></Suspense>}
 {mod==="price-lists" &&<ModPriceLists/>}
 {mod==="edgar"       &&<ModEdgar/>}

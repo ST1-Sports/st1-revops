@@ -37,7 +37,7 @@ function groupBy(items, keyFn) {
   return map;
 }
 
-function monthKey(date) {
+export function monthKey(date) {
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) return 'unknown';
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -57,6 +57,7 @@ function computeOrderSettlementRaw(order, orderPayables) {
   const grossCollected = totalAmount;
   const merchandise = subTotal;
   const discount = subTotal + tax + shippingCost - totalAmount; // usually 0
+  const unitCount = num(order.unitCount);
 
   let thirdPartyPayout = 0;
   let st1SuppliedCost = 0;
@@ -69,7 +70,7 @@ function computeOrderSettlementRaw(order, orderPayables) {
   const st1CashRetained = totalAmount - thirdPartyPayout;
   const st1GrossProfit = st1CashRetained - st1SuppliedCost;
 
-  return { grossCollected, merchandise, discount, thirdPartyPayout, st1SuppliedCost, st1CashRetained, st1GrossProfit };
+  return { grossCollected, merchandise, discount, tax, shippingCost, unitCount, thirdPartyPayout, st1SuppliedCost, st1CashRetained, st1GrossProfit };
 }
 
 function roundSettlement(s) {
@@ -77,6 +78,9 @@ function roundSettlement(s) {
     grossCollected: roundCents(s.grossCollected),
     merchandise: roundCents(s.merchandise),
     discount: roundCents(s.discount),
+    tax: roundCents(s.tax),
+    shippingCost: roundCents(s.shippingCost),
+    unitCount: s.unitCount, // a count, not money — never passed through roundCents
     thirdPartyPayout: roundCents(s.thirdPartyPayout),
     st1SuppliedCost: roundCents(s.st1SuppliedCost),
     st1CashRetained: roundCents(s.st1CashRetained),
@@ -90,7 +94,7 @@ export function computeOrderSettlement(order, orderPayables) {
 }
 
 function emptyRawTotals() {
-  return { grossCollected: 0, merchandise: 0, discount: 0, thirdPartyPayout: 0, st1SuppliedCost: 0, st1CashRetained: 0, st1GrossProfit: 0, orderCount: 0 };
+  return { grossCollected: 0, merchandise: 0, discount: 0, tax: 0, shippingCost: 0, unitCount: 0, thirdPartyPayout: 0, st1SuppliedCost: 0, st1CashRetained: 0, st1GrossProfit: 0, orderCount: 0 };
 }
 
 function addRaw(totals, s) {
@@ -98,12 +102,19 @@ function addRaw(totals, s) {
     grossCollected: totals.grossCollected + s.grossCollected,
     merchandise: totals.merchandise + s.merchandise,
     discount: totals.discount + s.discount,
+    tax: totals.tax + s.tax,
+    shippingCost: totals.shippingCost + s.shippingCost,
+    unitCount: totals.unitCount + s.unitCount,
     thirdPartyPayout: totals.thirdPartyPayout + s.thirdPartyPayout,
     st1SuppliedCost: totals.st1SuppliedCost + s.st1SuppliedCost,
     st1CashRetained: totals.st1CashRetained + s.st1CashRetained,
     st1GrossProfit: totals.st1GrossProfit + s.st1GrossProfit,
     orderCount: totals.orderCount + 1,
   };
+}
+
+function zeroTotals() {
+  return { ...roundSettlement(emptyRawTotals()), orderCount: 0 };
 }
 
 function roundRollup(groups) {
@@ -461,6 +472,68 @@ export function rollupApByPayee(payables, { now = Date.now() } = {}) {
     });
   }
   const out = {};
-  for (const [label, v] of groups) out[label] = { ...v, billed: roundCents(v.billed), outstanding: roundCents(v.outstanding) };
+  for (const [label, v] of groups) {
+    const billed = roundCents(v.billed);
+    const outstanding = roundCents(v.outstanding);
+    out[label] = { ...v, billed, outstanding, paid: roundCents(billed - outstanding) };
+  }
   return out;
+}
+
+// ── Month-end statement (used once a month, presentable to partners) ──────
+// Filters the given orders/lines/payables down to one calendar month (by the
+// same paidAt-then-createdAt rule rollupByMonth uses) and assembles every
+// section the statement needs from the building blocks above — nothing new
+// is computed here beyond the month scoping itself and the payee paid/
+// unpaid split, which intentionally uses RevOps' own payment record
+// (rollupApByPayee), not the platform's own `paid` flag, since this document
+// states what ST1 actually paid out.
+
+/**
+ * `month` is a 'YYYY-MM' string. Returns every section the statement page
+ * renders: moneyInOut (the whole month's settlement totals), byStore
+ * (orders/units/merch/tax/shipping/gross/payouts/retained per school),
+ * byStorePayee (the school × payee matrix), byPayeeStatus (owed by payee
+ * with paid/unpaid, from our own payment record), feeAudit, exceptions, and
+ * perOrder detail.
+ */
+export function buildStatement({ orders = [], lines = [], payables = [], config = {}, month } = {}) {
+  const monthOrders = (orders || []).filter(o => monthKey(o.paidAt ?? o.createdAt) === month);
+  const orderIds = new Set(monthOrders.map(o => String(o.id)));
+  const monthLines = (lines || []).filter(l => orderIds.has(String(l.orderId)));
+  const monthPayables = (payables || []).filter(p => orderIds.has(String(p.orderId)));
+
+  const report = buildSettlementReport({ orders: monthOrders, lines: monthLines, payables: monthPayables, config });
+
+  return {
+    month,
+    orderCount: monthOrders.length,
+    moneyInOut: report.byMonth[month] || zeroTotals(),
+    perOrder: report.perOrder,
+    byStore: report.byStore,
+    byEntity: report.byEntity,
+    byStorePayee: report.byStorePayee,
+    byPayeeStatus: rollupApByPayee(monthPayables),
+    feeAudit: report.feeAudit,
+    exceptions: report.exceptions,
+  };
+}
+
+/**
+ * One payee's slice of an already-built statement — everything a
+ * partner-facing per-payee view (screen or print) shows: their own
+ * billed/paid/outstanding status and their own per-school breakdown.
+ * Nothing else in the statement (money in/out, other payees, fee audit,
+ * exceptions) is ST1's business to hand a partner, so this is the entire
+ * filter — not a display-layer concern left to the page.
+ */
+export function statementForPayee(statement, payeeLabel) {
+  const status = statement?.byPayeeStatus?.[payeeLabel] || {
+    role: classifyPayeeRole(payeeLabel), items: 0, billed: 0, paid: 0, outstanding: 0, oldestAgeDays: null, oldestReferenceNumber: null,
+  };
+  const byStore = {};
+  for (const [store, payees] of Object.entries(statement?.byStorePayee || {})) {
+    if (payees[payeeLabel]) byStore[store] = payees[payeeLabel];
+  }
+  return { payeeLabel, ...status, byStore };
 }

@@ -17,6 +17,8 @@ import {
   ageDays,
   apSummary,
   rollupApByPayee,
+  buildStatement,
+  statementForPayee,
 } from './teamStoreSettlement.js';
 
 // ── August fixture ───────────────────────────────────────────────────────
@@ -28,16 +30,17 @@ import {
 // figures make up the rest of the month's totals.
 const ORDER_516 = {
   id: 'o-516', referenceNumber: 'ST1-26-00516', paidAt: '2026-08-12T00:00:00Z',
-  storeName: 'ADM Tigers', subTotal: 650.00, tax: 30.17, shippingCost: 12.00, totalAmount: 292.17,
+  storeName: 'ADM Tigers', subTotal: 650.00, tax: 30.17, shippingCost: 12.00, totalAmount: 292.17, unitCount: 20,
 };
 const PAYABLES_516 = [
   { orderId: 'o-516', payeeType: 'team_store', payeeLabel: 'ADM Tigers', amount: 65.22, storeName: 'ADM Tigers', platformPaid: false },
-  { orderId: 'o-516', payeeType: 'supplier', payeeLabel: 'Some Supplier', amount: 387.86, storeName: 'ADM Tigers', platformPaid: false },
+  // Recorded paid in RevOps — exercises buildStatement's byPayeeStatus paid/unpaid split below.
+  { orderId: 'o-516', payeeType: 'supplier', payeeLabel: 'Some Supplier', amount: 387.86, storeName: 'ADM Tigers', platformPaid: false, payment: { paidOn: '2026-08-25T00:00:00Z', amountPaid: 387.86 } },
 ];
 
 const ORDER_B = {
   id: 'o-b', referenceNumber: 'ST1-26-00600', paidAt: '2026-08-05T00:00:00Z',
-  storeName: 'Ames Youth Football', subTotal: 4000.00, tax: 280.00, shippingCost: 300.00, totalAmount: 4580.00,
+  storeName: 'Ames Youth Football', subTotal: 4000.00, tax: 280.00, shippingCost: 300.00, totalAmount: 4580.00, unitCount: 140,
 };
 const PAYABLES_B = [
   { orderId: 'o-b', payeeType: 'team_store', payeeLabel: 'Ames Youth Football', amount: 2160.00, storeName: 'Ames Youth Football', platformPaid: true },
@@ -47,12 +50,22 @@ const PAYABLES_B = [
 
 const ORDER_C = {
   id: 'o-c', referenceNumber: 'ST1-26-00601', paidAt: '2026-08-20T00:00:00Z',
-  storeName: 'Boone Wrestling', subTotal: 5005.49, tax: 344.48, shippingCost: 393.47, totalAmount: 5743.44,
+  storeName: 'Boone Wrestling', subTotal: 5005.49, tax: 344.48, shippingCost: 393.47, totalAmount: 5743.44, unitCount: 175,
 };
 const PAYABLES_C = [
   { orderId: 'o-c', payeeType: 'team_store', payeeLabel: 'Boone Wrestling', amount: 2700.00, storeName: 'Boone Wrestling', platformPaid: false },
   { orderId: 'o-c', payeeType: 'supplier', payeeLabel: 'Some Supplier C', amount: 60.89, storeName: 'Boone Wrestling', platformPaid: false },
   { orderId: 'o-c', payeeType: 'supplier', payeeLabel: 'ST1 Sports', amount: 53.65, storeName: 'Boone Wrestling', platformPaid: true },
+];
+
+// A September order — proves buildStatement's month scoping actually
+// excludes out-of-month orders/payables rather than just labeling them.
+const ORDER_SEPT = {
+  id: 'o-sept', referenceNumber: 'ST1-26-00650', paidAt: '2026-09-02T00:00:00Z',
+  storeName: 'Sept Store', subTotal: 100.00, tax: 0, shippingCost: 0, totalAmount: 100.00, unitCount: 5,
+};
+const PAYABLES_SEPT = [
+  { orderId: 'o-sept', payeeType: 'team_store', payeeLabel: 'Sept Store', amount: 60.00, storeName: 'Sept Store', platformPaid: false },
 ];
 
 const AUGUST_ORDERS = [ORDER_516, ORDER_B, ORDER_C];
@@ -368,5 +381,90 @@ describe('rollupApByPayee', () => {
   it('a payee whose only item is already paid in RevOps shows zero outstanding but its full billed amount', () => {
     assert.equal(byPayee['Random Paid School'].billed, 300.00);
     assert.equal(byPayee['Random Paid School'].outstanding, 0);
+  });
+});
+
+describe('buildStatement — the month-end statement', () => {
+  const orders = [...AUGUST_ORDERS, ORDER_SEPT];
+  const payables = [...AUGUST_PAYABLES, ...PAYABLES_SEPT];
+  const statement = buildStatement({ orders, payables, config: STATED_TERMS, month: '2026-08' });
+
+  it('scopes strictly to the requested month — the September order never enters any section', () => {
+    assert.equal(statement.orderCount, 3);
+    assert.equal(statement.moneyInOut.orderCount, 3);
+    assert.equal(statement.byStore['Sept Store'], undefined);
+    assert.equal(statement.byStorePayee['Sept Store'], undefined);
+  });
+
+  it('money in / money out matches the same August aggregate rollupByMonth produces, plus tax/shipping/units', () => {
+    const m = statement.moneyInOut;
+    assert.equal(m.merchandise, 9655.49);
+    assert.equal(m.discount, 400.00);
+    assert.equal(m.grossCollected, 10615.61);
+    assert.equal(m.thirdPartyPayout, 5413.97);
+    assert.equal(m.st1SuppliedCost, 93.65);
+    assert.equal(m.st1CashRetained, 5201.64);
+    assert.equal(m.tax, 654.65); // 30.17 + 280.00 + 344.48
+    assert.equal(m.shippingCost, 705.47); // 12.00 + 300.00 + 393.47
+    assert.equal(m.unitCount, 335); // 20 + 140 + 175
+  });
+
+  it('by school carries orders/units/merch/tax/shipping/gross/payouts/retained', () => {
+    const tigers = statement.byStore['ADM Tigers'];
+    assert.equal(tigers.orderCount, 1);
+    assert.equal(tigers.unitCount, 20);
+    assert.equal(tigers.merchandise, 650.00);
+    assert.equal(tigers.tax, 30.17);
+    assert.equal(tigers.shippingCost, 12.00);
+    assert.equal(tigers.grossCollected, 292.17);
+    assert.equal(tigers.thirdPartyPayout, 453.08);
+    assert.equal(tigers.st1CashRetained, -160.91);
+  });
+
+  it('owed by payee reflects RevOps\' own paid/unpaid record, not the platform paid flag', () => {
+    const someSupplier = statement.byPayeeStatus['Some Supplier'];
+    assert.equal(someSupplier.billed, 387.86);
+    assert.equal(someSupplier.paid, 387.86);
+    assert.equal(someSupplier.outstanding, 0);
+
+    // ADM Tigers' own payable was never recorded paid in RevOps, even though
+    // nothing about its platformPaid flag says so either — outstanding in full.
+    const admTigers = statement.byPayeeStatus['ADM Tigers'];
+    assert.equal(admTigers.paid, 0);
+    assert.equal(admTigers.outstanding, 65.22);
+  });
+
+  it('carries the exceptions and fee audit through unchanged from buildSettlementReport', () => {
+    assert.ok(statement.exceptions.some(f => f.type === 'discount' && f.referenceNumber === 'ST1-26-00516'));
+    assert.equal(statement.feeAudit.orderCount, 0); // no delta-share (usaCut) orders in this fixture
+  });
+
+  it('an empty month returns zeroed totals rather than throwing', () => {
+    const empty = buildStatement({ orders, payables, config: STATED_TERMS, month: '2020-01' });
+    assert.equal(empty.orderCount, 0);
+    assert.equal(empty.moneyInOut.grossCollected, 0);
+    assert.deepEqual(empty.byStore, {});
+  });
+});
+
+describe('statementForPayee', () => {
+  const orders = [...AUGUST_ORDERS, ORDER_SEPT];
+  const payables = [...AUGUST_PAYABLES, ...PAYABLES_SEPT];
+  const statement = buildStatement({ orders, payables, config: STATED_TERMS, month: '2026-08' });
+
+  it('gives a payee their own status and only the schools where they have a balance', () => {
+    const slice = statementForPayee(statement, 'ST1 Sports');
+    assert.equal(slice.role, 'ST1-supplied product (internal)');
+    assert.equal(slice.billed, 93.65);
+    assert.equal(Object.keys(slice.byStore).sort().join(','), 'Ames Youth Football,Boone Wrestling');
+    assert.equal(slice.byStore['Ames Youth Football'].amount, 40.00);
+    assert.equal(slice.byStore['Boone Wrestling'].amount, 53.65);
+  });
+
+  it('returns a zeroed slice for a payee with no activity that month, rather than throwing', () => {
+    const slice = statementForPayee(statement, 'Nobody Owed Anything');
+    assert.equal(slice.billed, 0);
+    assert.equal(slice.outstanding, 0);
+    assert.deepEqual(slice.byStore, {});
   });
 });
