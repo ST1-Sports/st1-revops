@@ -193,14 +193,20 @@ export async function runSync() {
     ]);
     ordersSeen = summaries.length;
 
-    await poolMap(summaries, DETAIL_CONCURRENCY, async summary => {
+    // Each worker's count is returned, not accumulated into a shared
+    // variable across an await — poolMap's concurrent workers would
+    // otherwise race (read the running total, await, add, write), silently
+    // losing counts under concurrency instead of throwing.
+    const perOrderCounts = await poolMap(summaries, DETAIL_CONCURRENCY, async summary => {
       try {
         const detail = await fetchOrderDetail(session, summary.id);
-        payablesUpserted += await upsertOrder(detail, decorationCosts);
+        return await upsertOrder(detail, decorationCosts);
       } catch (e) {
         errors.push(`order ${summary.id}${summary.referenceNumber ? ` (${summary.referenceNumber})` : ''}: ${e.message}`);
+        return 0;
       }
     });
+    payablesUpserted = perOrderCounts.reduce((a, b) => a + b, 0);
   } catch (e) {
     errors.push(`sync run failed: ${e.message}`);
   }
