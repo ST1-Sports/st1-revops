@@ -9,6 +9,7 @@ import {
   normalizeBankTransaction,
   matchPaymentsToSettledTransactions,
   confidenceLabel,
+  matchesToReject,
 } from './teamStoreReconcile.js';
 
 // ── Stripe charge normalization ──────────────────────────────────────────
@@ -206,5 +207,33 @@ describe('confidenceLabel', () => {
     assert.equal(confidenceLabel(0.6), 'medium');
     assert.equal(confidenceLabel(0.4), 'low');
     assert.equal(confidenceLabel(null), 'none');
+  });
+});
+
+describe('matchesToReject', () => {
+  const approved = { id: 'm-approved', targetType: 'order', targetId: 'o-1', sourceType: 'stripe_charge', sourceId: 'ch_1' };
+
+  it('rejects another pending candidate for the same target', () => {
+    const sibling = { id: 'm-sib', targetType: 'order', targetId: 'o-1', sourceType: 'stripe_charge', sourceId: 'ch_2' };
+    assert.deepEqual(matchesToReject([approved, sibling], approved), ['m-sib']);
+  });
+
+  it('rejects another pending candidate for the same source', () => {
+    const sibling = { id: 'm-sib', targetType: 'order', targetId: 'o-2', sourceType: 'stripe_charge', sourceId: 'ch_1' };
+    assert.deepEqual(matchesToReject([sibling], approved), ['m-sib']);
+  });
+
+  it('never includes the approved match itself', () => {
+    assert.deepEqual(matchesToReject([approved], approved), []);
+  });
+
+  it('leaves an unrelated candidate (different target AND different source) alone', () => {
+    const unrelated = { id: 'm-other', targetType: 'order', targetId: 'o-9', sourceType: 'stripe_charge', sourceId: 'ch_9' };
+    assert.deepEqual(matchesToReject([unrelated], approved), []);
+  });
+
+  it('handles an empty candidate list', () => {
+    assert.deepEqual(matchesToReject([], approved), []);
+    assert.deepEqual(matchesToReject(null, approved), []);
   });
 });

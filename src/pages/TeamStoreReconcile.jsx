@@ -70,17 +70,16 @@ function StatCard({ label, value, tone }) {
   );
 }
 
-function MoneyInRow({ m, onApprove, onReject, busy }) {
-  const order = m.order || {};
+function MatchRow({ title, subtitle, sourceExtra, m, onApprove, onReject, busy }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: `1px solid ${B.border}`, flexWrap: "wrap" }}>
-      <div style={{ minWidth: 140 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{order.referenceNumber || m.targetId}</div>
-        <div style={{ fontSize: 10.5, color: B.muted }}>{order.storeName} · {fmtD(order.paidAt)} · {fmt$(order.totalAmount)}</div>
+      <div style={{ minWidth: 160 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 10.5, color: B.muted }}>{subtitle}</div>
       </div>
       <div style={{ fontSize: 16, color: B.muted }}>&harr;</div>
       <div style={{ minWidth: 160 }}>
-        <div style={{ fontSize: 12.5 }}>{fmt$(m.sourceAmount)} {m.feeAmount ? <span style={{ color: B.muted, fontSize: 10.5 }}>(fee {fmt$(m.feeAmount)})</span> : null}</div>
+        <div style={{ fontSize: 12.5 }}>{fmt$(m.sourceAmount)} {sourceExtra}</div>
         <div style={{ fontSize: 10.5, color: B.muted }}>{fmtD(m.sourceDate)} · <SourceBadge type={m.sourceType} /></div>
       </div>
       <ConfidenceBadge confidence={m.matchConfidence} label={m.confidenceLabel} />
@@ -93,27 +92,45 @@ function MoneyInRow({ m, onApprove, onReject, busy }) {
   );
 }
 
+function MoneyInRow({ m, onApprove, onReject, busy }) {
+  const order = m.order || {};
+  return (
+    <MatchRow
+      title={order.referenceNumber || m.targetId}
+      subtitle={`${order.storeName} · ${fmtD(order.paidAt)} · ${fmt$(order.totalAmount)}`}
+      sourceExtra={m.feeAmount ? <span style={{ color: B.muted, fontSize: 10.5 }}>(fee {fmt$(m.feeAmount)})</span> : null}
+      m={m} onApprove={onApprove} onReject={onReject} busy={busy}
+    />
+  );
+}
+
 function MoneyOutRow({ m, onApprove, onReject, busy }) {
   const payment = m.payment || {};
   const payable = payment.payable || {};
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: `1px solid ${B.border}`, flexWrap: "wrap" }}>
-      <div style={{ minWidth: 160 }}>
-        <div style={{ fontSize: 12.5, fontWeight: 700 }}>{payable.payeeLabel || m.targetId}</div>
-        <div style={{ fontSize: 10.5, color: B.muted }}>{payable.referenceNumber} · {fmtD(payment.paidOn)} · {fmt$(payment.amountPaid)} · {payment.method}</div>
-      </div>
-      <div style={{ fontSize: 16, color: B.muted }}>&harr;</div>
-      <div style={{ minWidth: 160 }}>
-        <div style={{ fontSize: 12.5 }}>{fmt$(m.sourceAmount)}</div>
-        <div style={{ fontSize: 10.5, color: B.muted }}>{fmtD(m.sourceDate)} · <SourceBadge type={m.sourceType} /> {m.counterparty ? `· ${m.counterparty}` : ""}</div>
-      </div>
-      <ConfidenceBadge confidence={m.matchConfidence} label={m.confidenceLabel} />
-      {m.suggestionBasis === "reference" && <span style={{ fontSize: 9.5, color: B.green, fontWeight: 700 }}>REF MATCH</span>}
-      <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-        <OBtn onClick={() => onApprove(m.id)} disabled={busy}>CONFIRM</OBtn>
-        <GBtn onClick={() => onReject(m.id)} disabled={busy}>DISMISS</GBtn>
-      </div>
-    </div>
+    <MatchRow
+      title={payable.payeeLabel || m.targetId}
+      subtitle={`${payable.referenceNumber} · ${fmtD(payment.paidOn)} · ${fmt$(payment.amountPaid)} · ${payment.method}`}
+      sourceExtra={m.counterparty ? <span style={{ color: B.muted, fontSize: 10.5 }}>({m.counterparty})</span> : null}
+      m={m} onApprove={onApprove} onReject={onReject} busy={busy}
+    />
+  );
+}
+
+function UnmatchedList({ title, items, emptyText, keyFn, left, right }) {
+  return (
+    <>
+      <SectionTitle>{title} ({(items || []).length})</SectionTitle>
+      <Card>
+        {!items?.length && <div style={{ padding: 14, fontSize: 12.5, color: B.green }}>{emptyText}</div>}
+        {(items || []).map(item => (
+          <div key={keyFn(item)} style={{ padding: "8px 12px", borderBottom: `1px solid ${B.border}`, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
+            <span>{left(item)}</span>
+            <span style={{ fontVariantNumeric: "tabular-nums" }}>{right(item)}</span>
+          </div>
+        ))}
+      </Card>
+    </>
   );
 }
 
@@ -223,53 +240,31 @@ export default function TeamStoreReconcile({ s, dispatch, toast, cu, setMod }) {
 
           {tab === "in" && (
             <>
-              <SectionTitle>Orders With No Matching Charge ({(data.unmatchedOrders || []).length})</SectionTitle>
-              <Card>
-                {!data.unmatchedOrders?.length && <div style={{ padding: 14, fontSize: 12.5, color: B.green }}>Every order in this window has a candidate charge.</div>}
-                {(data.unmatchedOrders || []).map(o => (
-                  <div key={o.id} style={{ padding: "8px 12px", borderBottom: `1px solid ${B.border}`, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                    <span>{o.referenceNumber} — {o.storeName}</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt$(o.totalAmount)} · {fmtD(o.paidAt)}</span>
-                  </div>
-                ))}
-              </Card>
-
-              <SectionTitle>Charges With No Matching Order ({(data.unmatchedCharges || []).length})</SectionTitle>
-              <Card>
-                {!data.unmatchedCharges?.length && <div style={{ padding: 14, fontSize: 12.5, color: B.green }}>Every charge in this window matched an order.</div>}
-                {(data.unmatchedCharges || []).map(c => (
-                  <div key={c.id} style={{ padding: "8px 12px", borderBottom: `1px solid ${B.border}`, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                    <span>{c.id} — {c.description || "no description"}</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt$(c.amount)} · {fmtD(c.date)}</span>
-                  </div>
-                ))}
-              </Card>
+              <UnmatchedList
+                title="Orders With No Matching Charge" items={data.unmatchedOrders}
+                emptyText="Every order in this window has a candidate charge." keyFn={o => o.id}
+                left={o => `${o.referenceNumber} — ${o.storeName}`} right={o => `${fmt$(o.totalAmount)} · ${fmtD(o.paidAt)}`}
+              />
+              <UnmatchedList
+                title="Charges With No Matching Order" items={data.unmatchedCharges}
+                emptyText="Every charge in this window matched an order." keyFn={c => c.id}
+                left={c => `${c.id} — ${c.description || "no description"}`} right={c => `${fmt$(c.amount)} · ${fmtD(c.date)}`}
+              />
             </>
           )}
 
           {tab === "out" && (
             <>
-              <SectionTitle>Payments With No Matching Transaction ({(data.unmatchedPayments || []).length})</SectionTitle>
-              <Card>
-                {!data.unmatchedPayments?.length && <div style={{ padding: 14, fontSize: 12.5, color: B.green }}>Every recorded payment in this window has a candidate.</div>}
-                {(data.unmatchedPayments || []).map(p => (
-                  <div key={p.payableKey} style={{ padding: "8px 12px", borderBottom: `1px solid ${B.border}`, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                    <span>{p.payable?.payeeLabel || p.payableKey} — {p.method}</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt$(p.amountPaid)} · {fmtD(p.paidOn)}</span>
-                  </div>
-                ))}
-              </Card>
-
-              <SectionTitle>Transactions With No Matching Payment ({(data.unmatchedTransactions || []).length})</SectionTitle>
-              <Card>
-                {!data.unmatchedTransactions?.length && <div style={{ padding: 14, fontSize: 12.5, color: B.green }}>Every settled debit in this window matched a payment.</div>}
-                {(data.unmatchedTransactions || []).map(t => (
-                  <div key={t.id} style={{ padding: "8px 12px", borderBottom: `1px solid ${B.border}`, fontSize: 12.5, display: "flex", justifyContent: "space-between" }}>
-                    <span><SourceBadge type={t.source} /> {t.counterparty || t.id}</span>
-                    <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmt$(t.amount)} · {fmtD(t.date)}</span>
-                  </div>
-                ))}
-              </Card>
+              <UnmatchedList
+                title="Payments With No Matching Transaction" items={data.unmatchedPayments}
+                emptyText="Every recorded payment in this window has a candidate." keyFn={p => p.payableKey}
+                left={p => `${p.payable?.payeeLabel || p.payableKey} — ${p.method}`} right={p => `${fmt$(p.amountPaid)} · ${fmtD(p.paidOn)}`}
+              />
+              <UnmatchedList
+                title="Transactions With No Matching Payment" items={data.unmatchedTransactions}
+                emptyText="Every settled debit in this window matched a payment." keyFn={t => t.id}
+                left={t => <><SourceBadge type={t.source} /> {t.counterparty || t.id}</>} right={t => `${fmt$(t.amount)} · ${fmtD(t.date)}`}
+              />
             </>
           )}
         </>

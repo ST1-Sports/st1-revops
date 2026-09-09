@@ -20,24 +20,18 @@
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
-import { apSummary, rollupApByPayee } from '../../src/lib/teamStoreSettlement.js';
-
-function monthRange(month) {
-  const [y, m] = String(month).split('-').map(Number);
-  if (!y || !m) return null;
-  return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 1)) };
-}
+import { apSummary, rollupApByPayee, monthBoundsFromKey, isPaidInRevOps } from '../../src/lib/teamStoreSettlement.js';
 
 function applyLineFilters(payables, { month, payee, store, status, orderNumber }) {
   let out = payables;
-  const range = month ? monthRange(month) : null;
+  const range = month ? monthBoundsFromKey(month) : null;
   if (range) {
     out = out.filter(p => p.orderPaidAt && new Date(p.orderPaidAt) >= range.start && new Date(p.orderPaidAt) < range.end);
   }
   if (payee) out = out.filter(p => p.payeeLabel === payee);
   if (store) out = out.filter(p => p.storeName === store);
-  if (status === 'outstanding') out = out.filter(p => !p.payment);
-  if (status === 'paid') out = out.filter(p => !!p.payment);
+  if (status === 'outstanding') out = out.filter(p => !isPaidInRevOps(p));
+  if (status === 'paid') out = out.filter(p => isPaidInRevOps(p));
   if (orderNumber) {
     const needle = String(orderNumber).toLowerCase();
     out = out.filter(p => (p.referenceNumber || '').toLowerCase().includes(needle));

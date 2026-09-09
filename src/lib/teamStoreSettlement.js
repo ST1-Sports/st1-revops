@@ -372,12 +372,17 @@ export function ageDays(paidAt, now = Date.now()) {
   return Math.floor((Number(now) - paidTime) / 86_400_000);
 }
 
-function monthBounds(date) {
-  const d = date instanceof Date ? date : new Date(date);
+/** The [start, end) calendar-month boundary for a 'YYYY-MM' key — the one place this Date.UTC arithmetic is done. */
+export function monthBoundsFromKey(month) {
+  const [y, m] = String(month).split('-').map(Number);
   return {
-    start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)),
-    end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)),
+    start: new Date(Date.UTC(y, m - 1, 1)),
+    end: new Date(Date.UTC(y, m, 1)),
   };
+}
+
+function monthBounds(date) {
+  return monthBoundsFromKey(monthKey(date));
 }
 
 /**

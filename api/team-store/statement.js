@@ -10,17 +10,18 @@
  *   alongside it, filtering to one payee is a display concern, not a
  *   reason to refetch.
  *
- * Pulls every synced order/line/payable rather than a DB-side date filter —
- * buildStatement does its own month scoping so the exact same paidAt-then-
- * createdAt rule applies here as everywhere else this figure is reported.
+ * Scopes orders at the DB level to the same paidAt-then-createdAt rule
+ * buildStatement itself uses (an order counts if EITHER its paidAt falls in
+ * the month, or it has no paidAt yet and its createdAt does) — reported
+ * cost then grows with the size of one month, not the whole synced history.
+ * buildStatement still does its own monthKey() filtering on the result, so
+ * this is a narrowing, not a second source of truth for the rule.
  */
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
-import { buildStatement, statementForPayee } from '../../src/lib/teamStoreSettlement.js';
+import { buildStatement, statementForPayee, monthBoundsFromKey } from '../../src/lib/teamStoreSettlement.js';
 
-async function currentConfig(month) {
-  const [y, m] = String(month).split('-').map(Number);
-  const monthEnd = y && m ? new Date(Date.UTC(y, m, 1)) : new Date();
+async function currentConfig(monthEnd) {
   const config = await prisma.settlementConfig.findFirst({
     where: { effectiveFrom: { lte: monthEnd } },
     orderBy: { effectiveFrom: 'desc' },
@@ -42,11 +43,17 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'month required, as YYYY-MM' });
     }
 
-    const [orders, lines, payables, config] = await Promise.all([
-      prisma.teamStoreOrder.findMany(),
-      prisma.teamStoreOrderLine.findMany(),
-      prisma.teamStorePayable.findMany({ include: { payment: true } }),
-      currentConfig(month),
+    const { start, end } = monthBoundsFromKey(month);
+    const [orders, config] = await Promise.all([
+      prisma.teamStoreOrder.findMany({
+        where: { OR: [{ paidAt: { gte: start, lt: end } }, { paidAt: null, createdAt: { gte: start, lt: end } }] },
+      }),
+      currentConfig(end),
+    ]);
+    const orderIds = orders.map(o => o.id);
+    const [lines, payables] = await Promise.all([
+      prisma.teamStoreOrderLine.findMany({ where: { orderId: { in: orderIds } } }),
+      prisma.teamStorePayable.findMany({ where: { orderId: { in: orderIds } }, include: { payment: true } }),
     ]);
 
     const statement = buildStatement({ orders, lines, payables, config, month });

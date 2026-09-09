@@ -248,3 +248,19 @@ export function confidenceLabel(confidence) {
   if (confidence >= 0.6) return "medium";
   return "low";
 }
+
+/**
+ * A source confirms at most one target, and a target has at most one
+ * confirmed source. Given the still-pending candidates competing with a
+ * just-approved match on either axis, returns the ids that must now be
+ * rejected — every one of them is for a target or a source that already has
+ * its answer.
+ */
+export function matchesToReject(pendingCandidates, approvedMatch) {
+  return (pendingCandidates || [])
+    .filter(c => c.id !== approvedMatch.id)
+    .filter(c =>
+      (c.targetType === approvedMatch.targetType && c.targetId === approvedMatch.targetId) ||
+      (c.sourceType === approvedMatch.sourceType && c.sourceId === approvedMatch.sourceId))
+    .map(c => c.id);
+}
