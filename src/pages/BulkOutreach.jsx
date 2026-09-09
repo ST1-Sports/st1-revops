@@ -518,6 +518,13 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const email3Ready = touchHasCopy(templates.step2) || sendableLeads.some(l => touchHasCopy(l.touches?.[2]));
   const showEmail2Composer = showEmail1Composer && email1Ready && (composingEmail2 || email2Ready);
   const showEmail3Composer = showEmail1Composer && email2Ready && (composingEmail3 || email3Ready);
+  // The dedicated Email 1/2/3 composers above already own steps 0/1/2 while
+  // they're showing (same underlying templates.step{i} + StepEditor) — the
+  // EMAIL STEPS accordion below only needs to cover whichever steps aren't
+  // already being edited up there, so a Prospecting-sourced list doesn't
+  // show the same email in two different-looking editors at once.
+  const composerOwnsStep = i => (i === 0 && showEmail1Composer) || (i === 1 && showEmail2Composer) || (i === 2 && showEmail3Composer);
+  const emailStepsIndices = useMemo(() => stepIndices.filter(i => !composerOwnsStep(i)), [stepIndices, showEmail1Composer, showEmail2Composer, showEmail3Composer]);
 
   const startMs = useMemo(() => { try { return parseMTLocalStr(startDt); } catch { return nextMTBizStart(Date.now()); } }, [startDt]);
   const [campId, setCampId] = useState(() => mkId());
@@ -1830,12 +1837,12 @@ Subject: <subject line, may include {{orgName}}>
             </div>
           )}
 
-          {stepIndices.length > 0 && (
+          {emailStepsIndices.length > 0 && (
             <div style={{ background: B.white, border: `1px solid ${B.border}`, borderRadius: 10, overflow: "hidden", marginBottom: 18 }}>
               <div style={{ padding: "10px 16px", borderBottom: `1px solid ${B.border}`, fontSize: 9, fontFamily: "'Lexend Zetta',sans-serif", color: B.muted, letterSpacing: 1 }}>
                 EMAIL STEPS — shows what's already there; edit and push to everyone on that version
               </div>
-              {stepIndices.map(i => {
+              {emailStepsIndices.map(i => {
                 const stepKey = `step${i}`;
                 const tmplAtStep = touchHasCopy(templates[stepKey]) ? templates[stepKey] : null;
                 const atStep = sendableLeads.filter(l => l.touches?.[i] || (tmplAtStep && !touchHasCopy(l.touches?.[i])));
