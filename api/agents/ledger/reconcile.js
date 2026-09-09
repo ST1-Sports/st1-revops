@@ -35,7 +35,8 @@ import { prisma }                              from '../../_lib/prisma.js'
 import { recall, remember }                    from '../../_lib/memory.js'
 import { postSlackMessage }                    from '../../_lib/slack.js'
 import { booksGet, booksPost,
-         isPrismaTableMissing }                from '../../_lib/zoho-books.js'
+         isPrismaTableMissing,
+         ST1_OPERATING_ACCOUNT_ID }             from '../../_lib/zoho-books.js'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ const SHOPIFY_TOKEN   = process.env.SHOPIFY_ACCESS_TOKEN
 
 // Fixed Zoho Books account IDs (never change)
 const FIXED = {
-  operating:      '7255504000000180097',  // ST1 Operating Account
+  operating:      ST1_OPERATING_ACCOUNT_ID,
   ar:             '7255504000000000364',  // Accounts Receivable
   ap:             '7255504000000000373',  // Accounts Payable
   bankFees:       '7255504000000000409',  // Bank Fees and Charges

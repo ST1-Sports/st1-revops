@@ -44,6 +44,37 @@ function enrichRows(rows, byId, key) {
   return rows.map(r => ({ ...r, [key]: byId.get(r.targetId) || null, confidenceLabel: confidenceLabel(r.matchConfidence) }));
 }
 
+function splitByStatus(enriched) {
+  return {
+    proposed: enriched.filter(r => r.status === 'PENDING_REVIEW'),
+    confirmed: enriched.filter(r => r.status === 'APPROVED'),
+    // A REJECTED row is a human decision, not silence — surfaced separately
+    // so a dismissed charge/transaction reads as "already reviewed, not a
+    // real match" rather than looking identical to one nobody has seen yet.
+    dismissed: enriched.filter(r => r.status === 'REJECTED'),
+  };
+}
+
+/**
+ * Never re-propose a candidate for a target or a source that already has a
+ * confirmed match on the other side — excluding both symmetrically means a
+ * confirmed source stops showing up as "unmatched" once its target is
+ * excluded, and a confirmed source can't get proposed again for a different
+ * target. Only APPROVED rows narrow the candidate pool; a REJECTED source
+ * stays eligible to match something genuinely different later.
+ */
+async function excludeApproved({ direction, targetType, targets, targetIdOf, sources, sourceIdOf }) {
+  const approvedRows = await prisma.settlementMatch.findMany({
+    where: { direction, targetType, status: 'APPROVED', targetId: { in: targets.map(targetIdOf) } },
+  });
+  const approvedTargetIds = new Set(approvedRows.map(m => m.targetId));
+  const approvedSourceIds = new Set(approvedRows.map(m => m.sourceId));
+  return {
+    candidateTargets: targets.filter(t => !approvedTargetIds.has(targetIdOf(t))),
+    candidateSources: sources.filter(s => !approvedSourceIds.has(sourceIdOf(s))),
+  };
+}
+
 async function proposeMoneyIn(since, until) {
   // Orders and the Stripe fetch are independent — run them together rather
   // than making the (slower, paginated) Stripe call wait on the DB query.
@@ -52,20 +83,12 @@ async function proposeMoneyIn(since, until) {
     fetchStripeChargesNormalized(since, until),
   ]);
 
-  // Never re-propose a candidate for an order or a charge that already has a
-  // confirmed match on the other side — excluding both symmetrically means
-  // a confirmed charge stops showing up as "unmatched" once its order is
-  // excluded, and a confirmed charge can't get proposed again for a
-  // different order. `orders` itself (the full window) is still what's used
-  // below to enrich the DISPLAY, so an already-confirmed order's own
-  // APPROVED row still shows up as confirmed instead of disappearing.
-  const approvedRows = await prisma.settlementMatch.findMany({
-    where: { direction: 'in', targetType: 'order', status: 'APPROVED', targetId: { in: orders.map(o => o.id) } },
+  // `orders` itself (the full window) is still what's used below to enrich
+  // the DISPLAY, so an already-confirmed order's own APPROVED row still
+  // shows up as confirmed instead of disappearing.
+  const { candidateTargets: candidateOrders, candidateSources: candidateCharges } = await excludeApproved({
+    direction: 'in', targetType: 'order', targets: orders, targetIdOf: o => o.id, sources: charges, sourceIdOf: c => c.id,
   });
-  const approvedOrderIds = new Set(approvedRows.map(m => m.targetId));
-  const approvedChargeIds = new Set(approvedRows.map(m => m.sourceId));
-  const candidateOrders = orders.filter(o => !approvedOrderIds.has(o.id));
-  const candidateCharges = charges.filter(c => !approvedChargeIds.has(c.id));
 
   const { matches, unmatchedOrders, unmatchedCharges } = matchOrdersToCharges(candidateOrders, candidateCharges);
 
@@ -80,8 +103,7 @@ async function proposeMoneyIn(since, until) {
   const enriched = enrichRows(rows, new Map(orders.map(o => [o.id, o])), 'order');
 
   return {
-    proposed: enriched.filter(r => r.status === 'PENDING_REVIEW'),
-    confirmed: enriched.filter(r => r.status === 'APPROVED'),
+    ...splitByStatus(enriched),
     unmatchedOrders,
     unmatchedCharges,
     summary: summarizeMoneyIn(matches),
@@ -96,17 +118,9 @@ async function proposeMoneyOut(since, until) {
   ]);
   const transactions = [...payouts, ...bankDebits];
 
-  // Same reasoning as proposeMoneyIn above: exclude already-confirmed
-  // payments AND their confirmed transaction from MATCHING (symmetrically,
-  // so a confirmed transaction doesn't show up as "unmatched"), never from
-  // the window used for display.
-  const approvedRows = await prisma.settlementMatch.findMany({
-    where: { direction: 'out', targetType: 'payable', status: 'APPROVED', targetId: { in: payments.map(p => p.payableKey) } },
+  const { candidateTargets: candidatePayments, candidateSources: candidateTransactions } = await excludeApproved({
+    direction: 'out', targetType: 'payable', targets: payments, targetIdOf: p => p.payableKey, sources: transactions, sourceIdOf: t => t.id,
   });
-  const approvedPayableKeys = new Set(approvedRows.map(m => m.targetId));
-  const approvedTransactionIds = new Set(approvedRows.map(m => m.sourceId));
-  const candidatePayments = payments.filter(p => !approvedPayableKeys.has(p.payableKey));
-  const candidateTransactions = transactions.filter(t => !approvedTransactionIds.has(t.id));
 
   const { matches, unmatchedPayments, unmatchedTransactions } = matchPaymentsToSettledTransactions(candidatePayments, candidateTransactions);
 
@@ -121,8 +135,7 @@ async function proposeMoneyOut(since, until) {
   const enriched = enrichRows(rows, new Map(payments.map(p => [p.payableKey, p])), 'payment');
 
   return {
-    proposed: enriched.filter(r => r.status === 'PENDING_REVIEW'),
-    confirmed: enriched.filter(r => r.status === 'APPROVED'),
+    ...splitByStatus(enriched),
     unmatchedPayments,
     unmatchedTransactions,
   };
@@ -144,11 +157,11 @@ export default async function handler(req, res) {
           where: { id: matchId },
           data: { status: 'APPROVED', approvedById: approvedById || null, approvedAt: new Date() },
         });
+        // Scoped only by `direction` (structural) — matchesToReject is what
+        // actually decides which of these compete for the same target or
+        // source, not this query, so the rule can change in one place.
         const pendingCandidates = await prisma.settlementMatch.findMany({
-          where: { id: { not: matchId }, status: 'PENDING_REVIEW', OR: [
-            { targetType: match.targetType, targetId: match.targetId },
-            { sourceType: match.sourceType, sourceId: match.sourceId },
-          ] },
+          where: { direction: match.direction, status: 'PENDING_REVIEW', id: { not: matchId } },
         });
         const rejectIds = matchesToReject(pendingCandidates, match);
         if (rejectIds.length) {

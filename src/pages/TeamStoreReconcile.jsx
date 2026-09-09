@@ -182,6 +182,7 @@ export default function TeamStoreReconcile({ s, dispatch, toast, cu, setMod }) {
 
   const proposed = data?.proposed || [];
   const confirmed = data?.confirmed || [];
+  const dismissed = data?.dismissed || [];
 
   return (
     <div style={{ padding: "24px 28px", maxWidth: 1200, fontFamily: "'Lexend',sans-serif", color: B.text, background: B.pageBg }}>
@@ -237,6 +238,19 @@ export default function TeamStoreReconcile({ s, dispatch, toast, cu, setMod }) {
               ? <MoneyInRow key={m.id} m={m} onApprove={() => {}} onReject={() => {}} busy />
               : <MoneyOutRow key={m.id} m={m} onApprove={() => {}} onReject={() => {}} busy />)}
           </Card>
+
+          {!!dismissed.length && (
+            <details style={{ marginTop: 18 }}>
+              <summary style={{ cursor: "pointer", fontFamily: "'Lexend Zetta',sans-serif", fontSize: 10.5, color: B.muted, letterSpacing: 0.4 }}>
+                PREVIOUSLY DISMISSED ({dismissed.length}) — reviewed and rejected, not a real match
+              </summary>
+              <Card>
+                {dismissed.map(m => tab === "in"
+                  ? <MoneyInRow key={m.id} m={m} onApprove={() => {}} onReject={() => {}} busy />
+                  : <MoneyOutRow key={m.id} m={m} onApprove={() => {}} onReject={() => {}} busy />)}
+              </Card>
+            </details>
+          )}
 
           {tab === "in" && (
             <>

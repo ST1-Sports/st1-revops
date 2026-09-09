@@ -14,9 +14,9 @@
  * reference } — so a bank feed is a second source for the same matcher,
  * not a rewrite of it.
  */
+import { roundCents } from './teamStoreSettlement.js';
 
 function num(v) { return Number(v) || 0; }
-function roundCents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 function roundTo(n, places) {
   const f = 10 ** places;
   return Math.round(n * f) / f;

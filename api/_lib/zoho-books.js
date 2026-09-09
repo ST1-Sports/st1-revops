@@ -7,6 +7,11 @@ import { getZohoToken } from './zoho-token.js'
 export const ORG   = process.env.ZOHO_ORG_ID || '899940777'
 export const BOOKS = 'https://www.zohoapis.com/books/v3'
 
+// ST1's real operating bank account in Zoho Books — shared so every
+// consumer (Ledger reconciliation, Team Store reconciliation) reads the
+// same id rather than each hardcoding its own copy.
+export const ST1_OPERATING_ACCOUNT_ID = '7255504000000180097'
+
 async function booksHeaders() {
   const token = await getZohoToken()
   return { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }

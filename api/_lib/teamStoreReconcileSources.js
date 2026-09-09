@@ -6,7 +6,7 @@
  * the pure matcher, so the matcher itself never depends on any of these
  * providers' actual field names.
  */
-import { booksGet } from './zoho-books.js';
+import { booksGet, ST1_OPERATING_ACCOUNT_ID } from './zoho-books.js';
 import { normalizeStripeCharge, normalizeStripePayout, normalizeBankTransaction } from '../../src/lib/teamStoreReconcile.js';
 
 // ── Stripe (money in: charges; money out: payouts) ───────────────────────
@@ -73,10 +73,8 @@ export async function fetchStripePayoutsNormalized(sinceDate, untilDate) {
 // There is no direct bank connector ("Grasshopper" or otherwise) anywhere
 // in this codebase — verified by searching the full repo and git history.
 // What actually plays that role today is Zoho Books' own bank-transactions
-// feed for the ST1 Operating Account, already used for this exact account
-// by api/agents/ledger/reconcile.js (its FIXED.operating constant — same
-// id, reproduced here since that file's constant isn't exported).
-const ST1_OPERATING_ACCOUNT_ID = '7255504000000180097';
+// feed for the ST1 Operating Account (ST1_OPERATING_ACCOUNT_ID, shared with
+// api/agents/ledger/reconcile.js via zoho-books.js so the two never drift).
 
 /**
  * Settled EXPENSE transactions (money leaving the Operating account) in a
