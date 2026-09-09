@@ -85,4 +85,18 @@ describe('applyDealTombstones', () => {
     assert.equal(next.deals.length, 1);
     assert.equal(next.deals[0].id, 'keep');
   });
+
+  it('keeps a deal a stale posting device never had in its own snapshot', () => {
+    // Device A created "new-deal" and it's already stored server-side.
+    // Device B hasn't pulled since, so its POST only carries its own
+    // older deal — that must not wipe out what device A created.
+    const previous = { deals: [{ id: 'new-deal', name: 'Created on device A' }, { id: 'shared', name: 'Old copy' }] };
+    const incoming = { deals: [{ id: 'shared', name: 'Edited on device B' }] };
+    const next = applyDealTombstones(incoming, previous);
+    const ids = next.deals.map(d => d.id).sort();
+    assert.deepEqual(ids, ['new-deal', 'shared']);
+    // Same-id conflict: the posting (incoming) device's edit wins, matching
+    // prior last-write-wins behavior for a deal both sides actually have.
+    assert.equal(next.deals.find(d => d.id === 'shared').name, 'Edited on device B');
+  });
 });

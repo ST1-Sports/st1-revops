@@ -2108,6 +2108,17 @@ suggestions:[],ts:new Date(m.ts).getTime(),
 setHistory(msgs);
 setTimeout(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),80);
 };
+// s.agentHistory is deliberately excluded from /api/state sync (session-local,
+// same as currentUserId) — a device that's never opened chat before starts
+// with an empty thread even though its ChatSession/ChatMessage rows are
+// real and already loaded into `sessions` above. Resume the most recent one
+// automatically instead of leaving the thread blank until the rep happens to
+// notice and click a session in the sidebar themselves.
+useEffect(()=>{
+if(sessionsLoading||activeSessionId||sessionIdRef.current||history.length||!sessions.length)return;
+loadSession(sessions[0]);
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[sessionsLoading,sessions]);
 const deleteSession=async(sessId,{silent}={})=>{
 if(!sessId)return;
 try{
