@@ -49,6 +49,7 @@
     "api/cron/ledger-reconcile.js":               { "maxDuration": 60 },
     "api/webhooks/*.js":                           { "maxDuration": 30 },
     "api/team-store/sync.js":                      { "maxDuration": 120 },
+    "api/team-store/ap.js":                        { "maxDuration": 30 },
     "api/cron/team-store-sync.js":                 { "maxDuration": 120 }
   },
   "crons": [

@@ -1,9 +1,11 @@
 /**
  * Team Store Settlement — pure math, no I/O. Takes orders + lines +
  * payables + fee config (already fetched from wherever they live), returns
- * every number this module reports. Nothing here touches Prisma, fetch, or
- * the clock — a caller resolves what period/config applies and hands in
- * plain arrays.
+ * every number this module reports. Nothing here touches Prisma or fetch. A
+ * few AP functions below are date-relative (aging, "this period") — those
+ * take `now` as an explicit parameter (defaulting to Date.now() for real
+ * callers) rather than reading the clock implicitly, so they stay
+ * deterministic and testable with a fixed reference date.
  *
  * Rounding: every accumulator sums RAW (unrounded) figures across orders;
  * rounding to cents happens exactly once, at the point a number is handed
@@ -316,4 +318,149 @@ export function buildSettlementReport({ orders = [], lines = [], payables = [], 
     feeAudit: feeAudit(orders, lines, config),
     exceptions: flagExceptions(orders, lines, payables),
   };
+}
+
+// ── Accounts Payable (weekly screen) ────────────────────────────────────────
+// A payable here is expected to optionally carry its own recorded payment as
+// `payable.payment` (RevOps' own PayablePayment row, or null/undefined if
+// still outstanding) — matching a single Prisma query with
+// `include: { payment: true }`, so the caller never has to build or pass a
+// separate "which ids are paid" set alongside the payables array itself.
+
+export const AP_AGE_FLAG_DAYS = 45;
+
+const ROLE_BY_LABEL = {
+  'PMP Printing': 'Decoration / production',
+  'Inkify': 'Decoration / production',
+  'Unlimited Sports Apparel': 'Product supplier',
+  'MyHOUSE': 'Product supplier',
+  'PMP': 'Production (delta-share)',
+  'USA': 'Store partner delta',
+  [ST1_SUPPLIED_LABEL]: 'ST1-supplied product (internal)',
+};
+
+/** Roles for the exact labels seen in practice; anything unrecognized is a school — that's most of the payee list. */
+export function classifyPayeeRole(payeeLabel) {
+  return ROLE_BY_LABEL[String(payeeLabel || '').trim()] || 'School rev share';
+}
+
+export function isInternalPayee(payeeLabel) {
+  return String(payeeLabel || '').trim() === ST1_SUPPLIED_LABEL;
+}
+
+/** True once a payable carries our own recorded payment — never inspects the platform's own `paid` flag, which is a separate signal shown alongside this, not merged into it. */
+export function isPaidInRevOps(payable) {
+  return !!payable?.payment;
+}
+
+/** Whole days between the order's paidAt and `now`. null if there's no paidAt to age from at all (order not yet paid upstream). */
+export function ageDays(paidAt, now = Date.now()) {
+  if (!paidAt) return null;
+  const paidTime = new Date(paidAt).getTime();
+  if (Number.isNaN(paidTime)) return null;
+  return Math.floor((Number(now) - paidTime) / 86_400_000);
+}
+
+function monthBounds(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  return {
+    start: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)),
+    end: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)),
+  };
+}
+
+/**
+ * The AP screen's top-line numbers. Outstanding, item/payee counts, and
+ * oldest-unpaid age all EXCLUDE ST1 Sports — that payable is ST1 paying
+ * itself for product it supplied, cost rather than a partner payout, and
+ * must never inflate a "what we owe" figure. Its total is still returned
+ * separately (st1SuppliedCost) so it can be shown, just never folded in.
+ * `periodStart`/`periodEnd` default to the calendar month containing `now`.
+ */
+export function apSummary(payables, { now = Date.now(), periodStart, periodEnd } = {}) {
+  const bounds = periodStart || periodEnd
+    ? { start: periodStart ? new Date(periodStart) : null, end: periodEnd ? new Date(periodEnd) : null }
+    : monthBounds(now);
+
+  let totalOutstanding = 0;
+  let st1SuppliedCost = 0;
+  let itemCount = 0;
+  let oldestAgeDays = null;
+  let recordedPaidThisPeriod = 0;
+  const payeeSet = new Set();
+
+  for (const p of payables || []) {
+    const paid = isPaidInRevOps(p);
+    const amount = num(p.amount);
+
+    if (paid && p.payment?.paidOn) {
+      const t = new Date(p.payment.paidOn).getTime();
+      if ((!bounds.start || t >= bounds.start.getTime()) && (!bounds.end || t < bounds.end.getTime())) {
+        recordedPaidThisPeriod += num(p.payment.amountPaid ?? p.amount);
+      }
+    }
+
+    if (paid) continue; // only what's still open contributes to "outstanding"
+
+    if (isInternalPayee(p.payeeLabel)) {
+      st1SuppliedCost += amount;
+      continue;
+    }
+
+    totalOutstanding += amount;
+    itemCount++;
+    payeeSet.add(p.payeeLabel || 'Unknown');
+    const age = ageDays(p.orderPaidAt, now);
+    if (age != null && (oldestAgeDays == null || age > oldestAgeDays)) oldestAgeDays = age;
+  }
+
+  return {
+    totalOutstanding: roundCents(totalOutstanding),
+    st1SuppliedCost: roundCents(st1SuppliedCost),
+    itemCount,
+    payeeCount: payeeSet.size,
+    oldestAgeDays,
+    recordedPaidThisPeriod: roundCents(recordedPaidThisPeriod),
+  };
+}
+
+/**
+ * By-payee AP rollup: role, item count, total ever billed, outstanding
+ * (unpaid) balance, and the oldest unpaid item's age + reference number for
+ * that payee. ST1 Sports still gets its own row (its role marks it
+ * internal) so it's visible, not hidden — the screen is responsible for not
+ * summing it into a partner-facing total, same as apSummary above.
+ */
+export function rollupApByPayee(payables, { now = Date.now() } = {}) {
+  const groups = new Map();
+  for (const p of payables || []) {
+    const label = p.payeeLabel || 'Unknown';
+    const prev = groups.get(label) || {
+      role: classifyPayeeRole(label), items: 0, billed: 0, outstanding: 0, oldestAgeDays: null, oldestReferenceNumber: null,
+    };
+    const paid = isPaidInRevOps(p);
+    const amount = num(p.amount);
+
+    let oldestAgeDays = prev.oldestAgeDays;
+    let oldestReferenceNumber = prev.oldestReferenceNumber;
+    if (!paid) {
+      const age = ageDays(p.orderPaidAt, now);
+      if (age != null && (oldestAgeDays == null || age > oldestAgeDays)) {
+        oldestAgeDays = age;
+        oldestReferenceNumber = p.referenceNumber;
+      }
+    }
+
+    groups.set(label, {
+      role: prev.role,
+      items: prev.items + 1,
+      billed: prev.billed + amount,
+      outstanding: prev.outstanding + (paid ? 0 : amount),
+      oldestAgeDays,
+      oldestReferenceNumber,
+    });
+  }
+  const out = {};
+  for (const [label, v] of groups) out[label] = { ...v, billed: roundCents(v.billed), outstanding: roundCents(v.outstanding) };
+  return out;
 }

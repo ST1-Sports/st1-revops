@@ -10,6 +10,13 @@ import {
   feeAudit,
   flagExceptions,
   buildSettlementReport,
+  AP_AGE_FLAG_DAYS,
+  classifyPayeeRole,
+  isInternalPayee,
+  isPaidInRevOps,
+  ageDays,
+  apSummary,
+  rollupApByPayee,
 } from './teamStoreSettlement.js';
 
 // ── August fixture ───────────────────────────────────────────────────────
@@ -238,5 +245,128 @@ describe('buildSettlementReport', () => {
     assert.equal(report.perOrder.length, 3);
     assert.equal(report.byMonth['2026-08'].grossCollected, 10615.61);
     assert.ok(report.exceptions.some(f => f.type === 'discount' && f.referenceNumber === 'ST1-26-00516'));
+  });
+});
+
+// ── AP fixture ───────────────────────────────────────────────────────────
+// Synthetic — calibrated so the unpaid balances reproduce the brief's exact
+// reference snapshot: 10,569.52 total outstanding, with the seven named
+// payees at their exact stated balances. "Other Schools" is the (unnamed in
+// the brief) remainder that makes the total add up — the brief only called
+// out the biggest balances, not an exhaustive list.
+// `now` is fixed at 2026-09-15 so ages are deterministic: ADM Tigers' order
+// paid on 2026-07-01 is 76 days old (> the 45-day flag), everything else is
+// under 40 days old.
+const AP_NOW = new Date('2026-09-15T00:00:00Z').getTime();
+
+const AP_PAYABLES = [
+  { id: 'p1', referenceNumber: 'ST1-26-00700', payeeLabel: 'Unlimited Sports Apparel', amount: 3953.54, orderPaidAt: '2026-08-20T00:00:00Z', platformPaid: false },
+  { id: 'p2', referenceNumber: 'ST1-26-00701', payeeLabel: 'PMP Printing', amount: 2789.75, orderPaidAt: '2026-08-22T00:00:00Z', platformPaid: false },
+  { id: 'p3', referenceNumber: 'ST1-26-00702', payeeLabel: 'USA', amount: 1017.13, orderPaidAt: '2026-08-25T00:00:00Z', platformPaid: true },
+  { id: 'p4', referenceNumber: 'ST1-26-00703', payeeLabel: 'PMP', amount: 909.09, orderPaidAt: '2026-08-15T00:00:00Z', platformPaid: false },
+  { id: 'p5', referenceNumber: 'ST1-26-00704', payeeLabel: 'Norwalk HS XC', amount: 512.59, orderPaidAt: '2026-08-10T00:00:00Z', platformPaid: false },
+  { id: 'p6', referenceNumber: 'ST1-26-00705', payeeLabel: 'Inkify', amount: 470.94, orderPaidAt: '2026-08-28T00:00:00Z', platformPaid: false, payoutEnabled: false },
+  { id: 'p7', referenceNumber: 'ST1-26-00706', payeeLabel: 'ADM Tigers', amount: 435.68, orderPaidAt: '2026-07-01T00:00:00Z', platformPaid: false },
+  { id: 'p8', referenceNumber: 'ST1-26-00707', payeeLabel: 'Other Schools', amount: 480.80, orderPaidAt: '2026-08-18T00:00:00Z', platformPaid: false },
+  // ST1-supplied product — cost, never counted toward "we owe".
+  { id: 'p9', referenceNumber: 'ST1-26-00708', payeeLabel: 'ST1 Sports', amount: 200.00, orderPaidAt: '2026-08-20T00:00:00Z', platformPaid: false },
+  // Already recorded paid in RevOps this period — excluded from outstanding,
+  // counted in recordedPaidThisPeriod instead.
+  {
+    id: 'p10', referenceNumber: 'ST1-26-00709', payeeLabel: 'Random Paid School', amount: 300.00,
+    orderPaidAt: '2026-08-01T00:00:00Z', platformPaid: true,
+    payment: { paidOn: '2026-09-05T00:00:00Z', amountPaid: 300.00 },
+  },
+];
+
+describe('classifyPayeeRole', () => {
+  it('maps the exact labels from the brief to their roles', () => {
+    assert.equal(classifyPayeeRole('PMP Printing'), 'Decoration / production');
+    assert.equal(classifyPayeeRole('Inkify'), 'Decoration / production');
+    assert.equal(classifyPayeeRole('Unlimited Sports Apparel'), 'Product supplier');
+    assert.equal(classifyPayeeRole('MyHOUSE'), 'Product supplier');
+    assert.equal(classifyPayeeRole('PMP'), 'Production (delta-share)');
+    assert.equal(classifyPayeeRole('USA'), 'Store partner delta');
+    assert.equal(classifyPayeeRole('ST1 Sports'), 'ST1-supplied product (internal)');
+  });
+
+  it('falls back to school rev share for anything unrecognized', () => {
+    assert.equal(classifyPayeeRole('Norwalk HS XC'), 'School rev share');
+    assert.equal(classifyPayeeRole('ADM Tigers'), 'School rev share');
+  });
+});
+
+describe('isInternalPayee / isPaidInRevOps', () => {
+  it('flags only the ST1 Sports label as internal', () => {
+    assert.equal(isInternalPayee('ST1 Sports'), true);
+    assert.equal(isInternalPayee('PMP'), false);
+  });
+
+  it('is based only on our own payment record, never the platform paid flag', () => {
+    assert.equal(isPaidInRevOps({ platformPaid: true }), false);
+    assert.equal(isPaidInRevOps({ platformPaid: false, payment: { paidOn: '2026-09-01' } }), true);
+    assert.equal(isPaidInRevOps({}), false);
+  });
+});
+
+describe('ageDays', () => {
+  it('computes whole days between paidAt and now', () => {
+    assert.equal(ageDays('2026-07-01T00:00:00Z', AP_NOW), 76);
+  });
+
+  it('returns null when there is no paidAt to age from', () => {
+    assert.equal(ageDays(null, AP_NOW), null);
+    assert.equal(ageDays(undefined, AP_NOW), null);
+  });
+});
+
+describe('apSummary', () => {
+  it('reproduces the brief\'s exact outstanding snapshot, excluding ST1 Sports', () => {
+    const summary = apSummary(AP_PAYABLES, { now: AP_NOW });
+    assert.equal(summary.totalOutstanding, 10569.52);
+    assert.equal(summary.st1SuppliedCost, 200.00);
+    assert.equal(summary.itemCount, 8);
+    assert.equal(summary.payeeCount, 8);
+    assert.equal(summary.oldestAgeDays, 76);
+  });
+
+  it('counts recorded-paid amounts falling inside the given period', () => {
+    const summary = apSummary(AP_PAYABLES, { now: AP_NOW });
+    assert.equal(summary.recordedPaidThisPeriod, 300.00);
+  });
+});
+
+describe('rollupApByPayee', () => {
+  const byPayee = rollupApByPayee(AP_PAYABLES, { now: AP_NOW });
+
+  it('reports the exact per-payee balances from the brief', () => {
+    assert.equal(byPayee['Unlimited Sports Apparel'].outstanding, 3953.54);
+    assert.equal(byPayee['PMP Printing'].outstanding, 2789.75);
+    assert.equal(byPayee['USA'].outstanding, 1017.13);
+    assert.equal(byPayee['PMP'].outstanding, 909.09);
+    assert.equal(byPayee['Norwalk HS XC'].outstanding, 512.59);
+    assert.equal(byPayee['Inkify'].outstanding, 470.94);
+    assert.equal(byPayee['ADM Tigers'].outstanding, 435.68);
+  });
+
+  it('attaches the right role to each payee, ST1 Sports included though it is internal', () => {
+    assert.equal(byPayee['Unlimited Sports Apparel'].role, 'Product supplier');
+    assert.equal(byPayee['ST1 Sports'].role, 'ST1-supplied product (internal)');
+    assert.equal(byPayee['Norwalk HS XC'].role, 'School rev share');
+  });
+
+  it('tracks the oldest unpaid item age and its reference number per payee', () => {
+    assert.equal(byPayee['ADM Tigers'].oldestAgeDays, 76);
+    assert.equal(byPayee['ADM Tigers'].oldestReferenceNumber, 'ST1-26-00706');
+  });
+
+  it('flags nothing over the 45-day threshold except ADM Tigers', () => {
+    const flagged = Object.entries(byPayee).filter(([, v]) => v.oldestAgeDays != null && v.oldestAgeDays > AP_AGE_FLAG_DAYS);
+    assert.deepEqual(flagged.map(([label]) => label), ['ADM Tigers']);
+  });
+
+  it('a payee whose only item is already paid in RevOps shows zero outstanding but its full billed amount', () => {
+    assert.equal(byPayee['Random Paid School'].billed, 300.00);
+    assert.equal(byPayee['Random Paid School'].outstanding, 0);
   });
 });
