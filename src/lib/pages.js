@@ -24,6 +24,8 @@ export const KNOWN_MODS = new Set([
   "expansion",
   "finance",
   "team-stores",
+  "team-store-statement",
+  "team-store-reconcile",
   "flagship-store",
   "cc-ad-hub",
   "calendar",
