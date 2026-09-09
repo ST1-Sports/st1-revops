@@ -1032,3 +1032,131 @@ model OutreachBatch {
   updatedAt     DateTime @updatedAt
   @@index([status])
 }
+
+// ── TEAM STORE SETTLEMENT ───────────────────────────────────────────────────
+// Team store orders live in the ST1 admin app (api.st1sports.com), not here —
+// these tables are a local, periodically-synced cache used purely for
+// reporting ("what did each school sell, what do we owe"). The admin app is
+// the source of truth for order/payable data; RevOps is the source of truth
+// for whether a payable has actually been PAID, since the admin app exposes
+// no write endpoint for that and no payment date/reference at all. A sync
+// upserts TeamStoreOrder/TeamStoreOrderLine/TeamStorePayable from the admin
+// API and never touches PayablePayment — that table only ever changes when
+// someone records a payment in RevOps itself. See api/_lib/teamStoreSync.js.
+model TeamStoreOrder {
+  id                 String   @id                   // admin app's own order id — natural key, not generated
+  referenceNumber    String   @unique                // e.g. "ST1-26-00583"
+  createdAt          DateTime?                       // upstream order creation date — used to bucket monthly reports
+  paidAt             DateTime?
+  status             String?
+  storeId            String?
+  storeName          String?
+  isUsaStore         Boolean  @default(false)        // teamStore.isUSA — delta-share store vs. ST1-owned store
+  tax                Decimal? @db.Decimal(12, 2)
+  shipping           Decimal? @db.Decimal(12, 2)
+  subTotal           Decimal? @db.Decimal(12, 2)
+  totalAmount        Decimal? @db.Decimal(12, 2)
+  itemCount          Int?
+  unitCount          Int?
+  usaCut             Decimal? @db.Decimal(12, 2)
+  productSupplierCut Decimal? @db.Decimal(12, 2)
+  teamStoreRevenue   Decimal? @db.Decimal(12, 2)
+  raw                Json                            // full order detail payload, for anything not broken out above
+  syncedAt           DateTime @default(now())
+  lines              TeamStoreOrderLine[]
+  payables           TeamStorePayable[]
+
+  @@index([paidAt])
+  @@index([createdAt])
+  @@index([storeId])
+}
+
+model TeamStoreOrderLine {
+  id             String   @id @default(cuid())
+  orderId        String
+  order          TeamStoreOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  externalItemId String                              // items[].id from the admin app — scoped per order, used for idempotent upserts
+  sku            String?
+  productName    String?
+  supplierName   String?
+  size           String?
+  unitPrice      Decimal? @db.Decimal(12, 2)
+  quantity       Int?
+  amount         Decimal? @db.Decimal(12, 2)
+  baseCost       Decimal? @db.Decimal(12, 2)         // LIVE catalogue data, can drift after the order shipped — margin analysis only, never a payout figure
+  decorationCost Decimal? @db.Decimal(12, 2)         // resolved from /admin/decoration_cost against this line's design — same caveat as baseCost
+  childStoreName String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([orderId, externalItemId])
+  @@index([orderId])
+}
+
+model TeamStorePayable {
+  id              String   @id                       // `${referenceNumber}~${type}~${slug(label)}` — the payee's own id repeats across rows, this is the real unique key
+  orderId         String
+  order           TeamStoreOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  referenceNumber String                              // denormalized off the id for querying/display without a join
+  payeeType       String                              // team_store | supplier | product_supplier
+  payeeLabel      String
+  payeeExternalId String?                             // payables[].id — the PAYEE's id, NOT unique per payable row
+  amount          Decimal  @db.Decimal(12, 2)          // stored payable amount — the source of truth for what's owed, never recomputed from live cost data
+  platformPaid    Boolean  @default(false)             // upstream payables[].paid — a flag only, no date/reference/amount behind it
+  payoutMethod    String?
+  storeName       String?
+  orderPaidAt     DateTime?
+  syncedAt        DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  payment         PayablePayment?
+
+  @@index([orderId])
+  @@index([payeeType])
+  @@index([platformPaid])
+}
+
+// RevOps' own payment record — deliberately separate from TeamStorePayable so
+// a re-sync (which only ever writes upstream-derived fields on that table)
+// can never touch what was actually paid. One row per payable: the admin
+// app has no payment date, reference, batch, or amount-paid anywhere, and no
+// write endpoint to push a "paid" flag back to it — this is a RevOps-only
+// record, and the UI must be clear that marking paid here does not sync
+// upstream.
+model PayablePayment {
+  payableKey   String   @id                          // = TeamStorePayable.id
+  payable      TeamStorePayable @relation(fields: [payableKey], references: [id])
+  paidOn       DateTime
+  method       String?
+  reference    String?
+  amountPaid   Decimal  @db.Decimal(12, 2)
+  note         String?
+  recordedById String?
+  recordedAt   DateTime @default(now())
+}
+
+// Delta-share fee terms, effective-dated so a historical month reprices
+// against the terms actually in force then rather than whatever's current —
+// Matt's stated terms and what the platform actually applies have already
+// been observed to diverge (3.5%+$2/item stated vs. 2.90%+$2/item applied
+// in August), and that variance is itself a reportable number, not an error
+// to silently correct.
+model SettlementConfig {
+  id            String   @id @default(cuid())
+  feeRate       Decimal  @default(0.035) @db.Decimal(6, 4)
+  feePerItem    Decimal  @default(2.00) @db.Decimal(12, 2)
+  effectiveFrom DateTime
+  createdAt     DateTime @default(now())
+
+  @@index([effectiveFrom])
+}
+
+model TeamStoreSyncRun {
+  id               String    @id @default(cuid())
+  startedAt        DateTime  @default(now())
+  finishedAt       DateTime?
+  ordersSeen       Int       @default(0)
+  payablesUpserted Int       @default(0)
+  errors           Json      @default("[]")
+
+  @@index([startedAt])
+}
