@@ -1161,3 +1161,36 @@ model TeamStoreSyncRun {
 
   @@index([startedAt])
 }
+
+// Proposed matches between a real-money event (a Stripe charge/payout, or a
+// bank feed's settled transaction) and a TeamStoreOrder (money in) or
+// TeamStorePayable (money out). This table IS the confirmation record — it
+// never mutates TeamStoreOrder/TeamStorePayable/PayablePayment itself. A
+// fuzzy match is never auto-applied: every row starts PENDING_REVIEW and
+// only becomes APPROVED (or REJECTED) through an explicit human action,
+// which is what "store which source confirmed it" means here — sourceType +
+// sourceId on an APPROVED row.
+model SettlementMatch {
+  id              String    @id @default(cuid())
+  direction       String                                // in | out
+  targetType      String                                // order | payable
+  targetId        String                                // TeamStoreOrder.id or TeamStorePayable.id
+  sourceType      String                                // stripe_charge | stripe_payout | bank_transaction
+  sourceId        String                                // Stripe charge/payout id, or bank txn id
+  sourceAmount    Decimal   @db.Decimal(12, 2)
+  sourceDate      DateTime
+  feeAmount       Decimal?  @db.Decimal(12, 2)           // Stripe processing fee — money-in only
+  counterparty    String?                                // bank txn payee/description, when available
+  matchConfidence Float
+  suggestionBasis String                                 // reference | amount_date | amount_only
+  status          String    @default("PENDING_REVIEW")   // PENDING_REVIEW | APPROVED | REJECTED
+  approvedById    String?
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([sourceType, sourceId, targetType, targetId])
+  @@index([targetType, targetId])
+  @@index([status])
+  @@index([direction])
+}

@@ -51,6 +51,7 @@
     "api/team-store/sync.js":                      { "maxDuration": 120 },
     "api/team-store/ap.js":                        { "maxDuration": 30 },
     "api/team-store/statement.js":                  { "maxDuration": 60 },
+    "api/team-store/reconcile.js":                  { "maxDuration": 60 },
     "api/cron/team-store-sync.js":                 { "maxDuration": 120 }
   },
   "crons": [
