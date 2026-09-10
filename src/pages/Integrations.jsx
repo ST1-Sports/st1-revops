@@ -174,11 +174,9 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
   const [campaignCreating, setCampaignCreating] = useState(false);
   const [newListName, setNewListName] = useState("Cold Leads — Promo Offers");
 
-  // Ad platforms + Instantly
+  // Ad platforms
   const [adsStatus, setAdsStatus]   = useState(() => { try { const s=JSON.parse(localStorage.getItem("st1_ads_status_v1")||"{}"); return (Date.now()-(s.ts||0))<3600000?s:{}; } catch { return {}; } });
   const [adsLoading, setAdsLoading] = useState(false);
-  const [instStatus, setInstStatus] = useState(null);
-  const [instCampaigns, setInstCampaigns] = useState([]);
   const [lsEmbedUrl, setLsEmbedUrl]   = useState(() => { try { return localStorage.getItem("st1_ls_embed")||""; } catch { return ""; } });
   const [adLinks, setAdLinks]         = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_links")||"{}"); } catch { return {}; } });
   const [adMetrics, setAdMetrics]     = useState(() => { try { return JSON.parse(localStorage.getItem("st1_ad_metrics")||"{}"); } catch { return {}; } });
@@ -943,22 +941,6 @@ export default function IntegrationsHub({ initialTab = "overview" }) {
     setAdsLoading(false);
   };
 
-  const testInstantly = async () => {
-    setTesting("instantly");
-    try {
-      const r = await fetch("/api/instantly",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"list_campaigns"})});
-      const d = await r.json();
-      if(d.error) throw new Error(d.error);
-      setInstStatus({ok:true, count:d.campaigns?.length||0});
-      setInstCampaigns(d.campaigns||[]);
-      addLog(`✓ Instantly connected — ${d.campaigns?.length||0} campaigns`,"success");
-    } catch(e) {
-      setInstStatus({ok:false, error:e.message});
-      addLog(`Instantly: ${e.message.slice(0,100)}`,"error");
-    }
-    setTesting(null);
-  };
-
   const scanEmailInbox = async () => {
     setEmailScanning(true); setEmailOpps([]); setEmailMessages([]);
     addLog("Fetching recent emails from Gmail...");
@@ -1223,7 +1205,6 @@ Channel: ${slackChannelName}`);
             ["Zoho CRM",    status.crm,                                    "#E42527"],
             ["Campaigns",   status.campaigns,                              "#E42527"],
             ["Gmail",       gmailStatus,                                   "#EA4335"],
-            ["Instantly",   instStatus?.ok,                                "#FF4A00"],
             ["Meta Ads",    adsStatus.meta?.status==="connected",          "#1877F2"],
             ["Google Ads",  adsStatus.google?.status==="connected",        "#4285F4"],
             ["LinkedIn",    adsStatus.linkedin?.status==="connected",      "#0A66C2"],
@@ -1370,24 +1351,6 @@ Channel: ${slackChannelName}`);
                     ))}
                   </div>
                   <OBtn sm onClick={()=>setTab("ads")}>CONFIGURE →</OBtn>
-                </div>
-
-                {/* Instantly */}
-                <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,borderLeft:`4px solid ${instStatus?.ok?"#FF4A00":B.border}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                    <div style={{display:"flex",gap:9,alignItems:"center"}}>
-                      <span style={{fontSize:22}}>⚡</span>
-                      <div>
-                        <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.black}}>Instantly.ai</div>
-                        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Cold email sequences & nurture</div>
-                      </div>
-                    </div>
-                    <StatusBadge ok={instStatus?.ok}/>
-                  </div>
-                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.textMid,marginBottom:9}}>
-                    {instStatus?.ok?`${instStatus.count} campaign${instStatus.count!==1?"s":""} active. Cold leads route here automatically.`:"Set INSTANTLY_API_KEY in Vercel to connect email sequences."}
-                  </div>
-                  <OBtn sm color="#FF4A00" onClick={()=>setTab("marketing")}>CONFIGURE →</OBtn>
                 </div>
 
                 {/* Quick actions */}
@@ -1836,7 +1799,7 @@ Channel: ${slackChannelName}`);
             <div className="fu">
               <div style={{marginBottom:20}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:20,color:B.black,letterSpacing:.3}}>MARKETING AUTOMATION</div>
-                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Zoho Campaigns for email · Zoho Social for publishing · Cold lead nurture automation</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:2}}>Zoho Campaigns for email · Ayrshare for social publishing · Cold lead nurture automation</div>
                 <div style={{width:32,height:3,background:B.orange,marginTop:7,borderRadius:2}}/>
               </div>
 
@@ -2055,73 +2018,6 @@ Channel: ${slackChannelName}`);
                     )}
                   </div>
                 )}
-              </div>
-
-              {/* ── INSTANTLY.AI ────────────────────────────────────────────── */}
-              <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:8,padding:16,marginBottom:14,borderLeft:"4px solid #FF4A00"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-                  <div>
-                    <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>INSTANTLY.AI</div>
-                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>Cold email sequences · automated follow-ups · inbox rotation</div>
-                  </div>
-                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                    {instStatus?.ok
-                      ?<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green,background:B.greenBg,padding:"3px 8px",borderRadius:3}}>✓ CONNECTED</span>
-                      :<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.surface,padding:"3px 8px",borderRadius:3}}>NOT TESTED</span>}
-                    <button onClick={testInstantly} disabled={testing==="instantly"}
-                      style={{background:"#FF4A00",color:B.white,border:"none",borderRadius:4,padding:"6px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:"pointer"}}>
-                      {testing==="instantly"?"TESTING...":"TEST CONNECTION"}
-                    </button>
-                  </div>
-                </div>
-
-                <div style={{background:B.surface,borderRadius:6,padding:12,marginBottom:12,border:`1px solid ${B.border}`}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>VERCEL ENVIRONMENT VARIABLES</div>
-                  {[
-                    ["INSTANTLY_API_KEY","Your API key — Instantly → Settings → API Keys"],
-                    ["INSTANTLY_DEFAULT_CAMPAIGN_ID","ID of default nurture campaign to add leads to (optional)"],
-                  ].map(([k,hint])=>(
-                    <div key={k} style={{display:"flex",gap:12,padding:"4px 0",borderBottom:`1px solid ${B.border}`,alignItems:"baseline"}}>
-                      <span style={{fontFamily:"monospace",fontSize:10,color:"#FF4A00",minWidth:250,flexShrink:0}}>{k}</span>
-                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{hint}</span>
-                    </div>
-                  ))}
-                </div>
-
-                {instStatus?.ok&&instCampaigns.length>0&&(
-                  <div>
-                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:8}}>ACTIVE CAMPAIGNS ({instCampaigns.length})</div>
-                    <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                      {instCampaigns.slice(0,6).map((c,i)=>(
-                        <div key={c.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:B.surface,borderRadius:5,padding:"7px 11px",border:`1px solid ${B.border}`}}>
-                          <div>
-                            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{c.name||c.campaign_name||`Campaign ${i+1}`}</div>
-                            <div style={{fontFamily:"monospace",fontSize:9,color:B.muted,marginTop:1}}>{c.id}</div>
-                          </div>
-                          <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c.status==="active"?B.green:B.muted,background:c.status==="active"?B.greenBg:B.surface,padding:"2px 7px",borderRadius:3,border:`1px solid ${B.border}`}}>{(c.status||"—").toUpperCase()}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{marginTop:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
-                      Use campaign IDs above as <code style={{background:"#f0f0f0",padding:"1px 4px",borderRadius:2}}>INSTANTLY_DEFAULT_CAMPAIGN_ID</code> or pass them directly from RevOps outreach flows.
-                    </div>
-                  </div>
-                )}
-
-                {instStatus?.ok===false&&(
-                  <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:5,padding:"9px 12px",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.red}}>
-                    ✗ {instStatus.error}
-                  </div>
-                )}
-
-                <div style={{marginTop:12,background:B.orangeBg,border:`1px solid ${B.orange}30`,borderRadius:5,padding:"10px 12px"}}>
-                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:1.5,marginBottom:5}}>HOW IT'S USED IN REVOPS</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,lineHeight:1.6}}>
-                    <div>→ <strong>Batch Outreach</strong>: ⚡ ADD TO INSTANTLY button adds selected contacts to the default campaign</div>
-                    <div>→ <strong>AI Agent</strong>: When agent suggests "add to nurture", it calls Instantly to enroll the lead</div>
-                    <div>→ <strong>CRM module</strong>: Add lead to Instantly directly from contact record via agent action</div>
-                  </div>
-                </div>
               </div>
 
               {/* ── SOCIAL PUBLISHING (Ayrshare) ────────────────────────────── */}
@@ -2428,7 +2324,6 @@ Channel: ${slackChannelName}`);
             {l:"Zoho Books",   c:B.red,   desc:"Invoice & AR data",       ok:status.books},
             {l:"Zoho CRM",     c:B.red,   desc:"Contact sync",            ok:status.crm},
             {l:"Campaigns",    c:B.red,   desc:"Email lists",             ok:status.campaigns},
-            {l:"Instantly",    c:"#FF4A00",desc:"Nurture sequences",       ok:instStatus?.ok},
             {l:"Meta Ads",     c:"#1877F2",desc:"Facebook/Instagram ads", ok:adsStatus.meta?.status==="connected"},
             {l:"Google Ads",   c:"#4285F4",desc:"Search & Display ads",   ok:adsStatus.google?.status==="connected"},
             {l:"LinkedIn Ads", c:"#0A66C2",desc:"B2B ad targeting",       ok:adsStatus.linkedin?.status==="connected"},

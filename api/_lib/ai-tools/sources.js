@@ -144,7 +144,7 @@ export function mapProduct(product) {
     tags: product.tags || [],
     attributes: product.attributes || [],
     modifiedAt: product.date_modified ? product.date_modified.toISOString() : null,
-    source: source('ST1 product catalog (WooCommerce sync)', { recordId: String(product.id) }),
+    source: source('ST1 product catalog (Shopify sync)', { recordId: String(product.id) }),
   };
 }
 

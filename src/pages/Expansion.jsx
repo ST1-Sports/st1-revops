@@ -809,7 +809,7 @@ export default function ExpansionPlaybook(props) {
                     ["15-20 Key Contacts","ADs, coaches, procurement, associations — with emails/phones where public"],
                     ["Bid Calendar","Monthly action calendar, purchasing coops, active RFPs, registration steps"],
                     ["90-Day Plan","Week-by-week tasks, milestones, KPIs, revenue targets"],
-                    ["Email Sequences","2 ready-to-send outreach sequences for Instantly/Zoho"],
+                    ["Email Sequences","2 ready-to-send outreach sequences for Zoho"],
                     ["Positioning Strategy","Value props, competitive differentiators, messaging by audience"],
                   ].map(([t,d])=>(
                     <div key={t} style={{display:"flex",gap:8,marginBottom:8}}>

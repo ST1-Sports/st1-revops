@@ -8,10 +8,10 @@
  *
  * Optional shared secret: set TWILIO_WEBHOOK_SECRET and add
  * ?secret=<same value> to the webhook URL configured in Twilio — same
- * conditional-shared-secret convention as the other webhook handlers in
- * this directory (zoho.js, instantly.js). Twilio doesn't let a query
- * param collide with its own POST fields, so this is checked separately
- * from the form body.
+ * conditional-shared-secret convention as the other webhook handler in
+ * this directory (zoho.js). Twilio doesn't let a query param collide
+ * with its own POST fields, so this is checked separately from the
+ * form body.
  */
 import { prisma }         from '../_lib/prisma.js';
 import { normalizePhone } from '../_lib/twilio.js';
