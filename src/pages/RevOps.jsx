@@ -4584,7 +4584,7 @@ toast("Quote PDF added as a deal","success");
 <KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
 <KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
 <KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
-<KCard l="Open Deals" v={openDeals.length} c={B.blue} sub={fmt$K(totalOpen)}/>
+<KCard l="Open Deals" v={fmt$K(totalOpen)} c={B.blue} sub={`${openDeals.length} deal${openDeals.length===1?"":"s"}`}/>
 <KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
 </div>
 {/* ── ACCOUNT INFO ── */}
