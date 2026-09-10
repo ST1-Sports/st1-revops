@@ -776,12 +776,11 @@ call_edgar executes server-side and returns type:"edgar_quote" with the full ver
 call_brad executes server-side and returns type:"brad_outreach" with requiresApproval drafts for human review.
 call_ledger executes server-side and returns type:"ledger_invoice"|"ledger_reconcile"|"ledger_vendor_bill"|"ledger_payments" depending on the task.
 ${lockedQuote?.items?.length ? `
-=== OPEN QUOTE — HOLD COST AND SELL PRICE ===
+=== OPEN QUOTE — HOLD COST AND SELL PRICE (reference only, for a line the user still wants) ===
 ${formatLockedQuoteBlock(lockedQuote)}
-This quote is already priced. On "update the quote", a qty change, add/remove a line, or a CREATE IN ZOHO follow-up:
-- call_edgar and keep the same SKU, cost, and quotedPrice
-- only change quantity or add/remove items they asked about
-- do NOT pick a new dealer-list cost or a new sell price
+This is the customer's LAST quote in this conversation. It is here so a SKU that reappears keeps its cost/sell price — it is NOT a starting template for every new quote request.
+- If the current message is about a DIFFERENT customer, or asks for products that have nothing to do with the list above, ignore this section entirely — call_edgar with only what was actually asked for.
+- If the current message is an "update the quote" / qty change / add-remove-a-line / CREATE IN ZOHO follow-up on THIS SAME quote: call_edgar and keep the same SKU, cost, and quotedPrice for lines still being requested; only change quantity or add/remove items they asked about; do NOT pick a new dealer-list cost or a new sell price.
 Only refresh cost/list if they say reprice, new cost, latest list, refresh price, or dealer list changed.
 If they name prices, apply each to the right line only: ball/program $ stays on the goods, customization/add-on $ stays on that add-on, shipping $ stays on shipping. Never copy the ball price onto customization. A line total like $2,294.60 is not a unit price. If they say cost is from Spalding, search Spalding — do not keep an Athletic Connection cost.
 ` : ''}`;

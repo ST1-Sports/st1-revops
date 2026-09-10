@@ -332,9 +332,44 @@ export function buildLockedQuotePayload({ history, deals } = {}) {
   return extractLockedQuoteFromHistory(history) || extractLockedQuoteFromDeals(deals, lastUser);
 }
 
+function stripNonAlnum(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** Does the current ask reference this held item at all (ignoring case/punctuation)? */
+export function taskMentionsItemName(task, name) {
+  const tokens = normalizeName(name).split(' ').map(stripNonAlnum).filter(tok => tok.length >= 4);
+  if (!tokens.length) return false;
+  const flat = stripNonAlnum(task);
+  if (!flat) return false;
+  return tokens.some(tok => flat.includes(tok));
+}
+
+const CONTINUATION_RE = /\b(update (?:the )?(?:quote|order)|re-?price|change (?:the )?(?:qty|quantity|price)|add(?:ed)?\s+(?:a|another|one)?\s*(?:more\s+)?(?:line|item)|remove\s+(?:a|the|one)?\s*(?:line|item)|create in zoho|same quote|this quote|existing quote|revise (?:the )?quote)\b/;
+
+/**
+ * A held quote should only survive into a brand-new ask if that ask is
+ * plausibly still about it — same customer named, one of its items
+ * referenced, or explicit "update/reprice/add a line" continuation language.
+ * Without this, an unrelated request in the same open chat thread (a
+ * different school, different products) silently inherits the last quote's
+ * line items, since nothing else here is keyed on customer/topic — only on
+ * "was this the most recent edgar_quote."
+ */
+export function lockedQuoteIsRelevant(locked, hintText = '') {
+  if (!locked?.items?.length) return false;
+  const hint = String(hintText || '');
+  if (!hint.trim()) return true;
+  if (locked.customer && namesMatch(locked.customer, hint)) return true;
+  if (locked.items.some(it => taskMentionsItemName(hint, it.name))) return true;
+  if (CONTINUATION_RE.test(hint.toLowerCase())) return true;
+  return false;
+}
+
 export function resolveLockedQuote(localContext = {}, hintText = '') {
   if (localContext.lockedQuote?.items?.length) {
-    return normalizeLockedQuote(localContext.lockedQuote);
+    const locked = normalizeLockedQuote(localContext.lockedQuote);
+    if (locked && lockedQuoteIsRelevant(locked, hintText)) return locked;
   }
   return extractLockedQuoteFromDeals(localContext.deals, hintText);
 }

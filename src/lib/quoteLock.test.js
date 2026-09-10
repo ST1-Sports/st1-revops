@@ -8,6 +8,7 @@ import {
   extractLockedQuoteFromDeals,
   extractLockedQuoteFromHistory,
   lineKind,
+  lockedQuoteIsRelevant,
   lockedPricingToolResult,
   matchLockedItem,
   mergeLockedItemsIntoRequest,
@@ -15,6 +16,7 @@ import {
   parseQuoteRates,
   quoteIntent,
   resolveLockedQuote,
+  taskMentionsItemName,
   userWantsNewCostSource,
   userWantsNewSellPrice,
   userWantsReprice,
@@ -301,5 +303,66 @@ describe('resolveLockedQuote', () => {
       deals: [{ school: 'Other', quoteItems: [{ name: 'Bat', cost: 1, rate: 2 }] }],
     });
     assert.equal(payload.items[0].sku, 'AC-WC647929');
+  });
+
+  it('drops a held quote for an unrelated new ask (different customer, different products)', () => {
+    const locked = resolveLockedQuote({
+      lockedQuote: {
+        customer: 'Lincoln High School',
+        items: [
+          { name: 'Essentials 653 Landing System (Royal Blue)', cost: 8000, quotedPrice: 14500 },
+        ],
+      },
+      deals: [],
+    }, 'Matt Straub from Durant is looking for a quote for 4 mens balls and 8 womens balls. Shipping estimate of $36 total.');
+    assert.equal(locked, null);
+  });
+
+  it('keeps a held quote when the new ask still names the same customer', () => {
+    const locked = resolveLockedQuote({
+      lockedQuote: { customer: 'Hudson High School', items: [lockedTf] },
+      deals: [],
+    }, 'Add 2 more TF-5000s to the Hudson High School order');
+    assert.equal(locked.customer, 'Hudson High School');
+  });
+
+  it('keeps a held quote when the new ask references one of its items', () => {
+    const locked = resolveLockedQuote({
+      lockedQuote: { customer: null, items: [lockedTf] },
+      deals: [],
+    }, 'Make it 15 TF-5000s instead of 12');
+    assert.ok(locked);
+  });
+
+  it('keeps a held quote on generic continuation language with no item overlap', () => {
+    const locked = resolveLockedQuote({
+      lockedQuote: { customer: null, items: [lockedTf] },
+      deals: [],
+    }, 'update the quote to qty 10');
+    assert.ok(locked);
+  });
+});
+
+describe('taskMentionsItemName', () => {
+  it('matches ignoring punctuation and apostrophes', () => {
+    assert.equal(taskMentionsItemName('quote 4 mens balls and 8 womens balls', "Men's Basketball"), true);
+    assert.equal(taskMentionsItemName('quote 4 mens balls and 8 womens balls', "Women's Basketball"), true);
+  });
+
+  it('does not match an unrelated product name', () => {
+    assert.equal(taskMentionsItemName('quote 4 mens balls and 8 womens balls, shipping $36', 'Essentials 653 Landing System (Royal Blue)'), false);
+  });
+});
+
+describe('lockedQuoteIsRelevant', () => {
+  it('keeps the lock when no hint text is available', () => {
+    assert.equal(lockedQuoteIsRelevant({ items: [lockedTf] }, ''), true);
+  });
+
+  it('drops the lock for an unrelated ask', () => {
+    assert.equal(lockedQuoteIsRelevant(
+      { customer: 'Lincoln', items: [{ name: 'Essentials 653 Landing System' }] },
+      'quote 4 mens balls and 8 womens balls for Durant, shipping $36',
+    ), false);
   });
 });

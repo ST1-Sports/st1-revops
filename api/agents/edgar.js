@@ -150,7 +150,7 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
 
   const acctSection = accountBlock ? `\n=== ACCOUNT ON FILE (from CRM/Brad's prospect history) ===\n${accountBlock}\nUse this to inform tone, urgency, and whether to reference prior contact — but only quote real prices from the price data above.\n` : ''
   const memSection = memoryBlock ? `\n=== CUSTOMER HISTORY (recalled facts) ===\n${memoryBlock}\n` : ''
-  const heldSection = lockBlock ? `\n=== OPEN QUOTE — HOLD THESE PRICES ===\n${lockBlock}\nKeep cost and quotedPrice from this lock. Only change qty or add/remove lines the user asked for. Do not pick a different dealer-list row for a locked SKU.\n` : ''
+  const heldSection = lockBlock ? `\n=== OPEN QUOTE — HOLD THESE PRICES (reference only) ===\n${lockBlock}\nThese are prices to reuse ONLY for a line the current task is still asking for — a SKU/name above that reappears keeps its cost/quotedPrice from this lock. Do not pick a different dealer-list row for a locked SKU. This is NOT a base line-item list: build lineItems only from what the current task actually requests. If none of these items are part of the current task, ignore this section and do not add any of them to lineItems.\n` : ''
 
   const rules = `
 === HARD PRICING RULES ===
@@ -385,7 +385,7 @@ export default async function handler(req, res) {
     }
     if (customer) userMsg += `\n\nCustomer: ${customer}`
     if (lockBlock) {
-      userMsg += '\n\nHold cost and quotedPrice from the open quote unless Matt named a new rate for that line. Only change qty or add/remove lines the user asked for.'
+      userMsg += '\n\nFor any line above that this task still requests, hold its cost and quotedPrice unless Matt named a new rate for that line. Do not add a held line to this quote unless the task actually asks for it.'
     }
     if (hasNamedLineRates(quoteRates)) {
       const bits = [
