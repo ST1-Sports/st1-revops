@@ -84,15 +84,6 @@ export function dealIsReal(deal, suppress) {
   return REAL_SOURCES.has(deal.source);
 }
 
-/** Local leftover with no Zoho id and no in-flight create — not pipeline truth. */
-export function dealIsOrphanLocal(deal) {
-  if (!deal) return false;
-  if (zohoIdFromDeal(deal)) return false;
-  if (deal.zoho_synced === false) return false;
-  if (REAL_SOURCES.has(deal.source)) return false;
-  return true;
-}
-
 export function filterRealDeals(deals, suppress) {
   return (Array.isArray(deals) ? deals : []).filter(d => dealIsReal(d, suppress));
 }

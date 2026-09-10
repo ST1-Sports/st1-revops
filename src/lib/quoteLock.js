@@ -46,12 +46,6 @@ export function parseMoneyToken(raw) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-/** First unit-looking $ in the text. Skips comma totals like $2,294.60. */
-export function extractExplicitSellPrice(text) {
-  const rates = parseQuoteRates(text);
-  return rates.product ?? rates.customization ?? rates.shipping ?? null;
-}
-
 export function parseQuoteRates(text) {
   const t = String(text || '');
   const lower = t.toLowerCase();
@@ -144,11 +138,6 @@ export function lineKind(item) {
   return 'product';
 }
 
-export function isAddOnLine(item) {
-  const kind = lineKind(item);
-  return kind === 'shipping' || kind === 'customization';
-}
-
 function stampSell(item, price) {
   return {
     ...item,
@@ -157,11 +146,6 @@ function stampSell(item, price) {
     gmPct: gmPct(item.cost, price, item.gmPct),
     userPriced: true,
   };
-}
-
-/** Stamp one product $ on goods only. Add-ons / shipping stay as-is. */
-export function applyMattSellPrice(items, sellPrice) {
-  return applyQuoteRates(items, { product: sellPrice });
 }
 
 /** Apply per-line rates so customization cannot inherit the ball price. */

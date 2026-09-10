@@ -203,10 +203,6 @@ function buildOutputCSV(originalCsvText, items) {
 // ── RevOps store helpers (RFPTool is a standalone route — read/write localStorage directly) ──
 const REVOPS_STORE = APP_STATE_KEY;
 
-function lsReadRfps() {
-  try { const p=JSON.parse(localStorage.getItem(REVOPS_STORE)||"{}"); return Array.isArray(p.rfps)?p.rfps:[]; }
-  catch { return []; }
-}
 function lsSaveRfp(record) {
   try {
     const raw=localStorage.getItem(REVOPS_STORE)||"{}";

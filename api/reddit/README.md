@@ -65,7 +65,6 @@ All requests accept `dryRun: true` to simulate without side effects.
 | REDDIT_CLIENT_ID      | App client ID from reddit.com/prefs/apps |
 | REDDIT_CLIENT_SECRET  | App client secret |
 | REDDIT_REFRESH_TOKEN  | OAuth2 refresh token — required only for posting |
-| REDDIT_USERNAME       | Reddit account username (required by Reddit API ToS) |
 | REDDIT_USER_AGENT     | e.g. `ST1RevOps/1.0 by u/yourname` (required by Reddit ToS) |
 
 ### Targeting

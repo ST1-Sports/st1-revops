@@ -45,10 +45,4 @@ export async function fetchDecorationCosts(session) {
   return res.json();
 }
 
-export async function fetchSuppliers(session) {
-  const res = await session.request('/admin/supplier');
-  if (!res.ok) throw new Error(`GET /admin/supplier failed (${res.status})`);
-  return res.json();
-}
-
 export { API_BASE };

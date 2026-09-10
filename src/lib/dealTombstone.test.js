@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { mergeById } from './appStateSync.js';
 import {
   applyDealTombstones,
-  dealIsOrphanLocal,
   dealIsReal,
   dealIsSuppressed,
   filterLiveDeals,
@@ -69,7 +68,6 @@ describe('dealIsReal / orphans', () => {
   });
   it('treats old campaign leftovers with no Zoho id as orphans', () => {
     const dudley = { id: '7ye32nt', name: 'Dudley Softballs — Greene County', notes: 'From campaign: Blitz' };
-    assert.equal(dealIsOrphanLocal(dudley), true);
     assert.equal(dealIsReal(dudley, {}), false);
     assert.equal(filterRealDeals([dudley, { id: 'keep', zohoId: '9' }], {}).map(d => d.id).join(), 'keep');
   });

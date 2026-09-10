@@ -3,10 +3,8 @@ import assert from 'node:assert/strict';
 import { st1PriceActionFromPricing } from '../../api/_lib/st1PriceAction.js';
 import {
   applyLockedPrices,
-  applyMattSellPrice,
   applyQuoteRates,
   buildLockedQuotePayload,
-  extractExplicitSellPrice,
   extractLockedQuoteFromDeals,
   extractLockedQuoteFromHistory,
   lineKind,
@@ -58,7 +56,6 @@ describe('userWantsNewSellPrice', () => {
     assert.equal(userWantsNewSellPrice('10% off'), true);
     assert.equal(userWantsNewSellPrice('yes - we need theprogram at the $81.95'), true);
     assert.equal(userWantsNewSellPrice('keep it at $81.95'), true);
-    assert.equal(extractExplicitSellPrice('yes - we need theprogram at the $81.95'), 81.95);
   });
 
   it('does not treat a price question as a new sell price', () => {
@@ -146,11 +143,11 @@ describe('applyQuoteRates / add-on kind', () => {
     assert.equal(out[3].quotedPrice, 3);
   });
 
-  it('does not let applyMattSellPrice overwrite a customization add-on', () => {
-    const out = applyMattSellPrice([
+  it('does not let a flat product sell price overwrite a customization add-on', () => {
+    const out = applyQuoteRates([
       { name: 'Spalding TF-1000', quotedPrice: 10 },
       { name: 'Ball Customization Add-On', quotedPrice: 5.95 },
-    ], 81.95);
+    ], { product: 81.95 });
     assert.equal(out[0].quotedPrice, 81.95);
     assert.equal(out[1].quotedPrice, 5.95);
   });
