@@ -69,7 +69,13 @@ Only set "found": true if you have at least a name or an email from an actual so
     const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
     let result = {};
     try {
-      const match = textBlocks.match(/\{[\s\S]*\}/);
+      // Anchored on the "found" field and excludes nested braces (same
+      // pattern as enrich-website.js) — with a web_search tool in play,
+      // Claude's text blocks can include narration before/after the actual
+      // search calls, so a plain /\{[\s\S]*\}/ greedy match risks spanning
+      // from an unrelated brace all the way to the real answer's closing
+      // one and failing to parse, rather than reliably finding the object.
+      const match = textBlocks.match(/\{[^{}]*"found"[^{}]*\}/);
       if (match) result = JSON.parse(match[0]);
     } catch {
       result = {};
