@@ -1,17 +1,18 @@
 /**
- * Reddit Engagement — thread ingestion via public RSS feeds.
+ * Reddit Engagement — thread ingestion via Claude web_search.
  *
- * No Reddit API key required. Uses Reddit's public search RSS feeds
- * combined with AI-generated search queries to discover relevant threads.
+ * Discovery is one batched web_search call (web-discovery.js) covering
+ * every subreddit/keyword pair at once, combined with AI-generated search
+ * queries to pick relevant topics.
  */
 
-const { searchSubredditRSS } = require('./rss-fetcher');
-const { checkGuardrails }    = require('./db-guardrails');
-const { getPrisma }          = require('./_prisma');
+const { discoverThreadsViaWebSearch } = require('./web-discovery');
+const { checkGuardrails }             = require('./db-guardrails');
+const { getPrisma }                   = require('./_prisma');
 
 
 /**
- * Ingest candidate threads via RSS.
+ * Ingest candidate threads via Claude web_search.
  *
  * @param {Object} flags
  * @param {Object} [overrides]   - { subreddits?: string[], keywords?: string[] }
@@ -30,7 +31,9 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
   const candidates = [];
   const db = dryRun ? null : getPrisma();
 
-  // Search each subreddit × keyword pair (capped at 20 pairs to stay under timeout)
+  // Every subreddit × keyword pair goes into ONE web-search call (capped at
+  // 20 pairs so the prompt and max_uses stay bounded) rather than a separate
+  // request per pair.
   const pairs = [];
   for (const sub of subreddits) {
     for (const kw of keywords) {
@@ -40,53 +43,51 @@ async function ingestThreads(flags, overrides = {}, dryRun = false) {
     if (pairs.length >= 20) break;
   }
 
-  for (const { sub, kw } of pairs) {
-    let results;
-    try {
-      results = await searchSubredditRSS(sub, kw, 15);
-    } catch (e) {
-      console.error(`[ingestion] RSS error r/${sub} "${kw}":`, e.message);
+  let results;
+  try {
+    results = await discoverThreadsViaWebSearch(pairs);
+  } catch (e) {
+    console.error('[ingestion] web discovery error:', e.message);
+    results = [];
+  }
+
+  for (const thread of results) {
+    if (seen.has(thread.redditId)) continue;
+    seen.add(thread.redditId);
+
+    // DB guardrail: dedup, mute list, etc.
+    const guardrail = await checkGuardrails(thread, flags).catch(() => ({
+      pass: false, failures: ['Guardrail error'], isDuplicate: false,
+    }));
+
+    if (!guardrail.pass) {
+      if (!guardrail.isDuplicate) {
+        candidates.push({ thread, status: 'skipped', reasons: guardrail.failures });
+      }
       continue;
     }
 
-    for (const thread of results) {
-      if (seen.has(thread.redditId)) continue;
-      seen.add(thread.redditId);
-
-      // DB guardrail: dedup, mute list, etc.
-      const guardrail = await checkGuardrails(thread, flags).catch(() => ({
-        pass: false, failures: ['Guardrail error'], isDuplicate: false,
-      }));
-
-      if (!guardrail.pass) {
-        if (!guardrail.isDuplicate) {
-          candidates.push({ thread, status: 'skipped', reasons: guardrail.failures });
+    if (!dryRun) {
+      await db.redditThread.create({
+        data: {
+          redditId:     thread.redditId,
+          subreddit:    thread.subreddit,
+          title:        thread.title,
+          body:         thread.body || '',
+          url:          thread.url,
+          author:       thread.author,
+          score:        thread.score || 0,
+          commentCount: thread.commentCount || 0,
+          status:       'PENDING',
+        },
+      }).catch(e => {
+        if (!e.message.includes('Unique constraint')) {
+          console.error('[ingestion] DB write error:', e.message);
         }
-        continue;
-      }
-
-      if (!dryRun) {
-        await db.redditThread.create({
-          data: {
-            redditId:     thread.redditId,
-            subreddit:    thread.subreddit,
-            title:        thread.title,
-            body:         thread.body || '',
-            url:          thread.url,
-            author:       thread.author,
-            score:        thread.score || 0,
-            commentCount: thread.commentCount || 0,
-            status:       'PENDING',
-          },
-        }).catch(e => {
-          if (!e.message.includes('Unique constraint')) {
-            console.error('[ingestion] DB write error:', e.message);
-          }
-        });
-      }
-
-      candidates.push({ thread, status: 'ingested' });
+      });
     }
+
+    candidates.push({ thread, status: 'ingested' });
   }
 
   return {

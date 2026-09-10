@@ -8,9 +8,10 @@
  * since a live search has real latency/cost and isn't needed for bounces
  * nobody's going to resend to.
  *
- * Uses Perplexity's sonar model (same provider api/perplexity.js already
- * uses for Reddit thread search, PERPLEXITY_API_KEY) with its own prompt —
- * a different task, so a separate call rather than reusing that endpoint.
+ * Uses Claude's native web_search tool (same pattern as
+ * api/contacts/enrich-website.js, same ANTHROPIC_KEY already used
+ * everywhere else in this app) — not Perplexity, which burns through
+ * credits too fast for this to run on demand at any real volume.
  *
  * Body: { orgName, city, state, sport, contactName }
  * Response: { ok, found, name, title, email, phone, sourceUrl, note }
@@ -25,8 +26,8 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
-  const apiKey = process.env.PERPLEXITY_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: "PERPLEXITY_API_KEY not set in Vercel env vars" });
+  const apiKey = process.env.ANTHROPIC_KEY;
+  if (!apiKey) return res.status(500).json({ error: "ANTHROPIC_KEY not set in Vercel env vars" });
 
   const { orgName, city, state, sport, contactName } = req.body || {};
   if (!orgName) return res.status(400).json({ error: "orgName required" });
@@ -48,31 +49,27 @@ Return ONLY a JSON object, no markdown fences, no other text:
 Only set "found": true if you have at least a name or an email from an actual source you can cite in sourceUrl. Never guess, infer, or construct a plausible-looking email address — an unverified email is worse than none.`;
 
   try {
-    const r = await fetch("https://api.perplexity.ai/chat/completions", {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: "sonar",
-        messages: [
-          { role: "system", content: "You are a research assistant. Search the web and return only a valid JSON object. Never fabricate an email address, name, or URL — only report what a real source actually shows." },
-          { role: "user", content: prompt },
-        ],
-        search_recency_filter: "year",
-        return_citations: true,
-        temperature: 0.1,
+        model: "claude-sonnet-4-6",
         max_tokens: 800,
+        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 }],
+        messages: [{ role: "user", content: prompt }],
       }),
     });
 
-    const data = await r.json();
     if (!r.ok) {
-      return res.status(r.status).json({ error: data.error?.message || "Perplexity API error", detail: data });
+      const txt = await r.text();
+      return res.status(502).json({ error: `Anthropic ${r.status}: ${txt.slice(0, 200)}` });
     }
 
-    const content = data.choices?.[0]?.message?.content || "{}";
+    const data = await r.json();
+    const textBlocks = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
     let result = {};
     try {
-      const match = content.match(/\{[\s\S]*\}/);
+      const match = textBlocks.match(/\{[\s\S]*\}/);
       if (match) result = JSON.parse(match[0]);
     } catch {
       result = {};
