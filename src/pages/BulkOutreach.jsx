@@ -289,16 +289,44 @@ const BOUNCE_RESOLUTIONS = {
 };
 
 // Shared by the top bounce banner and each row's expanded view — a
-// suggested replacement email (if the CRM lookup found one), a plain field
-// to type a corrected one, and a way to clear the alert with no email at
-// all when there just isn't a good address to use.
-function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onResolve }) {
+// suggested replacement email (if the CRM lookup found one), an on-demand
+// web search for a current contact when it didn't, a plain field to type a
+// corrected one, and a way to clear the alert with no email at all when
+// there just isn't a good address to use.
+function BounceFixBox({ suggestedEmail, draftEmail, onDraftChange, onFix, onResolve, webResult, webSearching, onWebSearch }) {
   return (
     <>
       {suggestedEmail && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
           ✓ Found a different email on file: <b>{suggestedEmail}</b>
           <OBtn onClick={() => onFix(suggestedEmail)} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+        </div>
+      )}
+      {!suggestedEmail && onWebSearch && (
+        <div style={{ marginBottom: 8 }}>
+          {!webResult && (
+            <GBtn onClick={onWebSearch} disabled={webSearching} style={{ fontSize: 9, padding: "6px 12px" }}>
+              {webSearching ? "Searching the web…" : "🔍 Search the web for a current contact"}
+            </GBtn>
+          )}
+          {webResult && webResult.found && webResult.email && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 11, color: B.textMid, background: B.greenBg, border: `1px solid ${B.green}30`, borderRadius: 4, padding: "6px 9px" }}>
+              ✓ Web search found <b>{webResult.name}</b>{webResult.title ? ` (${webResult.title})` : ""} — <b>{webResult.email}</b>
+              <OBtn onClick={() => onFix(webResult.email)} style={{ fontSize: 9, padding: "5px 10px", marginLeft: "auto" }}>USE THIS</OBtn>
+              {webResult.sourceUrl && <a href={webResult.sourceUrl} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: B.muted }}>source</a>}
+            </div>
+          )}
+          {webResult && webResult.found && !webResult.email && (
+            <div style={{ fontSize: 11, color: B.textMid, background: B.yellowBg, border: `1px solid ${B.yellow}30`, borderRadius: 4, padding: "6px 9px" }}>
+              Found <b>{webResult.name}</b>{webResult.title ? ` (${webResult.title})` : ""} via web search, but no email listed —
+              {webResult.sourceUrl ? <> check <a href={webResult.sourceUrl} target="_blank" rel="noreferrer">the source</a> for contact info.</> : " no source to check either."}
+            </div>
+          )}
+          {webResult && !webResult.found && (
+            <div style={{ fontSize: 11, color: B.muted, background: B.surface, border: `1px solid ${B.border}`, borderRadius: 4, padding: "6px 9px" }}>
+              No current contact found via web search.
+            </div>
+          )}
         </div>
       )}
       <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
@@ -382,6 +410,8 @@ export default function BulkOutreach({ s, dispatch, toast, cu, setMod }) {
   const [leadPage, setLeadPage] = useState(0);
   const [suggestedEmails, setSuggestedEmails] = useState({}); // { [leadId]: alternateEmail } — from mark-bounced's CRM lookup
   const [emailFixDraft, setEmailFixDraft] = useState({}); // { [leadId]: string } — in-progress typed correction
+  const [webContactResults, setWebContactResults] = useState({}); // { [leadId]: {found,name,title,email,phone,sourceUrl} } — on-demand web search, only when suggestedEmails has nothing
+  const [webSearchingId, setWebSearchingId] = useState(null); // leadId currently being searched
   const [committing, setCommitting] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null); // null | "saving" | "saved"
   const [sendingKey, setSendingKey] = useState(null); // `${leadId}-${touchIdx}` currently sending
@@ -1095,7 +1125,30 @@ Return JSON exactly as:
     setLeads(prev => prev.map(l => l.id === leadId ? { ...l, email: trimmed, bounced: false, bouncedAt: null, bounceNote: null } : l));
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setWebContactResults(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast("Email updated — back in the active list", "success");
+  };
+
+  // On-demand only (never during syncWithBradInbox) — the internal CRM
+  // lookup already ran and came up empty, so this actually searches the web
+  // for whoever holds the role now. Still just a suggestion: the human
+  // clicks USE THIS same as the internal-match case, nothing auto-applies.
+  const searchWebForContact = async (lead) => {
+    setWebSearchingId(lead.id);
+    try {
+      const r = await fetch("/api/contacts/find-updated-contact", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ orgName: lead.orgName, city: lead.city, state: lead.state, sport: lead.sport, contactName: lead.contactName }),
+      });
+      const d = await r.json();
+      if (!d.ok) { toast(d.error || "Web search failed", "error"); return; }
+      setWebContactResults(prev => ({ ...prev, [lead.id]: d }));
+      if (!d.found) toast("No current contact found via web search", "info");
+    } catch (e) {
+      toast(`Web search failed: ${e.message}`, "error");
+    } finally {
+      setWebSearchingId(null);
+    }
   };
 
   // Clears a bounce alert with no replacement email in hand — the org isn't
@@ -1111,6 +1164,7 @@ Return JSON exactly as:
       : l));
     setSuggestedEmails(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     setEmailFixDraft(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
+    setWebContactResults(prev => { const { [leadId]: _drop, ...rest } = prev; return rest; });
     toast(`Cleared — ${res.label}`, "success");
   };
 
@@ -1635,6 +1689,9 @@ Subject: <subject line, may include {{orgName}}>
                       onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [l.id]: v }))}
                       onFix={email => fixLeadEmail(l.id, email)}
                       onResolve={reason => resolveBounce(l.id, reason)}
+                      webResult={webContactResults[l.id]}
+                      webSearching={webSearchingId === l.id}
+                      onWebSearch={() => searchWebForContact(l)}
                     />
                   </div>
                 ))}
@@ -2185,6 +2242,9 @@ Subject: <subject line, may include {{orgName}}>
                             onDraftChange={v => setEmailFixDraft(prev => ({ ...prev, [lead.id]: v }))}
                             onFix={email => fixLeadEmail(lead.id, email)}
                             onResolve={reason => resolveBounce(lead.id, reason)}
+                            webResult={webContactResults[lead.id]}
+                            webSearching={webSearchingId === lead.id}
+                            onWebSearch={() => searchWebForContact(lead)}
                           />
                         </div>
                       )}
