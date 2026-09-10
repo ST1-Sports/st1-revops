@@ -19,7 +19,7 @@
 
 import { prisma } from '../_lib/prisma.js';
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
-import { claimForEmail, leadStoppedAuto } from '../_lib/outreachSent.js';
+import { claimedEmails, emailKey, leadStoppedAuto } from '../_lib/outreachSent.js';
 
 const APP_URL = process.env.APP_URL || "https://revops.st1sports.com";
 
@@ -176,6 +176,10 @@ export default async function handler(req, res) {
     const batchLog = [];
     const errors = [];
     const outreachBatches = await loadAllOutreachBatches().catch(() => []);
+    // Built once for the whole run — claimForEmail rebuilt this from all
+    // batches×leads on every contact inside the send loop below, making one
+    // cron tick O(sends × total outreach leads) instead of O(total leads).
+    const emailClaims = claimedEmails(outreachBatches);
 
     outer: for (let ci = 0; ci < campaigns.length; ci++) {
       // Process every due batch for this campaign before moving to the next
@@ -268,7 +272,7 @@ export default async function handler(req, res) {
 
           if (camp.fromBrad) {
             const owner = outreachBatches.find(b => b.campaignId === camp.id);
-            const claim = claimForEmail(outreachBatches, c.email);
+            const claim = emailClaims.get(emailKey(c.email)) || null;
             if (claim && ((owner && claim.batchId !== owner.id) || (!owner && claim.batchId))) {
               console.log(`[cron] Skipping ${c.email} in "${camp.name}" — earlier list "${claim.batchName}" owns this address`);
               continue;

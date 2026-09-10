@@ -349,8 +349,7 @@ ctx.toast(`Email sent to ${action.to_name||action.to_email}`,"success");
 ctx.dispatch("LOG",{msg:`Email sent to ${action.to_name||action.to_email}: "${action.subject}"`});
 const contact=(ctx.contacts||[]).find(c=>c.email===action.to_email);
 if(contact)ctx.dispatch("SCORE_CONTACT",{contactId:contact.id,type:"sent",campaignId:"agent_email",note:`Agent email: ${action.subject}`});
-const nameParts=(action.to_name||"").toLowerCase().split(" ");
-const matchDeal=(ctx.deals||[]).find(d=>{const dn=(d.name||"").toLowerCase();return nameParts.some(p=>p.length>2&&dn.includes(p))||(contact?.school&&dn.includes((contact.school||"").toLowerCase().slice(0,6)));});
+const matchDeal=contact&&(ctx.deals||[]).find(d=>d.contactId===contact.id);
 if(matchDeal&&!matchDeal.followUpDate){const f=new Date(Date.now()+3*86400000).toISOString().slice(0,10);ctx.dispatch("UPDATE_DEAL",{id:matchDeal.id,followUpDate:f});ctx.toast(`Follow-up auto-set ${f}`,"info");}
 setTimeout(()=>sendFn(`Email sent ✓ to ${action.to_name||action.to_email} — "${action.subject}". Auto-execute: log this touch and schedule follow-up.`),600);
 }else{ctx.toast(d.error||"Send failed","error");}
@@ -7413,16 +7412,6 @@ const col=aiMap[field];
 if(col&&col in row) return String(row[col]||"").trim();
 return get(row,...fallback);
 };
-const inferSport=t=>{
-const tl=(t||"").toLowerCase();
-if(/track|cross.?country|xc|t&f|tf\b/.test(tl)) return "Track & Field";
-if(/baseball|softball/.test(tl)) return "Baseball/Softball";
-if(/volleyball/.test(tl)) return "Volleyball";
-if(/football/.test(tl)) return "Football";
-if(/basketball/.test(tl)) return "Basketball";
-if(/wrestling/.test(tl)) return "Wrestling";
-return importSport||"General";
-};
 const inferPriority=t=>{
 const tl=(t||"").toLowerCase();
 if(/athletic.?director|\bad\b|administrator|principal|superintendent|director/.test(tl)) return "high";
@@ -7462,7 +7451,7 @@ if(!state&&importState) state=importState;
 if(!fullName&&!email) return null;
 const sportCol=res(row,"sport","Sport","Sports","Sport Name");
 // Fall back to list-level sport if no sport found in the row
-const sport=sportCol||inferSport(title)||(importSport||"General");
+const sport=sportCol||inferSportFromTitle(title)||(importSport||"General");
 return {
 id:mkId(), firstName, lastName,
 fullName:fullName||email||"Unknown",

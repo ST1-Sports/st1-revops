@@ -1,4 +1,5 @@
 import { prisma } from '../prisma.js';
+import { updateSettingSafely } from '../settingSync.js';
 import { getZohoToken } from '../zoho-token.js';
 import {
   minAcceptableScore,
@@ -465,44 +466,42 @@ export async function listKnowledgeDocuments() {
 }
 
 export async function saveKnowledgeDocument(doc) {
-  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
-  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
-  const sourceName = String(doc.sourceName || '').trim().slice(0, 200);
-  const existing = doc.id
-    ? docs.find(d => d.id === doc.id)
-    : (sourceName ? docs.find(d => d.sourceType === doc.sourceType && d.sourceName === sourceName) : null);
-  const nextDoc = {
-    id: existing?.id || doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-    title: String(doc.title || 'Untitled document').trim().slice(0, 160),
-    sourceType: doc.sourceType,
-    sourceName,
-    content: String(doc.content || '').slice(0, 200_000),
-    uploadedAt: new Date().toISOString(),
-  };
-  const nextDocs = [nextDoc, ...docs.filter(d => d.id !== nextDoc.id)].slice(0, 100);
-  await prisma.setting.upsert({
-    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
-    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
-    update: { value: { documents: nextDocs } },
+  let result;
+  await updateSettingSafely(KNOWLEDGE_DOCS_SETTING_KEY, async (value) => {
+    const docs = Array.isArray(value?.documents) ? value.documents : [];
+    const sourceName = String(doc.sourceName || '').trim().slice(0, 200);
+    const existing = doc.id
+      ? docs.find(d => d.id === doc.id)
+      : (sourceName ? docs.find(d => d.sourceType === doc.sourceType && d.sourceName === sourceName) : null);
+    const nextDoc = {
+      id: existing?.id || doc.id || `kdoc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      title: String(doc.title || 'Untitled document').trim().slice(0, 160),
+      sourceType: doc.sourceType,
+      sourceName,
+      content: String(doc.content || '').slice(0, 200_000),
+      uploadedAt: new Date().toISOString(),
+    };
+    const nextDocs = [nextDoc, ...docs.filter(d => d.id !== nextDoc.id)].slice(0, 100);
+    result = {
+      id: nextDoc.id,
+      title: nextDoc.title,
+      sourceType: nextDoc.sourceType,
+      sourceName: nextDoc.sourceName || null,
+      uploadedAt: nextDoc.uploadedAt,
+      charCount: nextDoc.content.length,
+    };
+    return { documents: nextDocs };
   });
-  return {
-    id: nextDoc.id,
-    title: nextDoc.title,
-    sourceType: nextDoc.sourceType,
-    sourceName: nextDoc.sourceName || null,
-    uploadedAt: nextDoc.uploadedAt,
-    charCount: nextDoc.content.length,
-  };
+  return result;
 }
 
 export async function deleteKnowledgeDocument(id) {
-  const setting = await prisma.setting.findUnique({ where: { key: KNOWLEDGE_DOCS_SETTING_KEY } });
-  const docs = Array.isArray(setting?.value?.documents) ? setting.value.documents : [];
-  const nextDocs = docs.filter(doc => doc.id !== id);
-  await prisma.setting.upsert({
-    where: { key: KNOWLEDGE_DOCS_SETTING_KEY },
-    create: { key: KNOWLEDGE_DOCS_SETTING_KEY, value: { documents: nextDocs } },
-    update: { value: { documents: nextDocs } },
+  let deleted = false;
+  await updateSettingSafely(KNOWLEDGE_DOCS_SETTING_KEY, async (value) => {
+    const docs = Array.isArray(value?.documents) ? value.documents : [];
+    const nextDocs = docs.filter(doc => doc.id !== id);
+    deleted = docs.length !== nextDocs.length;
+    return { documents: nextDocs };
   });
-  return { deleted: docs.length !== nextDocs.length };
+  return { deleted };
 }

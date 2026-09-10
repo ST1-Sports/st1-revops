@@ -62,6 +62,11 @@ export default async function handler(req, res) {
   const openai = new OpenAI({ apiKey: openaiKey });
   let imageB64;
   try {
+    // UNVERIFIED — `quality: 'standard'` and `response_format: 'b64_json'`
+    // are dall-e-2/3 parameter conventions; gpt-image-1's documented quality
+    // enum is low/medium/high/auto and it may not accept response_format at
+    // all (always returning b64). If image generation ever starts failing
+    // here, check these two params against a live call first.
     const response = await openai.images.generate({
       model: 'gpt-image-1',
       prompt: imagePrompt,

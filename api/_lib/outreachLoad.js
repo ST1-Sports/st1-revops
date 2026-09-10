@@ -1,4 +1,5 @@
 import { prisma } from './prisma.js';
+import { updateSettingSafely } from './settingSync.js';
 
 const FALLBACK_KEY = 'outreach_batches_v1';
 
@@ -28,15 +29,14 @@ export async function saveOutreachBatchLeads(id, leads, extra = {}) {
   } catch (e) {
     if (!isMissingTable(e)) throw e;
   }
-  const row = await prisma.setting.findUnique({ where: { key: FALLBACK_KEY } }).catch(() => null);
-  const batches = Array.isArray(row?.value?.batches) ? row.value.batches : [];
-  const idx = batches.findIndex(b => b.id === id);
-  if (idx < 0) return null;
-  batches[idx] = { ...batches[idx], ...data, updatedAt: new Date().toISOString() };
-  await prisma.setting.upsert({
-    where: { key: FALLBACK_KEY },
-    create: { key: FALLBACK_KEY, value: { batches } },
-    update: { value: { batches } },
+  let updated = null;
+  await updateSettingSafely(FALLBACK_KEY, async (value) => {
+    const batches = Array.isArray(value?.batches) ? value.batches : [];
+    const idx = batches.findIndex(b => b.id === id);
+    if (idx < 0) { updated = null; return { batches }; }
+    batches[idx] = { ...batches[idx], ...data, updatedAt: new Date().toISOString() };
+    updated = batches[idx];
+    return { batches };
   });
-  return batches[idx];
+  return updated;
 }

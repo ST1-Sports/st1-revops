@@ -5,12 +5,24 @@
  * number in the Twilio console. Twilio POSTs application/x-www-form-urlencoded
  * with From/To/Body/MessageSid — logged here so replies show up in RevOps
  * without any polling.
+ *
+ * Optional shared secret: set TWILIO_WEBHOOK_SECRET and add
+ * ?secret=<same value> to the webhook URL configured in Twilio — same
+ * conditional-shared-secret convention as the other webhook handlers in
+ * this directory (zoho.js, instantly.js). Twilio doesn't let a query
+ * param collide with its own POST fields, so this is checked separately
+ * from the form body.
  */
 import { prisma }         from '../_lib/prisma.js';
 import { normalizePhone } from '../_lib/twilio.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).send('POST only');
+
+  const secret = process.env.TWILIO_WEBHOOK_SECRET;
+  if (secret && req.query?.secret !== secret) {
+    return res.status(401).send('Invalid webhook secret');
+  }
 
   try {
     const from = normalizePhone(req.body?.From || '');

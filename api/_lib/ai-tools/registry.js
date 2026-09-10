@@ -78,21 +78,11 @@ async function getSt1Pricing(input) {
   if (!query && !input.productId) {
     return notFound('get_st1_pricing', input, [], ['Need a product name, SKU, or product ID.']);
   }
-  const [listItems, products, zoho] = await Promise.all([
-    findPriceItems({ query, sku: input.sku, limit: 12 }).catch(() => []),
-    findProducts({
-      query,
-      productId: input.productId,
-      brand: input.brand,
-      limit: input.includeAlternatives ? 5 : 1,
-    }),
-    fetchZohoItems({ query, sku: input.sku, limit: input.includeAlternatives ? 5 : 1 }).catch(error => ({
-      configured: true,
-      items: [],
-      warning: error.message,
-      sources: [source('Zoho Books Items', { status: 'lookup_error' })],
-    })),
-  ]);
+  // findProducts/fetchZohoItems (the latter a live Zoho Books HTTP call) are
+  // only ever used in the no-price-list-match branch below — fetching them
+  // unconditionally paid for that extra round trip on every lookup even
+  // though a dealer-price-list match (the common path) never reads them.
+  const listItems = await findPriceItems({ query, sku: input.sku, limit: 12 }).catch(() => []);
 
   const tokens = tokenizePriceQuery(query);
   const floor = minAcceptableScore(tokens);
@@ -155,6 +145,21 @@ async function getSt1Pricing(input) {
       ].filter(Boolean),
     });
   }
+
+  const [products, zoho] = await Promise.all([
+    findProducts({
+      query,
+      productId: input.productId,
+      brand: input.brand,
+      limit: input.includeAlternatives ? 5 : 1,
+    }),
+    fetchZohoItems({ query, sku: input.sku, limit: input.includeAlternatives ? 5 : 1 }).catch(error => ({
+      configured: true,
+      items: [],
+      warning: error.message,
+      sources: [source('Zoho Books Items', { status: 'lookup_error' })],
+    })),
+  ]);
 
   const primaryZoho = zoho.items?.[0] || null;
   const primaryProduct = products[0] || null;

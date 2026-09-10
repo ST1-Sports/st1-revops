@@ -799,14 +799,18 @@ export default async function handler(req, res) {
       return res.json(result)
     }
 
-    // STEP 0 — idempotently create / verify Zoho Books accounts
-    const accountSetup = await setupAccounts()
-
     if (task === 'setup') {
+      const accountSetup = await setupAccounts()
       return res.json({ ok: true, accounts: accountSetup })
     }
 
     if (task === 'seed-stores') {
+      // Still idempotently verify accounts exist before seeding stores —
+      // just not on every default reconcile run below, which never uses
+      // this result (loadAccountIds() reads the already-seeded Setting rows
+      // directly) and was paying for a full Zoho chart-of-accounts fetch on
+      // every cron tick for nothing.
+      const accountSetup = await setupAccounts()
       const result = await seedTeamStores()
       return res.json({ ok: true, accounts: accountSetup, seedStores: result })
     }
@@ -910,7 +914,6 @@ export default async function handler(req, res) {
     return res.json({
       ok:     true,
       dryRun,
-      accounts: accountSetup,
       accountsPolled,
       message: zeroPolledHint,
       totals: {

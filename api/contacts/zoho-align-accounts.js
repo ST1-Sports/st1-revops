@@ -100,12 +100,22 @@ export default async function handler(req, res) {
 
   // 2. Pull Zoho Books invoices once, to find which accounts are actual
   //    invoiced customers — the only tier that gets real Contacts+Accounts.
+  //    Paginated (per_page=200 is Books' page cap, not the total) — an
+  //    unpaginated single call here silently missed every invoice past the
+  //    first 200 and misclassified those accounts as engagement-only.
   let invoices = []
   try {
     if (process.env.ZOHO_ORG_ID) {
-      const invRes = await fetch(`${BOOKS_BASE}/invoices?per_page=200&organization_id=${process.env.ZOHO_ORG_ID}`, { headers })
-      const invData = await invRes.json().catch(() => null)
-      invoices = invData?.invoices || []
+      let page = 1
+      while (true) {
+        const invRes = await fetch(`${BOOKS_BASE}/invoices?per_page=200&page=${page}&organization_id=${process.env.ZOHO_ORG_ID}`, { headers })
+        const invData = await invRes.json().catch(() => null)
+        if (invData?.message && !invData?.invoices) throw new Error(invData.message)
+        const batch = invData?.invoices || []
+        invoices = [...invoices, ...batch]
+        if (!invData?.page_context?.has_more_page || batch.length < 200) break
+        page++
+      }
     }
   } catch (err) { result.errors.push(`Books invoice lookup: ${err.message}`) }
   // Exact match only (after the same case/whitespace/punctuation normalization
