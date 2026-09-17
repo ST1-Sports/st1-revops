@@ -82,6 +82,10 @@ async function pollInbox(host) {
 
     const from    = parseAddr(getHdr('From'))
     const subject = getHdr('Subject') || '(no subject)'
+    const inboundHeaders = {
+      'auto-submitted': getHdr('Auto-Submitted'),
+      'x-autoreply': getHdr('X-Autoreply') || getHdr('X-Auto-Response-Suppress'),
+    }
 
     // Extract body text
     let bodyText = ''
@@ -98,7 +102,7 @@ async function pollInbox(host) {
 
     const contact = await prisma.salesContact.findUnique({ where: { email: from.email } }).catch(() => null)
 
-    const verdict = await classifyEmailIntent(subject, bodyText)
+    const verdict = await classifyEmailIntent(subject, bodyText, { fromEmail: from.email, headers: inboundHeaders })
 
     await fetch(`${GMAIL_BASE}/messages/${msg.id}/modify`, {
       method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },

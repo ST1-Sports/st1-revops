@@ -1,6 +1,7 @@
 import { prisma } from './prisma.js'
 import { notifyBradSlack } from './brad-shared.js'
 import { failedBradSlackRows, loadSlackWebhook, loadCanChatPost } from './slack.js'
+import { junkReplyFromStored } from './junkReply.js'
 
 export async function canSendBradSlack() {
   if (await loadSlackWebhook()) return true
@@ -16,7 +17,7 @@ export async function replayFailedBradSlack({ limit = 25 } = {}) {
     orderBy: { createdAt: 'desc' },
     take: 80,
   })
-  const failed = failedBradSlackRows(rows).slice(0, limit)
+  const failed = failedBradSlackRows(rows).filter(r => !junkReplyFromStored(r)).slice(0, limit)
   let replayed = 0
   const errors = []
   for (const row of failed) {
