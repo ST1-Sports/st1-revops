@@ -105,7 +105,10 @@ export default async function handler(req, res) {
         const host = req.headers.host;
         fetch(`https://${host}/api/agents/ledger/invoice`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(process.env.INTERNAL_SECRET ? { 'x-internal-secret': process.env.INTERNAL_SECRET } : {}),
+          },
           body:    JSON.stringify({
             action:        'draft',
             crmDealId:     String(dealId),

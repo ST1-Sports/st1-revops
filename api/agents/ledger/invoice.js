@@ -9,10 +9,12 @@
  *   confirm — send invoice in Zoho Books → update local DealInvoice to SENT
  *   status  — return current DealInvoice + live Zoho Books status
  *
- * Also accepts raw Zoho CRM webhook payload (deal.Stage = "Closed Won"),
- * which auto-runs a draft (dryRun: false) for each qualifying deal.
+ * api/webhooks/zoho.js calls action:'draft' (dryRun: false) directly when a
+ * deal closes won — it extracts the CRM fields itself rather than forwarding
+ * the raw webhook payload here.
  *
  * dryRun: true (default) returns a preview without writing to Zoho Books or DB.
+ * Requires the internal secret (see api/_lib/internalAuth.js) once configured.
  */
 
 import { setCors }                       from '../../_lib/cors.js'
@@ -20,6 +22,7 @@ import { prisma }                       from '../../_lib/prisma.js'
 import { getZohoToken }                 from '../../_lib/zoho-token.js'
 import { booksGet, booksPost,
          isPrismaTableMissing }          from '../../_lib/zoho-books.js'
+import { requireInternalSecret }        from '../../_lib/internalAuth.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } }
 
@@ -283,32 +286,10 @@ export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+  if (!requireInternalSecret(req, res)) return
 
   try {
     const body = req.body || {}
-
-    // Zoho CRM webhook passthrough — body.data contains deal records
-    const webhookItems = Array.isArray(body.data) ? body.data
-                       : body.data                 ? [body.data]
-                       : null
-    if (webhookItems) {
-      const results = []
-      for (const item of webhookItems) {
-        const stage = item.Stage || item.Deal_Stage
-        if (stage !== 'Closed Won') continue
-        const result = await createDraft({
-          crmDealId:    item.id || item.ID || item.Id,
-          crmDealName:  item.Deal_Name || item.Name || '',
-          crmAccountName: typeof item.Account_Name === 'object' ? item.Account_Name?.name : item.Account_Name || '',
-          crmEmail:     (item.Contact_Email || item.Email || '').toLowerCase().trim(),
-          dealAmount:   parseFloat(item.Amount || 0),
-          dryRun:       false,
-        })
-        results.push(result)
-      }
-      return res.json({ ok: true, invoices: results })
-    }
-
     const { action = 'draft', ...params } = body
 
     if (action === 'draft') {

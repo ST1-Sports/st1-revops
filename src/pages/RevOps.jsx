@@ -28,6 +28,8 @@ import {
 } from "../lib/quoteCrmLink.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
+import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
+import { internalAuthHeaders } from "../lib/internalAuth.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -376,6 +378,16 @@ if(!r.ok||d.error){ctx.toast(`Removed here — Zoho said: ${d.error||r.status}. 
 ctx.toast(`"${deal.name}" deleted`,"success");
 return true;
 }
+// /api/state's GET redacts appUsers[].pin before it ever reaches the browser
+// (see api/state.js) — the merge below has to keep whatever pin this device
+// already knows locally instead of letting the pin-less server copy wipe it,
+// or nobody could log in again until the next SET_APP_USER.
+function mergeAppUsers(local, server) {
+if (!Array.isArray(server)) return Array.isArray(local) ? local : [];
+const localByRep = {};
+for (const u of (local||[])) if (u?.repId) localByRep[u.repId] = u;
+return server.filter(u=>u?.repId).map(u=>({...localByRep[u.repId], ...u, pin: localByRep[u.repId]?.pin}));
+}
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
@@ -408,6 +420,7 @@ orders:       mergeById(base.orders,       server.orders),
 alerts:       mergeById(base.alerts,       server.alerts),
 activity:     mergeById(base.activity,     server.activity),
 priceLists:   mergeById(base.priceLists,   server.priceLists),
+appUsers:     mergeAppUsers(base.appUsers, server.appUsers),
 };
 }
 function useStore() {
@@ -527,7 +540,7 @@ if(/wrestling/.test(t)) return "Wrestling";
 return "General";
 }
 async function zohoCall(service, endpoint, method="GET", body=null) {
-const r = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const r = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service,endpoint,method,...(body?{body}:{})})});
 if(!r.ok) throw new Error(`Zoho proxy ${r.status}`);
 return r.json();
@@ -536,7 +549,7 @@ async function pushActivityToZoho(contact, activityNote) {
 const zid=zohoIdFromContact(contact);
 if (!zid) return;
 try {
-await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json"},
+await fetch("/api/zoho", {method:"POST", headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body: JSON.stringify({
 service: "crm",
 endpoint: `/Activities`,
@@ -546,15 +559,15 @@ body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Da
 });
 } catch {}
 }
-const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
-const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
-const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
+const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
+const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
+const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
 const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
 // invoice with the ledger agent so it's waiting for review in Finance the moment a deal closes.
 const autoInvoiceOnClosedWon=(deal,prevStage,newStage,toast)=>{
 if(newStage!=="Closed Won"||prevStage==="Closed Won")return;
-fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 action:"draft",dryRun:false,
 crmDealId:deal.zohoId||undefined,
 crmDealName:deal.name,
@@ -733,7 +746,7 @@ case "DEL_CONTACT_LIST":    return {...prev, contactLists:(prev.contactLists||[]
 case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
 case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
 case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
-case "SET_APP_USER":        return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),payload]};
+case "SET_APP_USER":        {const existingAu=(prev.appUsers||[]).find(u=>u.repId===payload.repId);return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),{...existingAu,...payload}]};}
 case "DEL_APP_USER":        return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.repId!==payload)};
 case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
 case "UPDATE_SEQUENCE":     return {...prev, sequences:(prev.sequences||[]).map(s=>s.id===payload.id?{...s,...payload}:s)};
@@ -968,7 +981,7 @@ const zs=v=>typeof v==="string"?v:v?.name||v?.display_value||"";
 const syncInvoices=async()=>{
 if(s.invoiceLastSync&&Date.now()-s.invoiceLastSync<SIX_H) return;
 try {
-const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"books",endpoint:"/invoices?per_page=200&sort_column=date&sort_order=D",method:"GET"})}).then(r=>r.json());
+const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"books",endpoint:"/invoices?per_page=200&sort_column=date&sort_order=D",method:"GET"})}).then(r=>r.json());
 const mapped=(res.invoices||[]).map(zi=>({id:"zoho_"+zi.invoice_id,zohoId:zi.invoice_id,number:zi.invoice_number||"",customer:zi.customer_name,customerId:zi.customer_id,status:STAT_MAP[zi.status]||zi.status,date:zi.date,dueDate:zi.due_date,total:zi.total||0,balance:zi.balance||0,items:(zi.line_items||[]).map(li=>({name:li.name||li.item_name||"",qty:li.quantity,rate:li.rate,total:li.item_total})),source:"zoho"}));
 if(mapped.length) dispatch("SET_INVOICES",{invoices:mapped,lastSync:Date.now()});
 } catch{}
@@ -977,7 +990,7 @@ const fetchAllPages=async(baseEndpoint)=>{
 let all=[],page=1;
 while(true){
 const sep=baseEndpoint.includes("?")?"&":"?";
-const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
+const res=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`${baseEndpoint}${sep}per_page=200&page=${page}`,method:"GET"})}).then(r=>r.json());
 // Zoho returns HTTP 204 (no JSON body) for a genuinely empty module — that's
 // not an error, res.data is just legitimately absent. But an actual failure
 // (bad token, missing scope, rate limit) comes back as a 200-wrapped error
@@ -1519,16 +1532,20 @@ const loginUsers = appUsers.map(au=>{
 const rep = reps.find(r=>r.id===au.repId);
 if(!rep) return null;
 const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();
-return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue, pin: au.pin };
+return { id: rep.id, name: rep.name, email: rep.email, initials, color: B.blue };
 }).filter(Boolean);
 const doLogin=async()=>{
 if(!sel||pin.length<4) return;
 setLoading(true);
-const user = loginUsers.find(u=>u.id===sel.id);
-await new Promise(r=>setTimeout(r,200));
-if(user && pin===user.pin){
+try{
+const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({repId:sel.id,pin})});
+const d=await r.json();
+if(d.ok){
 dispatch("LOGIN",sel.id);
 } else {
+setPin("");setShake(true);setTimeout(()=>setShake(false),500);
+}
+}catch(e){
 setPin("");setShake(true);setTimeout(()=>setShake(false),500);
 }
 setLoading(false);
@@ -1598,6 +1615,17 @@ const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBo
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+// One-click role chips (Athletic Director, Head Coach, ...) next to a free-text title
+// input, so a rep isn't stuck typing "Athletic Director" by hand every time. The
+// underlying field stays free text — a chip just fills it, custom titles still work.
+const RoleQuickPick=React.memo(function RoleQuickPick({value,onChange}){
+return <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:4}}>
+{COACH_ROLES.filter(r=>r!=="Other").map(r=>{
+const active=(value||"").trim().toLowerCase()===r.toLowerCase();
+return <button key={r} type="button" onClick={()=>onChange(r)} style={{background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:99,padding:"2px 8px",fontFamily:"'Lexend',sans-serif",fontSize:9,cursor:"pointer",whiteSpace:"nowrap"}}>{r}</button>;
+})}
+</div>;
+});
 function ListPager({page,setPage,total,pageSize=25,noun="items",compact=false}){
 const pages=Math.max(1,Math.ceil((total||0)/pageSize));
 const safe=Math.min(Math.max(1,page),pages);
@@ -2827,7 +2855,7 @@ const sendDone=created?.status==="SENT";
 const createDraft=async()=>{
 setInvoiceCreated(p=>({...p,[ikey+"_creating"]:true}));
 try{
-const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"draft",crmDealId:meta.crmDealId,crmDealName:customerName,dryRun:false})});
 const d=await r.json();
 if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:d}));toast(`Invoice ${d.invoiceNumber||d.zohoInvoiceId} created as draft`,"success");}
 else toast(d.error||"Draft creation failed","error");
@@ -2838,7 +2866,7 @@ const sendInvoice=async()=>{
 if(!dealInvoiceId){toast("No local invoice ID — create draft first","error");return;}
 setInvoiceCreated(p=>({...p,[ikey+"_sending"]:true}));
 try{
-const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"confirm",dealInvoiceId})});
+const r=await fetch("/api/agents/ledger/invoice",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"confirm",dealInvoiceId})});
 const d=await r.json();
 if(d.ok){setInvoiceCreated(p=>({...p,[ikey]:{...created,...d}}));toast("Invoice sent to customer","success");}
 else toast(d.error||"Send failed","error");
@@ -2906,7 +2934,7 @@ const createBill=async()=>{
   if(!pdf){toast("Upload a PDF first","error");return;}
   setBillCreated(p=>({...p,[bkey+"_creating"]:true}));
   try{
-    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
+    const r=await fetch("/api/agents/ledger/vendor-bill",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({action:"create",pdfBase64:pdf,pdfName:billPdfStore[bkey+"_name"]||"vendor-invoice.pdf",dryRun:false})});
     const d=await r.json();
     if(d.ok){setBillCreated(p=>({...p,[bkey]:d}));toast(`Bill ${d.billNumber||d.zohoBillId} created`,"success");}
     else toast(d.error||"Bill creation failed","error");
@@ -3618,14 +3646,14 @@ const rebuildDealsFromInvoices=async()=>{
 setRebuildingDeals(true);
 let preview;
 try{
-const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dryRun:true})});
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({dryRun:true})});
 preview=await r.json();
 }catch(e){toast(`Couldn't check invoices: ${e.message}`,"error");setRebuildingDeals(false);return;}
 if(!preview?.ok){toast(preview?.error||"Couldn't check invoices","error");setRebuildingDeals(false);return;}
 if(!window.confirm(`This deletes ALL ${preview.existingDeals} current Deal(s) in Zoho CRM — including any in-progress ones not yet invoiced — and creates exactly ${preview.invoicesUsable} new Deal(s), one per real invoice (${preview.invoicesSkipped} draft/void invoice(s) skipped). This cannot be undone. Continue?`))
 {setRebuildingDeals(false);return;}
 try{
-const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})});
+const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({})});
 const d=await r.json();
 if(!d.ok){toast(d.error||"Rebuild failed","error");setRebuildingDeals(false);return;}
 dispatch("SET_DEALS",[]);
@@ -3655,7 +3683,7 @@ const [overviewEditDealId,setOverviewEditDealId]=useState(null);
 const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
-const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:""});
+const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
 const [crmPage,setCrmPage]=useState(1);
@@ -4228,20 +4256,24 @@ return next;
 <input value={addForm.school} onChange={e=>setAddForm(f=>({...f,school:e.target.value}))} placeholder="School / Org" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text,gridColumn:"1/-1"}}/>
 <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<div style={{gridColumn:"1/-1"}}>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
+</div>
 </div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
 if(!addForm.lastName) return;
-const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
 setShowAddContact(false);
-setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});
+setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
 toast(`${c.fullName} added`,"success");
-fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school}]}})})
+fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school,Designation:addForm.title}]}})})
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
 }} disabled={!addForm.lastName}>SAVE</OBtn>
-<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:""});}}>Cancel</GBtn>
+<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});}}>Cancel</GBtn>
 </div>
 </div>
 )}
@@ -4972,7 +5004,7 @@ return(
 </div>
 {/* Title + Sport (prominent) */}
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-<div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} style={iS}/></div>
+<div><Lbl s={{marginBottom:3,fontSize:8}}>Title / Role</Lbl><input value={profileForm.title||""} onChange={e=>setPF("title",e.target.value)} placeholder="e.g. Athletic Director" style={iS}/><RoleQuickPick value={profileForm.title} onChange={r=>setPF("title",r)}/></div>
 <div>
 <Lbl s={{marginBottom:3,fontSize:8,color:B.purple,letterSpacing:1}}>★ SPORT</Lbl>
 <select value={profileForm.sport||""} onChange={e=>setPF("sport",e.target.value)}
@@ -5968,7 +6000,7 @@ style={{width:100,background:B.surface,border:`1px solid ${B.orange}`,color:B.or
 <Lbl s={{marginBottom:5}}>Move Stage</Lbl>
 <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
 {DEAL_STAGES.map(st=>(
-<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+<button key={st} onClick={()=>{const prevStage=sel_d.stage;dispatch("UPDATE_DEAL",{id:sel_d.id,stage:st});dispatch("LOG",{msg:cu?.name+" moved "+sel_d.name+" → "+st});toast("Moved to "+st,"success");if(sel_d.zohoId)fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Deals/${sel_d.zohoId}`,method:"PUT",body:{data:[{Stage:st}]}})}).catch(()=>{});autoInvoiceOnClosedWon(sel_d,prevStage,st,toast);}} style={{background:sel_d.stage===st?DSC[st]:B.surface,color:sel_d.stage===st?B.white:B.muted,border:"1px solid "+(sel_d.stage===st?DSC[st]:B.border),borderRadius:3,padding:"3px 7px",fontSize:9,fontFamily:"'Lexend',sans-serif"}}>{st}</button>
 ))}
 </div>
 <div style={{marginBottom:9}}>
@@ -6072,7 +6104,7 @@ dispatch("LOG",{msg:`Order "${o.name}" advanced to ${nextStage}`});
 if(nextStage==="Invoiced"){
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 service:"books",endpoint:"/invoices",method:"POST",
 body:{
 customer_name:o.school||o.contact||o.name,
@@ -6250,7 +6282,7 @@ return(
 <button onClick={async()=>{
 setInvoicing(o.id);
 try{
-const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+const r=await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({
 service:"books",endpoint:"/invoices",method:"POST",
 body:{customer_name:o.school||o.contact||o.name,date:today(),due_date:new Date(Date.now()+30*86400000).toISOString().slice(0,10),
 line_items:o.items?.length>0?o.items.map(item=>({name:item.name,description:item.description||"",quantity:item.qty||1,rate:item.rate||0})):[{name:o.name,description:o.notes||"",quantity:1,rate:o.value||0}],
@@ -7148,7 +7180,7 @@ let all = []; let page = 1;
 while(true) {
 const criteria = encodeURIComponent(`(Modified_Time:greater_than:${dt})`);
 const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
-const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service:"crm",endpoint,method:"GET"})
 }).then(r=>r.json());
 if(!Array.isArray(res.data)||!res.data.length) break;
@@ -7178,7 +7210,7 @@ let page = 1;
 while(true) {
 const criteria = encodeURIComponent(`(Created_Time:between:${chunk.start}:${chunk.end})`);
 const endpoint = `/${module}/search?criteria=${criteria}&fields=${fList}&per_page=200&page=${page}`;
-const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},
+const res = await fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},
 body:JSON.stringify({service:"crm",endpoint,method:"GET"})
 }).then(r=>r.json());
 if(!Array.isArray(res.data)||!res.data.length) break;
@@ -8438,9 +8470,9 @@ setEnrollingContact(null);
 )}
 <div style={{marginTop:6}}>
 {c.optedOut?(
-<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:false}]}})}).catch(()=>{});}}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
+<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:false});toast(`${c.fullName||c.firstName} opted back in`,"success");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:false}]}})}).catch(()=>{});}}} style={{background:B.greenBg,color:B.green,border:`1px solid ${B.green}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT BACK IN</button>
 ):(
-<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
+<button onClick={()=>{dispatch("UPDATE_CONTACT",{id:c.id,optedOut:true});toast(`${c.fullName||c.firstName} opted out`,"info");if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}}} style={{background:"none",color:B.red,border:`1px solid ${B.red}40`,borderRadius:3,padding:"3px 8px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.3,cursor:"pointer",width:"100%"}}>OPT OUT</button>
 )}
 </div>
 <div style={{marginTop:6}}>
@@ -8875,7 +8907,7 @@ bulkSel.forEach(cid=>{
 const c=(s.contacts||[]).find(x=>x.id===cid);
 if(c&&!c.optedOut){
 dispatch("UPDATE_CONTACT",{id:cid,optedOut:true});
-if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}
+if(c.zohoId){fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/Leads/${c.zohoId}`,method:"PUT",body:{data:[{id:c.zohoId,Email_Opt_Out:true}]}})}).catch(()=>{});}
 }
 });
 toast(`${bulkSel.size} contacts opted out`,"info");setBulkSel(new Set());
@@ -12843,7 +12875,7 @@ const previewInvoice=async()=>{
 if(!selectedDeal&&!manualDealName.trim()){toast("Pick a deal or type a customer name","error");return;}
 setInvoiceWorking(true);setInvoicePreview(null);setInvoiceCreated(null);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'draft',dryRun:true,...invoiceParams()})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12854,7 +12886,7 @@ setInvoiceWorking(false);
 const createInvoiceNow=async()=>{
 setInvoiceWorking(true);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'draft',dryRun:false,...invoiceParams()})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12867,7 +12899,7 @@ const sendInvoiceNow=async()=>{
 if(!invoiceCreated?.dealInvoiceId){toast("Nothing to send","error");return;}
 setInvoiceWorking(true);
 try{
-const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/invoice',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'confirm',dealInvoiceId:invoiceCreated.dealInvoiceId})});
 const d=await r.json();
 if(d.error) throw new Error(d.error);
@@ -12884,7 +12916,7 @@ reader.onload=async(ev)=>{
 const pdfBase64=ev.target.result.split(',')[1];
 setBillFileData({pdfBase64,pdfName:file.name});
 try{
-const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'extract',pdfBase64,pdfName:file.name,dryRun:true})});
 const d=await r.json();
 setBillPreview(d);
@@ -12897,7 +12929,7 @@ const createBillNow=async()=>{
 if(!billFileData){toast("Upload a bill first","error");return;}
 setBillCreating(true);
 try{
-const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json'},
+const r=await fetch('/api/agents/ledger/vendor-bill',{method:'POST',headers:{'Content-Type':'application/json',...internalAuthHeaders()},
 body:JSON.stringify({action:'create',dryRun:false,pdfBase64:billFileData.pdfBase64,pdfName:billFileData.pdfName,supplierId:billPreview?.supplierId||undefined})});
 const d=await r.json();
 if(!d.ok) throw new Error(d.error||"Create failed");

@@ -22,6 +22,7 @@ import { prisma }                              from '../../_lib/prisma.js'
 import { getZohoToken }                        from '../../_lib/zoho-token.js'
 import { ORG, BOOKS, booksGet, booksPost,
          isPrismaTableMissing }                from '../../_lib/zoho-books.js'
+import { requireInternalSecret }               from '../../_lib/internalAuth.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '20mb' } } }
 
@@ -487,6 +488,7 @@ export default async function handler(req, res) {
     }
 
     // ── create (live) ──────────────────────────────────────────────────────
+    if (!requireInternalSecret(req, res)) return
     if (!supplier) {
       return res.status(422).json({
         ok:      false,

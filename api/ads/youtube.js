@@ -1,4 +1,5 @@
 import { setCors } from '../_lib/cors.js';
+import { requireInternalSecret } from '../_lib/internalAuth.js';
 
 // YouTube Ads uses the Google Ads API filtered to VIDEO channel type.
 // Same OAuth credentials as google.js — reuses GOOGLE_ADS_* env vars.
@@ -209,6 +210,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: `Unknown action: ${action}` });
     }
     if (req.method === 'POST') {
+      if (!requireInternalSecret(req, res)) return;
       const { action, id, dailyBudget, campaign } = req.body || {};
       if (action === 'pause')      return res.status(200).json(await pauseCampaign(id));
       if (action === 'resume')     return res.status(200).json(await resumeCampaign(id));

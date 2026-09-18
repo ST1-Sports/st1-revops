@@ -1,4 +1,5 @@
 import { setCors } from '../_lib/cors.js';
+import { requireInternalSecret } from '../_lib/internalAuth.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
@@ -187,6 +188,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST') {
+      if (!requireInternalSecret(req, res)) return;
       const { action, id, dailyBudget, campaign } = req.body || {};
       if (action === 'pause')      return res.status(200).json(await pauseCampaign(id));
       if (action === 'resume')     return res.status(200).json(await resumeCampaign(id));

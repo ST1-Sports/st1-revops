@@ -5,6 +5,7 @@ import { integrationsPath } from "../lib/pages.js";
 
 const INTG_TABS = new Set(["overview","knowledge","slack","zoho","marketing","ads","email","shopify","tools","log"]);
 import { pushItemsToAppState, pushAppStateToServer, readAppState } from "../lib/appStateSync.js";
+import { internalAuthHeaders } from "../lib/internalAuth.js";
 import AiKnowledgeHub from "./AiKnowledgeHub.jsx";
 
 // ─── BRAND ────────────────────────────────────────────────────────────────────
@@ -32,7 +33,7 @@ const sleep = ms => new Promise(r=>setTimeout(r,ms));
 async function zohoAPI(service, endpoint, method="GET", body=null) {
   const r = await fetch("/api/zoho", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...internalAuthHeaders() },
     body: JSON.stringify({ service, endpoint, method, body }),
   });
   const data = await r.json();
@@ -44,7 +45,7 @@ async function zohoAPI(service, endpoint, method="GET", body=null) {
 async function shopifyAPI(endpoint, method="GET", body=null) {
   const r = await fetch("/api/shopify", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...internalAuthHeaders() },
     body: JSON.stringify({ endpoint, method, body }),
   });
   const data = await r.json();

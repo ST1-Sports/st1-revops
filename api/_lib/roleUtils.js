@@ -1,9 +1,9 @@
 /**
- * Server-side sport/role inference from a contact's job title — mirrors
- * inferSportFromTitle in src/pages/RevOps.jsx (kept in sync by hand; API
- * routes don't share a bundle with the frontend, so this can't just import
- * it directly). Used when aligning contacts into Zoho's Sport/Coach Role
- * custom fields.
+ * Server-side sport/role inference from a contact's job title, also imported
+ * directly by src/pages/RevOps.jsx for its role quick-pick UI (COACH_ROLES) —
+ * this file has no server-only dependencies, so it's shared as-is rather than
+ * duplicated. inferSportFromTitle here still duplicates RevOps.jsx's own copy
+ * (kept in sync by hand) since that one closes over UI-local state.
  */
 
 export const ACCOUNT_SPORTS = ["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew"]

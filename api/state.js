@@ -20,6 +20,15 @@ export const config = {
 // Fields that should never be synced (local-session only)
 const EXCLUDE_KEYS = new Set(["currentUserId"]);
 
+// appUsers[].pin is checked server-side by /api/login and must never reach an
+// unauthenticated browser — a device only needs to know who's pickable, not
+// their PIN. The real pin still gets written on POST (see below); only what
+// GET hands back to the client is redacted.
+function redactAppUserPins(state) {
+  if (!Array.isArray(state?.appUsers)) return state;
+  return { ...state, appUsers: state.appUsers.map(({ pin, ...rest }) => rest) };
+}
+
 function sanitize(state) {
   if (!state || typeof state !== "object") return {};
   const out = {};
@@ -45,7 +54,7 @@ export default async function handler(req, res) {
       if (!setting) return res.json({ state: null });
       const raw = setting.value || {};
       const tombs = applyDealTombstones(raw, raw);
-      return res.json({ state: { ...raw, ...tombs } });
+      return res.json({ state: redactAppUserPins({ ...raw, ...tombs }) });
     } catch (e) {
       console.error("[state] GET error:", e.message);
       return res.status(500).json({ error: e.message });

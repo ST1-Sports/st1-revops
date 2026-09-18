@@ -12,7 +12,7 @@
 import { CRM_BASE, zohoCrmCreateRecord, zohoRecordId } from './zohoCrm.js'
 import { pickBestZohoAccount, zohoAccountSearchWord } from './zohoAccountMatch.js'
 
-function zohoCriteriaValue(value) {
+export function zohoCriteriaValue(value) {
   return String(value || '').replace(/[\\()]/g, '\\$&')
 }
 
