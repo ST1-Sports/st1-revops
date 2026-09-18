@@ -87,14 +87,25 @@ export function mergeZohoContactRow(local, incoming, now = Date.now()) {
   return merged;
 }
 
-/** Server list wins for membership (Zoho deletes); recent local profile edits stay. */
+/**
+ * Union of local ∪ server — a contact only one side currently knows about
+ * (this device hasn't pulled recently, or the server has one from another
+ * device) stays present; a caller drops a contact only via an explicit
+ * tombstone (src/lib/contactTombstone.js), never just because one side's
+ * snapshot happens to be missing it. Where both sides have the same contact,
+ * a recent local profile edit still wins per-field (mergeZohoContactRow).
+ */
 export function mergeContactsPreferRecentSaves(localList, serverList, now = Date.now()) {
-  if (!Array.isArray(serverList)) return localList || [];
-  const localById = new Map((localList || []).map(c => [c.id, c]));
-  return serverList.map(sc => {
-    const lc = localById.get(sc.id);
-    return lc ? mergeZohoContactRow(lc, sc, now) : sc;
-  });
+  const byId = new Map();
+  for (const c of (Array.isArray(localList) ? localList : [])) {
+    if (c?.id) byId.set(c.id, c);
+  }
+  for (const sc of (Array.isArray(serverList) ? serverList : [])) {
+    if (!sc?.id) continue;
+    const lc = byId.get(sc.id);
+    byId.set(sc.id, lc ? mergeZohoContactRow(lc, sc, now) : sc);
+  }
+  return [...byId.values()];
 }
 
 /** Analytics / lists → CRM person deal tab, or the school page when there is no contact. */

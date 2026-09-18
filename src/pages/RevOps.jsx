@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from "react-router-dom";
 import * as bgTasks from "../lib/bgTasks.js";
 import { mergeById, APP_STATE_KEY } from "../lib/appStateSync.js";
 import { dealIsSuppressed, filterLiveDeals, filterRealDeals, mergeIdLists, suppressFromRemovedDeals } from "../lib/dealTombstone.js";
+import { filterLiveContacts, suppressFromRemovedContacts } from "../lib/contactTombstone.js";
 import { pathToMod, modToPath, prospectTabFromSearch, prospectPath, crmPath } from "../lib/pages.js";
 import { assistantBubbleText, ChatProse, EdgarQuoteCard, ScoutPriceCard, ZohoQuoteForm } from "../components/ScoutChatBits.jsx";
 import { dedupeChatActions } from "../lib/chatActions.js";
@@ -157,6 +158,8 @@ prospectAreas: [],
 agentHistory: [],
 suppressedDealZohoIds: [],
 suppressedDealIds: [],
+suppressedContactZohoIds: [],
+suppressedContactIds: [],
 agentDraft: "",
 edgarDraft: "",
 lastBriefDate: null,
@@ -392,6 +395,8 @@ function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
 const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
 const suppressedDealZohoIds = mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds);
+const suppressedContactIds = mergeIdLists(base.suppressedContactIds, server.suppressedContactIds);
+const suppressedContactZohoIds = mergeIdLists(base.suppressedContactZohoIds, server.suppressedContactZohoIds);
 return {
 ...base,
 ...server,
@@ -400,10 +405,12 @@ integrations: {...(base.integrations||{}), ...(typeof server.integrations==="obj
 company:      {...(base.company||{}),      ...(typeof server.company==="object"     &&server.company     ?server.company     :{})},
 agentHistory: Array.isArray(base.agentHistory) ? base.agentHistory : (Array.isArray(server.agentHistory) ? server.agentHistory.slice(-40) : []),
 campaigns:    mergeById(base.campaigns,    server.campaigns),
-// Contacts stay server-authored for membership (so a Zoho delete stays
-// gone) but a profile Matt just saved must win over a stale /api/state
-// pull — otherwise Hudson email/phone edits vanish on the next sync.
-contacts:     mergeContactsPreferRecentSaves(base.contacts, server.contacts),
+// Contacts union both sides — see contactTombstone.js. Membership only
+// ever shrinks via an explicit tombstone; a profile Matt just saved still
+// wins over a stale /api/state pull (mergeContactsPreferRecentSaves).
+suppressedContactIds,
+suppressedContactZohoIds,
+contacts:     filterLiveContacts(mergeContactsPreferRecentSaves(base.contacts, server.contacts), { suppressedContactIds, suppressedContactZohoIds }),
 contactLists: mergeById(base.contactLists, server.contactLists),
 suppressedDealIds,
 suppressedDealZohoIds,
@@ -735,6 +742,16 @@ return {
 deals:(prev.deals||[]).filter(d=>!payload.includes(d.id)),
 suppressedDealIds:mergeIdLists(prev.suppressedDealIds,tomb.suppressedDealIds),
 suppressedDealZohoIds:mergeIdLists(prev.suppressedDealZohoIds,tomb.suppressedDealZohoIds),
+};
+}
+case "REMOVE_CONTACTS": {
+const gone=(prev.contacts||[]).filter(c=>payload.includes(c.id));
+const tomb=suppressFromRemovedContacts(gone,payload);
+return {
+...prev,
+contacts:(prev.contacts||[]).filter(c=>!payload.includes(c.id)),
+suppressedContactIds:mergeIdLists(prev.suppressedContactIds,tomb.suppressedContactIds),
+suppressedContactZohoIds:mergeIdLists(prev.suppressedContactZohoIds,tomb.suppressedContactZohoIds),
 };
 }
 case "ADD_CONTACTS":      return {...prev, contacts:[...payload,...(prev.contacts||[])]};
@@ -1149,19 +1166,35 @@ if(dealsRemoved) dispatch("REMOVE_DEALS",deadDealIds);
 // cluttering the CRM tab. Runs every sync, so this also sweeps the existing
 // backlog, not just newly-fetched records.
 const updMap=new Map(toUpdate.map(c=>[c.id,c]));
-// A zoho_c_*/zoho_l_* contact absent from a *successful* fresh pull was
-// deleted directly in Zoho — merging above only ever adds/updates, so
-// without this a deleted-in-Zoho record just sits in the local cache
-// forever (this cache is our own Postgres app_state, entirely separate
-// from Zoho — deleting there never touches it on its own).
+// A zoho_c_*/zoho_l_* contact absent from a *successful* fresh pull MIGHT be
+// deleted directly in Zoho — but a single missing pull isn't trustworthy
+// enough to act on immediately: pagination gaps, rate limiting, and a
+// Lead→Contact conversion (which changes the record's id for a cycle or
+// two) can all make a genuinely-live contact look absent for one sync
+// without it actually being gone. So the first time a contact is missing we
+// just note it (zohoMissingSince) and keep it; only once it's stayed missing
+// across a full day of syncs do we actually remove + tombstone it (via
+// REMOVE_CONTACTS below, so it also can't just come back on the next pull —
+// see contactTombstone.js).
+const CONTACT_ZOHO_GRACE_MS=24*60*60*1000;
 const liveZohoIds=new Set(allZoho.map(c=>c.id));
 const isZohoSourced=(c)=>(c.id||"").startsWith("zoho_c_")||(c.id||"").startsWith("zoho_l_");
-const survivingExisting=(s.contacts||[]).filter(c=>fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id));
-const removedCount=(s.contacts||[]).length-survivingExisting.length;
+const toRemoveIds=[];
+const survivingExisting=(s.contacts||[]).flatMap(c=>{
+if(fetchFailed||!isZohoSourced(c)||liveZohoIds.has(c.id)){
+return [c.zohoMissingSince?{...c,zohoMissingSince:null}:c];
+}
+if(!c.zohoMissingSince) return [{...c,zohoMissingSince:now}];
+if(now-c.zohoMissingSince<CONTACT_ZOHO_GRACE_MS) return [c];
+toRemoveIds.push(c.id);
+return [];
+});
+const removedCount=toRemoveIds.length;
 const mergedExisting=survivingExisting.map(c=>updMap.has(c.id)?mergeZohoContactRow(c,updMap.get(c.id),now):{...c,zohoId:c.zohoId||zohoIdFromContact(c)});
 const fullContactSet=[...toAdd,...mergedExisting];
 const allDealsForPhase=[...existingDeals,...dealRows.map(zd=>({contact:zs(zd.Contact_Name),school:zs(zd.Account_Name)}))];
 const {cold,keep,discard}=splitColdContacts(fullContactSet,allDealsForPhase,s.invoices||[]);
+if(toRemoveIds.length) dispatch("REMOVE_CONTACTS",toRemoveIds);
 dispatch("SET_CONTACTS",keep);
 if(!fetchFailed) dispatch("SET_CONTACTS_LAST_SYNC",now);
 let movedToProspecting=0;
@@ -3646,6 +3679,10 @@ const wipeAndResyncContacts=async()=>{
 if(!crmSyncRef?.current){toast("Sync not ready — reload the page","error");return;}
 if(!window.confirm(`This clears all ${(s.contacts||[]).length} locally-cached contact(s) (here and in the shared database) and rebuilds the list fresh from what's actually live in Zoho right now. Use this if the count keeps reverting to an old number. Continue?`))return;
 setWipingContacts(true);
+// Not a real deletion — these contacts are still live in Zoho, this just
+// forces a clean local rebuild — so a plain SET_CONTACTS (not REMOVE_CONTACTS)
+// is correct here: tombstoning by id would permanently suppress the exact
+// zoho_c_/zoho_l_ ids syncContacts is about to legitimately re-add below.
 dispatch("SET_CONTACTS",[]);
 await crmSyncRef.current(true);
 setWipingContacts(false);
@@ -15171,8 +15208,8 @@ const staleContacts=(s.contacts||[]).filter(c=>/^zoho_[cl]_/.test(c.id));
 const staleDeals=(s.deals||[]).filter(d=>/^zoho_d_/.test(d.id));
 if(!staleContacts.length&&!staleDeals.length){toast("No Zoho-synced contacts/deals cached here","info");return;}
 if(!window.confirm(`Remove ${staleContacts.length} Zoho-synced contact(s) and ${staleDeals.length} Zoho-synced deal(s) cached in RevOps? This only clears this app's local cache — nothing in Zoho itself is touched. Use this after wiping/reseeding Zoho CRM so old records don't linger alongside the fresh ones.`))return;
-dispatch("SET_CONTACTS",(s.contacts||[]).filter(c=>!/^zoho_[cl]_/.test(c.id)));
-dispatch("SET_DEALS",(s.deals||[]).filter(d=>!/^zoho_d_/.test(d.id)));
+if(staleContacts.length) dispatch("REMOVE_CONTACTS",staleContacts.map(c=>c.id));
+if(staleDeals.length) dispatch("REMOVE_DEALS",staleDeals.map(d=>d.id));
 toast(`Cleared ${staleContacts.length} contact(s), ${staleDeals.length} deal(s) — use SYNC ZOHO CRM in Prospecting → Contact DB to pull the fresh data`,"success");
 }} style={{background:B.redBg,color:B.red,border:`1px solid ${B.red}40`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>CLEAR ZOHO CACHE</button>
 </div>

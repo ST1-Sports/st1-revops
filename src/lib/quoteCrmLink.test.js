@@ -286,7 +286,7 @@ describe('mergeZohoContactRow', () => {
 });
 
 describe('mergeContactsPreferRecentSaves', () => {
-  it('keeps server membership and overlays a recent local save', () => {
+  it('overlays a recent local save onto the matching server record', () => {
     const now = 1_700_000_000_000;
     const out = mergeContactsPreferRecentSaves(
       [{ id: 'zoho_c_1', email: 'new@x.com', profileSavedAt: now - 1000 }],
@@ -296,6 +296,18 @@ describe('mergeContactsPreferRecentSaves', () => {
     assert.equal(out.length, 2);
     assert.equal(out[0].email, 'new@x.com');
     assert.equal(out[1].email, 'other@x.com');
+  });
+
+  it('keeps a contact only the local side currently knows about, instead of dropping it', () => {
+    // The reported "Parker Kennedy disappears" bug: this device's contacts
+    // include Parker, but the server pull it's merging against doesn't (a
+    // different device posted a stale snapshot). Parker must survive.
+    const out = mergeContactsPreferRecentSaves(
+      [{ id: 'zoho_c_parker', fullName: 'Parker Kennedy' }],
+      [{ id: 'zoho_c_2', fullName: 'Someone Else' }],
+    );
+    const ids = out.map(c => c.id).sort();
+    assert.deepEqual(ids, ['zoho_c_2', 'zoho_c_parker']);
   });
 });
 

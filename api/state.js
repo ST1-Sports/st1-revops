@@ -12,6 +12,7 @@
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { applyDealTombstones } from '../src/lib/dealTombstone.js';
+import { applyContactTombstones } from '../src/lib/contactTombstone.js';
 
 export const config = {
   api: { bodyParser: { sizeLimit: "8mb" } },
@@ -54,7 +55,8 @@ export default async function handler(req, res) {
       if (!setting) return res.json({ state: null });
       const raw = setting.value || {};
       const tombs = applyDealTombstones(raw, raw);
-      return res.json({ state: redactAppUserPins({ ...raw, ...tombs }) });
+      const contactTombs = applyContactTombstones(raw, raw);
+      return res.json({ state: redactAppUserPins({ ...raw, ...tombs, ...contactTombs }) });
     } catch (e) {
       console.error("[state] GET error:", e.message);
       return res.status(500).json({ error: e.message });
@@ -71,7 +73,8 @@ export default async function handler(req, res) {
       const existing = await prisma.setting.findUnique({ where: { key: "app_state" } });
       const previous = existing?.value && typeof existing.value === "object" ? existing.value : {};
       const tombs = applyDealTombstones(clean, previous);
-      const value = { ...clean, ...tombs };
+      const contactTombs = applyContactTombstones(clean, previous);
+      const value = { ...clean, ...tombs, ...contactTombs };
       await prisma.setting.upsert({
         where: { key: "app_state" },
         update: { value },
