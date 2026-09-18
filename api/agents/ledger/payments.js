@@ -70,19 +70,23 @@ function daysFromNow(date) {
 // unless we go pull them in. This adopts any currently-open (sent/overdue/
 // partial) Books invoice that has no local row yet, so the Finance tab and
 // reconcile's invoice-matching always reflect what's actually in Zoho Books.
-async function backfillOpenInvoices(limit) {
+// Shared by callers that already need the open-invoice set (pollPayments) so
+// the same 3 Zoho filters aren't fetched twice per run.
+async function fetchOpenInvoiceMap(limit) {
   const filters = ['Status.Sent', 'Status.Overdue', 'Status.PartiallyPaid']
   const zohoMap = {}
-
   await Promise.all(filters.map(async filter => {
     try {
       const data = await booksGet(`/invoices?filter_by=${filter}&per_page=${limit}&sort_column=due_date&sort_order=A`)
       for (const inv of data.invoices || []) zohoMap[inv.invoice_id] = inv
     } catch (e) {
-      console.warn('[payments] backfill booksGet', filter, ':', e.message)
+      console.warn('[payments] booksGet', filter, ':', e.message)
     }
   }))
+  return zohoMap
+}
 
+async function backfillOpenInvoices(zohoMap) {
   const ids = Object.keys(zohoMap)
   if (!ids.length) return 0
 
@@ -116,12 +120,17 @@ async function backfillOpenInvoices(limit) {
 // ── Core poll ─────────────────────────────────────────────────────────────────
 
 async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
-  // 0. Adopt any Zoho Books invoices RevOps doesn't know about yet — this is a
+  // 0. Fetch the open-invoice set once — reused below for both the backfill
+  // adoption and the local-vs-live diff, instead of hitting the same 3 Zoho
+  // filters twice per run.
+  const zohoMap = await fetchOpenInvoiceMap(limit)
+
+  // Adopt any Zoho Books invoices RevOps doesn't know about yet — this is a
   // passive local mirror of what already exists in Books, not a write to
   // Zoho, so it runs regardless of dryRun.
   let backfilled = 0
   try {
-    backfilled = await backfillOpenInvoices(limit)
+    backfilled = await backfillOpenInvoices(zohoMap)
   } catch (e) {
     if (isPrismaTableMissing(e)) {
       return { ok: true, message: 'DealInvoice table not migrated — nothing to poll', totals: {} }
@@ -150,22 +159,8 @@ async function pollPayments({ dryRun = true, lookAheadDays = 7, limit = 200 }) {
     return { ok: true, message: 'No open invoices to track', totals: { checked: 0, backfilled } }
   }
 
-  // 2. Fetch open invoices from Zoho Books (parallel: sent, overdue, partial)
-  const zohoMap = {} // invoice_id → zoho invoice object
-  const filters = ['Status.Sent', 'Status.Overdue', 'Status.PartiallyPaid']
-
-  await Promise.all(filters.map(async filter => {
-    try {
-      const data = await booksGet(`/invoices?filter_by=${filter}&per_page=${limit}&sort_column=due_date&sort_order=A`)
-      for (const inv of data.invoices || []) {
-        zohoMap[inv.invoice_id] = inv
-      }
-    } catch (e) {
-      console.warn('[payments] booksGet', filter, ':', e.message)
-    }
-  }))
-
-  // For local invoices not found in open filters — fetch individually to catch paid/void
+  // 2. zohoMap (fetched in step 0) already holds the open-invoice set (sent,
+  // overdue, partial). For local invoices not found there — fetch individually to catch paid/void
   const missingIds = localInvoices
     .map(li => li.zohoInvoiceId)
     .filter(id => id && !zohoMap[id])

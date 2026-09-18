@@ -111,10 +111,14 @@ async function proposeMoneyIn(since, until) {
 }
 
 async function proposeMoneyOut(since, until) {
+  // A source-fetch failure (bad Stripe key, Zoho auth failure, network error) must
+  // not look identical to "nothing in this window" — that leaves every recorded
+  // payment shown as unmatched with no sign the underlying data never loaded.
+  const sourceErrors = [];
   const [payments, payouts, bankDebits] = await Promise.all([
     prisma.payablePayment.findMany({ where: { paidOn: { gte: since, lt: until } }, include: { payable: true } }),
-    fetchStripePayoutsNormalized(since, until).catch(() => []),
-    fetchOperatingAccountDebitsNormalized(since, until).catch(() => []),
+    fetchStripePayoutsNormalized(since, until).catch(e => { sourceErrors.push({ source: 'stripe_payouts', error: e.message }); return []; }),
+    fetchOperatingAccountDebitsNormalized(since, until).catch(e => { sourceErrors.push({ source: 'operating_account', error: e.message }); return []; }),
   ]);
   const transactions = [...payouts, ...bankDebits];
 
@@ -138,6 +142,7 @@ async function proposeMoneyOut(since, until) {
     ...splitByStatus(enriched),
     unmatchedPayments,
     unmatchedTransactions,
+    ...(sourceErrors.length ? { sourceErrors } : {}),
   };
 }
 

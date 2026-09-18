@@ -122,16 +122,29 @@ export function matchOrdersToCharges(orders, charges, opts = {}) {
   return { matches, unmatchedOrders, unmatchedCharges };
 }
 
-/** Gross collected / fees / net for a set of confirmed (or proposed) money-in matches. */
+/**
+ * Gross collected / fees / net for a set of confirmed (or proposed) money-in
+ * matches. An ambiguous order (more than one candidate charge within
+ * tolerance) appears once per candidate in `matches` so a human can pick the
+ * real one — summing every entry would double- (or triple-) count that
+ * order's amount, so this counts each order's amount once regardless of how
+ * many candidate charges it produced.
+ */
 export function summarizeMoneyIn(matches) {
   let gross = 0;
   let fees = 0;
+  const seenOrders = new Set();
+  let matchedCount = 0;
   for (const m of matches || []) {
+    const orderKey = m.order?.id ?? m;
+    if (seenOrders.has(orderKey)) continue;
+    seenOrders.add(orderKey);
     gross += m.charge.amount;
     fees += m.charge.feeAmount || 0;
+    matchedCount++;
   }
   return {
-    matchedCount: (matches || []).length,
+    matchedCount,
     grossCollected: roundCents(gross),
     totalFees: roundCents(fees),
     netRetained: roundCents(gross - fees),

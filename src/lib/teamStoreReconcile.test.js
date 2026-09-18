@@ -127,6 +127,19 @@ describe('summarizeMoneyIn', () => {
     assert.equal(s.totalFees, 0);
     assert.equal(s.netRetained, 20.00);
   });
+
+  it('counts an ambiguous order once, not once per candidate charge', () => {
+    const order = { id: 'o-1' };
+    const matches = [
+      { order, charge: { amount: 100.00, feeAmount: 3.00 }, ambiguous: true },
+      { order, charge: { amount: 100.00, feeAmount: 3.00 }, ambiguous: true },
+      { order: { id: 'o-2' }, charge: { amount: 50.00, feeAmount: 1.00 }, ambiguous: false },
+    ];
+    const s = summarizeMoneyIn(matches);
+    assert.equal(s.matchedCount, 2);
+    assert.equal(s.grossCollected, 150.00);
+    assert.equal(s.totalFees, 4.00);
+  });
 });
 
 // ── Money out: the generic settled-transaction shape ─────────────────────

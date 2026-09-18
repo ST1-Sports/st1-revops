@@ -159,6 +159,35 @@ async function createDraft({ crmDealId, crmDealName, crmAccountName, crmEmail, d
     }
   }
 
+  // Idempotency: a re-fired CRM webhook (deal edited again while still Closed
+  // Won, or a redelivery) must not create a second real Zoho Books invoice
+  // for the same deal.
+  if (crmDealId) {
+    try {
+      const existing = await prisma.dealInvoice.findFirst({
+        where: { crmDealId, status: { not: 'VOID' } },
+        orderBy: { createdAt: 'desc' },
+      })
+      if (existing) {
+        return {
+          ok:            true,
+          dryRun:        false,
+          action:        'draft',
+          alreadyExists: true,
+          zohoInvoiceId: existing.zohoInvoiceId,
+          status:        existing.status,
+          customerName:  existing.crmDealName || acctName,
+          total:         existing.amountTotal != null ? Number(existing.amountTotal) : totalAmount,
+          dealInvoiceId: existing.id,
+          reviewUrl:     existing.zohoInvoiceId ? `https://books.zoho.com/app#/invoices/${existing.zohoInvoiceId}` : null,
+          message:       `Deal ${crmDealId} already has an invoice (${existing.status}) — not creating another`,
+        }
+      }
+    } catch (e) {
+      if (!isPrismaTableMissing(e)) throw e
+    }
+  }
+
   const contactId = await resolveContact(acctName, email)
 
   const invoicePayload = {
