@@ -22,8 +22,11 @@ import { setCors } from '../_lib/cors.js';
 import { buildStatement, statementForPayee, monthBoundsFromKey } from '../../src/lib/teamStoreSettlement.js';
 
 async function currentConfig(monthEnd) {
+  // monthEnd is the exclusive boundary (start of the NEXT month) — a config whose
+  // effectiveFrom is set to exactly that instant (the natural way to schedule "starting
+  // next month") must not count for the month currently being statemented, hence `lt`.
   const config = await prisma.settlementConfig.findFirst({
-    where: { effectiveFrom: { lte: monthEnd } },
+    where: { effectiveFrom: { lt: monthEnd } },
     orderBy: { effectiveFrom: 'desc' },
   });
   if (config) return config;

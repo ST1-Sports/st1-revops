@@ -12,8 +12,8 @@ api/reddit/
   validators.js         JSON schema validators for Claude outputs
   types.js              JSDoc type definitions
   prompts/
-    evaluate.md         Thread evaluation prompt (fit_score, promo_risk, …)
-    reply-gen.md        Reply generation prompt (primary + safer variants)
+    eval.md             Thread evaluation prompt (fit_score, promo_risk, …)
+    reply.md            Reply generation prompt (primary + safer variants)
     guardrail.md        Content guardrail prompt (approved_for_review/post, risk_score)
   services/
     ingestion.js        Search Reddit, apply DB guardrails, persist threads
@@ -21,11 +21,16 @@ api/reddit/
     reply-generator.js  Generate reply variants (primary + safer) for an evaluated thread
     content-guardrail.js  Claude-based content review before approval/posting
     db-guardrails.js    DB-level guardrails: score filter, mute list, dedup, rate cap
-    slack-review.js     Build Block Kit cards and post Slack review notifications
-    posting.js          10-gate posting flow with full audit logging
+    posting.js          10-gate posting flow with full audit logging (no caller wires to it yet — see note below)
     analytics.js        Poll Reddit for upvote/moderation metrics on posted replies
     report.js           Aggregate analytics report (funnel, subreddits, variants, guardrails)
 ```
+
+There is no Slack notify/approve/post flow yet — approval and posting are
+manual today (mark-done records a reply posted by hand outside this app).
+api/slack/actions.js has button handlers ready for that flow, but nothing
+posts the review card that would trigger them, and no `services/slack-review.js`
+exists to build one.
 
 ## Actions (POST /api/reddit)
 
@@ -35,11 +40,9 @@ api/reddit/
 | ingest      | —                        | Fetch Reddit threads, apply guardrails, persist |
 | evaluate    | threadId                 | Run Claude evaluation on a pending thread |
 | generate    | threadId                 | Generate primary + safer reply variants |
-| notify      | threadId                 | Send Slack review card |
-| approve     | threadId, replyId        | Record human approval |
-| reject      | threadId                 | Reject all variants |
-| check       | replyId                  | Run Claude content guardrail |
-| post        | replyId                  | Post approved reply (requires REDDIT_POSTING_ENABLED=true) |
+| pipeline    | overrides? (subreddits/keywords) | Ingest + evaluate + generate for pending threads, one call |
+| mark-done   | threadId                 | Record that a reply was posted manually; hide from queue |
+| reject      | threadId                 | Hide a thread from the review queue |
 | analytics   | —                        | Refresh upvote metrics for posted replies |
 | report      | days? (default 90)       | Aggregated analytics report |
 | threads     | status?, limit?          | List threads from DB |

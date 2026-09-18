@@ -9,8 +9,7 @@
 
 import { getZohoToken } from '../_lib/zoho-token.js';
 import { setCors }       from '../_lib/cors.js';
-
-const CRM_BASE = 'https://www.zohoapis.com/crm/v3';
+import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
@@ -32,10 +31,7 @@ export default async function handler(req, res) {
   try {
     const zohoRes = await fetch(`${CRM_BASE}/Leads`, {
       method: 'POST',
-      headers: {
-        Authorization:  `Zoho-oauthtoken ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: zohoCrmHeaders(token),
       body: JSON.stringify({
         data: [{
           First_Name:  firstName   || '',

@@ -15,6 +15,8 @@
 
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { getZohoToken } from '../_lib/zoho-token.js';
+import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
 
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
@@ -40,15 +42,13 @@ export default async function handler(req, res) {
     let zohoMirrored = false;
     if (contact.zohoCrmId && contact.zohoModule) {
       try {
-        const zr = await fetch(`https://${req.headers.host}/api/zoho`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            service: 'crm', method: 'PUT', endpoint: `/${contact.zohoModule}/${contact.zohoCrmId}`,
-            body: { data: [{ id: contact.zohoCrmId, Email_Opt_Out: true }] },
-          }),
+        const token = await getZohoToken();
+        const zr = await fetch(`${CRM_BASE}/${contact.zohoModule}/${contact.zohoCrmId}`, {
+          method: 'PUT',
+          headers: zohoCrmHeaders(token),
+          body: JSON.stringify({ data: [{ id: contact.zohoCrmId, Email_Opt_Out: true }] }),
         });
-        const zd = await zr.json();
-        zohoMirrored = !zd.error && zd._http_status < 300;
+        zohoMirrored = zr.ok;
       } catch { /* zoho mirror is best-effort — the local flag above is what matters most */ }
     }
 

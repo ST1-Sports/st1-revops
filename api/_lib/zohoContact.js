@@ -1,4 +1,5 @@
 import { CRM_BASE, zohoCrmCreateRecord, zohoRecordId } from './zohoCrm.js'
+import { zohoCriteriaValue } from './zohoAccount.js'
 
 function splitName(fullName) {
   const parts = String(fullName || '').trim().split(/\s+/).filter(Boolean)
@@ -15,7 +16,7 @@ export async function findOrCreateZohoContact({ fullName, email, accountId }, he
 
   if (trimmedEmail) {
     try {
-      const criteria = `(Email:equals:${trimmedEmail})`
+      const criteria = `(Email:equals:${zohoCriteriaValue(trimmedEmail)})`
       const r = await fetch(`${CRM_BASE}/Contacts/search?criteria=${encodeURIComponent(criteria)}`, { headers })
       if (r.ok) {
         const data = await r.json().catch(() => null)

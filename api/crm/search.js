@@ -10,11 +10,11 @@
 
 import { getZohoToken } from '../_lib/zoho-token.js';
 import { setCors }       from '../_lib/cors.js';
-
-const CRM_BASE = 'https://www.zohoapis.com/crm/v3';
+import { CRM_BASE }      from '../_lib/zohoCrm.js';
+import { zohoCriteriaValue } from '../_lib/zohoAccount.js';
 
 async function zohoSearch(token, module, field, value) {
-  const criteria = encodeURIComponent(`(${field}:contains:${value})`);
+  const criteria = encodeURIComponent(`(${field}:contains:${zohoCriteriaValue(value)})`);
   const res = await fetch(`${CRM_BASE}/${module}/search?criteria=${criteria}&per_page=5`, {
     headers: { Authorization: `Zoho-oauthtoken ${token}` },
   });

@@ -10,8 +10,8 @@
 
 import { getZohoToken } from '../_lib/zoho-token.js';
 import { setCors }       from '../_lib/cors.js';
+import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
 
-const CRM_BASE     = 'https://www.zohoapis.com/crm/v3';
 const VALID_MODULES = ['Contacts', 'Leads'];
 
 export default async function handler(req, res) {
@@ -38,10 +38,7 @@ export default async function handler(req, res) {
   try {
     const zohoRes = await fetch(`${CRM_BASE}/Notes`, {
       method: 'POST',
-      headers: {
-        Authorization:  `Zoho-oauthtoken ${token}`,
-        'Content-Type': 'application/json',
-      },
+      headers: zohoCrmHeaders(token),
       body: JSON.stringify({
         data: [{
           Note_Title:   noteTitle || 'Talk Track Note',

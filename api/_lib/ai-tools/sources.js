@@ -1,6 +1,9 @@
 import { prisma } from '../prisma.js';
 import { updateSettingSafely } from '../settingSync.js';
 import { getZohoToken } from '../zoho-token.js';
+import { CRM_BASE } from '../zohoCrm.js';
+import { BOOKS as BOOKS_BASE } from '../zoho-books.js';
+import { zohoCriteriaValue } from '../zohoAccount.js';
 import {
   minAcceptableScore,
   prismaContainsOr,
@@ -8,9 +11,6 @@ import {
   rankPriceItems,
   tokenizePriceQuery,
 } from '../priceSearch.js';
-
-const CRM_BASE = 'https://www.zohoapis.com/crm/v3';
-const BOOKS_BASE = 'https://www.zohoapis.com/books/v3';
 
 export const ST1_BRAND_GUIDANCE = {
   id: 'st1-brand-voice',
@@ -368,7 +368,7 @@ export async function searchZohoCrm(query, limit = 10) {
   }
 
   async function search(module, field) {
-    const criteria = encodeURIComponent(`(${field}:contains:${q})`);
+    const criteria = encodeURIComponent(`(${field}:contains:${zohoCriteriaValue(q)})`);
     const res = await fetch(`${CRM_BASE}/${module}/search?criteria=${criteria}&per_page=${safeLimit(limit, 10, 25)}`, {
       headers: { Authorization: `Zoho-oauthtoken ${token}` },
     });

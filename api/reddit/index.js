@@ -7,23 +7,26 @@
  *   { ok: true, data: {...} }  or  { error: "msg", status: 400|500 }
  *
  * Feature flag check is the first thing done in every action handler:
- * if REDDIT_ENABLED !== "true", all actions except "status" return 403.
+ * if REDDIT_AUTOMATION_ENABLED !== "true", all actions except "status" return 403.
  *
  * Actions:
  *   status          — return current feature flag state (always allowed)
  *   ingest          — search Reddit and store candidate threads
  *   evaluate        — run Claude evaluation on a pending thread
  *   generate        — generate reply variants for an evaluated thread
- *   notify          — send Slack notification for a thread awaiting review
- *   approve         — record human approval of a reply variant
- *   reject          — record human rejection of all variants
- *   check           — run content guardrail on a reply (Claude review before post)
- *   post            — post an approved reply to Reddit (requires REDDIT_POSTING_ENABLED)
- *   analytics       — refresh engagement metrics for posted replies
+ *   pipeline        — ingest + evaluate + generate for pending threads, in one call
+ *   mark-done       — record that a reply was posted manually; hide from queue
+ *   reject          — hide a thread from the review queue
+ *   analytics       — refresh engagement metrics (upvotes) for posted replies
  *   report          — aggregated analytics report (funnel, subreddits, variants, guardrails)
  *   threads         — list threads from DB (for review UI)
  *   mute-add        — add a subreddit or keyword to the mute list
  *   mute-list       — list all mute entries
+ *
+ * There is no automated Slack notify/approve/post flow yet — approval and
+ * posting are both manual today (mark-done records a reply posted by hand).
+ * api/slack/actions.js has button handlers for that flow, but nothing ever
+ * posts the review card that would trigger them.
  */
 
 const { ingestThreads }         = require('./services/ingestion');
@@ -31,6 +34,8 @@ const { generateSearchQueries } = require('./services/query-generator');
 const { evaluateThread }        = require('./services/evaluator');
 const { generateReplies }       = require('./services/reply-generator');
 const { muteSubreddit, muteKeyword } = require('./services/db-guardrails');
+const { refreshAnalytics } = require('./services/analytics');
+const { generateReport } = require('./services/report');
 const { getPrisma } = require('./services/_prisma');
 
 
@@ -194,7 +199,11 @@ export default async function handler(req, res) {
             pResults.evaluated++;
             if (ev.decision === 'REPLY') {
               const rs = await generateReplies(thread.id);
-              if (!rs.skip) pResults.generated++;
+              if (rs.skip) {
+                await db.redditThread.update({ where: { id: thread.id }, data: { status: 'SKIPPED' } });
+              } else {
+                pResults.generated++;
+              }
             }
           } catch (e) {
             pResults.errors.push({ step: 'evaluate', threadId: thread.id, error: e.message });
@@ -203,11 +212,21 @@ export default async function handler(req, res) {
         return ok(res, pResults);
       }
 
+      case 'analytics': {
+        const records = await refreshAnalytics(body.dryRun === true || flags.dryRun);
+        return ok(res, { records });
+      }
+
+      case 'report': {
+        const report = await generateReport(body);
+        return ok(res, { report });
+      }
+
       case 'threads': {
         const db = getPrisma();
         const threads = await db.redditThread.findMany({
           orderBy: { ingestedAt: 'desc' },
-          take:    body.limit || 50,
+          take:    Number.isFinite(body.limit) ? body.limit : 50,
           where:   body.status ? { status: body.status } : undefined,
           include: { replies: { orderBy: { variant: 'asc' } } },
         });
