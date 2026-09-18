@@ -148,6 +148,7 @@ async function resumeCampaign(id) {
 }
 
 async function setBudget(campaignId, dailyBudgetUsd) {
+  if (!/^\d+$/.test(String(campaignId))) throw new Error('campaignId must be numeric');
   // Same pattern as api/ads/google.js's setBudget — YouTube campaigns run on
   // the same Google Ads API and budget object, just filtered to VIDEO type.
   const c     = creds();

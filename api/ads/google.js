@@ -167,6 +167,7 @@ async function resumeCampaign(id) {
 }
 
 async function setBudget(campaignId, dailyBudgetUsd) {
+  if (!/^\d+$/.test(String(campaignId))) throw new Error('campaignId must be numeric');
   // Google Ads requires updating the budget object, not the campaign directly
   // Simplified: update via campaign budget mutate
   const c     = creds();

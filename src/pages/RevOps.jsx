@@ -3705,6 +3705,7 @@ const [overviewEditDealId,setOverviewEditDealId]=useState(null);
 const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
+const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
@@ -4138,6 +4139,7 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 </div>
 <div style={{display:"flex",gap:4,flexShrink:0}}>
 <button onClick={()=>{
+savingContactRef.current=false;
 setShowAddContact(v=>{
 const next=!v;
 if(next&&leftMode==="accounts"&&selSchool){
@@ -4285,7 +4287,8 @@ return next;
 </div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
-if(!addForm.lastName) return;
+if(!addForm.lastName||savingContactRef.current) return;
+savingContactRef.current=true;
 const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
@@ -11910,6 +11913,7 @@ function SendStatusPanel(){
 const [status,setStatus]=useState(null);
 const [loading,setLoading]=useState(true);
 const [toggling,setToggling]=useState(false);
+const [toggleError,setToggleError]=useState("");
 const [expandedBatch,setExpandedBatch]=useState(null);
 useEffect(()=>{
 fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"status"})})
@@ -11918,12 +11922,16 @@ fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/jso
 const toggle=async()=>{
 if(!status||toggling)return;
 setToggling(true);
+setToggleError("");
 const action=status.globalPause?"resume":"pause";
 try{
 const r=await fetch("/api/cron/status",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action})});
 const d=await r.json();
-if(d.ok)setStatus(s=>({...s,globalPause:d.globalPause}));
-}catch(e){}
+if(d.ok) setStatus(s=>({...s,globalPause:d.globalPause}));
+else setToggleError(d.error||`${action==="pause"?"Pause":"Resume"} failed — still showing the old state`);
+}catch(e){
+setToggleError(`${action==="pause"?"Pause":"Resume"} failed: ${e.message} — still showing the old state`);
+}
 setToggling(false);
 };
 const fmtTime=iso=>{if(!iso)return"—";const d=new Date(iso);return d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit",hour12:true});};
@@ -11939,6 +11947,7 @@ return(
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:paused?"#ef4444":"#22c55e",marginBottom:4}}>{paused?"⏸ EMAIL SENDING PAUSED":"▶ EMAIL SENDING ACTIVE"}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>{paused?"All batch sends are halted. Click RESUME to restart the cron sender.":"Emails are sending normally. Click PAUSE to stop all cron sends immediately."}</div>
+{toggleError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#ef4444",marginTop:4}}>⚠ {toggleError}</div>}
 </div>
 <button onClick={toggle} disabled={toggling} style={{background:paused?"#22c55e":"#ef4444",color:"#fff",border:"none",borderRadius:6,padding:"10px 24px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,fontWeight:700,letterSpacing:.8,cursor:toggling?"not-allowed":"pointer",opacity:toggling?.6:1,minWidth:110}}>
 {toggling?"…":paused?"RESUME":"PAUSE"}
