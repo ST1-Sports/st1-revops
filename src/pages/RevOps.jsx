@@ -427,6 +427,7 @@ function useStore() {
 const saveTimer = useRef(null);
 const serverTimer = useRef(null);
 const pollTimer = useRef(null);
+const pendingServerSave = useRef(null); // state not yet flushed to /api/state — read by the unload flush below
 const [s, setRaw] = useState(() => {
 try {
 const saved = localStorage.getItem(STORE);
@@ -517,14 +518,35 @@ const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); 
 if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
 else doSave();
 }, 300);
+const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
+pendingServerSave.current = toSync;
 if (serverTimer.current) clearTimeout(serverTimer.current);
 serverTimer.current = setTimeout(() => {
-const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
+pendingServerSave.current = null;
 }, 2500);
 return next;
 });
+}, []);
+// The 2.5s debounce above means a tab closed/refreshed right after a save action
+// (upload a PDF, add a deal — anywhere the user sees a "saved" toast) can drop
+// that change entirely if nothing ever flushes it. sendBeacon still gets a best-
+// effort delivery attempt during unload, unlike a fetch the browser can cancel.
+useEffect(() => {
+const flush = () => {
+if (!pendingServerSave.current) return;
+try {
+navigator.sendBeacon?.('/api/state', new Blob([JSON.stringify({state: pendingServerSave.current})], {type: 'application/json'}));
+} catch {}
+};
+const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
+window.addEventListener('beforeunload', flush);
+document.addEventListener('visibilitychange', onVisibility);
+return () => {
+window.removeEventListener('beforeunload', flush);
+document.removeEventListener('visibilitychange', onVisibility);
+};
 }, []);
 return [s, set, lastSynced, syncing, pullFromServer];
 }

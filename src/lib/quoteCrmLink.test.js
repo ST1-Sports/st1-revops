@@ -2,6 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   orgNamesMatch,
+  looseSchoolNameMatch,
+  schoolCoreName,
   resolveQuoteCrmTarget,
   dealBelongsToSchool,
   dealBelongsToContact,
@@ -37,6 +39,26 @@ describe('orgNamesMatch', () => {
   it('does not merge different schools that do not contain each other', () => {
     assert.equal(orgNamesMatch('Lincoln High School', 'Lincoln Middle School'), false);
     assert.equal(orgNamesMatch('Iowa', 'Iowa City High'), false);
+  });
+});
+
+describe('looseSchoolNameMatch / schoolCoreName', () => {
+  it('matches an abbreviated suffix that plain substring-includes cannot ("Glenwood HS" vs "Glenwood High School")', () => {
+    assert.equal(orgNamesMatch('Glenwood HS', 'Glenwood High School'), false);
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Glenwood High School'), true);
+  });
+
+  it('still matches anything orgNamesMatch already catches', () => {
+    assert.equal(looseSchoolNameMatch('Hudson', 'Hudson High School'), true);
+  });
+
+  it('does not fold two different core names together', () => {
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Lincoln High School'), false);
+  });
+
+  it('accepts a precomputed coreA to skip recomputation', () => {
+    const coreA = schoolCoreName('Glenwood HS');
+    assert.equal(looseSchoolNameMatch('Glenwood HS', 'Glenwood High School', coreA), true);
   });
 });
 
@@ -186,6 +208,27 @@ describe('mergeAccountGroups + attachOpenDealsToAccountGroups', () => {
       'Lincoln High School — TX': { name: 'Lincoln High School', contacts: [{ id: 'tx', school: 'Lincoln High School', state: 'TX' }], deals: [], value: 0 },
     };
     assert.equal(Object.keys(mergeAccountGroups(groups)).length, 2);
+  });
+
+  it('folds "Glenwood HS" into "Glenwood High School" even though neither contains the other', () => {
+    const groups = {
+      'Glenwood High School — IA': {
+        name: 'Glenwood High School',
+        contacts: [{ id: 'c1', school: 'Glenwood High School', state: 'IA' }],
+        deals: [],
+        value: 0,
+      },
+      'Glenwood HS — IA': {
+        name: 'Glenwood HS',
+        contacts: [{ id: 'c2', school: 'Glenwood HS', state: 'IA' }],
+        deals: [],
+        value: 0,
+      },
+    };
+    const merged = mergeAccountGroups(groups);
+    assert.equal(Object.keys(merged).length, 1);
+    const g = Object.values(merged)[0];
+    assert.equal(g.contacts.length, 2);
   });
 });
 

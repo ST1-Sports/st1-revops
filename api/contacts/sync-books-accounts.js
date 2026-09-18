@@ -47,6 +47,7 @@ import { accountDedupKey, normalizeAccountName } from '../_lib/accountUtils.js'
 import { booksGet }     from '../_lib/zoho-books.js'
 import { findOrCreateZohoAccount } from '../_lib/zohoAccount.js'
 import { upsertZohoRecord } from '../_lib/zohoCrm.js'
+import { schoolCoreName, looseSchoolNameMatch } from '../../src/lib/quoteCrmLink.js'
 
 const BOOKS_BASE = 'https://www.zohoapis.com/books/v3'
 
@@ -123,21 +124,12 @@ export default async function handler(req, res) {
   // "Middle School"/etc.) and compare what's left, which also catches
   // "Boone HS" vs "Boone High School" that plain substring-includes can't
   // (neither string literally contains the other).
-  const SCHOOL_TYPE_WORDS = /\b(high school|middle school|elementary school|junior high|jr high|elementary|schools?|district|academy|area|public|community|hs|ms|jhs|isd|usd|csd)\b/gi
-  const coreName = (raw) => normalizeAccountName(raw).replace(SCHOOL_TYPE_WORDS, '').replace(/\s+/g, ' ').trim()
-  // The per-contact half of coreName() gets checked against every zero-
-  // contact account, not just one — precomputed once here instead of
+  // The per-contact half of the core-name match gets checked against every
+  // zero-contact account, not just one — precomputed once here instead of
   // recomputed on every (account, contact) pair the loose-match filter
   // considers below.
-  const contactCore = new Map(allContacts.map(c => [c.id, coreName(c.companyName)]))
-  const looseNameMatch = (a, b, coreA) => {
-    const na = normalizeAccountName(a), nb = normalizeAccountName(b)
-    if (!na || !nb) return false
-    if (na === nb) return true
-    if (na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na))) return true
-    const ca = coreA ?? coreName(a), cb = coreName(b)
-    return ca.length > 2 && ca === cb
-  }
+  const contactCore = new Map(allContacts.map(c => [c.id, schoolCoreName(c.companyName)]))
+  const looseNameMatch = looseSchoolNameMatch
   // Candidates aren't limited to totally-unlinked contacts — a real duplicate
   // Account (the same school recorded under a slightly different name by an
   // earlier import, before this one existed) can leave a contact linked to

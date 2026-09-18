@@ -19,6 +19,32 @@ export function orgNamesMatch(a, b) {
   return na.length > 4 && nb.length > 4 && (na.includes(nb) || nb.includes(na));
 }
 
+// Generic org-type words that don't distinguish one school from another —
+// stripping them lets "Glenwood HS" and "Glenwood High School" resolve to the
+// same core name. Deliberately NOT used by orgNamesMatch itself (used widely
+// for search/deal-linking, where this looser a match risks pulling in an
+// unrelated school); only mergeAccountGroups below opts into it, since that's
+// the one place a same-school spelling variant needs to fold into one group
+// rather than showing as two separate Accounts.
+const SCHOOL_TYPE_WORDS = /\b(high school|middle school|elementary school|junior high|jr high|elementary|schools?|district|academy|area|public|community|hs|ms|jhs|isd|usd|csd)\b/gi;
+
+export function schoolCoreName(raw) {
+  return normalizeOrgName(raw).replace(SCHOOL_TYPE_WORDS, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * orgNamesMatch, plus a same-core-name fallback ("Glenwood HS" / "Glenwood
+ * High School"). `coreA` lets a caller checking one name against many others
+ * (e.g. one contact's company against every zero-contact account) precompute
+ * it once instead of recomputing it on every pair.
+ */
+export function looseSchoolNameMatch(a, b, coreA) {
+  if (orgNamesMatch(a, b)) return true;
+  const ca = coreA ?? schoolCoreName(a);
+  const cb = schoolCoreName(b);
+  return ca.length > 2 && ca === cb;
+}
+
 export function schoolKeyOf(c) {
   const sch = (typeof c?.school === 'string' ? c.school : c?.school?.name || '') || '(No School)';
   const st = (c?.state || '').trim();
@@ -275,7 +301,7 @@ export function mergeAccountGroups(groups) {
       const [k2, g2] = entries[j];
       if (absorbed.has(k2)) continue;
       if (!statesCompatible(schoolKeyState(keepKey), schoolKeyState(k2))) continue;
-      if (!orgNamesMatch(keep.name, g2.name) && !orgNamesMatch(cleanSchoolName(keepKey), cleanSchoolName(k2))) continue;
+      if (!looseSchoolNameMatch(keep.name, g2.name) && !looseSchoolNameMatch(cleanSchoolName(keepKey), cleanSchoolName(k2))) continue;
 
       const preferIncoming =
         (g2.name || '').length > (keep.name || '').length
