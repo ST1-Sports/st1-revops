@@ -4186,24 +4186,19 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 </div>
 <div style={{display:"flex",gap:4,flexShrink:0}}>
 <button onClick={()=>{
-// On the top-level Accounts list (no specific account open yet), "+ Add"
-// creates the ACCOUNT itself — a person can only be attached to one once
-// it exists. Everywhere else (inside a specific account, or the People
-// tab) it's still the contact quick-add, as before.
-if(leftMode==="accounts"&&!selSchool){
+// The Accounts tab's "+ Add" always creates a new account. Adding a
+// contact to an account you're already viewing has its own dedicated
+// "+ ADD CONTACT" button inside that account's detail view (which
+// pre-fills the school for you) — this one must not also branch on
+// whatever selSchool happens to be left over from earlier navigation
+// (a chat lookup, a deal link, the URL's own ?school= param), or it
+// silently opens the wrong form depending on invisible state.
 savingContactRef.current=false;
+if(leftMode==="accounts"){
 setShowAddAccount(v=>!v);
 return;
 }
-savingContactRef.current=false;
-setShowAddContact(v=>{
-const next=!v;
-if(next&&leftMode==="accounts"&&selSchool){
-const schoolName=cleanSchoolName(selSchool);
-if(schoolName&&schoolName!=="(No School)") setAddForm(f=>({...f,school:f.school||schoolName}));
-}
-return next;
-});
+setShowAddContact(v=>!v);
 }} style={{background:(showAddContact||showAddAccount)?B.orange:B.white,color:(showAddContact||showAddAccount)?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
 <button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
 </div>
