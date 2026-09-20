@@ -150,6 +150,15 @@ export function contactBelongsToSchoolKey(c, selSchool) {
   return orgNamesMatch(c.school, selName) || orgNamesMatch(c.company, selName);
 }
 
+/** Same matching rule as contactBelongsToSchoolKey, for a manually-created account shell. */
+export function accountBelongsToSchoolKey(a, selSchool) {
+  if (!a?.name) return false;
+  if (schoolKeyOf({ school: a.name, state: a.state }) === selSchool) return true;
+  const selName = cleanSchoolName(selSchool);
+  if (!statesCompatible(schoolKeyState(selSchool), a.state)) return false;
+  return looseSchoolNameMatch(a.name, selName);
+}
+
 function contactDisplayName(c) {
   return (c?.fullName || `${c?.firstName || ''} ${c?.lastName || ''}`.trim() || '').trim();
 }
@@ -330,11 +339,25 @@ export function mergeAccountGroups(groups) {
         deals: dedupeDeals([...(winner.deals || []), ...(loser.deals || [])]),
         invoiced: !!(winner.invoiced || loser.invoiced),
         value: 0,
+        // Carry a manually-created account shell's own fields through a merge —
+        // otherwise folding a same-school contact group onto it would silently
+        // drop the account record's id/URL/type.
+        accountId: winner.accountId || loser.accountId || null,
+        domain: winner.domain || loser.domain || null,
+        orgType: winner.orgType || loser.orgType || null,
+        city: winner.city || loser.city || null,
+        state: winner.state || loser.state || null,
       };
       keep.value = keep.deals
         .filter(d => !['Closed Won', 'Closed Lost'].includes(d.stage))
         .reduce((a, d) => a + (d.value || 0), 0);
+      // Both keys are now folded into `keep` — absorb the winner's key too,
+      // not just the loser's. Without this, a winner key that differs from
+      // the current outer key (the later entry had the longer name) would
+      // still get visited as its own fresh top-level entries[] iteration
+      // later, silently overwriting this merge with an unmerged copy.
       absorbed.add(loserKey);
+      absorbed.add(winnerKey);
       keepKey = winnerKey;
     }
 

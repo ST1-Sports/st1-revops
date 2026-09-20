@@ -14,6 +14,7 @@ import {
   schoolKeyOf,
   cleanSchoolName,
   contactBelongsToSchoolKey,
+  accountBelongsToSchoolKey,
   dealBelongsToSchool,
   dealBelongsToContact,
   resolveQuoteCrmTarget,
@@ -151,6 +152,7 @@ invoices: [],
 rfps: [],
 reorders: [],
 contacts: [],
+accounts: [],
 sequences: [],
 competeIntel: {},
 battlecards: {},
@@ -416,6 +418,7 @@ suppressedDealIds,
 suppressedDealZohoIds,
 deals: filterLiveDeals(mergeById(base.deals, server.deals), { suppressedDealIds, suppressedDealZohoIds }),
 rfps:         mergeById(base.rfps,         server.rfps),
+accounts:     mergeById(base.accounts,     server.accounts),
 invoices:     mergeById(base.invoices,     server.invoices),
 reorders:     mergeById(base.reorders,     server.reorders),
 brandAssets:  mergeById(base.brandAssets,  server.brandAssets),
@@ -444,6 +447,7 @@ return {...SEED,...p,
 deals:        filterLiveDeals(sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]), p),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
+accounts:     Array.isArray(p.accounts)     ? p.accounts     : [],
 reorders:     sanitizeLookupFields(Array.isArray(p.reorders) ? p.reorders : [], ["school","contact"]),
 contacts:     sanitizeLookupFields(Array.isArray(p.contacts) ? p.contacts : [], ["school","title"]),
 sequences:    Array.isArray(p.sequences)    ? p.sequences    : [],
@@ -785,6 +789,9 @@ case "DEL_CONTACT_LIST":    return {...prev, contactLists:(prev.contactLists||[]
 case "ADD_REP":             return {...prev, reps:[...(prev.reps||[]),payload]};
 case "UPDATE_REP":          return {...prev, reps:(prev.reps||[]).map(r=>r.id===payload.id?{...r,...payload}:r)};
 case "DEL_REP":             return {...prev, reps:(prev.reps||[]).filter(r=>r.id!==payload)};
+case "ADD_ACCOUNT":         return {...prev, accounts:[payload,...(prev.accounts||[])]};
+case "UPDATE_ACCOUNT":      return {...prev, accounts:(prev.accounts||[]).map(a=>a.id===payload.id?{...a,...payload}:a)};
+case "DELETE_ACCOUNT":      return {...prev, accounts:(prev.accounts||[]).filter(a=>a.id!==payload)};
 case "SET_APP_USER":        {const existingAu=(prev.appUsers||[]).find(u=>u.repId===payload.repId);return {...prev, appUsers:[...(prev.appUsers||[]).filter(u=>u.repId!==payload.repId),{...existingAu,...payload}]};}
 case "DEL_APP_USER":        return {...prev, appUsers:(prev.appUsers||[]).filter(u=>u.repId!==payload)};
 case "ADD_SEQUENCE":        return {...prev, sequences:[payload,...(prev.sequences||[])]};
@@ -3744,6 +3751,8 @@ const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
 const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
+const [showAddAccount,setShowAddAccount]=useState(false);
+const [addAccountForm,setAddAccountForm]=useState({name:"",domain:"",orgType:"school"});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
 const [crmPage,setCrmPage]=useState(1);
@@ -4176,6 +4185,14 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 </div>
 <div style={{display:"flex",gap:4,flexShrink:0}}>
 <button onClick={()=>{
+// On the top-level Accounts list (no specific account open yet), "+ Add"
+// creates the ACCOUNT itself — a person can only be attached to one once
+// it exists. Everywhere else (inside a specific account, or the People
+// tab) it's still the contact quick-add, as before.
+if(leftMode==="accounts"&&!selSchool){
+setShowAddAccount(v=>!v);
+return;
+}
 savingContactRef.current=false;
 setShowAddContact(v=>{
 const next=!v;
@@ -4185,7 +4202,7 @@ if(schoolName&&schoolName!=="(No School)") setAddForm(f=>({...f,school:f.school|
 }
 return next;
 });
-}} style={{background:showAddContact?B.orange:B.white,color:showAddContact?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
+}} style={{background:(showAddContact||showAddAccount)?B.orange:B.white,color:(showAddContact||showAddAccount)?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
 <button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
 </div>
 </div>
@@ -4309,6 +4326,31 @@ return next;
 </div>
 )}
 </div>
+{showAddAccount&&(
+<div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+<div style={{display:"grid",gridTemplateColumns:"1fr",gap:5,marginBottom:6}}>
+<input value={addAccountForm.name} onChange={e=>setAddAccountForm(f=>({...f,name:e.target.value}))} placeholder="Account name *" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addAccountForm.domain} onChange={e=>setAddAccountForm(f=>({...f,domain:e.target.value}))} placeholder="Website / URL" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<select value={addAccountForm.orgType} onChange={e=>setAddAccountForm(f=>({...f,orgType:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}>
+<option value="school">School / District</option>
+<option value="college">College / University</option>
+<option value="">Organization</option>
+</select>
+</div>
+<div style={{display:"flex",gap:5}}>
+<OBtn sm onClick={()=>{
+if(!addAccountForm.name.trim()) return;
+const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
+dispatch("ADD_ACCOUNT",a);
+setShowAddAccount(false);
+setAddAccountForm({name:"",domain:"",orgType:"school"});
+setSelSchool(schoolKeyOf({school:a.name,state:""}));
+toast(`${a.name} added — add a contact to attach someone to it`,"success");
+}} disabled={!addAccountForm.name.trim()}>SAVE</OBtn>
+<GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",domain:"",orgType:"school"});}}>Cancel</GBtn>
+</div>
+</div>
+)}
 {showAddContact&&(
 <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
@@ -4373,6 +4415,16 @@ const invoices=s.invoices||[];
 const fuzzyMatch=orgNamesMatch;
 const isInvoiced=(school)=>invoices.some(inv=>fuzzyMatch(school,inv.customer));
 const groups={};
+// Manually-created account shells (Settings → Accounts → +Add) exist even with
+// zero contacts yet — seed them first so an exact-name-matching contact just
+// aggregates into the same group; a near-match spelling gets folded in below
+// by mergeAccountGroups, which now carries these fields through a merge too.
+(s.accounts||[]).forEach(a=>{
+if(!a?.name) return;
+const key=schoolKeyOf({school:a.name,state:a.state});
+if(sq&&!key.toLowerCase().includes(sq)) return;
+if(!groups[key]) groups[key]={name:a.name,contacts:[],deals:[],value:0,invoiced:isInvoiced(a.name),accountId:a.id,domain:a.domain||"",orgType:a.orgType||"",city:a.city||"",state:a.state||""};
+});
 contacts.filter(c=>!c.deadStatus).forEach(c=>{
 const key=schoolKeyOf(c);
 const displayName=cleanSchoolName(key);
@@ -4444,14 +4496,19 @@ const allDeals=schoolDeals;
 const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
-const schoolCleanName=primaryC?.school||cleanSchoolName(selSchool);
-const schoolOrgType=primaryC?.orgType||"";
+// A manually-created account (Settings → Accounts → +Add) has no contact to
+// read these from yet — fall back to its own record so Name/Type/URL show
+// up right away instead of blank, without changing anything for an account
+// that already has a contact carrying this data.
+const accountRecord=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool))||null;
+const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(selSchool);
+const schoolOrgType=primaryC?.orgType||accountRecord?.orgType||"";
 const schoolClass=primaryC?.schoolClass||"";
 const numAthletes=primaryC?.numAthletes||"";
 const numSports=primaryC?.numSports||"";
-const state=primaryC?.state||"";
-const city=primaryC?.city||"";
-const website=primaryC?.website||"";
+const state=primaryC?.state||accountRecord?.state||"";
+const city=primaryC?.city||accountRecord?.city||"";
+const website=primaryC?.website||accountRecord?.domain||"";
 const renameAccount=async()=>{
 const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
@@ -4468,6 +4525,7 @@ const isLead=(c.id||"").startsWith("zoho_l_");
 crmUpdate(isLead?"Leads":"Contacts",zid,isLead?{Company:newName}:{Account_Name:{id:d.accountId}});
 }
 });
+if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,name:newName});
 setSelSchool(state?`${newName} — ${state}`:newName);
 setEditingAccountName(false);
 toast(`Renamed to ${newName}${d.accountCreated?" (new Zoho Account created)":""}`,"success");
@@ -4485,6 +4543,7 @@ if(!d.website){toast("Couldn't confidently find an official website","info");set
 // app-state pipeline as school/city/state) so it's visible to the whole
 // team on next load — not just this browser tab.
 schoolContacts.forEach(c=>dispatch("UPDATE_CONTACT",{id:c.id,website:d.website}));
+if(accountRecord) dispatch("UPDATE_ACCOUNT",{id:accountRecord.id,domain:d.website});
 try{await fetch("/api/crm/account-name",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:schoolCleanName,city,state,website:d.website})});}catch{}
 toast(`Found ${d.website} — saved to Zoho and shared account record`,"success");
 }catch(e){toast(`Enrich error: ${e.message}`,"error");}

@@ -8,6 +8,7 @@ import {
   dealBelongsToSchool,
   dealBelongsToContact,
   contactBelongsToSchoolKey,
+  accountBelongsToSchoolKey,
   buildLocalQuoteDeal,
   findExistingQuoteDeal,
   mergeAccountGroups,
@@ -229,6 +230,54 @@ describe('mergeAccountGroups + attachOpenDealsToAccountGroups', () => {
     assert.equal(Object.keys(merged).length, 1);
     const g = Object.values(merged)[0];
     assert.equal(g.contacts.length, 2);
+  });
+
+  it('carries a manually-created account shell\'s id/domain/orgType through a merge with a contact-derived group', () => {
+    const groups = {
+      'Riverside Academy — CO': {
+        name: 'Riverside Academy',
+        contacts: [],
+        deals: [],
+        value: 0,
+        invoiced: false,
+        accountId: 'acct_1',
+        domain: 'riverside.org',
+        orgType: 'school',
+        city: 'Denver',
+        state: 'CO',
+      },
+      'Riverside Academy School — CO': {
+        name: 'Riverside Academy School',
+        contacts: [{ id: 'c1', school: 'Riverside Academy School', state: 'CO' }],
+        deals: [],
+        value: 0,
+        invoiced: false,
+      },
+    };
+    const merged = mergeAccountGroups(groups);
+    assert.equal(Object.keys(merged).length, 1);
+    const g = Object.values(merged)[0];
+    assert.equal(g.contacts.length, 1);
+    assert.equal(g.accountId, 'acct_1');
+    assert.equal(g.domain, 'riverside.org');
+    assert.equal(g.orgType, 'school');
+  });
+});
+
+describe('accountBelongsToSchoolKey', () => {
+  it('matches an account shell to its own school key', () => {
+    const account = { id: 'acct_1', name: 'Riverside Academy', state: 'CO' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Riverside Academy — CO'), true);
+  });
+
+  it('matches loosely on a spelling variant, same as looseSchoolNameMatch', () => {
+    const account = { id: 'acct_1', name: 'Glenwood HS', state: 'IA' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Glenwood High School — IA'), true);
+  });
+
+  it('does not match a different account in a different state', () => {
+    const account = { id: 'acct_1', name: 'Lincoln High School', state: 'TX' };
+    assert.equal(accountBelongsToSchoolKey(account, 'Lincoln High School — IA'), false);
   });
 });
 
