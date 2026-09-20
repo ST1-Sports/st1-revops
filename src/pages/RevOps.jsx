@@ -1688,6 +1688,7 @@ return <button key={r} type="button" onClick={()=>onChange(r)} style={{backgroun
 })}
 </div>;
 });
+const isCoachRole=(title)=>/coach/i.test(title||"");
 function ListPager({page,setPage,total,pageSize=25,noun="items",compact=false}){
 const pages=Math.max(1,Math.ceil((total||0)/pageSize));
 const safe=Math.min(Math.max(1,page),pages);
@@ -3750,7 +3751,7 @@ const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
 const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
-const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
+const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
 const [showAddAccount,setShowAddAccount]=useState(false);
 const [addAccountForm,setAddAccountForm]=useState({name:"",domain:"",orgType:"school"});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
@@ -4190,6 +4191,7 @@ if(fromSel&&cleanSchoolName(fromSel)!=="(No School)") setSelSchool(fromSel);
 // it exists. Everywhere else (inside a specific account, or the People
 // tab) it's still the contact quick-add, as before.
 if(leftMode==="accounts"&&!selSchool){
+savingContactRef.current=false;
 setShowAddAccount(v=>!v);
 return;
 }
@@ -4328,7 +4330,8 @@ return next;
 </div>
 {showAddAccount&&(
 <div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
-<div style={{display:"grid",gridTemplateColumns:"1fr",gap:5,marginBottom:6}}>
+<Lbl c={B.orange} s={{marginBottom:6}}>Account</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr",gap:5,marginBottom:10}}>
 <input value={addAccountForm.name} onChange={e=>setAddAccountForm(f=>({...f,name:e.target.value}))} placeholder="Account name *" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addAccountForm.domain} onChange={e=>setAddAccountForm(f=>({...f,domain:e.target.value}))} placeholder="Website / URL" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <select value={addAccountForm.orgType} onChange={e=>setAddAccountForm(f=>({...f,orgType:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}>
@@ -4337,17 +4340,48 @@ return next;
 <option value="">Organization</option>
 </select>
 </div>
+<div style={{borderTop:`1px solid ${B.border}`,margin:"2px 0 10px"}}/>
+<Lbl c={B.muted} s={{marginBottom:6}}>Contact (optional)</Lbl>
+<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
+<input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<div style={{gridColumn:"1/-1"}}>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
+</div>
+{isCoachRole(addForm.title)&&(
+<select value={addForm.sport} onChange={e=>setAddForm(f=>({...f,sport:e.target.value}))} style={{gridColumn:"1/-1",width:"100%",boxSizing:"border-box",background:B.white,border:`1.5px solid ${addForm.sport?B.purple:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:addForm.sport?B.purple:B.muted}}>
+<option value="">— Sport (required for a coach) —</option>
+{COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+</select>
+)}
+</div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
-if(!addAccountForm.name.trim()) return;
+if(!addAccountForm.name.trim()||savingContactRef.current) return;
+if(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport) return;
+savingContactRef.current=true;
 const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
 dispatch("ADD_ACCOUNT",a);
+const key=schoolKeyOf({school:a.name,state:""});
 setShowAddAccount(false);
 setAddAccountForm({name:"",domain:"",orgType:"school"});
-setSelSchool(schoolKeyOf({school:a.name,state:""}));
+setSelSchool(key);
+if(addForm.lastName){
+const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:a.name,accountId:a.id,email:addForm.email,phone:addForm.phone,title:addForm.title,sport:addForm.sport,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+dispatch("ADD_CONTACTS",[c]);
+setSelId(c.id);
+fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:a.name,Designation:addForm.title}]}})})
+.then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
+toast(`${a.name} added with ${c.fullName}`,"success");
+} else {
 toast(`${a.name} added — add a contact to attach someone to it`,"success");
-}} disabled={!addAccountForm.name.trim()}>SAVE</OBtn>
-<GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",domain:"",orgType:"school"});}}>Cancel</GBtn>
+}
+setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
+}} disabled={!addAccountForm.name.trim()||(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport)}>SAVE</OBtn>
+<GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",domain:"",orgType:"school"});setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
 </div>
 </div>
 )}
@@ -4360,24 +4394,31 @@ toast(`${a.name} added — add a contact to attach someone to it`,"success");
 <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <div style={{gridColumn:"1/-1"}}>
-<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
 </div>
+{isCoachRole(addForm.title)&&(
+<select value={addForm.sport} onChange={e=>setAddForm(f=>({...f,sport:e.target.value}))} style={{gridColumn:"1/-1",width:"100%",boxSizing:"border-box",background:B.white,border:`1.5px solid ${addForm.sport?B.purple:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:addForm.sport?B.purple:B.muted}}>
+<option value="">— Sport (required for a coach) —</option>
+{COMMON_SPORTS.map(sp=><option key={sp}>{sp}</option>)}
+</select>
+)}
 </div>
 <div style={{display:"flex",gap:5}}>
 <OBtn sm onClick={()=>{
 if(!addForm.lastName||savingContactRef.current) return;
+if(isCoachRole(addForm.title)&&!addForm.sport) return;
 savingContactRef.current=true;
-const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
+const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,sport:addForm.sport,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
 setSelId(c.id);
 setShowAddContact(false);
-setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});
+setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
 toast(`${c.fullName} added`,"success");
 fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school,Designation:addForm.title}]}})})
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
-}} disabled={!addForm.lastName}>SAVE</OBtn>
-<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:""});}}>Cancel</GBtn>
+}} disabled={!addForm.lastName||(isCoachRole(addForm.title)&&!addForm.sport)}>SAVE</OBtn>
+<GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
 </div>
 </div>
 )}
