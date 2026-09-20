@@ -174,8 +174,11 @@ export function dealBelongsToContact(deal, contact) {
   return orgNamesMatch(dealSchool, contact.school) || orgNamesMatch(deal.company, contact.school);
 }
 
-export function dealBelongsToSchool(deal, schoolContacts, schoolCleanName) {
+export function dealBelongsToSchool(deal, schoolContacts, schoolCleanName, accountId) {
   if (!deal) return false;
+  // A deal tagged with the real Account id is authoritative — no fuzzy name
+  // matching needed, and it stays correct even if the account gets renamed.
+  if (accountId && deal.accountId) return deal.accountId === accountId;
   const contacts = schoolContacts || [];
   if (contacts.some(c => c.id && c.id === deal.contactId)) return true;
   if (contacts.some(c => {

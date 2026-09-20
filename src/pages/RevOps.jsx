@@ -3753,6 +3753,7 @@ const [showAddContact,setShowAddContact]=useState(false);
 const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
 const [showAddAccount,setShowAddAccount]=useState(false);
+const [accountTab,setAccountTab]=useState("overview");
 const [addAccountForm,setAddAccountForm]=useState({name:"",domain:"",orgType:"school"});
 const [leftMode,setLeftMode]=useState(()=>new URLSearchParams(window.location.search).get("c")?"contacts":"accounts");
 const [selSchool,setSelSchool]=useState(()=>new URLSearchParams(window.location.search).get("school"));
@@ -3998,7 +3999,7 @@ const current=`${location.pathname}${location.search}`;
 if(current!==dest) navigate(dest, {replace:!selId && !selSchool});
 },[selId, selSchool, leftMode]);
 useEffect(()=>{ setCrmPage(1); },[search, filter, leftMode]);
-useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); },[selSchool]);
+useEffect(()=>{ setShowAccountDeal(false); setAccountPdfDraft(null); setAccountTab("overview"); },[selSchool]);
 const filtered=useMemo(()=>{
 const q=search.toLowerCase();
 const po={order:0,deal:1,quote:1,lead:2};
@@ -4524,19 +4525,23 @@ linkedContact={ttContact}
 const schoolContacts=contacts.filter(c=>contactBelongsToSchoolKey(c,selSchool));
 const coverage=computeAccountCoverage(schoolContacts);
 const hasPositiveIntent=schoolContacts.some(c=>(c.id||"").startsWith("zoho_c_")||(c.score||0)>=CONTACT_INTENT_SCORE||["replied","interested"].includes(c.outreachStatus));
+// A manually-created account (Settings → Accounts → +Add) has no contact to
+// read these from yet — fall back to its own record so Name/Type/URL show
+// up right away instead of blank, without changing anything for an account
+// that already has a contact carrying this data.
+const accountRecord=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool))||null;
 const schoolCleanNameForDeals=schoolContacts[0]?.school||cleanSchoolName(selSchool);
-const schoolDeals=deals.filter(d=>dealBelongsToSchool(d,schoolContacts,schoolCleanNameForDeals));
+// A deal created from this page onward carries the real accountId (see
+// "+ ADD DEAL"/"SAVE DEAL FROM PDF" below) so it's tied to this account for
+// good, not re-derived by fuzzy name/contact matching every render — that
+// matching still runs as a fallback for deals that predate this.
+const schoolDeals=deals.filter(d=>dealBelongsToSchool(d,schoolContacts,schoolCleanNameForDeals,accountRecord?.id));
 const openDeals=schoolDeals.filter(d=>!["Closed Won","Closed Lost"].includes(d.stage));
 const closedWon=schoolDeals.filter(d=>d.stage==="Closed Won");
 const allDeals=schoolDeals;
 const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
-// A manually-created account (Settings → Accounts → +Add) has no contact to
-// read these from yet — fall back to its own record so Name/Type/URL show
-// up right away instead of blank, without changing anything for an account
-// that already has a contact carrying this data.
-const accountRecord=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool))||null;
 const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(selSchool);
 const schoolOrgType=primaryC?.orgType||accountRecord?.orgType||"";
 const schoolClass=primaryC?.schoolClass||"";
@@ -4545,6 +4550,16 @@ const numSports=primaryC?.numSports||"";
 const state=primaryC?.state||accountRecord?.state||"";
 const city=primaryC?.city||accountRecord?.city||"";
 const website=primaryC?.website||accountRecord?.domain||"";
+// Most existing accounts only exist as a grouping of contacts by school
+// name — there's no Account row to tag a new deal to yet. Create one on
+// first use instead of leaving new deals to fall back on fuzzy name
+// matching forever.
+const ensureAccountRecord=()=>{
+if(accountRecord) return accountRecord.id;
+const a={id:mkId(),name:schoolCleanName,domain:website||"",orgType:schoolOrgType||"school",city,state,createdAt:Date.now()};
+dispatch("ADD_ACCOUNT",a);
+return a.id;
+};
 const renameAccount=async()=>{
 const newName=accountNameInput.trim();
 if(!newName||newName===schoolCleanName){setEditingAccountName(false);return;}
@@ -4720,7 +4735,7 @@ setAccountPdfBusy(false);
 <OBtn sm onClick={()=>{
 if(!accountDealForm.name.trim()){toast("Deal name required","error");return;}
 const contact=schoolContacts.find(c=>c.id===accountDealForm.contactId);
-const d={id:mkId(),name:accountDealForm.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value:Number(accountDealForm.value||0),stage:accountDealForm.stage||"Quoted",product:accountDealForm.product||"",notes:accountDealForm.notes||"",createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"manual"};
+const d={id:mkId(),name:accountDealForm.name.trim(),school:schoolCleanName,accountId:ensureAccountRecord(),city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value:Number(accountDealForm.value||0),stage:accountDealForm.stage||"Quoted",product:accountDealForm.product||"",notes:accountDealForm.notes||"",createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"manual"};
 dispatch("ADD_DEAL",d);
 dispatch("LOG",{msg:`${cu?.name||"Someone"} added deal on ${schoolCleanName}: ${d.name}`});
 pushDealToZoho({dealName:d.name,amount:d.value,stage:d.stage,accountName:schoolCleanName,accountCity:city,accountState:state,description:d.notes}).then(dd=>{if(dd.dealId)dispatch("UPDATE_DEAL",{id:d.id,zohoId:dd.dealId});});
@@ -4753,7 +4768,7 @@ if(!accountPdfDraft.name.trim()){toast("Deal name required","error");return;}
 const contact=schoolContacts.find(c=>c.id===accountPdfDraft.contactId);
 const items=(accountPdfDraft.lineItems||[]).map(it=>({id:mkId(),name:it.name,qty:it.qty||1,rate:it.rate||0}));
 const value=Number(accountPdfDraft.value||0);
-const d={id:mkId(),name:accountPdfDraft.name.trim(),school:schoolCleanName,city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value,stage:"Quoted",product:items[0]?.name||"",notes:accountPdfDraft.notes||`Uploaded PDF: ${accountPdfDraft.filename}`,createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"uploaded-quote",quoteNumber:accountPdfDraft.quoteNumber||"",quoteItems:items,quoteAmount:value,quotePdfName:accountPdfDraft.filename,hasUploadedPdf:true};
+const d={id:mkId(),name:accountPdfDraft.name.trim(),school:schoolCleanName,accountId:ensureAccountRecord(),city,state,contact:contact?cName(contact):"",contactId:contact?.id||"",value,stage:"Quoted",product:items[0]?.name||"",notes:accountPdfDraft.notes||`Uploaded PDF: ${accountPdfDraft.filename}`,createdAt:today(),lastTouch:Date.now(),priority:"warm",zoho_synced:false,source:"uploaded-quote",quoteNumber:accountPdfDraft.quoteNumber||"",quoteItems:items,quoteAmount:value,quotePdfName:accountPdfDraft.filename,hasUploadedPdf:true};
 dispatch("ADD_DEAL",d);
 dispatch("LOG",{msg:`${cu?.name||"Someone"} uploaded quote PDF on ${schoolCleanName}: ${d.name}`});
 try{
@@ -4776,6 +4791,19 @@ toast("Quote PDF added as a deal","success");
 <KCard l="Open Deals" v={fmt$K(totalOpen)} c={B.blue} sub={`${openDeals.length} deal${openDeals.length===1?"":"s"}`}/>
 <KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
 </div>
+{/* ── ACCOUNT SUB-NAV ── */}
+<div style={{display:"flex",gap:2,marginTop:14,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+{[
+["overview","OVERVIEW"],
+["contacts",`CONTACTS (${schoolContacts.length})`],
+["deals",`DEALS (${allDeals.length})`],
+["invoices",`INVOICES (${schoolInvoices.length})`],
+["history","HISTORY"],
+].map(([id,label])=>(
+<button key={id} onClick={()=>setAccountTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${accountTab===id?B.orange:"transparent"}`,color:accountTab===id?B.orange:B.muted,padding:"8px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{label}</button>
+))}
+</div>
+{accountTab==="overview"&&(<>
 {/* ── ACCOUNT INFO ── */}
 <SectionHdr>ACCOUNT INFO</SectionHdr>
 <div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
@@ -4843,6 +4871,23 @@ return(
 </div>
 </>
 )}
+{/* ── EXPANSION OPPORTUNITIES ── */}
+{expandOps.length>0&&(<>
+<SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
+<div style={{display:"flex",flexDirection:"column",gap:8}}>
+{expandOps.map((op,i)=>(
+<div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
+<span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+<div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
+</div>
+</div>
+))}
+</div>
+</>)}
+</>)}
+{accountTab==="contacts"&&(<>
 {/* ── CONTACTS ── */}
 <SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
 {schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
@@ -4865,6 +4910,39 @@ return(
 );
 })}
 </div>
+{/* ── CONTACTS FROM BOOKS ── */}
+{schoolInvoices.length>0&&schoolInvoices[0].customerId&&(()=>{
+const booksCustomerId=schoolInvoices[0].customerId;
+const bContactsRaw=booksContactsByCustomer[booksCustomerId];
+// Books' own contact_persons for this customer often just repeats someone
+// already listed above under CONTACTS/COACHES — filter those out so the
+// same real person doesn't visibly show up twice.
+const bContacts=bContactsRaw&&bContactsRaw.filter(bc=>!schoolContacts.some(c=>
+(c.email&&bc.email&&c.email.toLowerCase()===bc.email.toLowerCase())
+||cName(c).toLowerCase()===(bc.name||"").trim().toLowerCase()
+));
+return(<>
+<SectionHdr sub={bContacts?`${bContacts.length} contact${bContacts.length!==1?"s":""}`:undefined}>CONTACTS (FROM BOOKS)</SectionHdr>
+{!bContactsRaw?(
+<button onClick={()=>loadBooksContacts(booksCustomerId)} disabled={loadingBooksContacts===booksCustomerId} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>{loadingBooksContacts===booksCustomerId?"LOADING…":"LOAD CONTACTS FROM BOOKS"}</button>
+):bContactsRaw.length===0?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contact persons on file in Books for this customer.</div>
+):bContacts.length===0?(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>Everyone Books has on file for this customer is already listed above.</div>
+):(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+{bContacts.map((c,i)=>(
+<div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.name}{c.isPrimary&&<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange}}>PRIMARY</span>}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{c.email}{c.phone?` · ${c.phone}`:""}</div>
+</div>
+))}
+</div>
+)}
+</>);
+})()}
+</>)}
+{accountTab==="deals"&&(<>
 {/* ── ALL DEALS ── */}
 <SectionHdr sub={allDeals.length?`${allDeals.length} total · ${fmt$K(allDeals.reduce((a,d)=>a+(d.value||0),0))} pipeline`:"none yet"}>DEALS</SectionHdr>
 {allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
@@ -4883,49 +4961,6 @@ return(
 </div>
 ))}
 </div>
-{/* ── INVOICES & PAYMENTS ── */}
-{schoolInvoices.length>0&&(<>
-<SectionHdr sub={`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`}>INVOICES & PAYMENTS</SectionHdr>
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-{schoolInvoices.map(inv=>(
-<div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
-</div>
-<div style={{display:"flex",gap:12,alignItems:"center"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
-<div style={{textAlign:"right"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
-{inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
-</div>
-</div>
-</div>
-))}
-</div>
-</>)}
-{/* ── CONTACTS FROM BOOKS ── */}
-{schoolInvoices.length>0&&schoolInvoices[0].customerId&&(()=>{
-const booksCustomerId=schoolInvoices[0].customerId;
-const bContacts=booksContactsByCustomer[booksCustomerId];
-return(<>
-<SectionHdr sub={bContacts?`${bContacts.length} contact${bContacts.length!==1?"s":""}`:undefined}>CONTACTS (FROM BOOKS)</SectionHdr>
-{!bContacts?(
-<button onClick={()=>loadBooksContacts(booksCustomerId)} disabled={loadingBooksContacts===booksCustomerId} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 14px",fontSize:10,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer",letterSpacing:.3}}>{loadingBooksContacts===booksCustomerId?"LOADING…":"LOAD CONTACTS FROM BOOKS"}</button>
-):bContacts.length===0?(
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contact persons on file in Books for this customer.</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:5}}>
-{bContacts.map((c,i)=>(
-<div key={i} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{c.name}{c.isPrimary&&<span style={{marginLeft:6,fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange}}>PRIMARY</span>}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,textAlign:"right"}}>{c.email}{c.phone?` · ${c.phone}`:""}</div>
-</div>
-))}
-</div>
-)}
-</>);
-})()}
 {/* ── ITEMS PURCHASED ── */}
 {purchasedItems.length>0&&(<>
 <SectionHdr sub={`${allItems.length} line items across ${schoolInvoices.length} invoice${schoolInvoices.length!==1?"s":""}`}>ITEMS PURCHASED</SectionHdr>
@@ -4963,21 +4998,44 @@ return(<>
 ))}
 </div>
 </>)}
-{/* ── EXPANSION OPPORTUNITIES ── */}
-{expandOps.length>0&&(<>
-<SectionHdr>EXPANSION OPPORTUNITIES</SectionHdr>
-<div style={{display:"flex",flexDirection:"column",gap:8}}>
-{expandOps.map((op,i)=>(
-<div key={i} style={{background:`${B.orange}05`,border:`1px solid ${B.orange}20`,borderLeft:`3px solid ${B.orange}`,borderRadius:5,padding:"10px 14px",display:"flex",gap:12,alignItems:"flex-start"}}>
-<span style={{fontSize:16,flexShrink:0}}>{op.icon}</span>
+</>)}
+{accountTab==="invoices"&&(<>
+{/* ── INVOICES & PAYMENTS ── */}
+<SectionHdr sub={schoolInvoices.length?`${schoolInvoices.length} invoices · ${fmt$K(totalInvoiced)} total`:"none yet"}>INVOICES & PAYMENTS</SectionHdr>
+{schoolInvoices.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No invoices on file yet.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+{schoolInvoices.map(inv=>(
+<div key={inv.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,color:B.text,marginBottom:2}}>{op.title}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,lineHeight:1.4}}>{op.desc}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>#{inv.number||inv.id}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{inv.date||""}</div>
+</div>
+<div style={{display:"flex",gap:12,alignItems:"center"}}>
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:inv.status==="paid"?B.green:inv.status==="overdue"?B.red:B.orange}}>{(inv.status||"").toUpperCase()}</span>
+<div style={{textAlign:"right"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{fmt$(inv.total||0)}</div>
+{inv.balance>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red}}>Owed: {fmt$(inv.balance)}</div>}
+</div>
 </div>
 </div>
 ))}
 </div>
 </>)}
+{accountTab==="history"&&(()=>{
+const schoolHistory=(s.activity||[]).filter(a=>(a.msg||"").includes(schoolCleanName));
+return(<>
+<SectionHdr sub={schoolHistory.length?`${schoolHistory.length} entries`:"none yet"}>HISTORY</SectionHdr>
+{schoolHistory.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No activity logged for this account yet.</div>}
+<div style={{display:"flex",flexDirection:"column",gap:6}}>
+{schoolHistory.map(a=>(
+<div key={a.id} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"9px 13px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{a.msg}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginTop:2}}>{new Date(a.ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</div>
+</div>
+))}
+</div>
+</>);
+})()}
 </div>
 </div>
 );

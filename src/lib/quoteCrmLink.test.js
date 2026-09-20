@@ -118,6 +118,21 @@ describe('dealBelongsToSchool / contactBelongsToSchoolKey', () => {
     assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School'), true);
   });
 
+  it('trusts a matching accountId over fuzzy name/contact matching', () => {
+    const deal = { id: 'd5', school: 'Some Other Name Entirely', contactId: 'nobody', accountId: 'acct_1' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), true);
+  });
+
+  it('does not show a deal tagged to a different account, even if the name would otherwise fuzzy-match', () => {
+    const deal = { id: 'd6', school: 'Hudson High School', accountId: 'acct_other' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), false);
+  });
+
+  it('falls back to fuzzy matching for a deal that predates account tagging', () => {
+    const deal = { id: 'd7', school: 'Hudson', contact: '' };
+    assert.equal(dealBelongsToSchool(deal, [hudsonCoach], 'Hudson High School', 'acct_1'), true);
+  });
+
   it('puts a school-only Hudson deal on every Hudson coach', () => {
     const deal = { id: 'd3', school: 'Hudson', contact: '', contactId: '', stage: 'Quoted' };
     assert.equal(dealBelongsToContact(deal, hudsonCoach), true);
