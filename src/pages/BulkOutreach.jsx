@@ -874,7 +874,14 @@ Return JSON exactly as:
     });
     leadsRef.current = updatedLeads;
     setLeads(updatedLeads);
-    leadsDirtyRef.current = true;
+    // Deliberately NOT marking leadsDirtyRef here — this already persists
+    // itself, reliably, via the small touchUpdates PATCH above. The generic
+    // autosave below keys off that same flag to decide whether it needs to
+    // re-include the full leads array; on a large list that means another,
+    // much bigger, unnecessary (and equally body-size-limited) write 900ms
+    // later, built from whatever leads this render closure had at the time —
+    // which can race the very update just made here and overwrite it right
+    // back to unsent. Nothing else here needs leadsDirtyRef set.
 
     let saved = false;
     for (let attempt = 0; attempt < 3 && !saved; attempt++) {
@@ -1095,12 +1102,23 @@ Return JSON exactly as:
     if (!bounces.length) return;
     const bouncedAt = new Date().toISOString();
     const byLeadId = new Map(bounces.map(b => [b.leadId, b]));
-    const updatedLeads = leads.map(l => {
+    // leadsRef.current, not the leads closure — syncWithBradInbox calls this
+    // right after markTouchesSent in the same run. leads here is whatever
+    // this render captured when syncWithBradInbox started, which predates
+    // markTouchesSent's setLeads — building off it would silently wipe out
+    // the sentAt markers that call just applied (the count visibly bumping
+    // back up right after dropping was exactly this: sent-matching dropped
+    // it, then this clobbered that state with the stale pre-sent-marking
+    // leads, only the bounce flags added on top).
+    const updatedLeads = leadsRef.current.map(l => {
       const b = byLeadId.get(l.id);
       if (!b) return l;
       return { ...l, bounced: true, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) };
     });
+    leadsRef.current = updatedLeads;
     setLeads(updatedLeads);
+    // Not marking leadsDirtyRef — see markTouchesSent; this already
+    // persists itself below via the small bounceUpdates PATCH.
     // bounceUpdates, not the full leads array — see markTouchesSent for why
     // re-uploading every lead on every save silently fails at this list's
     // scale once it's carried enough sent copy to cross the body-size limit.
