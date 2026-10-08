@@ -9,12 +9,19 @@
  *
  * Double-send prevention: each batch is claimed (removed from scheduledBatches
  * and written to DB) before any email is sent. A function timeout mid-send will
- * not re-queue the batch on the next cron tick.
+ * not re-queue the batch on the next cron tick. Whatever's already been sent in
+ * the batch — enrollments advanced + sentBatches record — is persisted as soon
+ * as sending stops for ANY reason (end of batch, end of business day, or the
+ * time-budget guard below), so an interrupted batch never gets its already-sent
+ * contacts re-batched and re-emailed on the next schedule pass; only the
+ * un-sent remainder of that batch is still pending.
  *
  * Pacing: 30s between each email. All due batches across all campaigns are
  * processed in one run (not just one per campaign). A time-budget guard stops
  * gracefully 45s before the 300s Vercel timeout so no run is killed mid-send.
- * The 15-minute cron picks up remaining batches on the next tick.
+ * The 15-minute cron picks up other, not-yet-started due batches on the next
+ * tick; a batch that was stopped partway through needs its schedule reapplied
+ * to queue the remaining contacts under a new batch key.
  */
 
 import { prisma } from '../_lib/prisma.js';
@@ -255,7 +262,7 @@ export default async function handler(req, res) {
           if (timeRemaining() < SEND_PAUSE_MS + 10_000) {
             stoppedReason = "time-budget";
             console.log(`[cron] Time budget exhausted — stopping after ${ei} of ${contactIds.length} contact(s) in batch ${batchKey}`);
-            break outer;
+            break;
           }
 
           const enroll = updEnr.find(e => e.contactId === contactId);
@@ -403,7 +410,7 @@ export default async function handler(req, res) {
 
         console.log(`[cron] Batch ${batchKey} done — sent=${sent} failed=${failed} batchSize=${contactIds.length}`);
 
-        if (stoppedReason === "end-of-day") break outer;
+        if (stoppedReason === "end-of-day" || stoppedReason === "time-budget") break outer;
       }
     }
 
