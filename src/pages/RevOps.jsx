@@ -1586,10 +1586,48 @@ return(
 );
 }
 function Login({dispatch, reps=[], appUsers=[]}) {
+const [mode,setMode]=useState("email"); // "email" (default) or "pin" (fallback)
 const [sel,setSel]=useState(null);
 const [pin,setPin]=useState("");
 const [shake,setShake]=useState(false);
 const [loading,setLoading]=useState(false);
+// ── Email-code login ──────────────────────────────────────────────────────
+const [email,setEmail]=useState("");
+const [code,setCode]=useState("");
+const [codeSent,setCodeSent]=useState(false);
+const [emailBusy,setEmailBusy]=useState(false);
+const [emailError,setEmailError]=useState("");
+const sendCode=async()=>{
+const e=email.trim().toLowerCase();
+if(!/^[a-z0-9._%+-]+@st1sports\.com$/.test(e)){setEmailError("Enter your @st1sports.com email address");return;}
+setEmailBusy(true);setEmailError("");
+try{
+const r=await fetch("/api/login-request-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:e})});
+const d=await r.json();
+if(d.ok) setCodeSent(true);
+else setEmailError(d.error||"Couldn't send a code — try again");
+}catch(err){setEmailError(`Send failed: ${err.message}`);}
+setEmailBusy(false);
+};
+const verifyCode=async()=>{
+if(code.trim().length<6) return;
+setEmailBusy(true);setEmailError("");
+try{
+const r=await fetch("/api/login-verify-code",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email.trim().toLowerCase(),code:code.trim()})});
+const d=await r.json();
+if(d.ok){
+if(reps.some(x=>x.id===d.repId)) dispatch("UPDATE_REP",d.rep);
+else dispatch("ADD_REP",d.rep);
+dispatch("SET_APP_USER",d.appUser);
+dispatch("LOGIN",d.repId);
+}else{
+setEmailError(d.error||"Incorrect code");
+setShake(true);setTimeout(()=>setShake(false),500);
+}
+}catch(err){setEmailError(`Verify failed: ${err.message}`);}
+setEmailBusy(false);
+};
+// ── PIN login (fallback) ──────────────────────────────────────────────────
 const loginUsers = appUsers.map(au=>{
 const rep = reps.find(r=>r.id===au.repId);
 if(!rep) return null;
@@ -1623,6 +1661,43 @@ return (
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:19,color:B.black,letterSpacing:.3}}>ST1 RevOps</div>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:3,marginTop:3}}>SIGN IN</div>
 </div>
+{mode==="email"?(
+<div className={shake?"shk fu":"fu"}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>{codeSent?"ENTER YOUR CODE":"YOUR ST1 EMAIL"}</div>
+{!codeSent?(
+<>
+<input type="email" autoFocus value={email} onChange={e=>{setEmail(e.target.value);setEmailError("");}} onKeyDown={e=>e.key==="Enter"&&sendCode()}
+placeholder="you@st1sports.com"
+style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:13,marginBottom:10,boxSizing:"border-box"}}/>
+{emailError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>{emailError}</div>}
+<button onClick={sendCode} disabled={emailBusy}
+style={{width:"100%",background:B.orange,color:B.white,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5,opacity:emailBusy?.6:1}}>
+{emailBusy?"SENDING…":"SEND CODE →"}
+</button>
+</>
+):(
+<>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:10}}>Sent to {email}</div>
+<input autoFocus value={code} onChange={e=>{setCode(e.target.value.replace(/\D/g,"").slice(0,6));setEmailError("");}} onKeyDown={e=>e.key==="Enter"&&verifyCode()}
+placeholder="------" maxLength={6}
+style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:5,padding:"10px 12px",fontSize:18,letterSpacing:8,textAlign:"center",marginBottom:10,boxSizing:"border-box"}}/>
+{emailError&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.red,marginBottom:10}}>{emailError}</div>}
+<button onClick={verifyCode} disabled={code.length<6||emailBusy}
+style={{width:"100%",background:code.length===6?B.orange:B.border,color:code.length===6?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5,marginBottom:10}}>
+{emailBusy?"CHECKING…":"SIGN IN →"}
+</button>
+<div style={{display:"flex",justifyContent:"space-between"}}>
+<button onClick={()=>{setCodeSent(false);setCode("");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Use a different email</button>
+<button onClick={sendCode} disabled={emailBusy} style={{background:"none",border:"none",color:B.orange,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Resend code</button>
+</div>
+</>
+)}
+<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+<button onClick={()=>{setMode("pin");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Trouble with email? Use a PIN instead</button>
+</div>
+</div>
+):(
+<>
 <div style={{marginBottom:14}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:2,marginBottom:7}}>SELECT USER</div>
 {loginUsers.length===0?(
@@ -1659,6 +1734,11 @@ style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B
 style={{width:"100%",background:sel&&pin.length>=4?B.orange:B.border,color:sel&&pin.length>=4?B.white:B.muted,border:"none",borderRadius:6,padding:"11px",fontFamily:"'Russo One',sans-serif",fontSize:13,letterSpacing:.5}}>
 {loading?"CHECKING…":"SIGN IN →"}
 </button>
+<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
+<button onClick={()=>setMode("email")} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Use your email instead</button>
+</div>
+</>
+)}
 {/* Admin bypass — only visible when no admin accounts are set up */}
 {!appUsers.some(au=>au.isAdmin)&&(
 <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>

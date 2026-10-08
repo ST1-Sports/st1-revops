@@ -60,6 +60,18 @@ model Setting {
   updatedAt DateTime @default(now()) @updatedAt
 }
 
+// Email-code login (api/login-request-code.js, api/login-verify-code.js) —
+// one row per in-flight login attempt, keyed by the email the code was sent
+// to. codeHash is a SHA-256 digest, never the plaintext code. One-time use:
+// deleted on successful verification.
+model LoginCode {
+  email     String   @id
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+}
+
 // ── CHAT HISTORY ──────────────────────────────────────────────────────────────
 
 model ChatSession {
