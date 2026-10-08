@@ -9250,7 +9250,7 @@ const CAMP_TEMPLATES = [
 {id:"blank", name:"Start Blank", product:"", goal:"", channels:[], metrics:[], tone:"friendly", ctx:"", assetTypes:[]},
 ];
 function ModMarketing() {
-const {s,dispatch,toast,setMod}=useApp();
+const {s,dispatch,toast,setMod,pullFromServer}=useApp();
 const [tab,setTab]=useState("campaigns");
 const [selCampId,setSelCampId]=useState(null);
 const [showNewCampForm,setShowNewCampForm]=useState(false);
@@ -9334,6 +9334,8 @@ const [schedDelay,setSchedDelay]=useState(60);
 const [schedTouchGap,setSchedTouchGap]=useState(7);
 const [maxPerDay,setMaxPerDay]=useState(0);
 const [schedStatus,setSchedStatus]=useState(null);
+const [reconcileStatus,setReconcileStatus]=useState(null);
+const [reconcilePreview,setReconcilePreview]=useState(null);
 const [lastSendErr,setLastSendErr]=useState(null);
 const [intCollapsed,setIntCollapsed]=useState(false);
 const [segRunning,setSegRunning]=useState(false);
@@ -11153,6 +11155,25 @@ const handleScheduleClick=()=>{
 setSchedStatus('applying');
 setTimeout(()=>{applySchedule();setSchedStatus('done');setTimeout(()=>setSchedStatus(null),2500);},120);
 };
+const runReconcile=async(dryRun)=>{
+setReconcileStatus(dryRun?'checking':'applying');
+try{
+const r=await fetch("/api/outreach/reconcile-sent",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({campaignId:selCamp.id,dryRun})});
+const d=await r.json();
+if(!d.ok){toast(d.error||"Reconcile failed","error");setReconcileStatus(null);return;}
+if(dryRun){
+setReconcilePreview(d);
+setReconcileStatus(null);
+if(d.matched===0)toast(`Checked ${d.checked} of ${d.candidates} pending contact(s) against Gmail — no already-sent matches found`,"info");
+}else{
+setReconcilePreview(null);
+setReconcileStatus('done');
+setTimeout(()=>setReconcileStatus(null),2500);
+toast(`Marked ${d.matched} contact(s) as already sent — they won't be re-emailed`,"success");
+pullFromServer(); // pull the corrected enrollments into local state right away
+}
+}catch(e){toast(`Reconcile error: ${e.message}`,"error");setReconcileStatus(null);}
+};
 return(
 <div className="card" style={{padding:"12px 14px",marginBottom:14,borderLeft:`3px solid ${B.blue}`}}>
 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8,flexWrap:"wrap"}}>
@@ -11198,7 +11219,40 @@ style={{background:"none",border:`1px solid ${B.red}40`,borderRadius:5,padding:"
 CLEAR SCHEDULE
 </button>
 )}
+<button onClick={()=>runReconcile(true)} disabled={reconcileStatus==='checking'||reconcileStatus==='applying'}
+title="Checks every pending contact in this campaign against the real Gmail Sent folder — catches contacts a timed-out batch actually emailed but never got marked sent, so they aren't re-emailed"
+style={{background:"none",border:`1px solid ${B.purple}60`,borderRadius:5,padding:"7px 12px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.purple,cursor:reconcileStatus?"not-allowed":"pointer",whiteSpace:"nowrap"}}>
+{reconcileStatus==='checking'?"⟳ CHECKING…":reconcileStatus==='done'?"✓ RECONCILED":"RECONCILE VS GMAIL SENT"}
+</button>
 </div>
+{reconcilePreview&&(
+<div style={{marginBottom:8,background:B.surface,border:`1px solid ${B.purple}40`,borderRadius:5,padding:"8px 10px"}}>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,marginBottom:6}}>
+Checked {reconcilePreview.checked} of {reconcilePreview.candidates} pending contact(s){reconcilePreview.truncated?" (stopped early — time budget; re-run to keep checking)":""} against Gmail Sent since {reconcilePreview.sinceDate} —{" "}
+<strong>{reconcilePreview.matched} already received a real email</strong> and would be marked sent without re-sending.
+</div>
+{reconcilePreview.matched>0&&(
+<div style={{maxHeight:160,overflowY:"auto",marginBottom:8}}>
+{reconcilePreview.matches.map(m=>(
+<div key={m.contactId} style={{display:"flex",justifyContent:"space-between",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,padding:"2px 0"}}>
+<span>{m.name||m.email} <span style={{color:B.border}}>·</span> {m.email}</span>
+<span>{new Date(m.sentAt).toLocaleString()}</span>
+</div>
+))}
+</div>
+)}
+<div style={{display:"flex",gap:8}}>
+{reconcilePreview.matched>0&&(
+<button onClick={()=>{if(window.confirm(`Mark ${reconcilePreview.matched} contact(s) as already sent? This does not send any email — it only stops them from being re-emailed.`))runReconcile(false);}}
+disabled={reconcileStatus==='applying'}
+style={{background:B.purple,color:B.white,border:"none",borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,fontWeight:700,cursor:reconcileStatus==='applying'?"not-allowed":"pointer"}}>
+{reconcileStatus==='applying'?"⟳ MARKING…":`MARK ${reconcilePreview.matched} AS SENT`}
+</button>
+)}
+<button onClick={()=>setReconcilePreview(null)} style={{background:"none",border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 14px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.muted,cursor:"pointer"}}>DISMISS</button>
+</div>
+</div>
+)}
 {pendingScheduledCount>0&&(
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>
 {pendingScheduledCount} batch{pendingScheduledCount!==1?"es":""} pending · cron fires every 15 min Mon–Fri 9am–5pm MT · batches outside hours shift to next 9am MT automatically.
