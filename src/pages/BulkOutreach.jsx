@@ -842,19 +842,33 @@ Return JSON exactly as:
   // campaign's enrollments, advanced exactly the way the cron would so a
   // touch confirmed sent here is never re-sent automatically. Shared by a
   // single manual SEND NOW and by the bulk Gmail reconciliation below.
+  //
+  // Saves via touchUpdates (just the changed pairs), not the full leads
+  // array — a list here can hold thousands of leads, and the old code
+  // re-uploaded every one of them on every single send. Once enough leads
+  // carried real sent subject/body text that payload crossed the request
+  // body ceiling, the PATCH started failing — silently, since the response
+  // was never checked — so a contact that really got emailed kept looking
+  // unsent and got queued to be re-sent. touchUpdates keeps this payload
+  // tiny no matter how large the list gets.
   const markTouchesSent = async (pairs) => {
     if (!pairs.length) return;
-    const byLead = new Map();
-    for (const p of pairs) (byLead.get(p.leadId) || byLead.set(p.leadId, new Map()).get(p.leadId)).set(p.touchIdx, p.sentAt);
     const tmpl = templatesRef.current || {};
+    const byLeadId = new Map(leadsRef.current.map(l => [l.id, l]));
+    const touchUpdates = pairs.map(p => {
+      const l = byLeadId.get(p.leadId);
+      const eff = l ? effectiveTouch(l, p.touchIdx, tmpl) : null;
+      return { leadId: p.leadId, touchIdx: p.touchIdx, sentAt: p.sentAt, subject: eff?.subject, body: eff?.body };
+    });
+    const byLead = new Map();
+    for (const u of touchUpdates) (byLead.get(u.leadId) || byLead.set(u.leadId, new Map()).get(u.leadId)).set(u.touchIdx, u);
     const updatedLeads = leadsRef.current.map(l => {
       const touchMap = byLead.get(l.id);
       if (!touchMap) return l;
       const touches = [...(l.touches || [])];
-      for (const [touchIdx, sentAt] of touchMap.entries()) {
-        const eff = effectiveTouch(l, touchIdx, tmpl);
+      for (const [touchIdx, u] of touchMap.entries()) {
         while (touches.length <= touchIdx) touches.push({ subject: "", body: "" });
-        touches[touchIdx] = { ...(eff || touches[touchIdx] || {}), sentAt };
+        touches[touchIdx] = { ...(touches[touchIdx] || {}), ...(u.subject !== undefined ? { subject: u.subject } : {}), ...(u.body !== undefined ? { body: u.body } : {}), sentAt: u.sentAt };
       }
       return { ...l, touches };
     });
@@ -862,11 +876,17 @@ Return JSON exactly as:
     setLeads(updatedLeads);
     leadsDirtyRef.current = true;
 
-    try {
-      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
-      setBatchStatus(prev => prev === "approved" ? prev : "active");
-    } catch (e) { toast(`Sent, but couldn't save the sent status: ${e.message}`, "info"); }
+    let saved = false;
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+      try {
+        const r = await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, touchUpdates }) });
+        if (r.ok) saved = true;
+      } catch { /* retry */ }
+    }
+    if (saved) setBatchStatus(prev => prev === "approved" ? prev : "active");
+    else toast(`Sent, but couldn't confirm it saved — run "Check Brad's Inbox" later to recover it if it still shows unsent`, "error");
 
     if (linkedCampaignId) {
       const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
@@ -1081,10 +1101,20 @@ Return JSON exactly as:
       return { ...l, bounced: true, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) };
     });
     setLeads(updatedLeads);
-    try {
-      await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: batchId, leads: updatedLeads }) });
-    } catch (e) { toast(`Bounces flagged, but couldn't save it: ${e.message}`, "info"); }
+    // bounceUpdates, not the full leads array — see markTouchesSent for why
+    // re-uploading every lead on every save silently fails at this list's
+    // scale once it's carried enough sent copy to cross the body-size limit.
+    const bounceUpdates = bounces.map(b => ({ leadId: b.leadId, bouncedAt, bounceNote: (b.snippet || "").slice(0, 200) }));
+    let saved = false;
+    for (let attempt = 0; attempt < 3 && !saved; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+      try {
+        const r = await fetch("/api/outreach/batches", { method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: batchId, bounceUpdates }) });
+        if (r.ok) saved = true;
+      } catch { /* retry */ }
+    }
+    if (!saved) toast(`Bounces flagged, but couldn't confirm it saved — run "Check Brad's Inbox" again later`, "error");
 
     if (linkedCampaignId) {
       const camp = (s?.campaigns || []).find(c => c.id === linkedCampaignId);
