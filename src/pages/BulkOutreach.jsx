@@ -1194,12 +1194,25 @@ Return JSON exactly as:
     setSyncingGmail(true);
     let sentFound = 0, bouncesFound = 0;
     try {
-      const targets = [];
+      // Built from effectiveTouch (lead's own copy, falling back to the
+      // shared step template with merge tags resolved) — not the lead's raw
+      // l.touches[i]. On a shared-template list (the common "Email 1 for all
+      // N contacts" case) a not-yet-sent lead's own touches[i] is empty
+      // until the moment it's actually sent; reading it directly here meant
+      // targets was built from nothing but blanks, so this whole sent-check
+      // silently never ran for exactly the lists it matters most for.
+      const targetsByEmail = new Map(); // email (lower) -> [{lead, touchIdx, subject}]
       for (const l of sendableLeads) {
-        l.touches.forEach((t, i) => { if (!touchSentInfo(l, i).sent && t.subject?.trim()) targets.push({ lead: l, touchIdx: i }); });
+        for (const i of stepIndices) {
+          if (touchSentInfo(l, i).sent) continue;
+          const eff = effectiveTouch(l, i, templatesRef.current);
+          if (!eff || !touchHasCopy(eff)) continue;
+          const key = l.email.toLowerCase();
+          (targetsByEmail.get(key) || targetsByEmail.set(key, []).get(key)).push({ lead: l, touchIdx: i, subject: eff.subject });
+        }
       }
-      if (targets.length) {
-        const emails = [...new Set(targets.map(t => t.lead.email))];
+      if (targetsByEmail.size) {
+        const emails = [...targetsByEmail.keys()];
         const CHUNK = 20;
         const found = [];
         for (let i = 0; i < emails.length; i += CHUNK) {
@@ -1212,8 +1225,9 @@ Return JSON exactly as:
           for (const msg of d.messages || []) {
             const toEmail = (String(msg.to || "").match(/[^<\s,]+@[^>\s,]+/) || [])[0]?.toLowerCase();
             if (!toEmail) continue;
-            const match = targets.find(t => t.lead.email.toLowerCase() === toEmail
-              && t.lead.touches[t.touchIdx].subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
+            const candidates = targetsByEmail.get(toEmail);
+            if (!candidates) continue;
+            const match = candidates.find(t => t.subject.trim().toLowerCase() === String(msg.subject || "").trim().toLowerCase());
             if (match) found.push({ leadId: match.lead.id, touchIdx: match.touchIdx, sentAt: msg.date ? new Date(msg.date).toISOString() : new Date().toISOString() });
           }
         }
