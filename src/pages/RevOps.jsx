@@ -3863,6 +3863,9 @@ const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quo
 const [accountPdfBusy,setAccountPdfBusy]=useState(false);
 const [accountPdfDraft,setAccountPdfDraft]=useState(null);
 const accountPdfRef=useRef(null);
+const [editingAccountInfo,setEditingAccountInfo]=useState(false);
+const [accountInfoForm,setAccountInfoForm]=useState(null);
+const [savingAccountInfo,setSavingAccountInfo]=useState(false);
 const [smsHistory,setSmsHistory]=useState([]);
 const [smsLoading,setSmsLoading]=useState(false);
 const [smsBody,setSmsBody]=useState("");
@@ -4624,9 +4627,14 @@ const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
 const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(selSchool);
 const schoolOrgType=primaryC?.orgType||accountRecord?.orgType||"";
-const schoolClass=primaryC?.schoolClass||"";
-const numAthletes=primaryC?.numAthletes||"";
-const numSports=primaryC?.numSports||"";
+// Account-level edits (the "ACCOUNT INFO" panel below) win once made — these
+// used to live only on the primary contact, which is fine as a read fallback
+// for accounts nobody's edited yet, but writes belong on the Account record:
+// it's an attribute of the school, not of whichever person happens to be
+// contact #1 today.
+const schoolClass=accountRecord?.schoolClass||primaryC?.schoolClass||"";
+const numAthletes=accountRecord?.numAthletes||primaryC?.numAthletes||"";
+const numSports=accountRecord?.numSports||primaryC?.numSports||"";
 const state=primaryC?.state||accountRecord?.state||"";
 const city=primaryC?.city||accountRecord?.city||"";
 const website=primaryC?.website||accountRecord?.domain||"";
@@ -4685,8 +4693,36 @@ const sponsorshipMax=primaryC?.sponsorshipMax||null;
 const sponsorshipStatus=primaryC?.sponsorshipStatus||null;
 const sponsorshipConfirmed=primaryC?.sponsorshipConfirmedAmount||null;
 const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
-const hasOnlineStore=primaryC?.hasOnlineStore||false;
-const hasBoosterClub=primaryC?.hasBoosterClub||false;
+const hasOnlineStore=accountRecord?.hasOnlineStore!=null?accountRecord.hasOnlineStore:(primaryC?.hasOnlineStore||false);
+const hasBoosterClub=accountRecord?.hasBoosterClub!=null?accountRecord.hasBoosterClub:(primaryC?.hasBoosterClub||false);
+const teamStoreUrl=accountRecord?.teamStoreUrl||"";
+const startEditAccountInfo=()=>{
+setAccountInfoForm({
+schoolClass,
+numAthletes:numAthletes?String(numAthletes):"",
+numSports:numSports?String(numSports):"",
+hasOnlineStore,
+teamStoreUrl,
+hasBoosterClub,
+});
+setEditingAccountInfo(true);
+};
+const saveAccountInfo=()=>{
+setSavingAccountInfo(true);
+const id=ensureAccountRecord();
+dispatch("UPDATE_ACCOUNT",{
+id,
+schoolClass:accountInfoForm.schoolClass||"",
+numAthletes:Number(accountInfoForm.numAthletes)||0,
+numSports:Number(accountInfoForm.numSports)||0,
+hasOnlineStore:accountInfoForm.hasOnlineStore===true,
+teamStoreUrl:accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
+hasBoosterClub:accountInfoForm.hasBoosterClub===true,
+});
+setEditingAccountInfo(false);
+setSavingAccountInfo(false);
+toast("Account info saved","success");
+};
 const schoolInvoices=(s.invoices||[]).filter(inv=>{
 const cust=(inv.customer||"").toLowerCase();
 return orgNamesMatch(inv.customer,schoolCleanName)||schoolContacts.some(c=>(c.fullName||"").toLowerCase()===cust||(c.school||"").toLowerCase()===cust);
@@ -4740,7 +4776,11 @@ return(
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
 {numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
 {numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
-{hasOnlineStore&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>}
+{hasOnlineStore&&(teamStoreUrl?(
+<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3,textDecoration:"none"}}>TEAM STORE ↗</a>
+):(
+<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>
+))}
 {hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
 </div>
 </div>
@@ -4772,7 +4812,7 @@ return(
 <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6,flexWrap:"wrap",alignItems:"center"}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
 <GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
-<OBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</OBtn>
+<GBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</GBtn>
 <GBtn sm onClick={()=>accountPdfRef.current?.click()}>{accountPdfBusy?"READING PDF…":"UPLOAD PDF"}</GBtn>
 <input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{
 const file=e.target.files?.[0];
@@ -4885,25 +4925,74 @@ toast("Quote PDF added as a deal","success");
 </div>
 {accountTab==="overview"&&(<>
 {/* ── ACCOUNT INFO ── */}
-<SectionHdr>ACCOUNT INFO</SectionHdr>
-<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
-{[
-["School Class",schoolClass||"—"],
-["Location",[city,state].filter(Boolean).join(", ")||"—"],
-["Org Type",schoolOrgType||"—"],
-["# Athletes",numAthletes||"—"],
-["# Sports",numSports||"—"],
-["Team Store",hasOnlineStore?"Yes":"No"],
-["Booster Club",hasBoosterClub?"Yes":"No"],
-["Contacts",schoolContacts.length],
-["Open Deals",openDeals.length],
-].map(([k,v])=>(
-<div key={k}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2}}>{k}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{v}</div>
+{(()=>{
+const lblS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:2};
+const valS={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500};
+const inpS={width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
+const toggle=(active)=>({flex:1,background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"});
+return(<>
+<SectionHdr sub={editingAccountInfo?(
+<div style={{display:"flex",gap:6}}>
+<button onClick={saveAccountInfo} disabled={savingAccountInfo} style={{background:B.orange,border:"none",color:B.white,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,cursor:"pointer"}}>{savingAccountInfo?"SAVING…":"SAVE"}</button>
+<button onClick={()=>setEditingAccountInfo(false)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>CANCEL</button>
 </div>
+):(
+<button onClick={startEditAccountInfo} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:11}} title="Edit account info">✎ EDIT</button>
+)}>ACCOUNT INFO</SectionHdr>
+<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+<div>
+<div style={lblS}>School Class</div>
+{editingAccountInfo?(
+<select value={accountInfoForm.schoolClass} onChange={e=>setAccountInfoForm(f=>({...f,schoolClass:e.target.value}))} style={inpS}>
+<option value="">— Select —</option>
+{["1A","2A","3A","4A","5A","6A"].map(v=><option key={v}>{v}</option>)}
+</select>
+):(<div style={valS}>{schoolClass||"—"}</div>)}
+</div>
+<div><div style={lblS}>Location</div><div style={valS}>{[city,state].filter(Boolean).join(", ")||"—"}</div></div>
+<div><div style={lblS}>Org Type</div><div style={valS}>{schoolOrgType||"—"}</div></div>
+<div>
+<div style={lblS}># Athletes</div>
+{editingAccountInfo?(
+<input type="number" min={0} value={accountInfoForm.numAthletes} onChange={e=>setAccountInfoForm(f=>({...f,numAthletes:e.target.value}))} style={inpS}/>
+):(<div style={valS}>{numAthletes||"—"}</div>)}
+</div>
+<div>
+<div style={lblS}># Sports</div>
+{editingAccountInfo?(
+<input type="number" min={0} value={accountInfoForm.numSports} onChange={e=>setAccountInfoForm(f=>({...f,numSports:e.target.value}))} style={inpS}/>
+):(<div style={valS}>{numSports||"—"}</div>)}
+</div>
+<div style={editingAccountInfo&&accountInfoForm.hasOnlineStore?{gridColumn:"span 2"}:undefined}>
+<div style={lblS}>Team Store</div>
+{editingAccountInfo?(
+<div>
+<div style={{display:"flex",gap:5,marginBottom:accountInfoForm.hasOnlineStore?5:0}}>
+{["Yes","No"].map(opt=>(
+<button key={opt} onClick={()=>setAccountInfoForm(f=>({...f,hasOnlineStore:opt==="Yes"}))} style={toggle(opt==="Yes"?accountInfoForm.hasOnlineStore===true:accountInfoForm.hasOnlineStore!==true)}>{opt}</button>
 ))}
 </div>
+{accountInfoForm.hasOnlineStore&&<input value={accountInfoForm.teamStoreUrl} onChange={e=>setAccountInfoForm(f=>({...f,teamStoreUrl:e.target.value}))} placeholder="https://teamstore…" style={inpS}/>}
+</div>
+):(
+hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{...valS,color:B.blue}}>{teamStoreUrl.replace(/^https?:\/\//,"")}</a>:<div style={valS}>Yes</div>):<div style={valS}>No</div>
+)}
+</div>
+<div>
+<div style={lblS}>Booster Club</div>
+{editingAccountInfo?(
+<div style={{display:"flex",gap:5}}>
+{["Yes","No"].map(opt=>(
+<button key={opt} onClick={()=>setAccountInfoForm(f=>({...f,hasBoosterClub:opt==="Yes"}))} style={toggle(opt==="Yes"?accountInfoForm.hasBoosterClub===true:accountInfoForm.hasBoosterClub!==true)}>{opt}</button>
+))}
+</div>
+):(<div style={valS}>{hasBoosterClub?"Yes":"No"}</div>)}
+</div>
+<div><div style={lblS}>Contacts</div><div style={valS}>{schoolContacts.length}</div></div>
+<div><div style={lblS}>Open Deals</div><div style={valS}>{openDeals.length}</div></div>
+</div>
+</>);
+})()}
 {/* ── STAFF COVERAGE ── */}
 <SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
 <div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
