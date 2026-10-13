@@ -1,18 +1,22 @@
 /**
  * POST /api/crm/rebuild-deals-from-invoices
  *
- * One-time clean-slate reset: a Deal should only ever exist because of a
- * real Zoho Books invoice — not a speculative/in-progress quote that never
- * closed. This wipes every existing Zoho CRM Deal (no partial/selective
- * mode — stale ones and active-but-uninvoiced pipeline both go) and
- * rebuilds exactly one Deal per real invoice, Closed Won, tied to the real
- * Account and carrying the invoice's amount/date/line-items.
+ * Resync: every real, sent Zoho Books invoice should have exactly one
+ * Closed Won Deal tied to the real Account, carrying the invoice's amount/
+ * date/line-items. Rebuilds only THAT set — it wipes and recreates deals
+ * this same tool previously created (identified by the "<customer> —
+ * Invoice <number>" name it always uses), not every Deal in the org. A
+ * manually-tracked, not-yet-invoiced pipeline deal (e.g. "+ ADD DEAL" on
+ * the Account page, or an uploaded quote) never matches that pattern and
+ * is left alone — it used to be deleted outright by a prior version of
+ * this tool with no way to get it back, which is exactly backwards once
+ * accounts are meant to track real pipeline, not just invoiced history.
  *
  * Skips draft and void invoices — never actually sent to the customer, so
  * not a real transaction to have a Deal for.
  *
  * Body: { dryRun?: boolean }
- * Returns: { ok, dealsDeleted, invoicesTotal, invoicesSkipped, dealsCreated, errors }
+ * Returns: { ok, dealsDeleted, dealsPreserved, invoicesTotal, invoicesSkipped, dealsCreated, errors }
  */
 import { setCors }      from '../_lib/cors.js'
 import { getZohoToken } from '../_lib/zoho-token.js'
@@ -33,7 +37,13 @@ async function fetchAllInvoices() {
   return all
 }
 
-async function fetchAllDealIds(headers) {
+// Every Deal this tool creates is named "<customer> — Invoice <number>"
+// (see the payload below) — the one reliable way to tell "a deal this tool
+// is responsible for, safe to wipe and recreate" apart from a deal someone
+// added manually that just happens to exist for the same customer.
+const INVOICE_DEAL_NAME_RE = / — Invoice .+$/
+
+async function fetchAllDeals(headers) {
   let all = [], page = 1
   while (true) {
     const r = await fetch(`${CRM_BASE}/Deals?fields=Deal_Name&per_page=200&page=${page}`, { headers })
@@ -45,7 +55,7 @@ async function fetchAllDealIds(headers) {
     if (!data?.info?.more_records || batch.length < 200) break
     page++
   }
-  return all.map(d => d.id)
+  return all
 }
 
 async function deleteDealsBulk(ids, headers) {
@@ -89,21 +99,29 @@ export default async function handler(req, res) {
   const usable = invoices.filter(inv => !['draft', 'void'].includes(inv.status))
 
   if (dryRun) {
-    let existingDeals = 0
-    try { existingDeals = (await fetchAllDealIds(crmHeaders)).length } catch { /* report 0 rather than fail a dry run */ }
+    let existingDeals = 0, dealsPreserved = 0
+    try {
+      const all = await fetchAllDeals(crmHeaders)
+      existingDeals = all.filter(d => INVOICE_DEAL_NAME_RE.test(d.Deal_Name)).length
+      dealsPreserved = all.length - existingDeals
+    } catch { /* report 0 rather than fail a dry run */ }
     return res.json({
-      ok: true, dryRun: true, existingDeals,
+      ok: true, dryRun: true, existingDeals, dealsPreserved,
       invoicesTotal: invoices.length, invoicesUsable: usable.length,
       invoicesSkipped: invoices.length - usable.length,
     })
   }
 
-  // 1. Wipe every existing Deal — no partial mode, see file header.
-  let dealsDeleted = 0
+  // 1. Wipe only the invoice-backed deals from a previous run — see
+  //    INVOICE_DEAL_NAME_RE above. Anything else (manual pipeline deals,
+  //    uploaded-quote deals, a deal Zoho's own native flows created) stays.
+  let dealsDeleted = 0, dealsPreserved = 0
   const errors = []
   try {
-    const existingDealIds = await fetchAllDealIds(crmHeaders)
-    const result = await deleteDealsBulk(existingDealIds, crmHeaders)
+    const all = await fetchAllDeals(crmHeaders)
+    const invoiceBackedIds = all.filter(d => INVOICE_DEAL_NAME_RE.test(d.Deal_Name)).map(d => d.id)
+    dealsPreserved = all.length - invoiceBackedIds.length
+    const result = await deleteDealsBulk(invoiceBackedIds, crmHeaders)
     dealsDeleted = result.deleted
     errors.push(...result.errors)
   } catch (err) {
@@ -161,7 +179,7 @@ export default async function handler(req, res) {
   }
 
   return res.json({
-    ok: true, dealsDeleted, invoicesTotal: invoices.length,
+    ok: true, dealsDeleted, dealsPreserved, invoicesTotal: invoices.length,
     invoicesSkipped: invoices.length - usable.length, dealsCreated, errors,
   })
 }

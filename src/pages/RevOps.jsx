@@ -3797,15 +3797,21 @@ const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",header
 preview=await r.json();
 }catch(e){toast(`Couldn't check invoices: ${e.message}`,"error");setRebuildingDeals(false);return;}
 if(!preview?.ok){toast(preview?.error||"Couldn't check invoices","error");setRebuildingDeals(false);return;}
-if(!window.confirm(`This deletes ALL ${preview.existingDeals} current Deal(s) in Zoho CRM — including any in-progress ones not yet invoiced — and creates exactly ${preview.invoicesUsable} new Deal(s), one per real invoice (${preview.invoicesSkipped} draft/void invoice(s) skipped). This cannot be undone. Continue?`))
+if(!window.confirm(`This rebuilds ${preview.existingDeals} invoice-backed Deal(s) in Zoho CRM from ${preview.invoicesUsable} real invoice(s) (${preview.invoicesSkipped} draft/void invoice(s) skipped). ${preview.dealsPreserved} other Deal(s) in Zoho (manual pipeline, uploaded quotes, etc.) are left untouched. Continue?`))
 {setRebuildingDeals(false);return;}
 try{
 const r=await fetch("/api/crm/rebuild-deals-from-invoices",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({})});
 const d=await r.json();
 if(!d.ok){toast(d.error||"Rebuild failed","error");setRebuildingDeals(false);return;}
-dispatch("SET_DEALS",[]);
+// Not dispatch("SET_DEALS",[]) — that wiped EVERY local deal, including a
+// purely-local manual/PDF-import one that was never pushed to Zoho at all
+// (ADD_DEAL never crmCreate's these) and so could never come back from the
+// Zoho re-sync below, which only ever adds/updates/removes deals it can
+// match by zohoId. Those local-only deals were never touched server-side
+// and don't need to be — crmSyncRef's own zohoId-based reconciliation
+// already adds the newly-rebuilt ones and drops the now-deleted ones.
 if(crmSyncRef?.current)await crmSyncRef.current(true);
-toast(`Deleted ${d.dealsDeleted} old deal(s), created ${d.dealsCreated} from invoices${d.errors?.length?` · ${d.errors.length} error(s), first: ${d.errors[0]}`:""}`,d.errors?.length?"info":"success");
+toast(`Rebuilt ${d.dealsDeleted} invoice-backed deal(s) → ${d.dealsCreated} created · ${d.dealsPreserved} other deal(s) left alone${d.errors?.length?` · ${d.errors.length} error(s), first: ${d.errors[0]}`:""}`,d.errors?.length?"info":"success");
 }catch(e){toast(`Rebuild error: ${e.message}`,"error");}
 setRebuildingDeals(false);
 };
@@ -4303,7 +4309,7 @@ setShowAddContact(v=>!v);
 <div style={{marginTop:5,display:"flex",gap:6,flexWrap:"wrap"}}>
 <button onClick={wipeAndResyncContacts} disabled={wipingContacts} title="Clears the cached contact list (here and in the shared database) and rebuilds it fresh from what's live in Zoho right now — use this if the count keeps reverting to an old number" style={{background:"none",border:`1px solid ${wipingContacts?B.border:B.red}`,color:wipingContacts?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:wipingContacts?"default":"pointer"}}>{wipingContacts?"WIPING…":"⟲ WIPE + RESYNC CONTACTS"}</button>
 <button onClick={resetAllScores} disabled={resettingScores} title="One-time cleanup after the auto-reply scoring bug — zeroes engagement score/activity for every contact, here and in the prospecting database" style={{background:"none",border:`1px solid ${resettingScores?B.border:B.red}`,color:resettingScores?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:resettingScores?"default":"pointer"}}>{resettingScores?"RESETTING…":"⟲ RESET ALL SCORES"}</button>
-<button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Deletes every Deal in Zoho CRM and recreates exactly one Deal per real (non-draft/void) Zoho Books invoice — a Deal should only exist because of a real invoice" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
+<button onClick={rebuildDealsFromInvoices} disabled={rebuildingDeals} title="Rebuilds only the invoice-backed Deals (one per real, sent Zoho Books invoice) — manual pipeline deals and uploaded quotes are left alone" style={{background:"none",border:`1px solid ${rebuildingDeals?B.border:B.red}`,color:rebuildingDeals?B.muted:B.red,borderRadius:3,padding:"2px 7px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,fontWeight:700,letterSpacing:.5,cursor:rebuildingDeals?"default":"pointer"}}>{rebuildingDeals?"REBUILDING…":"⟲ REBUILD DEALS FROM INVOICES"}</button>
 </div>
 )}
 {showBreakdown&&(

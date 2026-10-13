@@ -11,6 +11,7 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
+import { updateSettingSafely } from './_lib/settingSync.js';
 import { applyDealTombstones } from '../src/lib/dealTombstone.js';
 import { applyContactTombstones } from '../src/lib/contactTombstone.js';
 
@@ -70,15 +71,21 @@ export default async function handler(req, res) {
     }
     try {
       const clean = sanitize(state);
-      const existing = await prisma.setting.findUnique({ where: { key: "app_state" } });
-      const previous = existing?.value && typeof existing.value === "object" ? existing.value : {};
-      const tombs = applyDealTombstones(clean, previous);
-      const contactTombs = applyContactTombstones(clean, previous);
-      const value = { ...clean, ...tombs, ...contactTombs };
-      await prisma.setting.upsert({
-        where: { key: "app_state" },
-        update: { value },
-        create: { key: "app_state", value },
+      // updateSettingSafely, not a plain findUnique-then-upsert — this is the
+      // single most frequently written endpoint in the app (every dispatch()
+      // POSTs here), so two near-simultaneous writes from different actions,
+      // tabs, or devices are routine, not an edge case. A blind read-then-
+      // write lets the second one silently clobber the first's changes with
+      // a merge computed against an already-stale "previous" — e.g. a deal
+      // added in one request can vanish because another request's write
+      // lands a split second later, unioned against a previous snapshot that
+      // never had it. updateSettingSafely retries the whole read-merge-write
+      // against the fresh row instead of ever blindly overwriting it.
+      await updateSettingSafely("app_state", (previousRaw) => {
+        const previous = previousRaw && typeof previousRaw === "object" ? previousRaw : {};
+        const tombs = applyDealTombstones(clean, previous);
+        const contactTombs = applyContactTombstones(clean, previous);
+        return { ...clean, ...tombs, ...contactTombs };
       });
       return res.json({ ok: true });
     } catch (e) {
