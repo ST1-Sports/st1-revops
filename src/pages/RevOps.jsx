@@ -658,8 +658,14 @@ return null;
 // Given all contacts at one account, work out who the AD is (if known) and
 // which sports have a coach on file vs. which are gaps — this is the data
 // that should get filled in once positive intent shows up at that school.
+// "Athletic Director" alone missed real titles people actually use —
+// "Director of Athletics" (reversed word order) and "Activities Director"
+// (the common combined role at smaller schools) are at least as frequent,
+// and a contact with either title was showing as "not on file" even
+// though the AD genuinely was on file, just under a different phrasing.
+const AD_TITLE_RE=/athletic(s)?\s+director|director\s+of\s+athletics|activities?\s+director/i;
 function computeAccountCoverage(schoolContacts) {
-const adContact=schoolContacts.find(c=>/athletic director/i.test(c.title||""))||null;
+const adContact=schoolContacts.find(c=>AD_TITLE_RE.test(c.title||""))||null;
 const covered=new Map();
 schoolContacts.forEach(c=>{
 let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
@@ -4632,17 +4638,17 @@ const totalOpen=openDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalWon=closedWon.reduce((a,d)=>a+(d.value||0),0);
 const primaryC=schoolContacts[0]||null;
 const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(selSchool);
-const schoolOrgType=primaryC?.orgType||accountRecord?.orgType||"";
 // Account-level edits (the "ACCOUNT INFO" panel below) win once made — these
 // used to live only on the primary contact, which is fine as a read fallback
 // for accounts nobody's edited yet, but writes belong on the Account record:
 // it's an attribute of the school, not of whichever person happens to be
 // contact #1 today.
+const schoolOrgType=accountRecord?.orgType||primaryC?.orgType||"";
 const schoolClass=accountRecord?.schoolClass||primaryC?.schoolClass||"";
 const numAthletes=accountRecord?.numAthletes||primaryC?.numAthletes||"";
 const numSports=accountRecord?.numSports||primaryC?.numSports||"";
-const state=primaryC?.state||accountRecord?.state||"";
-const city=primaryC?.city||accountRecord?.city||"";
+const state=accountRecord?.state||primaryC?.state||"";
+const city=accountRecord?.city||primaryC?.city||"";
 const website=primaryC?.website||accountRecord?.domain||"";
 // Most existing accounts only exist as a grouping of contacts by school
 // name — there's no Account row to tag a new deal to yet. Create one on
@@ -4705,6 +4711,9 @@ const teamStoreUrl=accountRecord?.teamStoreUrl||"";
 const startEditAccountInfo=()=>{
 setAccountInfoForm({
 schoolClass,
+city:city||"",
+state:state||"",
+orgType:schoolOrgType||"school",
 numAthletes:numAthletes?String(numAthletes):"",
 numSports:numSports?String(numSports):"",
 hasOnlineStore,
@@ -4719,6 +4728,9 @@ const id=ensureAccountRecord();
 dispatch("UPDATE_ACCOUNT",{
 id,
 schoolClass:accountInfoForm.schoolClass||"",
+city:(accountInfoForm.city||"").trim(),
+state:(accountInfoForm.state||"").trim(),
+orgType:accountInfoForm.orgType||"school",
 numAthletes:Number(accountInfoForm.numAthletes)||0,
 numSports:Number(accountInfoForm.numSports)||0,
 hasOnlineStore:accountInfoForm.hasOnlineStore===true,
@@ -4741,9 +4753,12 @@ const itemMap={};
 allItems.forEach(it=>{const k=(it.name||"").toLowerCase();if(!itemMap[k])itemMap[k]={name:it.name||"",qty:0,total:0,lastDate:""};itemMap[k].qty+=Number(it.qty||0);itemMap[k].total+=(it.total||0);if(!itemMap[k].lastDate||it.date>itemMap[k].lastDate)itemMap[k].lastDate=it.date;});
 const purchasedItems=Object.values(itemMap).sort((a,b)=>b.total-a.total);
 const schoolOrders=(s.orders||[]).filter(o=>schoolContacts.some(c=>c.id===o.contactId)||(o.school||"").toLowerCase()===schoolCleanName.toLowerCase());
+// Team Store / Booster Club used to always show up here too whenever they
+// were off — the exact same "No" the ACCOUNT INFO panel right above
+// already states, now with an EDIT button that actually does something
+// about it. Restating it a second time just below was redundant, not a
+// second insight, so those two entries were dropped from this list.
 const expandOps=[];
-if(!hasOnlineStore) expandOps.push({icon:"🛒",title:"Team Store",desc:"No online store yet — potential $35/athlete in additional annual revenue"});
-if(!hasBoosterClub) expandOps.push({icon:"🏅",title:"Booster Club",desc:"No booster program tracked — could add 15% revenue lift via fundraising"});
 if(sponsorshipMin&&!sponsorshipStatus) expandOps.push({icon:"★",title:"Sponsorship",desc:`Estimated sponsorship potential ${fmt$(sponsorshipMin)}${sponsorshipMax?` – ${fmt$(sponsorshipMax)}`:""}`});
 if(numSports&&Number(numSports)>0&&closedWon.length>0){
 const sportsWithOrders=new Set(closedWon.map(d=>d.sport||"").filter(Boolean)).size;
@@ -4963,8 +4978,25 @@ return(<>
 </select>
 ):(<div style={valS}>{schoolClass||"—"}</div>)}
 </div>
-<div><div style={lblS}>Location</div><div style={valS}>{[city,state].filter(Boolean).join(", ")||"—"}</div></div>
-<div><div style={lblS}>Org Type</div><div style={valS}>{schoolOrgType||"—"}</div></div>
+<div>
+<div style={lblS}>Location</div>
+{editingAccountInfo?(
+<div style={{display:"flex",gap:5}}>
+<input value={accountInfoForm.city} onChange={e=>setAccountInfoForm(f=>({...f,city:e.target.value}))} placeholder="City" style={inpS}/>
+<input value={accountInfoForm.state} onChange={e=>setAccountInfoForm(f=>({...f,state:e.target.value}))} placeholder="State" style={{...inpS,width:70,flex:"0 0 70px"}}/>
+</div>
+):(<div style={valS}>{[city,state].filter(Boolean).join(", ")||"—"}</div>)}
+</div>
+<div>
+<div style={lblS}>Org Type</div>
+{editingAccountInfo?(
+<select value={accountInfoForm.orgType} onChange={e=>setAccountInfoForm(f=>({...f,orgType:e.target.value}))} style={inpS}>
+<option value="school">School / District</option>
+<option value="college">College / University</option>
+<option value="other">Other Organization</option>
+</select>
+):(<div style={valS}>{schoolOrgType||"—"}</div>)}
+</div>
 <div>
 <div style={lblS}># Athletes</div>
 {editingAccountInfo?(
