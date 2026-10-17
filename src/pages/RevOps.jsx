@@ -4910,12 +4910,20 @@ toast("Quote PDF added as a deal","success");
 </div>
 )}
 {/* ── KPI STRIP ── */}
-<div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginTop:14,marginBottom:4}}>
-<KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange}/>
-<KCard l="Paid" v={fmt$K(totalPaid)} c={B.green}/>
-<KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted}/>
-<KCard l="Open Deals" v={fmt$K(totalOpen)} c={B.blue} sub={`${openDeals.length} deal${openDeals.length===1?"":"s"}`}/>
-<KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)}/>
+{/* auto-fit/minmax as the base, not a fixed 5-column grid — the existing
+    @media(max-width:768px) rule for .rv-kpi-grid only forces 2 columns on
+    true mobile; a merely-narrow desktop window (not maximized, a smaller
+    laptop screen, browser zoom) still had nowhere to go but overflow, with
+    no scrollbar to reach it. auto-fit reflows continuously at any width in
+    between, and the mobile breakpoint below still wins via !important at
+    <768px. Each card jumps to the tab it summarizes — these numbers ARE the
+    deals/invoices, not just a readout. */}
+<div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginTop:14,marginBottom:4}}>
+<KCard l="Total Invoiced" v={fmt$K(totalInvoiced)} c={B.orange} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Paid" v={fmt$K(totalPaid)} c={B.green} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Outstanding" v={fmt$K(totalOwed)} c={totalOwed>0?B.red:B.muted} onClick={()=>setAccountTab("invoices")}/>
+<KCard l="Open Deals" v={fmt$K(totalOpen)} c={B.blue} sub={`${openDeals.length} deal${openDeals.length===1?"":"s"}`} onClick={()=>setAccountTab("deals")}/>
+<KCard l="Closed Won" v={closedWon.length} c={B.green} sub={fmt$K(totalWon)} onClick={()=>setAccountTab("deals")}/>
 </div>
 {/* ── ACCOUNT SUB-NAV ── */}
 <div style={{display:"flex",gap:2,marginTop:14,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
@@ -4943,9 +4951,9 @@ return(<>
 <button onClick={()=>setEditingAccountInfo(false)} style={{background:"none",border:`1px solid ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"}}>CANCEL</button>
 </div>
 ):(
-<button onClick={startEditAccountInfo} style={{background:"none",border:"none",color:B.muted,cursor:"pointer",fontSize:11}} title="Edit account info">✎ EDIT</button>
+<button onClick={startEditAccountInfo} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}} title="Edit account info">✎ EDIT</button>
 )}>ACCOUNT INFO</SectionHdr>
-<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+<div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
 <div>
 <div style={lblS}>School Class</div>
 {editingAccountInfo?(
