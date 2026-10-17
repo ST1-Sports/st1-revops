@@ -644,8 +644,41 @@ const ACCOUNT_SPORTS=COMMON_SPORTS.filter(sp=>!["Multiple Sports","All Sports / 
 // "club" already existed elsewhere (Prospecting's area-browse tags youth
 // sports clubs this way) — reused here rather than inventing a second,
 // conflicting value for the same concept at the Account level.
-const ORG_TYPE_LABEL={school:"School / District",college:"College / University",club:"Sports Club",business:"Business"};
-const orgTypeLabel=(t)=>ORG_TYPE_LABEL[t]||"Organization";
+//
+// Single source of truth for "what does this org type get" — added so the
+// next org type (or the next field) is one new entry here, not another
+// isBusinessOrg-style check copy-pasted into every section that happens to
+// need it. Every place that used to ask "is this a business/school/club"
+// directly should ask ORG_TYPE_CONFIG[orgType].<flag> instead.
+//   label             — display name (header, Org Type dropdowns, etc.)
+//   schoolClass       — show the 1A–6A classification field
+//   athleteCount      — show a manually-entered "# Athletes" number
+//   boosterClub       — show the Booster Club Yes/No field
+//   teamStore         — show the Team Store section (every type gets this —
+//                        a business reselling or a club with merch is just
+//                        as real a team-store customer as a school)
+//   sportsMode        — "exclude": track all ACCOUNT_SPORTS, opt a sport OUT
+//                        one at a time once confirmed they don't run it
+//                        (schools/colleges — most run most sports, a few
+//                        exceptions). "include": start from nothing, opt
+//                        sports IN by picking exactly what the org offers
+//                        (clubs — usually just one or two sports, "assume
+//                        everything" would be mostly wrong). "none": no
+//                        sports concept at all (business).
+//   athleticDirector  — track an Athletic Director as its own role
+//   requireContactTitle — a contact added under this org can't be saved
+//                        without a Title/Role (clubs/businesses have no
+//                        implied role the way "a school contact probably
+//                        coaches something" does for schools)
+const ORG_TYPE_CONFIG={
+  school:  {label:"School / District",   schoolClass:true,  athleteCount:true,  boosterClub:true,  teamStore:true, sportsMode:"exclude", athleticDirector:true,  requireContactTitle:false},
+  college: {label:"College / University",schoolClass:false, athleteCount:true,  boosterClub:true,  teamStore:true, sportsMode:"exclude", athleticDirector:true,  requireContactTitle:false},
+  club:    {label:"Sports Club",         schoolClass:false, athleteCount:true,  boosterClub:false, teamStore:true, sportsMode:"include", athleticDirector:false, requireContactTitle:true},
+  business:{label:"Business",            schoolClass:false, athleteCount:false, boosterClub:false, teamStore:true, sportsMode:"none",    athleticDirector:false, requireContactTitle:true},
+};
+const DEFAULT_ORG_TYPE_CONFIG=ORG_TYPE_CONFIG.school;
+const orgTypeConfig=(t)=>ORG_TYPE_CONFIG[t]||DEFAULT_ORG_TYPE_CONFIG;
+const orgTypeLabel=(t)=>ORG_TYPE_CONFIG[t]?.label||"Organization";
 const SPORT_TITLE_PATTERNS=[
 [/track|cross.?country|\bxc\b|t&f/i,"Track & Field"],
 [/football/i,"Football"],[/basketball/i,"Basketball"],[/baseball/i,"Baseball"],
@@ -3847,6 +3880,12 @@ const [overviewEditDealId,setOverviewEditDealId]=useState(null);
 const [overviewEditValue,setOverviewEditValue]=useState("");
 const [quoteItems,setQuoteItems]=useState([]);
 const [showAddContact,setShowAddContact]=useState(false);
+// Set at the moment + ADD CONTACT opens, from the target account's own
+// ORG_TYPE_CONFIG — a club or business contact has no implied role the way
+// "probably coaches something" does for a school, so Title can't be optional
+// there. Stays false for the generic People-tab add, which has no specific
+// account context to check.
+const [addContactRequireTitle,setAddContactRequireTitle]=useState(false);
 const savingContactRef=useRef(false); // guards a rapid double-click firing two independent /Leads creates
 const [addForm,setAddForm]=useState({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
 const [showAddAccount,setShowAddAccount]=useState(false);
@@ -4332,6 +4371,7 @@ if(leftMode==="accounts"){
 setShowAddAccount(v=>!v);
 return;
 }
+setAddContactRequireTitle(false);
 setShowAddContact(v=>!v);
 }} style={{background:(showAddContact||showAddAccount)?B.orange:B.white,color:(showAddContact||showAddAccount)?B.white:B.orange,border:`1px solid ${B.orange}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:600,cursor:"pointer"}}>+ Add</button>
 <button onClick={()=>setShowCrmTools(v=>!v)} style={{background:showCrmTools?B.surface:B.white,color:B.muted,border:`1px solid ${B.border}`,borderRadius:5,padding:"6px 8px",fontFamily:"'Lexend',sans-serif",fontSize:11,cursor:"pointer"}}>Tools</button>
@@ -4479,7 +4519,7 @@ setShowAddContact(v=>!v);
 <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <div style={{gridColumn:"1/-1"}}>
-<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder={`Title / Role (e.g. Athletic Director)${addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle?" *":""}`} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim()?B.red:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
 </div>
 {isCoachRole(addForm.title)&&(
@@ -4493,6 +4533,7 @@ setShowAddContact(v=>!v);
 <OBtn sm onClick={()=>{
 if(!addAccountForm.name.trim()||savingContactRef.current) return;
 if(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport) return;
+if(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim()) return;
 savingContactRef.current=true;
 const a={id:mkId(),name:addAccountForm.name.trim(),domain:addAccountForm.domain.trim(),orgType:addAccountForm.orgType,createdAt:Date.now()};
 dispatch("ADD_ACCOUNT",a);
@@ -4511,7 +4552,7 @@ toast(`${a.name} added with ${c.fullName}`,"success");
 toast(`${a.name} added — add a contact to attach someone to it`,"success");
 }
 setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});
-}} disabled={!addAccountForm.name.trim()||(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport)}>SAVE</OBtn>
+}} disabled={!addAccountForm.name.trim()||(addForm.lastName&&isCoachRole(addForm.title)&&!addForm.sport)||(addForm.lastName&&orgTypeConfig(addAccountForm.orgType).requireContactTitle&&!addForm.title.trim())}>SAVE</OBtn>
 <GBtn sm onClick={()=>{setShowAddAccount(false);setAddAccountForm({name:"",domain:"",orgType:"school"});setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
 </div>
 </div>
@@ -4535,8 +4576,9 @@ setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:
 <input value={addForm.email} onChange={e=>setAddForm(f=>({...f,email:e.target.value}))} placeholder="Email" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.phone} onChange={e=>setAddForm(f=>({...f,phone:e.target.value}))} placeholder="Phone" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <div style={{gridColumn:"1/-1"}}>
-<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder="Title / Role (e.g. Athletic Director)" style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
+<input value={addForm.title} onChange={e=>setAddForm(f=>({...f,title:e.target.value,sport:isCoachRole(e.target.value)?f.sport:""}))} placeholder={`Title / Role (e.g. Athletic Director)${addContactRequireTitle?" *":""}`} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${addContactRequireTitle&&!addForm.title.trim()?B.red:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <RoleQuickPick value={addForm.title} onChange={r=>setAddForm(f=>({...f,title:r}))}/>
+{addContactRequireTitle&&!addForm.title.trim()&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.red,marginTop:3}}>Title is required for this organization type.</div>}
 </div>
 {isCoachRole(addForm.title)&&(
 <select value={addForm.sport} onChange={e=>setAddForm(f=>({...f,sport:e.target.value}))} style={{gridColumn:"1/-1",width:"100%",boxSizing:"border-box",background:B.white,border:`1.5px solid ${addForm.sport?B.purple:B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:addForm.sport?B.purple:B.muted}}>
@@ -4549,6 +4591,7 @@ setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:
 <OBtn sm onClick={()=>{
 if(!addForm.lastName||savingContactRef.current) return;
 if(isCoachRole(addForm.title)&&!addForm.sport) return;
+if(addContactRequireTitle&&!addForm.title.trim()) return;
 savingContactRef.current=true;
 const c={id:mkId(),firstName:addForm.firstName,lastName:addForm.lastName,fullName:`${addForm.firstName} ${addForm.lastName}`.trim(),school:addForm.school,email:addForm.email,phone:addForm.phone,title:addForm.title,sport:addForm.sport,ownerId:cu?.id,source:"manual",orgType:"school",importedAt:Date.now()};
 dispatch("ADD_CONTACTS",[c]);
@@ -4558,7 +4601,7 @@ setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:
 toast(`${c.fullName} added`,"success");
 fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Leads",method:"POST",body:{data:[{First_Name:addForm.firstName,Last_Name:addForm.lastName,Email:addForm.email,Phone:addForm.phone,Company:addForm.school,Designation:addForm.title}]}})})
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
-}} disabled={!addForm.lastName||(isCoachRole(addForm.title)&&!addForm.sport)}>SAVE</OBtn>
+}} disabled={!addForm.lastName||(isCoachRole(addForm.title)&&!addForm.sport)||(addContactRequireTitle&&!addForm.title.trim())}>SAVE</OBtn>
 <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
 </div>
 </div>
@@ -4695,14 +4738,18 @@ const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(sel
 // it's an attribute of the school, not of whichever person happens to be
 // contact #1 today.
 const schoolOrgType=accountRecord?.orgType||primaryC?.orgType||"";
-// School Class/# Athletes/# Sports/Booster Club/the whole Staff Coverage
-// table only mean anything for an org that actually runs school athletic
-// programs — a business account shouldn't carry (or be asked to fill in)
-// any of it.
-const isBusinessOrg=schoolOrgType==="business";
+// Every "does this field apply" question below reads from ORG_TYPE_CONFIG
+// instead of its own one-off check, so adding or adjusting an org type is a
+// config edit in one place, not a hunt through every section that touches it.
+const orgCfg=orgTypeConfig(schoolOrgType);
 const schoolClass=accountRecord?.schoolClass||primaryC?.schoolClass||"";
 const numAthletes=accountRecord?.numAthletes||primaryC?.numAthletes||"";
 const numSports=accountRecord?.numSports||primaryC?.numSports||"";
+// A club's "how many sports" is however many it's actually ticked off in
+// Sports Offered — not a free-typed guess the way numSports is for a
+// school running "most" sports. sportsMode drives which number is real.
+const offeredSports=accountRecord?.offeredSports||[];
+const sportsCountForDisplay=orgCfg.sportsMode==="include"?offeredSports.length:Number(numSports)||0;
 const state=accountRecord?.state||primaryC?.state||"";
 const city=accountRecord?.city||primaryC?.city||"";
 const website=primaryC?.website||accountRecord?.domain||"";
@@ -4773,6 +4820,7 @@ state:state||"",
 orgType:schoolOrgType||"school",
 numAthletes:numAthletes?String(numAthletes):"",
 numSports:numSports?String(numSports):"",
+offeredSports,
 hasOnlineStore,
 teamStoreUrl,
 linkedStoreName,
@@ -4801,23 +4849,26 @@ fetch(`/api/team-store/names?q=${encodeURIComponent(val)}`)
 const saveAccountInfo=()=>{
 setSavingAccountInfo(true);
 const id=ensureAccountRecord();
-// Business wipes the school-only fields on save, not just hides them while
-// editing — otherwise switching to Business leaves stale School Class/
-// athlete/sport/booster-club numbers sitting in the record, invisible now
-// but still there (and ready to reappear if the org type ever changes back).
-const savingBusiness=accountInfoForm.orgType==="business";
+// Wipes whatever the chosen org type doesn't carry, not just hides it
+// while editing — otherwise switching types leaves stale School Class/
+// athlete/sport/booster-club/offered-sports data sitting in the record,
+// invisible now but still there (and ready to reappear if the org type
+// ever changes back). Driven by the same ORG_TYPE_CONFIG every display
+// in this file reads, so a new/changed org type only needs editing there.
+const savedCfg=orgTypeConfig(accountInfoForm.orgType);
 dispatch("UPDATE_ACCOUNT",{
 id,
-schoolClass:savingBusiness?"":(accountInfoForm.schoolClass||""),
+schoolClass:savedCfg.schoolClass?(accountInfoForm.schoolClass||""):"",
 city:(accountInfoForm.city||"").trim(),
 state:(accountInfoForm.state||"").trim(),
 orgType:accountInfoForm.orgType||"school",
-numAthletes:savingBusiness?0:(Number(accountInfoForm.numAthletes)||0),
-numSports:savingBusiness?0:(Number(accountInfoForm.numSports)||0),
-hasOnlineStore:accountInfoForm.hasOnlineStore===true,
-teamStoreUrl:accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
-linkedStoreName:accountInfoForm.hasOnlineStore===true?(accountInfoForm.linkedStoreName||""):"",
-hasBoosterClub:savingBusiness?false:(accountInfoForm.hasBoosterClub===true),
+numAthletes:savedCfg.athleteCount?(Number(accountInfoForm.numAthletes)||0):0,
+numSports:savedCfg.sportsMode==="exclude"?(Number(accountInfoForm.numSports)||0):0,
+offeredSports:savedCfg.sportsMode==="include"?accountInfoForm.offeredSports:[],
+hasOnlineStore:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true,
+teamStoreUrl:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
+linkedStoreName:savedCfg.teamStore&&accountInfoForm.hasOnlineStore===true?(accountInfoForm.linkedStoreName||""):"",
+hasBoosterClub:savedCfg.boosterClub?(accountInfoForm.hasBoosterClub===true):false,
 });
 setEditingAccountInfo(false);
 setSavingAccountInfo(false);
@@ -4875,16 +4926,16 @@ return(
 )}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {website&&<a href={website} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{website.replace(/^https?:\/\//,"")}</a>}
-{!isBusinessOrg&&schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+{orgCfg.schoolClass&&schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
-{!isBusinessOrg&&numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-{!isBusinessOrg&&numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
-{hasOnlineStore&&(teamStoreUrl?(
+{orgCfg.athleteCount&&numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+{orgCfg.sportsMode!=="none"&&sportsCountForDisplay>0&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{sportsCountForDisplay} sport{sportsCountForDisplay!==1?"s":""}</span>}
+{orgCfg.teamStore&&hasOnlineStore&&(teamStoreUrl?(
 <a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3,textDecoration:"none"}}>TEAM STORE ↗</a>
 ):(
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>
 ))}
-{!isBusinessOrg&&hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
+{orgCfg.boosterClub&&hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
 </div>
 </div>
 {/* Revenue summary */}
@@ -4914,7 +4965,7 @@ return(
 {/* Action bar */}
 <div style={{display:"flex",gap:8,marginBottom:4,paddingTop:6,flexWrap:"wrap",alignItems:"center"}}>
 <OBtn sm onClick={()=>{setTtContact(schoolContacts[0]||null);setTtView(true);}}>⤳ TALK TRACK</OBtn>
-<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
+<GBtn sm onClick={()=>{setAddForm(f=>({...f,school:schoolCleanName}));setAddContactRequireTitle(orgCfg.requireContactTitle);setShowAddContact(true);}}>+ ADD CONTACT</GBtn>
 <GBtn sm onClick={()=>{setAccountPdfDraft(null);setShowAccountDeal(v=>!v);setAccountDealForm({name:`${schoolCleanName} — Equipment`,value:"",stage:"Quoted",product:"",contactId:primaryC?.id||"",notes:""});}}>+ ADD DEAL</GBtn>
 <GBtn sm onClick={()=>accountPdfRef.current?.click()}>{accountPdfBusy?"READING PDF…":"UPLOAD PDF"}</GBtn>
 <input ref={accountPdfRef} type="file" accept="application/pdf" style={{display:"none"}} onChange={async e=>{
@@ -5041,10 +5092,10 @@ const lblS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,lett
 const valS={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500};
 const inpS={width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
 const toggle=(active)=>({flex:1,background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"});
-// Live off the in-progress edit, not just the saved value, so picking
-// "Business" from the Org Type dropdown hides School Class/# Athletes/
-// # Sports/Booster Club immediately instead of only after SAVE.
-const hidingSchoolFields=editingAccountInfo?accountInfoForm.orgType==="business":isBusinessOrg;
+// Live off the in-progress edit, not just the saved value, so picking a
+// different Org Type shows/hides fields immediately instead of only after
+// SAVE — same ORG_TYPE_CONFIG the rest of the account page reads from.
+const liveCfg=editingAccountInfo?orgTypeConfig(accountInfoForm.orgType):orgCfg;
 return(<>
 <SectionHdr sub={editingAccountInfo?(
 <div style={{display:"flex",gap:6}}>
@@ -5055,7 +5106,7 @@ return(<>
 <button onClick={startEditAccountInfo} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}} title="Edit account info">✎ EDIT</button>
 )}>ACCOUNT INFO</SectionHdr>
 <div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
-{!hidingSchoolFields&&(
+{liveCfg.schoolClass&&(
 <div>
 <div style={lblS}>School Class</div>
 {editingAccountInfo?(
@@ -5087,7 +5138,7 @@ return(<>
 </select>
 ):(<div style={valS}>{orgTypeLabel(schoolOrgType)}</div>)}
 </div>
-{!hidingSchoolFields&&(
+{liveCfg.athleteCount&&(
 <div>
 <div style={lblS}># Athletes</div>
 {editingAccountInfo?(
@@ -5095,7 +5146,7 @@ return(<>
 ):(<div style={valS}>{numAthletes||"—"}</div>)}
 </div>
 )}
-{!hidingSchoolFields&&(
+{liveCfg.sportsMode==="exclude"&&(
 <div>
 <div style={lblS}># Sports</div>
 {editingAccountInfo?(
@@ -5103,6 +5154,22 @@ return(<>
 ):(<div style={valS}>{numSports||"—"}</div>)}
 </div>
 )}
+{liveCfg.sportsMode==="include"&&(
+<div style={{gridColumn:"1/-1"}}>
+<div style={lblS}>Sports Offered{editingAccountInfo?` (${accountInfoForm.offeredSports.length} selected)`:""}</div>
+{editingAccountInfo?(
+<div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+{ACCOUNT_SPORTS.map(sp=>{
+const on=accountInfoForm.offeredSports.includes(sp);
+return(
+<button key={sp} onClick={()=>setAccountInfoForm(f=>({...f,offeredSports:on?f.offeredSports.filter(s=>s!==sp):[...f.offeredSports,sp]}))} style={{background:on?B.orange:B.white,color:on?B.white:B.muted,border:`1px solid ${on?B.orange:B.border}`,borderRadius:4,padding:"3px 9px",fontSize:10,fontFamily:"'Lexend',sans-serif",cursor:"pointer"}}>{sp}</button>
+);
+})}
+</div>
+):(<div style={valS}>{offeredSports.length?offeredSports.join(", "):"—"}</div>)}
+</div>
+)}
+{liveCfg.teamStore&&(
 <div style={editingAccountInfo&&accountInfoForm.hasOnlineStore?{gridColumn:"span 2"}:undefined}>
 <div style={lblS}>Team Store</div>
 {editingAccountInfo?(
@@ -5139,7 +5206,8 @@ return(<>
 hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{...valS,color:B.blue}}>{teamStoreUrl.replace(/^https?:\/\//,"")}</a>:<div style={valS}>Yes</div>):<div style={valS}>No</div>
 )}
 </div>
-{!hidingSchoolFields&&(
+)}
+{liveCfg.boosterClub&&(
 <div>
 <div style={lblS}>Booster Club</div>
 {editingAccountInfo?(
@@ -5232,9 +5300,15 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 const thS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`};
 const tdName={fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
 const tdMuted={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
-// A business has people and titles, not sports or an Athletic Director —
-// no gap rows, no "not offered," just who's on file.
-if(isBusinessOrg){
+const smallBtn={background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:findingStaff?"default":"pointer",color:B.muted};
+const contactSportOf=(c)=>{
+let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
+return sp;
+};
+// sportsMode "none" (business): a business has people and titles, not
+// sports or an Athletic Director — no gap rows, no sport tracking at all.
+if(orgCfg.sportsMode==="none"){
 return(<>
 <SectionHdr sub={`${schoolContacts.length} on file`}>CONTACTS</SectionHdr>
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
@@ -5252,25 +5326,60 @@ return(<>
 </div>
 </>);
 }
-const contactSportOf=(c)=>{
-let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
-return sp;
-};
-const excludedSports=accountRecord?.excludedSports||[];
 const coveredSports=new Set(schoolContacts.map(contactSportOf).filter(Boolean));
+// sportsMode "include" (club): gaps are only sports it actually offers
+// (opt-IN list) minus whichever of those are covered — not all tracked
+// sports minus an opt-OUT list the way a school works. No Athletic
+// Director row; clubs don't have one.
+if(orgCfg.sportsMode==="include"){
+const searchOneRole=(sp)=>findMissingStaff(schoolCleanName,city,state,[sp],false);
+const gapSports=offeredSports.filter(sp=>!coveredSports.has(sp));
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file${gapSports.length?` · ${gapSports.length} gap${gapSports.length!==1?"s":""}`:""}`}>CONTACTS / COACHES</SectionHdr>
+{offeredSports.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Pick which sports this club offers in ACCOUNT INFO → EDIT to track coverage here.</div>}
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px"}}>
+{["NAME","SPORT / ROLE","EMAIL",""].map(h=><div key={h} style={thS}>{h}</div>)}
+</div>
+{schoolContacts.length===0&&offeredSports.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px"}}>No contacts yet.</div>}
+{schoolContacts.map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{contactSportOf(c)||c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
+</div>
+))}
+{gapSports.map(sp=>(
+<div key={sp} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>{sp}</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center"}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(sp)} disabled={findingStaff} title={`Search for a ${sp} coach`} style={smallBtn}>🔎</button>}
+</div>
+</div>
+))}
+</div>
+{!hasPositiveIntent&&gapSports.length>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
+</>);
+}
+// sportsMode "exclude" (school/college): track every ACCOUNT_SPORTS entry
+// as a gap until it's covered or explicitly marked not offered — most
+// schools run most sports, so starting from "everything, opt out the
+// exceptions" fits better than the club's opt-in list.
+const excludedSports=accountRecord?.excludedSports||[];
 const gapSports=ACCOUNT_SPORTS.filter(sp=>!coveredSports.has(sp)&&!excludedSports.includes(sp));
 const setExcludedSports=(next)=>dispatch("UPDATE_ACCOUNT",{id:ensureAccountRecord(),excludedSports:next});
 const searchOneRole=(sp,isAD)=>findMissingStaff(schoolCleanName,city,state,isAD?[]:[sp],isAD);
-const smallBtn={background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:findingStaff?"default":"pointer",color:B.muted};
-const gapCount=gapSports.length+(coverage.adContact?0:1);
+const gapCount=gapSports.length+(orgCfg.athleticDirector&&!coverage.adContact?1:0);
 return(<>
 <SectionHdr sub={`${schoolContacts.length} on file${gapCount?` · ${gapCount} gap${gapCount!==1?"s":""}`:""}`}>CONTACTS / COACHES</SectionHdr>
 <div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
 <div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px"}}>
 {["NAME","SPORT / ROLE","EMAIL",""].map(h=><div key={h} style={thS}>{h}</div>)}
 </div>
-{coverage.adContact?(
+{orgCfg.athleticDirector&&(coverage.adContact?(
 <div onClick={()=>setSelId(coverage.adContact.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
 <div style={tdName}>{cName(coverage.adContact)}</div>
 <div style={tdMuted}>Athletic Director</div>
@@ -5286,7 +5395,7 @@ return(<>
 {hasPositiveIntent&&<button onClick={()=>searchOneRole(null,true)} disabled={findingStaff} title="Search for the Athletic Director" style={smallBtn}>🔎 Search</button>}
 </div>
 </div>
-)}
+))}
 {schoolContacts.filter(c=>c.id!==coverage.adContact?.id).map(c=>(
 <div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
 <div style={tdName}>{cName(c)}</div>
