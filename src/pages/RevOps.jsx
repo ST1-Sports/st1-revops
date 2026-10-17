@@ -4236,7 +4236,6 @@ const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, 
 setDraft(t||"");setDrafting(false);
 };
 const [findingStaff,setFindingStaff]=useState(false);
-const [showCoverageGaps,setShowCoverageGaps]=useState(false);
 const findMissingStaff=async(school,schoolCity,schoolState,gaps,needsAD)=>{
 setFindingStaff(true);
 const roles=[...(needsAD?["Athletic Director"]:[]),...gaps.map(sp=>`Head ${sp} Coach`)];
@@ -5145,55 +5144,10 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 )}
 </>);
 })()}
-{/* ── STAFF COVERAGE ── */}
-{/* Used to list all 20 ACCOUNT_SPORTS as pills every time, covered or not —
-    mostly gray "not on file" noise for any school that doesn't run every
-    sport ST1 tracks, and the covered ones only showed WHO via a hover
-    tooltip instead of just saying so. Now: who's actually on file is a
-    plain, readable list; gaps collapse behind a count so the useful part
-    (who do we have) isn't buried under the unhelpful part (who we don't). */}
-<SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
-<div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-<div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1}}>ATHLETIC DIRECTOR</span>
-{coverage.adContact?
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.green,fontWeight:500}}>{cName(coverage.adContact)}</span>
-:<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,background:B.border,padding:"2px 7px",borderRadius:3}}>NOT ON FILE</span>}
-</div>
-{coverage.gaps.length>0&&hasPositiveIntent&&(
-<OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(schoolCleanName,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
-)}
-</div>
-{coverage.covered.size>0&&(
-<div style={{marginBottom:coverage.gaps.length>0?10:0}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:5}}>COACHES ON FILE ({coverage.covered.size})</div>
-<div style={{display:"flex",flexDirection:"column",gap:4}}>
-{[...coverage.covered.entries()].map(([sp,c])=>(
-<div key={sp} style={{display:"flex",justifyContent:"space-between",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
-<span style={{color:B.muted}}>{sp}</span>
-<span style={{color:B.text,fontWeight:500}}>{cName(c)}</span>
-</div>
-))}
-</div>
-</div>
-)}
-{coverage.gaps.length>0&&(
-<div>
-<button onClick={()=>setShowCoverageGaps(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>
-{showCoverageGaps?"Hide":"Show"} {coverage.gaps.length} sport{coverage.gaps.length!==1?"s":""} with no coach on file {showCoverageGaps?"▲":"▼"}
-</button>
-{showCoverageGaps&&(
-<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
-{coverage.gaps.map(sp=>(
-<span key={sp} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.3,padding:"3px 8px",borderRadius:3,color:B.muted,background:B.border}}>{sp}</span>
-))}
-</div>
-)}
-{!hasPositiveIntent&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
-</div>
-)}
-</div>
+{/* Staff Coverage used to have its own section here, separate from the
+    actual contact list a few clicks away on the CONTACTS tab — moved there
+    entirely (see accountTab==="contacts" below) so who's on file and who's
+    missing live in one table instead of two disconnected views. */}
 {/* ── SPONSORSHIP ── */}
 {(sponsorshipMin||sponsorshipStatus)&&(
 <>
@@ -5234,28 +5188,84 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 </>)}
 </>)}
 {accountTab==="contacts"&&(<>
-{/* ── CONTACTS ── */}
-<SectionHdr sub={`${schoolContacts.length} total`}>CONTACTS / COACHES</SectionHdr>
-{schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No contacts yet.</div>}
-<div style={{display:"flex",flexDirection:"column",gap:6}}>
-{schoolContacts.map(c=>{
-const {cd,phase}=getCD(c);
-const top=cd.find(d=>!["Closed Won","Closed Lost"].includes(d.stage))||cd[0];
-const pc=PCOL[phase];
-return(
-<div key={c.id} onClick={()=>setSelId(c.id)} style={{background:B.white,border:`1px solid ${selId===c.id?B.orange:B.border}`,borderRadius:6,padding:"10px 14px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{cName(c)}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:1}}>{[c.title,c.sport,c.email].filter(Boolean).join(" · ")}</div>
+{/* ── CONTACTS / COACHES — table, merged with Staff Coverage ── */}
+{/* Used to be a separate card list here PLUS a whole other "Staff Coverage"
+    section on Overview repeating the same people by sport, with no way to
+    tell "we don't run this sport" apart from "we just don't have a coach
+    on file yet" — every untracked sport showed as a gap forever. Now one
+    table: real contacts with whatever sport/role they're on file for, a
+    row for each actually-missing sport/role with its own search button,
+    and a sport marked "not offered" drops out of the gap rows for good
+    (reversible below) instead of nagging every time this page loads. */}
+{(()=>{
+const contactSportOf=(c)=>{
+let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
+if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
+return sp;
+};
+const excludedSports=accountRecord?.excludedSports||[];
+const coveredSports=new Set(schoolContacts.map(contactSportOf).filter(Boolean));
+const gapSports=ACCOUNT_SPORTS.filter(sp=>!coveredSports.has(sp)&&!excludedSports.includes(sp));
+const setExcludedSports=(next)=>dispatch("UPDATE_ACCOUNT",{id:ensureAccountRecord(),excludedSports:next});
+const searchOneRole=(sp,isAD)=>findMissingStaff(schoolCleanName,city,state,isAD?[]:[sp],isAD);
+const thS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`};
+const tdName={fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+const tdMuted={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+const smallBtn={background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:findingStaff?"default":"pointer",color:B.muted};
+const gapCount=gapSports.length+(coverage.adContact?0:1);
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file${gapCount?` · ${gapCount} gap${gapCount!==1?"s":""}`:""}`}>CONTACTS / COACHES</SectionHdr>
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px"}}>
+{["NAME","SPORT / ROLE","EMAIL",""].map(h=><div key={h} style={thS}>{h}</div>)}
 </div>
-<div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
-{top&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[top.stage]||B.muted}}>{top.stage} · {fmt$(top.value||0)}</div>}
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:pc,background:`${pc}18`,padding:"2px 6px",borderRadius:3}}>{phase}</span>
+{coverage.adContact?(
+<div onClick={()=>setSelId(coverage.adContact.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(coverage.adContact)}</div>
+<div style={tdMuted}>Athletic Director</div>
+<div style={tdMuted}>{coverage.adContact.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
+</div>
+):(
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>Athletic Director</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center"}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(null,true)} disabled={findingStaff} title="Search for the Athletic Director" style={smallBtn}>🔎 Search</button>}
 </div>
 </div>
-);
-})}
+)}
+{schoolContacts.filter(c=>c.id!==coverage.adContact?.id).map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{contactSportOf(c)||c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+<div style={{...tdMuted,padding:"9px 12px"}}></div>
 </div>
+))}
+{gapSports.map(sp=>(
+<div key={sp} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr 90px",background:B.surface}}>
+<div style={tdMuted}>—</div>
+<div style={tdName}>{sp}</div>
+<div style={tdMuted}>—</div>
+<div style={{padding:"6px 10px",borderBottom:`1px solid ${B.border}`,display:"flex",alignItems:"center",gap:4}}>
+{hasPositiveIntent&&<button onClick={()=>searchOneRole(sp,false)} disabled={findingStaff} title={`Search for a ${sp} coach`} style={smallBtn}>🔎</button>}
+<button onClick={()=>setExcludedSports([...excludedSports,sp])} title="We don't offer this sport" style={smallBtn}>Not offered</button>
+</div>
+</div>
+))}
+</div>
+{!hasPositiveIntent&&gapCount>0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
+{excludedSports.length>0&&(
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8}}>
+Not offered: {excludedSports.map(sp=>(
+<span key={sp} style={{marginRight:10}}>{sp} <button onClick={()=>setExcludedSports(excludedSports.filter(s=>s!==sp))} style={{background:"none",border:"none",color:B.blue,cursor:"pointer",fontSize:10,padding:0,textDecoration:"underline"}}>undo</button></span>
+))}
+</div>
+)}
+</>);
+})()}
 {/* ── CONTACTS FROM BOOKS ── */}
 {schoolInvoices.length>0&&schoolInvoices[0].customerId&&(()=>{
 const booksCustomerId=schoolInvoices[0].customerId;
