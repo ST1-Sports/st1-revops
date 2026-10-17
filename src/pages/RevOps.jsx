@@ -3878,6 +3878,31 @@ const accountPdfRef=useRef(null);
 const [editingAccountInfo,setEditingAccountInfo]=useState(false);
 const [accountInfoForm,setAccountInfoForm]=useState(null);
 const [savingAccountInfo,setSavingAccountInfo]=useState(false);
+const [storeNameQuery,setStoreNameQuery]=useState("");
+const [storeNameResults,setStoreNameResults]=useState([]);
+const [storeNameSearching,setStoreNameSearching]=useState(false);
+const storeNameSearchTimer=useRef(null);
+const [teamStoreSummary,setTeamStoreSummary]=useState(null);
+const [loadingTeamStoreSummary,setLoadingTeamStoreSummary]=useState(false);
+// Re-derives the linked store name independently of the account-detail IIFE
+// below (which only runs while that page is actually open) — this effect
+// lives at the top level since hooks can't live inside a conditionally
+// rendered IIFE, so it reads s.accounts/selSchool directly instead of
+// reusing that IIFE's local accountRecord.
+useEffect(()=>{
+const acct=(s.accounts||[]).find(a=>accountBelongsToSchoolKey(a,selSchool));
+const name=acct?.linkedStoreName||"";
+if(!name){setTeamStoreSummary(null);return;}
+let cancelled=false;
+setLoadingTeamStoreSummary(true);
+fetch(`/api/team-store/summary?storeName=${encodeURIComponent(name)}`)
+.then(r=>r.json())
+.then(d=>{if(!cancelled)setTeamStoreSummary(d?.ok?d:null);})
+.catch(()=>{if(!cancelled)setTeamStoreSummary(null);})
+.finally(()=>{if(!cancelled)setLoadingTeamStoreSummary(false);});
+return ()=>{cancelled=true;};
+// eslint-disable-next-line react-hooks/exhaustive-deps
+},[selSchool,s.accounts]);
 const [smsHistory,setSmsHistory]=useState([]);
 const [smsLoading,setSmsLoading]=useState(false);
 const [smsBody,setSmsBody]=useState("");
@@ -4708,6 +4733,7 @@ const sponsorshipPaid=primaryC?.sponsorshipPaid||false;
 const hasOnlineStore=accountRecord?.hasOnlineStore!=null?accountRecord.hasOnlineStore:(primaryC?.hasOnlineStore||false);
 const hasBoosterClub=accountRecord?.hasBoosterClub!=null?accountRecord.hasBoosterClub:(primaryC?.hasBoosterClub||false);
 const teamStoreUrl=accountRecord?.teamStoreUrl||"";
+const linkedStoreName=accountRecord?.linkedStoreName||"";
 const startEditAccountInfo=()=>{
 setAccountInfoForm({
 schoolClass,
@@ -4718,9 +4744,28 @@ numAthletes:numAthletes?String(numAthletes):"",
 numSports:numSports?String(numSports):"",
 hasOnlineStore,
 teamStoreUrl,
+linkedStoreName,
 hasBoosterClub,
 });
+setStoreNameQuery(linkedStoreName);
+setStoreNameResults([]);
 setEditingAccountInfo(true);
+};
+// Debounced search against the synced Team Store order names (api/team-
+// store/names.js) — picking one here, instead of typing a name free-form,
+// is what makes the revenue/payable card below reliable: it queries by
+// this exact stored name, not a fuzzy match computed fresh every time.
+const searchStoreNames=(val)=>{
+setStoreNameQuery(val);
+setAccountInfoForm(f=>f&&({...f,linkedStoreName:""}));
+clearTimeout(storeNameSearchTimer.current);
+if(!val.trim()){setStoreNameResults([]);return;}
+storeNameSearchTimer.current=setTimeout(()=>{
+setStoreNameSearching(true);
+fetch(`/api/team-store/names?q=${encodeURIComponent(val)}`)
+.then(r=>r.json()).then(d=>{setStoreNameResults(d?.names||[]);setStoreNameSearching(false);})
+.catch(()=>setStoreNameSearching(false));
+},350);
 };
 const saveAccountInfo=()=>{
 setSavingAccountInfo(true);
@@ -4735,6 +4780,7 @@ numAthletes:Number(accountInfoForm.numAthletes)||0,
 numSports:Number(accountInfoForm.numSports)||0,
 hasOnlineStore:accountInfoForm.hasOnlineStore===true,
 teamStoreUrl:accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
+linkedStoreName:accountInfoForm.hasOnlineStore===true?(accountInfoForm.linkedStoreName||""):"",
 hasBoosterClub:accountInfoForm.hasBoosterClub===true,
 });
 setEditingAccountInfo(false);
@@ -5018,7 +5064,28 @@ return(<>
 <button key={opt} onClick={()=>setAccountInfoForm(f=>({...f,hasOnlineStore:opt==="Yes"}))} style={toggle(opt==="Yes"?accountInfoForm.hasOnlineStore===true:accountInfoForm.hasOnlineStore!==true)}>{opt}</button>
 ))}
 </div>
-{accountInfoForm.hasOnlineStore&&<input value={accountInfoForm.teamStoreUrl} onChange={e=>setAccountInfoForm(f=>({...f,teamStoreUrl:e.target.value}))} placeholder="https://teamstore…" style={inpS}/>}
+{accountInfoForm.hasOnlineStore&&(
+<div style={{display:"flex",flexDirection:"column",gap:5}}>
+<input value={accountInfoForm.teamStoreUrl} onChange={e=>setAccountInfoForm(f=>({...f,teamStoreUrl:e.target.value}))} placeholder="https://teamstore…" style={inpS}/>
+<div style={{position:"relative"}}>
+<input value={storeNameQuery} onChange={e=>searchStoreNames(e.target.value)} placeholder="Link to a synced store (for revenue tracking)…" style={inpS}/>
+{accountInfoForm.linkedStoreName&&(
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,marginTop:3}}>✓ Linked to "{accountInfoForm.linkedStoreName}"</div>
+)}
+{storeNameQuery&&!accountInfoForm.linkedStoreName&&(storeNameSearching||storeNameResults.length>0)&&(
+<div style={{position:"absolute",top:"100%",left:0,right:0,background:B.white,border:`1px solid ${B.border}`,borderRadius:5,boxShadow:"0 4px 12px rgba(0,0,0,.1)",zIndex:20,maxHeight:160,overflowY:"auto"}}>
+{storeNameSearching?(
+<div style={{padding:"8px 10px",fontSize:10,color:B.muted}}>Searching…</div>
+):storeNameResults.length===0?(
+<div style={{padding:"8px 10px",fontSize:10,color:B.muted}}>No synced store matches that name</div>
+):storeNameResults.map(n=>(
+<button key={n} onClick={()=>{setAccountInfoForm(f=>({...f,linkedStoreName:n}));setStoreNameQuery(n);setStoreNameResults([]);}} style={{display:"block",width:"100%",textAlign:"left",background:"transparent",border:"none",borderBottom:`1px solid ${B.border}`,padding:"7px 10px",cursor:"pointer",fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{n}</button>
+))}
+</div>
+)}
+</div>
+</div>
+)}
 </div>
 ):(
 hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{...valS,color:B.blue}}>{teamStoreUrl.replace(/^https?:\/\//,"")}</a>:<div style={valS}>Yes</div>):<div style={valS}>No</div>
@@ -5037,6 +5104,25 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 <div><div style={lblS}>Contacts</div><div style={valS}>{schoolContacts.length}</div></div>
 <div><div style={lblS}>Open Deals</div><div style={valS}>{openDeals.length}</div></div>
 </div>
+{/* ── TEAM STORE PERFORMANCE — only once a store is linked above ── */}
+{linkedStoreName&&(
+<>
+<SectionHdr>TEAM STORE PERFORMANCE</SectionHdr>
+<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+{loadingTeamStoreSummary?(
+<div style={{...valS,color:B.muted,gridColumn:"1/-1"}}>Loading store performance…</div>
+):teamStoreSummary?(<>
+<div><div style={lblS}>Orders</div><div style={valS}>{teamStoreSummary.orderCount}</div></div>
+<div><div style={lblS}>Revenue Collected</div><div style={valS}>{fmt$(teamStoreSummary.grossCollected)}</div></div>
+<div><div style={lblS}>ST1 Revenue Share</div><div style={{...valS,color:B.green}}>{fmt$(teamStoreSummary.revenueShare)}</div></div>
+<div><div style={lblS}>Paid To School</div><div style={valS}>{fmt$(teamStoreSummary.paidToSchool)}</div></div>
+<div><div style={lblS}>Outstanding To School</div><div style={{...valS,color:teamStoreSummary.outstandingToSchool>0?B.red:B.muted}}>{fmt$(teamStoreSummary.outstandingToSchool)}</div></div>
+</>):(
+<div style={{...valS,color:B.muted,gridColumn:"1/-1"}}>No synced orders found yet for "{linkedStoreName}".</div>
+)}
+</div>
+</>
+)}
 </>);
 })()}
 {/* ── STAFF COVERAGE ── */}
