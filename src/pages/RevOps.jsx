@@ -3871,6 +3871,7 @@ const [booksContactsByCustomer,setBooksContactsByCustomer]=useState({});
 const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
 const [showAccountDeal,setShowAccountDeal]=useState(false);
+const [accountDealModal,setAccountDealModal]=useState(null);
 const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quoted",product:"",contactId:"",notes:""});
 const [accountPdfBusy,setAccountPdfBusy]=useState(false);
 const [accountPdfDraft,setAccountPdfDraft]=useState(null);
@@ -4097,7 +4098,14 @@ setSelId(id);setCrmTab(tab==="quote"?"deal":(tab||"overview"));
 if(school){setLeftMode("accounts");setSelSchool(school);}
 else setLeftMode("contacts");
 }
-else if(school){setLeftMode("accounts");setSelSchool(school);setSelId(null);if(tab)setCrmTab(tab==="quote"?"deal":tab);}
+else if(school){
+// Landing on the account page itself (no contact id) — that page switches
+// sections via its own accountTab state, not crmTab (which only the
+// contact-detail page reads), so a 'deal'/'quote' hint has to map onto
+// accountTab's "deals" tab or it silently lands on Overview instead.
+setLeftMode("accounts");setSelSchool(school);setSelId(null);
+if(tab)setAccountTab(tab==="quote"||tab==="deal"?"deals":tab);
+}
 dispatch("SET_CRM_NAV",null);
 },[s.crmNav]);
 useEffect(()=>{
@@ -5286,7 +5294,7 @@ return(<>
 {allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
-<div key={d.id} onClick={()=>{const c=schoolContacts.find(ct=>ct.id===d.contactId)||schoolContacts.find(ct=>cName(ct)===d.contact);if(c){setSelId(c.id);setCrmTab("deal");}}} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:(d.contactId||d.contact)?"pointer":"default"}}>
+<div key={d.id} onClick={()=>setAccountDealModal(d)} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:"pointer"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
@@ -5374,6 +5382,55 @@ return(<>
 </div>
 </>);
 })()}
+{/* ── DEAL DETAIL (popup) ── */}
+{/* Clicking a deal here used to resolve its contact and navigate to that
+    person's own deal tab — the deal belongs to this account, so that
+    jumped away from the account entirely for the sake of editing it.
+    This opens in place instead; everything below acts on this deal's own
+    id, not on a contact. */}
+{accountDealModal&&(
+<div onClick={()=>setAccountDealModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:440,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
+<div>
+<div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{accountDealModal.name}</div>
+{accountDealModal.contact&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>Contact: {accountDealModal.contact}</div>}
+</div>
+<button onClick={()=>setAccountDealModal(null)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+</div>
+<Lbl s={{marginBottom:5}}>Stage</Lbl>
+<div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
+{DEAL_STAGES.map(st=>(
+<button key={st} onClick={()=>{
+const prevStage=accountDealModal.stage;
+dispatch("UPDATE_DEAL",{id:accountDealModal.id,stage:st});
+crmUpdate("Deals",accountDealModal.zohoId,{Stage:st});
+setAccountDealModal(m=>({...m,stage:st}));
+toast("Stage updated","success");
+autoInvoiceOnClosedWon(accountDealModal,prevStage,st,toast);
+}} style={{background:accountDealModal.stage===st?DSC[st]:B.surface,color:accountDealModal.stage===st?B.white:B.muted,border:`1px solid ${accountDealModal.stage===st?DSC[st]:B.border}`,borderRadius:3,padding:"3px 7px",fontSize:9,cursor:"pointer"}}>{st}</button>
+))}
+</div>
+<Lbl s={{marginBottom:3}}>Value ($)</Lbl>
+<div style={{display:"flex",gap:6,marginBottom:12}}>
+<input type="number" value={accountDealModal.value||0} onChange={e=>setAccountDealModal(m=>({...m,value:Number(e.target.value)||0}))} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+<OBtn sm onClick={()=>{dispatch("UPDATE_DEAL",{id:accountDealModal.id,value:accountDealModal.value});crmUpdate("Deals",accountDealModal.zohoId,{Amount:accountDealModal.value});toast("Deal value updated","success");}}>SAVE</OBtn>
+</div>
+<Lbl s={{marginBottom:3}}>Follow-up Date</Lbl>
+<input type="date" value={accountDealModal.followUpDate||""} onChange={e=>{
+dispatch("UPDATE_DEAL",{id:accountDealModal.id,followUpDate:e.target.value});
+crmUpdate("Deals",accountDealModal.zohoId,{Closing_Date:e.target.value});
+setAccountDealModal(m=>({...m,followUpDate:e.target.value}));
+}} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,marginBottom:12}}/>
+<Lbl s={{marginBottom:3}}>Notes</Lbl>
+<textarea defaultValue={accountDealModal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:accountDealModal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
+<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<button onClick={()=>{sharedDeleteDeal(accountDealModal,{dispatch,toast,cu});setAccountDealModal(null);}} style={{background:"none",border:`1px solid ${B.red}`,color:B.red,borderRadius:4,padding:"5px 10px",fontSize:10,cursor:"pointer"}}>🗑 Delete Deal</button>
+{accountDealModal.hasUploadedPdf&&<button onClick={()=>openStoredDealPdf(accountDealModal.id,accountDealModal.quotePdfName)} style={{background:"none",border:"none",color:B.blue,fontSize:11,cursor:"pointer"}}>Open PDF</button>}
+</div>
+</div>
+</div>
+)}
 </div>
 </div>
 );
@@ -5385,6 +5442,24 @@ const myDeals=openDeals.filter(d=>d.repId===cu?.id||d.assignee===cu?.id||!d.repI
 const overdue=openDeals.filter(d=>d.followUpDate&&dUntil(d.followUpDate)<0);
 const myPipeline=myDeals.reduce((a,d)=>a+(d.value||0),0);
 const totalContacts=(s.contacts||[]).filter(c=>!c.deadStatus).length;
+// Deals belong to the organization, not to whichever contact happens to
+// share its name/id — crmNavForDeal already encodes "accountId wins,
+// contact lookup is only a fallback for deals that predate that tagging",
+// same logic ModAnalytics's openDealInCrm uses, just applied locally here
+// instead of round-tripping through SET_CRM_NAV since this is already
+// inside ModCRM.
+const navToDeal=(d)=>{
+const nav=crmNavForDeal(d,s.contacts||[]);
+if(!nav) return;
+if(nav.id){
+setSelId(nav.id);setCrmTab(nav.tab==="quote"?"deal":(nav.tab||"overview"));
+if(nav.school){setLeftMode("accounts");setSelSchool(nav.school);}
+else setLeftMode("contacts");
+}else if(nav.school){
+setLeftMode("accounts");setSelSchool(nav.school);setSelId(null);
+if(nav.tab)setAccountTab(nav.tab==="quote"||nav.tab==="deal"?"deals":nav.tab);
+}
+};
 return(<>
 {/* Stats */}
 <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:22}}>
@@ -5399,9 +5474,8 @@ return(<>
 <Lbl s={{marginBottom:8,color:B.red}}>OVERDUE FOLLOW-UPS</Lbl>
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {overdue.slice(0,5).map(d=>{
-const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
 return(
-<div key={d.id} onClick={()=>setSelId(c?.id)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={d.id} onClick={()=>navToDeal(d)} style={{background:B.white,border:`1px solid ${B.red}30`,borderLeft:`3px solid ${B.red}`,borderRadius:4,padding:"9px 13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||"—"} · {d.stage}</div>
@@ -5430,7 +5504,7 @@ return(
 const c=(s.contacts||[]).find(ct=>ct.id===d.contactId||(ct.fullName||"")===d.contact);
 const dsc=DSC[d.stage]||B.muted;
 return(
-<div key={d.id} onClick={()=>c&&setSelId(c.id)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:c?"pointer":"default",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+<div key={d.id} onClick={()=>navToDeal(d)} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"9px 13px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
 <div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,fontWeight:500,color:B.text}}>{d.name}</div>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{d.contact||c&&(c.fullName||"")}</div>

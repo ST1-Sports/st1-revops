@@ -108,15 +108,25 @@ export function mergeContactsPreferRecentSaves(localList, serverList, now = Date
   return [...byId.values()];
 }
 
-/** Analytics / lists → CRM person deal tab, or the school page when there is no contact. */
+/**
+ * Analytics / lists → CRM account page (deals belong to the organization),
+ * or the person's own deal tab only as a fallback for a deal that predates
+ * accountId tagging and has no account to resolve. A deal with accountId
+ * set skips contact resolution entirely — it's tied to the organization,
+ * not to whichever contact happens to share its name or id.
+ */
 export function crmNavForDeal(deal, contacts) {
   if (!deal) return null;
+  const schoolName = typeof deal.school === 'string' ? deal.school : (deal.school?.name || '');
+  if (deal.accountId) {
+    const usableSchool = deal.state && schoolName ? `${schoolName} — ${deal.state}` : schoolName;
+    return usableSchool && usableSchool !== '(No School)' ? { school: usableSchool, tab: 'deal' } : null;
+  }
   const list = contacts || [];
   const named = String(deal.contact || '').trim().toLowerCase();
   const contact = (deal.contactId && list.find(c => c.id === deal.contactId))
     || (named && list.find(c => contactDisplayName(c).toLowerCase() === named))
     || null;
-  const schoolName = typeof deal.school === 'string' ? deal.school : (deal.school?.name || '');
   const schoolKey = contact
     ? schoolKeyOf(contact)
     : (deal.state && schoolName ? `${schoolName} — ${deal.state}` : schoolName);

@@ -392,4 +392,19 @@ describe('crmNavForDeal', () => {
     assert.equal(nav.school, 'Hudson High School — IA');
     assert.equal(nav.tab, 'deal');
   });
+
+  it('routes to the account, not the contact, once a deal carries accountId — even when a matching contact exists', () => {
+    const nav = crmNavForDeal(
+      { id: 'd3', contactId: 'c_hudson_ad', accountId: 'acct_1', school: 'Hudson High School', state: 'IA' },
+      [hudsonCoach],
+    );
+    assert.equal(nav.id, undefined);
+    assert.equal(nav.school, 'Hudson High School — IA');
+    assert.equal(nav.tab, 'deal');
+  });
+
+  it('skips an unusable school name on an accountId deal rather than guessing from the contact', () => {
+    const nav = crmNavForDeal({ id: 'd4', contactId: 'c_hudson_ad', accountId: 'acct_1', school: '' }, [hudsonCoach]);
+    assert.equal(nav, null);
+  });
 });
