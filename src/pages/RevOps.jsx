@@ -641,6 +641,11 @@ return false;
 // real "sports" a coverage gap could ever be filled for.
 const COMMON_SPORTS=["Football","Basketball","Baseball","Softball","Soccer","Volleyball","Track & Field","Cross Country","Wrestling","Swimming & Diving","Tennis","Golf","Hockey","Lacrosse","Gymnastics","Cheerleading","Dance","Bowling","Badminton","Water Polo","Rowing / Crew","Multiple Sports","All Sports / General"];
 const ACCOUNT_SPORTS=COMMON_SPORTS.filter(sp=>!["Multiple Sports","All Sports / General"].includes(sp));
+// "club" already existed elsewhere (Prospecting's area-browse tags youth
+// sports clubs this way) — reused here rather than inventing a second,
+// conflicting value for the same concept at the Account level.
+const ORG_TYPE_LABEL={school:"School / District",college:"College / University",club:"Sports Club",business:"Business"};
+const orgTypeLabel=(t)=>ORG_TYPE_LABEL[t]||"Organization";
 const SPORT_TITLE_PATTERNS=[
 [/track|cross.?country|\bxc\b|t&f/i,"Track & Field"],
 [/football/i,"Football"],[/basketball/i,"Basketball"],[/baseball/i,"Baseball"],
@@ -4461,7 +4466,9 @@ setShowAddContact(v=>!v);
 <select value={addAccountForm.orgType} onChange={e=>setAddAccountForm(f=>({...f,orgType:e.target.value}))} style={{width:"100%",boxSizing:"border-box",background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}>
 <option value="school">School / District</option>
 <option value="college">College / University</option>
-<option value="">Organization</option>
+<option value="club">Sports Club</option>
+<option value="business">Business</option>
+<option value="">Other Organization</option>
 </select>
 </div>
 <div style={{borderTop:`1px solid ${B.border}`,margin:"2px 0 10px"}}/>
@@ -4842,7 +4849,7 @@ return(
 <div style={{padding:"16px 22px 12px",borderBottom:`1px solid ${B.border}`,background:B.white,flexShrink:0}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
 <div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{schoolOrgType==="school"?"SCHOOL / DISTRICT":schoolOrgType==="college"?"COLLEGE / UNIVERSITY":"ORGANIZATION"}</div>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,letterSpacing:2,marginBottom:3}}>{orgTypeLabel(schoolOrgType).toUpperCase()}</div>
 {editingAccountName?(
 <div style={{display:"flex",gap:6,alignItems:"center"}}>
 <input autoFocus value={accountNameInput} onChange={e=>setAccountNameInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")renameAccount();if(e.key==="Escape")setEditingAccountName(false);}} style={{fontFamily:"'Russo One',sans-serif",fontSize:16,color:B.black,border:`1px solid ${B.orange}`,borderRadius:4,padding:"3px 8px",minWidth:220}}/>
@@ -5058,9 +5065,11 @@ return(<>
 <select value={accountInfoForm.orgType} onChange={e=>setAccountInfoForm(f=>({...f,orgType:e.target.value}))} style={inpS}>
 <option value="school">School / District</option>
 <option value="college">College / University</option>
+<option value="club">Sports Club</option>
+<option value="business">Business</option>
 <option value="other">Other Organization</option>
 </select>
-):(<div style={valS}>{schoolOrgType||"—"}</div>)}
+):(<div style={valS}>{orgTypeLabel(schoolOrgType)}</div>)}
 </div>
 <div>
 <div style={lblS}># Athletes</div>
@@ -5767,7 +5776,7 @@ style={{...iS,border:`1.5px solid ${profileForm.sport?B.purple:B.border}`,color:
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,marginBottom:10}}>ORG PROFILE</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
 {[
-["Type", sel.orgType==="school"?"School / District":sel.orgType==="college"?"College / University":sel.orgType?"Organization / Club":"—"],
+["Type", sel.orgType?orgTypeLabel(sel.orgType):"—"],
 ["School Class", sel.schoolClass||"—"],
 ["# Athletes", sel.numAthletes||"—"],
 ["# Sports", sel.numSports||"—"],
