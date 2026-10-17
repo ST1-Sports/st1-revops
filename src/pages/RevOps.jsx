@@ -4695,6 +4695,11 @@ const schoolCleanName=primaryC?.school||accountRecord?.name||cleanSchoolName(sel
 // it's an attribute of the school, not of whichever person happens to be
 // contact #1 today.
 const schoolOrgType=accountRecord?.orgType||primaryC?.orgType||"";
+// School Class/# Athletes/# Sports/Booster Club/the whole Staff Coverage
+// table only mean anything for an org that actually runs school athletic
+// programs — a business account shouldn't carry (or be asked to fill in)
+// any of it.
+const isBusinessOrg=schoolOrgType==="business";
 const schoolClass=accountRecord?.schoolClass||primaryC?.schoolClass||"";
 const numAthletes=accountRecord?.numAthletes||primaryC?.numAthletes||"";
 const numSports=accountRecord?.numSports||primaryC?.numSports||"";
@@ -4796,18 +4801,23 @@ fetch(`/api/team-store/names?q=${encodeURIComponent(val)}`)
 const saveAccountInfo=()=>{
 setSavingAccountInfo(true);
 const id=ensureAccountRecord();
+// Business wipes the school-only fields on save, not just hides them while
+// editing — otherwise switching to Business leaves stale School Class/
+// athlete/sport/booster-club numbers sitting in the record, invisible now
+// but still there (and ready to reappear if the org type ever changes back).
+const savingBusiness=accountInfoForm.orgType==="business";
 dispatch("UPDATE_ACCOUNT",{
 id,
-schoolClass:accountInfoForm.schoolClass||"",
+schoolClass:savingBusiness?"":(accountInfoForm.schoolClass||""),
 city:(accountInfoForm.city||"").trim(),
 state:(accountInfoForm.state||"").trim(),
 orgType:accountInfoForm.orgType||"school",
-numAthletes:Number(accountInfoForm.numAthletes)||0,
-numSports:Number(accountInfoForm.numSports)||0,
+numAthletes:savingBusiness?0:(Number(accountInfoForm.numAthletes)||0),
+numSports:savingBusiness?0:(Number(accountInfoForm.numSports)||0),
 hasOnlineStore:accountInfoForm.hasOnlineStore===true,
 teamStoreUrl:accountInfoForm.hasOnlineStore===true?(accountInfoForm.teamStoreUrl||"").trim():"",
 linkedStoreName:accountInfoForm.hasOnlineStore===true?(accountInfoForm.linkedStoreName||""):"",
-hasBoosterClub:accountInfoForm.hasBoosterClub===true,
+hasBoosterClub:savingBusiness?false:(accountInfoForm.hasBoosterClub===true),
 });
 setEditingAccountInfo(false);
 setSavingAccountInfo(false);
@@ -4865,16 +4875,16 @@ return(
 )}
 <div style={{display:"flex",gap:10,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
 {website&&<a href={website} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.blue}}>{website.replace(/^https?:\/\//,"")}</a>}
-{schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
+{!isBusinessOrg&&schoolClass&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange,background:`${B.orange}15`,padding:"2px 8px",borderRadius:3}}>{schoolClass}</span>}
 {(city||state)&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[city,state].filter(Boolean).join(", ")}</span>}
-{numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
-{numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
+{!isBusinessOrg&&numAthletes&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numAthletes} athletes</span>}
+{!isBusinessOrg&&numSports&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{numSports} sports</span>}
 {hasOnlineStore&&(teamStoreUrl?(
 <a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3,textDecoration:"none"}}>TEAM STORE ↗</a>
 ):(
 <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:`${B.green}18`,padding:"2px 6px",borderRadius:3}}>TEAM STORE</span>
 ))}
-{hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
+{!isBusinessOrg&&hasBoosterClub&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple||"#7c3aed",background:"#7c3aed18",padding:"2px 6px",borderRadius:3}}>BOOSTER CLUB</span>}
 </div>
 </div>
 {/* Revenue summary */}
@@ -5031,6 +5041,10 @@ const lblS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,lett
 const valS={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500};
 const inpS={width:"100%",background:B.white,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"4px 7px",fontSize:11,fontFamily:"'Lexend',sans-serif",boxSizing:"border-box"};
 const toggle=(active)=>({flex:1,background:active?B.orange:B.white,color:active?B.white:B.muted,border:`1px solid ${active?B.orange:B.border}`,borderRadius:4,padding:"4px 10px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",cursor:"pointer"});
+// Live off the in-progress edit, not just the saved value, so picking
+// "Business" from the Org Type dropdown hides School Class/# Athletes/
+// # Sports/Booster Club immediately instead of only after SAVE.
+const hidingSchoolFields=editingAccountInfo?accountInfoForm.orgType==="business":isBusinessOrg;
 return(<>
 <SectionHdr sub={editingAccountInfo?(
 <div style={{display:"flex",gap:6}}>
@@ -5041,6 +5055,7 @@ return(<>
 <button onClick={startEditAccountInfo} style={{background:"none",border:`1px solid ${B.border}`,color:B.blue,borderRadius:4,padding:"3px 9px",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.3,cursor:"pointer"}} title="Edit account info">✎ EDIT</button>
 )}>ACCOUNT INFO</SectionHdr>
 <div className="rv-info-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12,background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
+{!hidingSchoolFields&&(
 <div>
 <div style={lblS}>School Class</div>
 {editingAccountInfo?(
@@ -5050,6 +5065,7 @@ return(<>
 </select>
 ):(<div style={valS}>{schoolClass||"—"}</div>)}
 </div>
+)}
 <div>
 <div style={lblS}>Location</div>
 {editingAccountInfo?(
@@ -5071,18 +5087,22 @@ return(<>
 </select>
 ):(<div style={valS}>{orgTypeLabel(schoolOrgType)}</div>)}
 </div>
+{!hidingSchoolFields&&(
 <div>
 <div style={lblS}># Athletes</div>
 {editingAccountInfo?(
 <input type="number" min={0} value={accountInfoForm.numAthletes} onChange={e=>setAccountInfoForm(f=>({...f,numAthletes:e.target.value}))} style={inpS}/>
 ):(<div style={valS}>{numAthletes||"—"}</div>)}
 </div>
+)}
+{!hidingSchoolFields&&(
 <div>
 <div style={lblS}># Sports</div>
 {editingAccountInfo?(
 <input type="number" min={0} value={accountInfoForm.numSports} onChange={e=>setAccountInfoForm(f=>({...f,numSports:e.target.value}))} style={inpS}/>
 ):(<div style={valS}>{numSports||"—"}</div>)}
 </div>
+)}
 <div style={editingAccountInfo&&accountInfoForm.hasOnlineStore?{gridColumn:"span 2"}:undefined}>
 <div style={lblS}>Team Store</div>
 {editingAccountInfo?(
@@ -5119,6 +5139,7 @@ return(<>
 hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="noreferrer" style={{...valS,color:B.blue}}>{teamStoreUrl.replace(/^https?:\/\//,"")}</a>:<div style={valS}>Yes</div>):<div style={valS}>No</div>
 )}
 </div>
+{!hidingSchoolFields&&(
 <div>
 <div style={lblS}>Booster Club</div>
 {editingAccountInfo?(
@@ -5129,6 +5150,7 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 </div>
 ):(<div style={valS}>{hasBoosterClub?"Yes":"No"}</div>)}
 </div>
+)}
 <div><div style={lblS}>Contacts</div><div style={valS}>{schoolContacts.length}</div></div>
 <div><div style={lblS}>Open Deals</div><div style={valS}>{openDeals.length}</div></div>
 </div>
@@ -5207,6 +5229,29 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
     and a sport marked "not offered" drops out of the gap rows for good
     (reversible below) instead of nagging every time this page loads. */}
 {(()=>{
+const thS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`};
+const tdName={fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+const tdMuted={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
+// A business has people and titles, not sports or an Athletic Director —
+// no gap rows, no "not offered," just who's on file.
+if(isBusinessOrg){
+return(<>
+<SectionHdr sub={`${schoolContacts.length} on file`}>CONTACTS</SectionHdr>
+<div style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:6,overflow:"hidden"}}>
+<div style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr"}}>
+{["NAME","TITLE","EMAIL"].map(h=><div key={h} style={thS}>{h}</div>)}
+</div>
+{schoolContacts.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"12px"}}>No contacts yet.</div>}
+{schoolContacts.map(c=>(
+<div key={c.id} onClick={()=>setSelId(c.id)} style={{display:"grid",gridTemplateColumns:"1.3fr 1fr 1.4fr",cursor:"pointer"}}>
+<div style={tdName}>{cName(c)}</div>
+<div style={tdMuted}>{c.title||"—"}</div>
+<div style={tdMuted}>{c.email||"—"}</div>
+</div>
+))}
+</div>
+</>);
+}
 const contactSportOf=(c)=>{
 let sp=typeof c.sport==="string"?c.sport:c.sport?.name||"";
 if(!sp||sp==="General"||!ACCOUNT_SPORTS.includes(sp)) sp=inferSportFromTitle(c.title)||"";
@@ -5217,9 +5262,6 @@ const coveredSports=new Set(schoolContacts.map(contactSportOf).filter(Boolean));
 const gapSports=ACCOUNT_SPORTS.filter(sp=>!coveredSports.has(sp)&&!excludedSports.includes(sp));
 const setExcludedSports=(next)=>dispatch("UPDATE_ACCOUNT",{id:ensureAccountRecord(),excludedSports:next});
 const searchOneRole=(sp,isAD)=>findMissingStaff(schoolCleanName,city,state,isAD?[]:[sp],isAD);
-const thS={fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,padding:"7px 12px",background:B.surface,borderBottom:`1px solid ${B.border}`};
-const tdName={fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
-const tdMuted={fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"9px 12px",borderBottom:`1px solid ${B.border}`};
 const smallBtn={background:"none",border:`1px solid ${B.border}`,borderRadius:4,padding:"3px 7px",fontSize:10,cursor:findingStaff?"default":"pointer",color:B.muted};
 const gapCount=gapSports.length+(coverage.adContact?0:1);
 return(<>
