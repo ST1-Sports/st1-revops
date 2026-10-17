@@ -4228,6 +4228,7 @@ const t=await aiCall(`Write a follow-up email from ST1 Sports to ${cName(sel)}, 
 setDraft(t||"");setDrafting(false);
 };
 const [findingStaff,setFindingStaff]=useState(false);
+const [showCoverageGaps,setShowCoverageGaps]=useState(false);
 const findMissingStaff=async(school,schoolCity,schoolState,gaps,needsAD)=>{
 setFindingStaff(true);
 const roles=[...(needsAD?["Athletic Director"]:[]),...gaps.map(sp=>`Head ${sp} Coach`)];
@@ -4502,7 +4503,17 @@ setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:
 </div>
 )}
 {showAddContact&&(
-<div style={{padding:"10px 13px",borderBottom:`1px solid ${B.border}`,background:`${B.orange}05`}}>
+// A modal, not inline in this left panel — opened from the account detail
+// page (the right-side panel) this used to render up here, off to the
+// side of whatever the person was actually looking at, and was easy to
+// miss entirely. A centered popup is visible regardless of which panel
+// triggered it.
+<div onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:400,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:11,letterSpacing:.5,color:B.text}}>ADD CONTACT</div>
+<button onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer"}}>✕</button>
+</div>
 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:5,marginBottom:6}}>
 <input value={addForm.firstName} onChange={e=>setAddForm(f=>({...f,firstName:e.target.value}))} placeholder="First name" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
 <input value={addForm.lastName} onChange={e=>setAddForm(f=>({...f,lastName:e.target.value}))} placeholder="Last name *" style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:4,padding:"5px 7px",fontSize:10,color:B.text}}/>
@@ -4535,6 +4546,7 @@ fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...i
 .then(r=>r.json()).then(d=>{const zid=d?.data?.[0]?.details?.id;if(zid)dispatch("UPDATE_CONTACT",{id:c.id,zohoId:zid});}).catch(()=>{});
 }} disabled={!addForm.lastName||(isCoachRole(addForm.title)&&!addForm.sport)}>SAVE</OBtn>
 <GBtn sm onClick={()=>{setShowAddContact(false);setAddForm({firstName:"",lastName:"",school:"",email:"",phone:"",title:"",sport:""});}}>Cancel</GBtn>
+</div>
 </div>
 </div>
 )}
@@ -5126,6 +5138,12 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 </>);
 })()}
 {/* ── STAFF COVERAGE ── */}
+{/* Used to list all 20 ACCOUNT_SPORTS as pills every time, covered or not —
+    mostly gray "not on file" noise for any school that doesn't run every
+    sport ST1 tracks, and the covered ones only showed WHO via a hover
+    tooltip instead of just saying so. Now: who's actually on file is a
+    plain, readable list; gaps collapse behind a count so the useful part
+    (who do we have) isn't buried under the unhelpful part (who we don't). */}
 <SectionHdr sub={hasPositiveIntent&&coverage.gaps.length>0?"Positive intent on file — go fill the gaps below":undefined}>STAFF COVERAGE</SectionHdr>
 <div style={{background:B.surface,borderRadius:6,padding:14,border:`1px solid ${B.border}`}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
@@ -5139,15 +5157,34 @@ hasOnlineStore?(teamStoreUrl?<a href={teamStoreUrl} target="_blank" rel="norefer
 <OBtn sm color={B.teal} disabled={findingStaff} onClick={()=>findMissingStaff(schoolCleanName,city,state,coverage.gaps,!coverage.adContact)}>{findingStaff?"SEARCHING…":"🔎 FIND MISSING STAFF"}</OBtn>
 )}
 </div>
-<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-{ACCOUNT_SPORTS.map(sp=>{
-const c=coverage.covered.get(sp);
-return(
-<span key={sp} title={c?cName(c):"Not on file"} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.3,padding:"3px 8px",borderRadius:3,color:c?B.green:B.muted,background:c?`${B.green}15`:B.border}}>{sp}{c?" ✓":""}</span>
-);
-})}
+{coverage.covered.size>0&&(
+<div style={{marginBottom:coverage.gaps.length>0?10:0}}>
+<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1,marginBottom:5}}>COACHES ON FILE ({coverage.covered.size})</div>
+<div style={{display:"flex",flexDirection:"column",gap:4}}>
+{[...coverage.covered.entries()].map(([sp,c])=>(
+<div key={sp} style={{display:"flex",justifyContent:"space-between",gap:8,fontFamily:"'Lexend',sans-serif",fontSize:11}}>
+<span style={{color:B.muted}}>{sp}</span>
+<span style={{color:B.text,fontWeight:500}}>{cName(c)}</span>
 </div>
-{coverage.gaps.length>0&&!hasPositiveIntent&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:8}}>{coverage.gaps.length} sport{coverage.gaps.length!==1?"s":""} with no coach on file — search unlocks once someone here shows positive intent.</div>}
+))}
+</div>
+</div>
+)}
+{coverage.gaps.length>0&&(
+<div>
+<button onClick={()=>setShowCoverageGaps(v=>!v)} style={{background:"none",border:"none",padding:0,fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,cursor:"pointer",textDecoration:"underline",textDecorationStyle:"dotted"}}>
+{showCoverageGaps?"Hide":"Show"} {coverage.gaps.length} sport{coverage.gaps.length!==1?"s":""} with no coach on file {showCoverageGaps?"▲":"▼"}
+</button>
+{showCoverageGaps&&(
+<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:6}}>
+{coverage.gaps.map(sp=>(
+<span key={sp} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,letterSpacing:.3,padding:"3px 8px",borderRadius:3,color:B.muted,background:B.border}}>{sp}</span>
+))}
+</div>
+)}
+{!hasPositiveIntent&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:6}}>Search unlocks once someone here shows positive intent.</div>}
+</div>
+)}
 </div>
 {/* ── SPONSORSHIP ── */}
 {(sponsorshipMin||sponsorshipStatus)&&(
