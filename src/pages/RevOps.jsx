@@ -28,6 +28,20 @@ import {
   mergeContactsPreferRecentSaves,
   crmNavForDeal,
 } from "../lib/quoteCrmLink.js";
+import {
+  ANALYTICS_TABS,
+  analyticsKpis,
+  buildKeyAccounts,
+  dealsForFilter,
+  doubleDownItems,
+  matchesAnalyticsQuery,
+  pipelineByProduct,
+  pipelineByStage,
+  dealAttention,
+  rankAttentionDeals,
+  rankOpenDeals,
+  storyBeats,
+} from "../lib/analyticsStory.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
@@ -1859,370 +1873,218 @@ return <span title={`Saved to the database ${new Date(pl.dbSyncedAt).toLocaleStr
 });
 const UCh=React.memo(function UCh({uid}){const {s}=useApp();const u=(s.reps||[]).find(r=>r.id===uid);if(!u)return null;const ini=(u.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toUpperCase();return <div style={{display:"flex",alignItems:"center",gap:4}}><div style={{width:16,height:16,borderRadius:"50%",background:B.blue,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontFamily:"'Russo One',sans-serif",fontSize:6,color:B.white}}>{ini}</span></div><span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{u.name.split(" ")[0]}</span></div>;});
 const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,border:`2px solid ${B.border}`,borderTop:`2px solid ${B.orange}`,borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>;});
-const KCard=React.memo(function KCard({l,v,c,sub,onClick}){return <div onClick={onClick} style={{background:B.white,border:`1px solid ${B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
+const KCard=React.memo(function KCard({l,v,c,sub,onClick,active}){return <div onClick={onClick} role={onClick?"button":undefined} style={{background:active?`${c}14`:B.white,border:`1px solid ${active?c:B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:active?`0 0 0 1px ${c}55`:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 function ModAnalytics() {
-const {s,setMod,dispatch}=useApp();
-const openDealInCrm=(deal)=>{
-const nav=crmNavForDeal(deal,s.contacts||[]);
-if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
-else setMod("deals");
-};
-const [tab,setTab]=useState("overview");
-const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
-const campaigns=s.campaigns||[];
-const contacts=s.contacts||[];
-const reps=s.reps||[];
-const {openDeals,won,lost,openPipeline,wonTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,campaignDeals}=useMemo(()=>{
-const closedStages=["Closed Won","Closed Lost","PO Received"];
-const openDeals=deals.filter(d=>!closedStages.includes(d.stage));
-const won=deals.filter(d=>d.stage==="Closed Won");
-const lost=deals.filter(d=>d.stage==="Closed Lost");
-const openPipeline=openDeals.reduce((a,d)=>a+(d.value||0),0);
-const wonTotal=won.reduce((a,d)=>a+(d.value||0),0);
-const activeCampaigns=campaigns.filter(c=>c.status==="active").length;
-const hotLeads=contacts.filter(c=>(c.score||0)>=40).length;
-const totalClosed=won.length+lost.length;
-const convRate=totalClosed>0?Math.round((won.length/totalClosed)*100):0;
-const avgDeal=won.length>0?Math.round(wonTotal/won.length):0;
-const campaignDeals=deals.filter(d=>d.campaignId).sort((a,b)=>(b.value||0)-(a.value||0));
-return{openDeals,won,lost,openPipeline,wonTotal,activeCampaigns,hotLeads,totalClosed,convRate,avgDeal,campaignDeals};
-},[deals,campaigns,contacts]);
-const TABS=[["overview","Overview"],["pipeline","Pipeline"],["campaigns","Campaigns"],["hotleads","Hot Leads"],["emails","Emails"]];
-return (
-<div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
-<PH title="ANALYTICS" sub="Live Zoho deals and deals created here — deleted leftovers stay gone"/>
-<div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`}}>
-{TABS.map(([id,label])=>(
-<button key={id} onClick={()=>setTab(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer"}}>{label}</button>
-))}
-</div>
-{tab==="overview"&&(
-<div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:11,marginBottom:20}}>
-<KCard l="Total Won" v={fmt$K(wonTotal)} c={B.green} sub="closed won"/>
-<KCard l="Open Pipeline" v={fmt$K(openPipeline)} c={B.orange} sub={`${openDeals.length} deals`}/>
-<KCard l="Avg Deal Size" v={fmt$K(avgDeal)} c={B.yellow}/>
-<KCard l="Win Rate" v={`${convRate}%`} c={B.blue}/>
-<KCard l="Active Campaigns" v={activeCampaigns} c={B.purple}/>
-<KCard l="Hot Leads" v={hotLeads} c={B.teal} sub="score ≥ 40"/>
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Recent Deals</Lbl>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{deals.slice().sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)).slice(0,5).map(d=>(
-<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-<div style={{flex:1,minWidth:0}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
-<div style={{marginTop:3}}><Pill v={d.stage} sc={DSC} bc={DBG}/></div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0,marginLeft:9}}>{fmt$K(d.value||0)}</div>
-</div>
-))}
-{deals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No deals yet</div>}
-</div>
-</div>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Top Campaigns by Replies</Lbl>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{[...campaigns].map(camp=>{
-const enrs=camp.enrollments||[];
-return{...camp,replied:enrs.filter(e=>e.status==="replied").length,opened:enrs.filter(e=>e.openedAt).length,enrolled:enrs.length};
-}).sort((a,b)=>b.replied-a.replied).slice(0,3).map(camp=>(
-<div key={camp.id} style={{padding:"8px 0",borderBottom:`1px solid ${B.border}`}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,marginBottom:4}}>{camp.name}</div>
-<div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>ENROLLED <span style={{color:B.text}}>{camp.enrolled}</span></span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.blue}}>OPENED <span style={{color:B.text}}>{camp.opened}</span></span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.green}}>REPLIED <span style={{color:B.text}}>{camp.replied}</span></span>
-</div>
-</div>
-))}
-{campaigns.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted}}>No campaigns yet</div>}
-</div>
-</div>
-</div>
-</div>
-)}
-{tab==="campaigns"&&(
-<div style={{overflowX:"auto"}}>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
-<thead>
-<tr style={{background:B.surface}}>
-{["NAME","CHANNELS","ENROLLED","SENT","OPENED","REPLIED","DONE","REP","DEALS"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"8px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`,whiteSpace:"nowrap"}}>{h}</th>
-))}
-</tr>
-</thead>
-<tbody>
-{campaigns.map(camp=>{
-const enrs=camp.enrollments||[];
-const enrolled=enrs.length;
-const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
-const opened=enrs.filter(e=>e.openedAt).length;
-const replied=enrs.filter(e=>e.status==="replied").length;
-const done=enrs.filter(e=>e.status==="done").length;
-const sentPct=enrolled>0?Math.round(sent/enrolled*100):0;
-const rep=reps.find(r=>r.id===camp.repId);
-const campDeals=deals.filter(d=>d.campaignId===camp.id);
-const campDealVal=campDeals.reduce((a,d)=>a+(d.value||0),0);
-return(
-<tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"9px 10px"}}>
-<div style={{fontWeight:500,color:B.text}}>{camp.name}</div>
-<div style={{fontSize:9,color:B.muted,marginTop:2}}>{camp.product||""}</div>
-<div style={{marginTop:4,height:4,background:B.border,borderRadius:2,width:80}}>
-<div style={{height:"100%",width:`${sentPct}%`,background:B.purple,borderRadius:2}}/>
-</div>
-<div style={{fontSize:8,color:B.muted,marginTop:2}}>{sentPct}% sent</div>
-</td>
-<td style={{padding:"9px 10px"}}>
-<div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-{(camp.channels||[]).map(ch=>(
-<span key={ch} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"1px 5px",borderRadius:3}}>{ch}</span>
-))}
-{!(camp.channels||[]).length&&<span style={{color:B.muted,fontSize:9}}>—</span>}
-</div>
-</td>
-<td style={{padding:"9px 10px",color:B.text}}>{enrolled}</td>
-<td style={{padding:"9px 10px",color:B.purple,fontWeight:500}}>{sent}</td>
-<td style={{padding:"9px 10px",color:B.blue,fontWeight:500}}>{opened}</td>
-<td style={{padding:"9px 10px",color:B.green,fontWeight:500}}>{replied}</td>
-<td style={{padding:"9px 10px",color:B.muted}}>{done}</td>
-<td style={{padding:"9px 10px",color:B.muted}}>{rep?(rep.name||"").split(" ")[0]:camp.repId||"—"}</td>
-<td style={{padding:"9px 10px"}}>
-{campDeals.length>0?(
-<div>
-<div style={{fontWeight:500,color:B.orange}}>{campDeals.length}</div>
-<div style={{fontSize:9,color:B.muted}}>{fmt$K(campDealVal)}</div>
-</div>
-):<span style={{color:B.muted}}>—</span>}
-</td>
-</tr>
-);
-})}
-{campaigns.length===0&&(
-<tr><td colSpan={9} style={{padding:"32px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>
-)}
-</tbody>
-</table>
-</div>
-)}
-{tab==="pipeline"&&(
-<div style={{display:"flex",flexDirection:"column",gap:18}}>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Stage</Lbl>
-{(()=>{
-const stageMap={};
-deals.forEach(d=>{
-if(!stageMap[d.stage]) stageMap[d.stage]={count:0,value:0};
-stageMap[d.stage].count++;
-stageMap[d.stage].value+=(d.value||0);
-});
-const entries=Object.entries(stageMap).sort((a,b)=>b[1].value-a[1].value);
-const maxVal=Math.max(...entries.map(e=>e[1].value),1);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([stage,{count,value}])=>(
-<div key={stage} style={{marginBottom:10}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-<div style={{display:"flex",alignItems:"center",gap:8}}>
-<div style={{width:8,height:8,borderRadius:2,background:DSC[stage]||B.muted,flexShrink:0}}/>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{stage}</span>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{count} deal{count!==1?"s":""}</span>
-</div>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:DSC[stage]||B.muted}}>{fmt$K(value)}</span>
-</div>
-<div style={{height:6,background:B.border,borderRadius:3}}>
-<div style={{height:"100%",width:`${Math.round(value/maxVal*100)}%`,background:DSC[stage]||B.muted,borderRadius:3}}/>
-</div>
-</div>
-));
-})()}
-</div>
-<div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Product</Lbl>
-{(()=>{
-const prodMap={};
-deals.forEach(d=>{const p=d.product||"Other";if(!prodMap[p])prodMap[p]={count:0,value:0};prodMap[p].count++;prodMap[p].value+=(d.value||0);});
-const entries=Object.entries(prodMap).sort((a,b)=>b[1].value-a[1].value);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([prod,{count,value}])=>(
-<div key={prod} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{prod}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deal{count!==1?"s":""}</div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$K(value)}</div>
-</div>
-));
-})()}
-</div>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:12}}>Pipeline by Rep</Lbl>
-{(()=>{
-const repMap={};
-deals.forEach(d=>{const rid=d.repId||d.assignee||"unassigned";if(!repMap[rid])repMap[rid]={count:0,value:0};repMap[rid].count++;repMap[rid].value+=(d.value||0);});
-const entries=Object.entries(repMap).sort((a,b)=>b[1].value-a[1].value);
-if(entries.length===0) return <div style={{color:B.muted,fontSize:11}}>No deals yet</div>;
-return entries.map(([rid,{count,value}])=>{
-const u=reps.find(r=>r.id===rid);
-const avg=count>0?Math.round(value/count):0;
-return(
-<div key={rid} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
-<div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{u?.name||rid}</div>
-<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{count} deals · avg {fmt$K(avg)}</div>
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.blue}}>{fmt$K(value)}</div>
-</div>
-);
-});
-})()}
-</div>
-</div>
-<div className="card" style={{padding:16}}>
-<Lbl s={{marginBottom:10}}>Deals with Campaign Attribution</Lbl>
-{deals.filter(d=>d.campaignId).length===0?(
-<div style={{color:B.muted,fontSize:11}}>No deals with campaign attribution yet. Set SOURCE CAMPAIGN when creating a deal.</div>
-):(
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{campaignDeals.map(d=>{
-const camp=campaigns.find(c=>c.id===d.campaignId);
-return(
-<div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
-<div>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{d.name}</span>
-<Pill v={d.stage} sc={DSC} bc={DBG}/>
-</div>
-{camp&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.purple,background:B.purpleBg,padding:"2px 6px",borderRadius:3}}>✦ {camp.name}</span>}
-</div>
-<div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$K(d.value||0)}</div>
-</div>
-);
-})}
-</div>
-)}
-</div>
-</div>
-)}
-{tab==="hotleads"&&(
-<div>
-{(()=>{
-const tiers=[
-{label:"READY",min:60,color:B.green,bg:B.greenBg},
-{label:"WARM",min:30,color:B.orange,bg:B.orangeBg},
-{label:"ENGAGED",min:10,color:B.blue,bg:B.blueBg},
-];
-const sorted=[...contacts].filter(c=>(c.score||0)>=10).sort((a,b)=>(b.score||0)-(a.score||0));
-if(sorted.length===0) return <div style={{color:B.muted,fontSize:12,padding:"40px 0",textAlign:"center"}}>No leads with engagement score &gt;= 10 yet</div>;
-return tiers.map(tier=>{
-const group=sorted.filter(c=>{const sc=c.score||0;if(tier.label==="READY")return sc>=60;if(tier.label==="WARM")return sc>=30&&sc<60;return sc>=10&&sc<30;});
-if(group.length===0) return null;
-return(
-<div key={tier.label} style={{marginBottom:20}}>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 12px",background:tier.bg,borderRadius:5,borderLeft:`3px solid ${tier.color}`}}>
-<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:tier.color,letterSpacing:2,fontWeight:700}}>{tier.label}</span>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:tier.color}}>{group.length} contacts</span>
-</div>
-<div style={{display:"flex",flexDirection:"column",gap:7}}>
-{group.map(c=>{
-const lastAct=(c.activity||[]).reduce((best,a)=>(!best||a.ts>best.ts)?a:best,null);
-const name=c.fullName||`${c.firstName||""} ${c.lastName||""}`.trim()||"Unnamed";
-const school=typeof c.school==="string"?c.school:c.school?.name||"";
-const title=typeof c.title==="string"?c.title:c.title?.name||"";
-const sport=typeof c.sport==="string"?c.sport:c.sport?.name||"";
-const sc=c.score||0;
-const scoreColor=sc>=60?B.green:sc>=30?B.orange:B.blue;
-return(
-<div key={c.id} className="card" style={{padding:"10px 12px",borderLeft:`3px solid ${scoreColor}`}}>
-<div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-<div style={{flex:1}}>
-<div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3,flexWrap:"wrap"}}>
-<span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{name}</span>
-{sport&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 5px",borderRadius:3}}>{sport}</span>}
-</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:6}}>{title}{title&&school?" · ":""}{school}{c.state?` · ${c.state}`:""}</div>
-<div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-<div style={{flex:1,height:5,background:B.border,borderRadius:3,maxWidth:120}}>
-<div style={{height:"100%",width:`${Math.min(sc,100)}%`,background:scoreColor,borderRadius:3}}/>
-</div>
-<span style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:scoreColor}}>{sc} pts</span>
-</div>
-{lastAct&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:9,color:B.muted,marginBottom:6}}>Last: {lastAct.note} · {new Date(lastAct.ts).toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>}
-</div>
-<div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0,marginLeft:10}}>
-<OBtn sm col={B.green} onClick={()=>{dispatch("SET_CRM_NAV",{id:c.id,tab:"deal"});setMod("crm");}}>DEAL +</OBtn>
-</div>
-</div>
-</div>
-);
-})}
-</div>
-</div>
-);
-});
-})()}
-</div>
-)}
-{tab==="emails"&&(
-<div>
-{(()=>{
-const allActivity=contacts.flatMap(c=>c.activity||[]);
-const totalSent=allActivity.filter(a=>a.type==="sent").length;
-const totalOpened=allActivity.filter(a=>a.type==="opened").length;
-const totalReplied=allActivity.filter(a=>a.type==="replied").length;
-const openRate=totalSent>0?Math.round(totalOpened/totalSent*100):0;
-const replyRate=totalSent>0?Math.round(totalReplied/totalSent*100):0;
-return(
-<div>
-<div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:11,marginBottom:20}}>
-<KCard l="Total Sent" v={totalSent} c={B.purple}/>
-<KCard l="Total Opened" v={totalOpened} c={B.blue}/>
-<KCard l="Total Replied" v={totalReplied} c={B.green}/>
-<KCard l="Open Rate" v={`${openRate}%`} c={B.teal}/>
-<KCard l="Reply Rate" v={`${replyRate}%`} c={B.orange}/>
-</div>
-<div className="card" style={{padding:14}}>
-<Lbl s={{marginBottom:10}}>Campaigns with Email Channel — by Reply Rate</Lbl>
-<table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"'Lexend',sans-serif"}}>
-<thead>
-<tr style={{background:B.surface}}>
-{["CAMPAIGN","ENROLLED","SENT","OPEN RATE","REPLY RATE"].map(h=>(
-<th key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,letterSpacing:1.5,padding:"7px 10px",textAlign:"left",borderBottom:`1px solid ${B.border}`}}>{h}</th>
-))}
-</tr>
-</thead>
-<tbody>
-{[...campaigns].filter(camp=>(camp.channels||[]).some(ch=>ch.includes("email"))||(camp.touches||[]).length>0).map(camp=>{
-const enrs=camp.enrollments||[];
-const enrolled=enrs.length;
-const sent=enrs.filter(e=>e.step>0||e.status==="done").length;
-const opened=enrs.filter(e=>e.openedAt).length;
-const replied=enrs.filter(e=>e.status==="replied").length;
-return{...camp,enrolled,sent,openR:sent>0?Math.round(opened/sent*100):0,replyR:sent>0?Math.round(replied/sent*100):0};
-}).sort((a,b)=>b.replyR-a.replyR).map(camp=>(
-<tr key={camp.id} style={{borderBottom:`1px solid ${B.border}`}}>
-<td style={{padding:"8px 10px",fontWeight:500,color:B.text}}>{camp.name}</td>
-<td style={{padding:"8px 10px",color:B.muted}}>{camp.enrolled}</td>
-<td style={{padding:"8px 10px",color:B.purple,fontWeight:500}}>{camp.sent}</td>
-<td style={{padding:"8px 10px",color:B.blue,fontWeight:500}}>{camp.openR}%</td>
-<td style={{padding:"8px 10px",color:B.green,fontWeight:500}}>{camp.replyR}%</td>
-</tr>
-))}
-{campaigns.length===0&&<tr><td colSpan={5} style={{padding:"24px 10px",textAlign:"center",color:B.muted}}>No campaigns yet</td></tr>}
-</tbody>
-</table>
-</div>
-</div>
-);
-})()}
-</div>
-)}
-</div>
-);
+  const {s,setMod,dispatch}=useApp();
+  const openDealInCrm=(deal)=>{
+    const nav=crmNavForDeal(deal,s.contacts||[]);
+    if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
+    else setMod("deals");
+  };
+  const openAccountInCrm=(name)=>{
+    if(!name) return;
+    dispatch("SET_CRM_NAV",{school:name});
+    setMod("crm");
+  };
+  const [tab,setTab]=useState("story");
+  const [stageFilter,setStageFilter]=useState("");
+  const [q,setQ]=useState("");
+  const [page,setPage]=useState(1);
+  const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
+  const invoices=s.invoices||[];
+  const contacts=s.contacts||[];
+  const keyAccounts=useMemo(()=>buildKeyAccounts({invoices,deals,contacts}),[invoices,deals,contacts]);
+  const kpis=useMemo(()=>analyticsKpis({deals,invoices,accounts:keyAccounts}),[deals,invoices,keyAccounts]);
+  const attentionDeals=useMemo(()=>rankAttentionDeals(deals),[deals]);
+  const openDeals=useMemo(()=>rankOpenDeals(deals),[deals]);
+  const stageRows=useMemo(()=>pipelineByStage(openDeals),[openDeals]);
+  const productRows=useMemo(()=>pipelineByProduct(openDeals),[openDeals]);
+  const beats=storyBeats(kpis);
+  const accountFocus=useMemo(()=>doubleDownItems({attentionDeals:[],keyAccounts}),[keyAccounts]);
+  useEffect(()=>{setPage(1);},[tab,stageFilter,q]);
+  const setFilter=(id)=>{
+    if(id==="story"){setTab("story");setStageFilter("");return;}
+    setTab(cur=>cur===id?"story":id);
+    if(id!=="open") setStageFilter("");
+  };
+  const pickStage=(stage)=>{
+    setTab("open");
+    setStageFilter(cur=>cur===stage?"":stage);
+  };
+  const listDeals=useMemo(()=>{
+    const rows=dealsForFilter(deals,tab,{stage:stageFilter});
+    return rows.filter(d=>matchesAnalyticsQuery({...d,school:d.school||d.company||""},q)).map(d=>{
+      if(d.attention) return d;
+      const att=dealAttention(d);
+      return att?{...d,attention:att.reason,attentionKind:att.kind}:d;
+    });
+  },[deals,tab,stageFilter,q]);
+  const listAccounts=useMemo(
+    ()=>keyAccounts.filter(a=>matchesAnalyticsQuery(a,q)),
+    [keyAccounts,q]
+  );
+  const PAGE=20;
+  const attTone=(kind)=>kind==="overdue"?B.red:kind==="due"?B.orange:kind==="hold"?B.muted:B.yellow;
+  const dealRow=(d)=>(
+    <div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
+        <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.school||d.company||""}{d.contact?` · ${d.contact}`:""}</div>
+        <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4,flexWrap:"wrap"}}>
+          <Pill v={d.stage} sc={DSC} bc={DBG}/>
+          {d.attention&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:attTone(d.attentionKind),background:`${attTone(d.attentionKind)}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{d.attention.toUpperCase()}</span>}
+        </div>
+      </div>
+      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$K(d.value||0)}</div>
+    </div>
+  );
+  const accountRow=(a)=>(
+    <div key={a.name} onClick={()=>openAccountInCrm(a.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+          <span style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{a.name}</span>
+          {a.customer
+            ? <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.green,background:B.greenBg,padding:"2px 6px",borderRadius:3}}>CUSTOMER</span>
+            : <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.orange,background:B.orangeBg,padding:"2px 6px",borderRadius:3}}>IN PLAY</span>}
+        </div>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
+          {a.customer&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>INVOICED <span style={{color:B.text}}>{fmt$K(a.invoiced)}</span></span>}
+          {a.owed>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.red}}>OWED <span style={{color:B.red}}>{fmt$K(a.owed)}</span></span>}
+          {a.pipeline>0&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.orange}}>PIPELINE <span style={{color:B.text}}>{fmt$K(a.pipeline)}</span></span>}
+        </div>
+      </div>
+      <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:a.owed>0?B.red:B.orange,flexShrink:0}}>{fmt$K(a.owed>0?a.owed:a.pipeline||a.invoiced)}</div>
+    </div>
+  );
+  const empty=(msg)=><div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,padding:"18px 0",textAlign:"center"}}>{msg}</div>;
+  const paged=(rows)=>rows.slice((page-1)*PAGE,page*PAGE);
+  return (
+    <div style={{padding:"22px 26px",overflowY:"auto",height:"calc(100vh - 46px)"}}>
+      <PH title="ANALYTICS" sub="How we're doing and where to double down — click a number to filter"/>
+      <div style={{display:"flex",gap:5,marginBottom:18,borderBottom:`1px solid ${B.border}`,flexWrap:"wrap"}}>
+        {ANALYTICS_TABS.map(([id,label])=>(
+          <button key={id} onClick={()=>setFilter(id)} style={{background:"none",border:"none",borderBottom:`2px solid ${tab===id?B.orange:"transparent"}`,color:tab===id?B.orange:B.muted,padding:"7px 14px 9px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,letterSpacing:1.5,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>{label}</button>
+        ))}
+      </div>
+      <div className="rv-kpi-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:11,marginBottom:20}}>
+        <KCard l="Total Won" v={fmt$K(kpis.wonTotal)} c={B.green} sub={`${kpis.wonCount} closed won`} onClick={()=>setFilter("won")} active={tab==="won"}/>
+        <KCard l="Open Pipeline" v={fmt$K(kpis.openPipeline)} c={B.orange} sub={`${kpis.openCount} open deal${kpis.openCount===1?"":"s"}`} onClick={()=>setFilter("open")} active={tab==="open"}/>
+        <KCard l="Needs Attention" v={kpis.attentionCount} c={kpis.attentionCount?B.red:B.muted} sub={kpis.attentionCount?"follow-up now":"pipeline is current"} onClick={()=>setFilter("attention")} active={tab==="attention"}/>
+        <KCard l="Avg Deal Size" v={fmt$K(kpis.avgDeal)} c={B.yellow} sub="closed won" onClick={()=>setFilter("won")} active={false}/>
+        <KCard l="Win Rate" v={`${kpis.winRate}%`} c={B.blue} sub={`${kpis.wonCount} won / ${kpis.lostCount} lost`} onClick={()=>setFilter("won")} active={false}/>
+        <KCard l="Key Accounts" v={kpis.customerCount||kpis.keyAccountCount} c={B.teal} sub={kpis.outstanding>0?`${fmt$K(kpis.outstanding)} outstanding`: `${kpis.keyAccountCount} in play`} onClick={()=>setFilter("accounts")} active={tab==="accounts"}/>
+      </div>
+      {tab==="story"&&(
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div className="card" style={{padding:14,borderLeft:`3px solid ${B.orange}`}}>
+            <Lbl s={{marginBottom:6}}>How we're doing</Lbl>
+            <div style={{fontFamily:"'Lexend',sans-serif",fontSize:13,color:B.text,lineHeight:1.5}}>
+              {beats.openBit} · <span style={{fontFamily:"'Russo One',sans-serif",color:B.orange}}>{fmt$K(kpis.openPipeline)}</span> in pipeline · {beats.attentionBit} · {beats.customerBit}{kpis.invoicedTotal>0?` · ${fmt$K(kpis.invoicedTotal)} invoiced`:""}.
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:14}}>
+            <div className="card" style={{padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <Lbl>Needs attention</Lbl>
+                {attentionDeals.length>0&&<button onClick={()=>setFilter("attention")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,cursor:"pointer"}}>SEE ALL {attentionDeals.length}</button>}
+              </div>
+              {attentionDeals.slice(0,6).map(dealRow)}
+              {attentionDeals.length===0&&empty("Nothing is overdue — stay on the open pipeline.")}
+            </div>
+            <div className="card" style={{padding:14}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                <Lbl>Key accounts</Lbl>
+                {keyAccounts.length>0&&<button onClick={()=>setFilter("accounts")} style={{background:"none",border:"none",color:B.orange,fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,letterSpacing:1,cursor:"pointer"}}>SEE ALL {keyAccounts.length}</button>}
+              </div>
+              {keyAccounts.slice(0,6).map(accountRow)}
+              {keyAccounts.length===0&&empty("No invoiced customers or open-pipeline schools yet.")}
+            </div>
+          </div>
+          {accountFocus.length>0&&(
+            <div className="card" style={{padding:14}}>
+              <Lbl s={{marginBottom:10}}>Where to double down</Lbl>
+              <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>Outstanding invoices and existing customers with more pipeline in play.</div>
+              {accountFocus.map(item=>(
+                <div key={`dd-${item.id}`} onClick={()=>openAccountInCrm(item.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+                  <div>
+                    <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500}}>{item.name}</div>
+                    <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:item.label==="outstanding"?B.red:B.orange,marginTop:3,letterSpacing:.4}}>{item.label.toUpperCase()}</div>
+                  </div>
+                  <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:item.label==="outstanding"?B.red:B.orange}}>{fmt$K(item.value)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:12}}>Open pipeline by stage</Lbl>
+            {stageRows.length===0&&empty("No open deals yet")}
+            {stageRows.map(row=>{
+              const maxVal=Math.max(...stageRows.map(r=>r.value),1);
+              return (
+                <div key={row.stage} onClick={()=>pickStage(row.stage)} style={{marginBottom:10,cursor:"pointer"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:8,height:8,borderRadius:2,background:DSC[row.stage]||B.muted,flexShrink:0}}/>
+                      <span style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>{row.stage}</span>
+                      <span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted}}>{row.count} deal{row.count!==1?"s":""}</span>
+                    </div>
+                    <span style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:DSC[row.stage]||B.muted}}>{fmt$K(row.value)}</span>
+                  </div>
+                  <div style={{height:6,background:B.border,borderRadius:3}}>
+                    <div style={{height:"100%",width:`${Math.round(row.value/maxVal*100)}%`,background:DSC[row.stage]||B.muted,borderRadius:3}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="card" style={{padding:16}}>
+            <Lbl s={{marginBottom:12}}>Open pipeline by product</Lbl>
+            {productRows.length===0&&empty("No open deals yet")}
+            {productRows.map(row=>(
+              <div key={row.product} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:`1px solid ${B.border}`}}>
+                <div>
+                  <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text,fontWeight:500}}>{row.product}</div>
+                  <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:B.muted,marginTop:1}}>{row.count} deal{row.count!==1?"s":""}</div>
+                </div>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:12,color:B.orange}}>{fmt$K(row.value)}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tab!=="story"&&(
+        <div>
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:12,flexWrap:"wrap"}}>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder={tab==="accounts"?"Filter accounts…":"Filter deals…"} style={{flex:"1 1 220px",background:B.white,border:`1px solid ${B.border}`,borderRadius:5,padding:"7px 10px",fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text}}/>
+            {tab==="open"&&(
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                <button onClick={()=>setStageFilter("")} style={{background:!stageFilter?B.orange:B.white,color:!stageFilter?B.white:B.muted,border:`1px solid ${!stageFilter?B.orange:B.border}`,borderRadius:99,padding:"3px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>All stages</button>
+                {DEAL_STAGES.filter(st=>openDeals.some(d=>d.stage===st)).map(st=>(
+                  <button key={st} onClick={()=>setStageFilter(cur=>cur===st?"":st)} style={{background:stageFilter===st?(DSC[st]||B.orange):B.white,color:stageFilter===st?B.white:B.muted,border:`1px solid ${stageFilter===st?(DSC[st]||B.orange):B.border}`,borderRadius:99,padding:"3px 10px",fontFamily:"'Lexend',sans-serif",fontSize:10,cursor:"pointer"}}>{st}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="card" style={{padding:"6px 14px 0"}}>
+            {tab==="accounts"?(
+              <>
+                {paged(listAccounts).map(accountRow)}
+                {listAccounts.length===0&&empty(q?"No accounts match that filter.":"No key accounts yet.")}
+                <ListPager page={page} setPage={setPage} total={listAccounts.length} pageSize={PAGE} noun="accounts"/>
+              </>
+            ):(
+              <>
+                {paged(listDeals).map(dealRow)}
+                {listDeals.length===0&&empty(q?"No deals match that filter.":tab==="attention"?"Nothing needs attention.":tab==="won"?"No closed-won deals yet.":"No open deals yet.")}
+                <ListPager page={page} setPage={setPage} total={listDeals.length} pageSize={PAGE} noun="deals"/>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 function ModHome() {
 const {s,dispatch,toast,cu,setMod}=useApp();
