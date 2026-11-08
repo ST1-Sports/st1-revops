@@ -38,6 +38,9 @@ import {
   pipelineByProduct,
   pipelineByStage,
   dealAttention,
+  dealStagePatch,
+  liveDealFromList,
+  plusDaysISO,
   rankAttentionDeals,
   rankOpenDeals,
   storyBeats,
@@ -1876,12 +1879,9 @@ const Spin=React.memo(function Spin(){return <div style={{width:18,height:18,bor
 const KCard=React.memo(function KCard({l,v,c,sub,onClick,active}){return <div onClick={onClick} role={onClick?"button":undefined} style={{background:active?`${c}14`:B.white,border:`1px solid ${active?c:B.border}`,borderRadius:7,padding:"12px 14px",borderTop:`2px solid ${c}`,textAlign:"center",cursor:onClick?"pointer":"default",boxShadow:active?`0 0 0 1px ${c}55`:"0 1px 3px rgba(0,0,0,.04)"}}><div style={{fontFamily:"'Russo One',sans-serif",fontSize:21,color:c,letterSpacing:.3}}>{v}</div><Lbl s={{marginTop:3}}>{l}</Lbl>{sub&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2}}>{sub}</div>}</div>;});
 const ORDER_STAGES = ["Order Received","Order Placed","Invoiced"];
 function ModAnalytics() {
-  const {s,setMod,dispatch}=useApp();
-  const openDealInCrm=(deal)=>{
-    const nav=crmNavForDeal(deal,s.contacts||[]);
-    if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
-    else setMod("deals");
-  };
+  const {s,setMod,dispatch,toast,cu}=useApp();
+  const [dealModalId,setDealModalId]=useState(null);
+  const [valueDraft,setValueDraft]=useState("");
   const openAccountInCrm=(name)=>{
     if(!name) return;
     dispatch("SET_CRM_NAV",{school:name});
@@ -1892,6 +1892,39 @@ function ModAnalytics() {
   const [q,setQ]=useState("");
   const [page,setPage]=useState(1);
   const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
+  const liveDeal=useMemo(()=>liveDealFromList(deals,dealModalId),[deals,dealModalId]);
+  useEffect(()=>{
+    if(liveDeal) setValueDraft(String(liveDeal.value||0));
+    else setValueDraft("");
+  },[dealModalId,liveDeal?.value]);
+  useEffect(()=>{
+    if(!dealModalId) return;
+    const onKey=e=>{if(e.key==="Escape") setDealModalId(null);};
+    window.addEventListener("keydown",onKey);
+    return ()=>window.removeEventListener("keydown",onKey);
+  },[dealModalId]);
+  const setDealStage=(st)=>{
+    const patch=dealStagePatch(liveDeal,st);
+    if(!patch) return;
+    const prev=liveDeal.stage;
+    dispatch("UPDATE_DEAL",patch);
+    crmUpdate("Deals",liveDeal.zohoId,{Stage:st});
+    dispatch("LOG",{msg:`${cu?.name||"Someone"} moved ${liveDeal.name} → ${st}`});
+    toast("Stage updated","success");
+    autoInvoiceOnClosedWon(liveDeal,prev,st,toast);
+  };
+  const setDealFollowUp=(dateStr)=>{
+    if(!liveDeal) return;
+    dispatch("UPDATE_DEAL",{id:liveDeal.id,followUpDate:dateStr,lastTouch:Date.now()});
+    crmUpdate("Deals",liveDeal.zohoId,{Closing_Date:dateStr});
+  };
+  const saveDealValue=()=>{
+    if(!liveDeal) return;
+    const v=Number(valueDraft||0);
+    dispatch("UPDATE_DEAL",{id:liveDeal.id,value:v,lastTouch:Date.now()});
+    crmUpdate("Deals",liveDeal.zohoId,{Amount:v});
+    toast("Deal value updated","success");
+  };
   const invoices=s.invoices||[];
   const contacts=s.contacts||[];
   const keyAccounts=useMemo(()=>buildKeyAccounts({invoices,deals,contacts}),[invoices,deals,contacts]);
@@ -1926,8 +1959,9 @@ function ModAnalytics() {
   );
   const PAGE=20;
   const attTone=(kind)=>kind==="overdue"?B.red:kind==="due"?B.orange:kind==="hold"?B.muted:B.yellow;
+  const modalAtt=liveDeal?dealAttention(liveDeal):null;
   const dealRow=(d)=>(
-    <div key={d.id} onClick={()=>openDealInCrm(d)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+    <div key={d.id} onClick={()=>setDealModalId(d.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.school||d.company||""}{d.contact?` · ${d.contact}`:""}</div>
@@ -2080,6 +2114,75 @@ function ModAnalytics() {
                 <ListPager page={page} setPage={setPage} total={listDeals.length} pageSize={PAGE} noun="deals"/>
               </>
             )}
+          </div>
+        </div>
+      )}
+      {liveDeal&&(
+        <div onClick={()=>setDealModalId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,gap:10}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black}}>{liveDeal.name}</div>
+                <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginTop:3}}>{liveDeal.school||liveDeal.company||""}{liveDeal.contact?` · ${liveDeal.contact}`:""}</div>
+              </div>
+              <button onClick={()=>setDealModalId(null)} style={{background:"none",border:"none",color:B.muted,fontSize:16,cursor:"pointer",lineHeight:1}}>✕</button>
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
+              <Pill v={liveDeal.stage} sc={DSC} bc={DBG}/>
+              {modalAtt&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:attTone(modalAtt.kind),background:`${attTone(modalAtt.kind)}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{modalAtt.reason.toUpperCase()}</span>}
+              {liveDeal.product&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.blue,background:B.blueBg,padding:"2px 6px",borderRadius:3}}>{liveDeal.product}</span>}
+              {liveDeal.quoteNumber&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,background:B.surface,padding:"2px 6px",borderRadius:3}}>Q {liveDeal.quoteNumber}</span>}
+            </div>
+            <Lbl s={{marginBottom:5}}>Stage</Lbl>
+            <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:14}}>
+              {DEAL_STAGES.map(st=>(
+                <button key={st} onClick={()=>setDealStage(st)} style={{background:liveDeal.stage===st?(DSC[st]||B.orange):B.surface,color:liveDeal.stage===st?B.white:B.muted,border:`1px solid ${liveDeal.stage===st?(DSC[st]||B.orange):B.border}`,borderRadius:3,padding:"4px 8px",fontSize:9,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>{st}</button>
+              ))}
+            </div>
+            <Lbl s={{marginBottom:3}}>Value ($)</Lbl>
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              <input type="number" value={valueDraft} onChange={e=>setValueDraft(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveDealValue()} style={{flex:1,background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+              <OBtn sm onClick={saveDealValue}>SAVE</OBtn>
+            </div>
+            <Lbl s={{marginBottom:3}}>Follow-up</Lbl>
+            <div style={{display:"flex",gap:6,marginBottom:8,flexWrap:"wrap"}}>
+              <input type="date" value={liveDeal.followUpDate||""} onChange={e=>setDealFollowUp(e.target.value)} style={{flex:"1 1 140px",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,boxSizing:"border-box"}}/>
+              <GBtn onClick={()=>setDealFollowUp(today())}>Today</GBtn>
+              <GBtn onClick={()=>setDealFollowUp(plusDaysISO(3))}>+3d</GBtn>
+              <GBtn onClick={()=>setDealFollowUp(plusDaysISO(7))}>+7d</GBtn>
+            </div>
+            {(liveDeal.quoteItems||[]).length>0&&(
+              <div style={{marginBottom:12}}>
+                <Lbl s={{marginBottom:6}}>What's in the deal</Lbl>
+                {(liveDeal.quoteItems||[]).map((it,i)=>(
+                  <div key={it.id||`${it.name}-${i}`} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
+                    <span>{it.qty||1} × {it.name||"Item"}</span>
+                    <span style={{color:B.muted}}>{fmt$K(it.total||((it.qty||1)*(it.rate||0)))}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Lbl s={{marginBottom:3}}>Notes</Lbl>
+            <textarea key={liveDeal.id} defaultValue={liveDeal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:liveDeal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <button onClick={()=>{
+                const nav=crmNavForDeal(liveDeal,s.contacts||[]);
+                if(nav){dispatch("SET_CRM_NAV",nav);setMod("crm");}
+                else setMod("crm");
+              }} style={{background:"none",border:"none",color:B.muted,fontSize:11,cursor:"pointer",fontFamily:"'Lexend',sans-serif",textDecoration:"underline",padding:0}}>Open account in CRM</button>
+              {liveDeal.hasUploadedPdf&&<button onClick={async()=>{
+                try{
+                  const r=await fetch(`/api/crm/deal-pdf?dealId=${encodeURIComponent(liveDeal.id)}`);
+                  const d=await r.json();
+                  if(!d.ok||!d.pdfBase64){toast(d.error||"PDF not on file","error");return;}
+                  const bytes=Uint8Array.from(atob(d.pdfBase64),c=>c.charCodeAt(0));
+                  const url=URL.createObjectURL(new Blob([bytes],{type:"application/pdf"}));
+                  const a=document.createElement("a");
+                  a.href=url;a.target="_blank";a.rel="noreferrer";a.download=liveDeal.quotePdfName||d.filename||"quote.pdf";
+                  a.click();
+                }catch(e){toast(`Could not open PDF: ${e.message}`,"error");}
+              }} style={{background:"none",border:"none",color:B.blue,fontSize:11,cursor:"pointer"}}>Open PDF</button>}
+            </div>
           </div>
         </div>
       )}
@@ -5477,9 +5580,8 @@ const totalContacts=(s.contacts||[]).filter(c=>!c.deadStatus).length;
 // Deals belong to the organization, not to whichever contact happens to
 // share its name/id — crmNavForDeal already encodes "accountId wins,
 // contact lookup is only a fallback for deals that predate that tagging",
-// same logic ModAnalytics's openDealInCrm uses, just applied locally here
-// instead of round-tripping through SET_CRM_NAV since this is already
-// inside ModCRM.
+// Analytics opens a deal modal in place; CRM home still jumps to the
+// account/contact that owns the deal because we are already in CRM.
 const navToDeal=(d)=>{
 const nav=crmNavForDeal(d,s.contacts||[]);
 if(!nav) return;

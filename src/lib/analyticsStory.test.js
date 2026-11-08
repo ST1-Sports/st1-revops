@@ -16,6 +16,9 @@ import {
   storyBeats,
   doubleDownItems,
   matchesAnalyticsQuery,
+  liveDealFromList,
+  plusDaysISO,
+  dealStagePatch,
 } from './analyticsStory.js';
 
 const NOW = Date.parse('2026-11-08T18:00:00Z');
@@ -211,5 +214,26 @@ describe('daysSinceTouch', () => {
   it('prefers lastTouch over createdAt', () => {
     assert.equal(daysSinceTouch({ lastTouch: daysAgo(5), createdAt: daysAgo(40) }, NOW), 5);
     assert.equal(daysSinceTouch({ createdAt: '2026-10-25T00:00:00Z' }, NOW), 14);
+  });
+});
+
+describe('analytics deal modal helpers', () => {
+  it('resolves the live deal by id after a stage change', () => {
+    const deals = [
+      { id: 'd1', name: 'Hudson', stage: 'Quoted', value: 22000 },
+      { id: 'd2', name: 'Glenwood', stage: 'Negotiating', value: 9000 },
+    ];
+    assert.equal(liveDealFromList(deals, 'd1').name, 'Hudson');
+    const next = deals.map(d => d.id === 'd1' ? { ...d, stage: 'Follow-Up 1' } : d);
+    assert.equal(liveDealFromList(next, 'd1').stage, 'Follow-Up 1');
+    assert.equal(liveDealFromList(next, 'missing'), null);
+  });
+
+  it('patches stage and lastTouch, and skips a no-op', () => {
+    const deal = { id: 'd1', stage: 'Quoted' };
+    const patch = dealStagePatch(deal, 'Negotiating', NOW);
+    assert.deepEqual(patch, { id: 'd1', stage: 'Negotiating', lastTouch: NOW });
+    assert.equal(dealStagePatch(deal, 'Quoted', NOW), null);
+    assert.equal(plusDaysISO(7, Date.parse('2026-11-08T18:00:00Z')), '2026-11-15');
   });
 });

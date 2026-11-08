@@ -288,6 +288,22 @@ export function doubleDownItems({ attentionDeals = [], keyAccounts = [] } = {}) 
     .slice(0, 8);
 }
 
+/** Live deal for the analytics modal — id stays stable while stage/value update. */
+export function liveDealFromList(deals, id) {
+  if (id == null || id === '') return null;
+  return (deals || []).find(d => d && d.id === id) || null;
+}
+
+export function plusDaysISO(days, now = Date.now()) {
+  return new Date(now + Number(days) * 86400000).toISOString().slice(0, 10);
+}
+
+/** Patch applied when a stage chip is clicked in the analytics deal modal. */
+export function dealStagePatch(deal, nextStage, now = Date.now()) {
+  if (!deal?.id || !nextStage || nextStage === deal.stage) return null;
+  return { id: deal.id, stage: nextStage, lastTouch: now };
+}
+
 export function matchesAnalyticsQuery(row, q) {
   if (!q) return true;
   const needle = String(q).trim().toLowerCase();
