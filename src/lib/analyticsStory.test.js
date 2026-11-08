@@ -228,6 +228,7 @@ describe('analytics deal modal helpers', () => {
     const next = deals.map(d => d.id === 'd1' ? { ...d, stage: 'Follow-Up 1' } : d);
     assert.equal(liveDealFromList(next, 'd1').stage, 'Follow-Up 1');
     assert.equal(liveDealFromList(next, 'missing'), null);
+    assert.equal(liveDealFromList([{ zohoId: 'z9', name: 'Skyview' }], 'z9').name, 'Skyview');
   });
 
   it('patches stage and lastTouch, and skips a no-op', () => {

@@ -291,7 +291,8 @@ export function doubleDownItems({ attentionDeals = [], keyAccounts = [] } = {}) 
 /** Live deal for the analytics modal — id stays stable while stage/value update. */
 export function liveDealFromList(deals, id) {
   if (id == null || id === '') return null;
-  return (deals || []).find(d => d && d.id === id) || null;
+  const sid = String(id);
+  return (deals || []).find(d => d && (String(d.id) === sid || String(d.zohoId || '') === sid)) || null;
 }
 
 export function plusDaysISO(days, now = Date.now()) {

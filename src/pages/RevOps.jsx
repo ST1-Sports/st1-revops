@@ -667,37 +667,6 @@ function persistDealQuoteLines(deal, items, {dispatch, toast} = {}) {
     return { ok: false, error: err.message };
   });
 }
-function QuoteLinesEditor({items,onChange,onSave,busy,saving}){
-  const rows=items?.length?items:[emptyQuoteLine(mkId())];
-  const patch=(idx,field,val)=>onChange(rows.map((row,i)=>i===idx?{...row,[field]:val}:row));
-  return (
-    <div style={{marginBottom:12}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
-        <Lbl>Quote line items</Lbl>
-        {busy&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading from Zoho…</span>}
-      </div>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4}}>
-        {["ITEM","QTY","RATE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
-      </div>
-      {rows.map((item,idx)=>(
-        <div key={item.id||idx} style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4,alignItems:"center"}}>
-          <input value={item.name||""} onChange={e=>patch(idx,"name",e.target.value)} placeholder="Item / kit" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
-          <input type="number" min="1" value={item.qty} onChange={e=>patch(idx,"qty",Number(e.target.value||1))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"center"}}/>
-          <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>patch(idx,"rate",Number(e.target.value||0))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"right"}}/>
-          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
-          <button onClick={()=>onChange(rows.length<=1?[emptyQuoteLine(mkId())]:rows.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>×</button>
-        </div>
-      ))}
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`,gap:8,flexWrap:"wrap"}}>
-        <button onClick={()=>onChange([...rows,emptyQuoteLine(mkId())])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>+ ADD LINE</button>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(quoteLinesTotal(rows))}</span>
-          <OBtn sm onClick={onSave} disabled={saving}>{saving?"SAVING…":"SAVE LINES"}</OBtn>
-        </div>
-      </div>
-    </div>
-  );
-}
 const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
 const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
@@ -1906,6 +1875,37 @@ const PH=React.memo(function PH({title,sub,action}){return <div style={{marginBo
 const Lbl=React.memo(function Lbl({c,s={},children}){return <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:c||B.muted,letterSpacing:2.5,textTransform:"uppercase",...s}}>{children}</div>;});
 const OBtn=React.memo(function OBtn({children,onClick,disabled,sm,col,style={}}){const c=col||B.orange;return <button onClick={onClick} disabled={disabled} style={{background:disabled?B.border:c,color:disabled?B.muted:B.white,border:"none",borderRadius:5,padding:sm?"5px 11px":"8px 16px",fontSize:sm?10:11,fontFamily:"'Lexend Zetta',sans-serif",fontWeight:700,letterSpacing:.4,cursor:disabled?"not-allowed":"pointer",...style}}>{children}</button>;});
 const GBtn=React.memo(function GBtn({children,onClick,style={}}){return <button onClick={onClick} style={{background:B.white,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"7px 13px",fontSize:11,fontFamily:"'Lexend',sans-serif",...style}}>{children}</button>;});
+function QuoteLinesEditor({items,onChange,onSave,busy,saving}){
+  const rows=items?.length?items:[emptyQuoteLine(mkId())];
+  const patch=(idx,field,val)=>onChange(rows.map((row,i)=>i===idx?{...row,[field]:val}:row));
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+        <Lbl>Quote line items</Lbl>
+        {busy&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading from Zoho…</span>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4}}>
+        {["ITEM","QTY","RATE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+      </div>
+      {rows.map((item,idx)=>(
+        <div key={item.id||idx} style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4,alignItems:"center"}}>
+          <input value={item.name||""} onChange={e=>patch(idx,"name",e.target.value)} placeholder="Item / kit" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+          <input type="number" min="1" value={item.qty} onChange={e=>patch(idx,"qty",Number(e.target.value||1))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"center"}}/>
+          <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>patch(idx,"rate",Number(e.target.value||0))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"right"}}/>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+          <button onClick={()=>onChange(rows.length<=1?[emptyQuoteLine(mkId())]:rows.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>×</button>
+        </div>
+      ))}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`,gap:8,flexWrap:"wrap"}}>
+        <button onClick={()=>onChange([...rows,emptyQuoteLine(mkId())])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>+ ADD LINE</button>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(quoteLinesTotal(rows))}</span>
+          <OBtn sm onClick={onSave} disabled={saving}>{saving?"SAVING…":"SAVE LINES"}</OBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
 // One-click role chips (Athletic Director, Head Coach, ...) next to a free-text title
 // input, so a rep isn't stuck typing "Athletic Director" by hand every time. The
 // underlying field stays free text — a chip just fills it, custom titles still work.
@@ -1983,7 +1983,17 @@ function ModAnalytics() {
   const [q,setQ]=useState("");
   const [page,setPage]=useState(1);
   const deals=useMemo(()=>filterRealDeals(s.deals||[],s),[s.deals,s.suppressedDealIds,s.suppressedDealZohoIds]);
-  const liveDeal=useMemo(()=>liveDealFromList(deals,dealModalId),[deals,dealModalId]);
+  const liveDeal=useMemo(
+    ()=>liveDealFromList(deals,dealModalId)||liveDealFromList(s.deals,dealModalId),
+    [deals,s.deals,dealModalId]
+  );
+  const openDealModal=(d,e)=>{
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    const id=d?.id||d?.zohoId;
+    if(!id) return;
+    setDealModalId(id);
+  };
   useEffect(()=>{
     if(liveDeal) setValueDraft(String(liveDeal.value||0));
     else setValueDraft("");
@@ -1996,7 +2006,7 @@ function ModAnalytics() {
   },[dealModalId]);
   useEffect(()=>{
     if(!dealModalId){setLineDraft([]);setLinesBusy(false);return;}
-    const deal=(s.deals||[]).find(d=>d.id===dealModalId);
+    const deal=liveDealFromList(s.deals,dealModalId);
     const local=normalizeQuoteLines(deal?.quoteItems);
     setLineDraft(local.length?local:[emptyQuoteLine(mkId())]);
     const zohoId=deal?.zohoId;
@@ -2006,11 +2016,11 @@ function ModAnalytics() {
     fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(zohoId)}`)
       .then(r=>r.json())
       .then(d=>{
-        if(cancelled||!d?.ok) return;
-        if(d.quoteId) dispatch("UPDATE_DEAL",{id:dealModalId,zohoQuoteId:d.quoteId});
+        if(cancelled||!d?.ok||!deal?.id) return;
+        if(d.quoteId) dispatch("UPDATE_DEAL",{id:deal.id,zohoQuoteId:d.quoteId});
         const zohoItems=normalizeQuoteLines(d.items);
         if(!zohoItems.length||local.length) return;
-        dispatch("UPDATE_DEAL",{id:dealModalId,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems),value:deal?.value||quoteLinesTotal(zohoItems)});
+        dispatch("UPDATE_DEAL",{id:deal.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems),value:deal?.value||quoteLinesTotal(zohoItems)});
         setLineDraft(zohoItems);
       })
       .catch(()=>{})
@@ -2088,7 +2098,7 @@ function ModAnalytics() {
   const dealRow=(d)=>{
     const lineHint=quoteLinesSummary(quoteLinesForDeal(d));
     return (
-    <div key={d.id} onClick={()=>setDealModalId(d.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
+    <div key={d.id||d.zohoId} onClick={e=>openDealModal(d,e)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.school||d.company||""}{d.contact?` · ${d.contact}`:""}</div>
@@ -2246,7 +2256,7 @@ function ModAnalytics() {
           </div>
         </div>
       )}
-      {liveDeal&&(
+      {dealModalId&&liveDeal&&(
         <div onClick={()=>setDealModalId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,gap:10}}>
