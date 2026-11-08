@@ -29,6 +29,7 @@ import { getZohoToken } from '../_lib/zoho-token.js';
 import { CRM_BASE, zohoCrmHeaders } from '../_lib/zohoCrm.js';
 import { updateSettingSafely } from '../_lib/settingSync.js';
 import { dealIsSuppressed } from '../../src/lib/dealTombstone.js';
+import { filledQuoteLines, quoteFieldsFromZohoRecord } from '../../src/lib/quoteLines.js';
 
 const DEAL_FIELDS = 'Deal_Name,Amount,Stage,Closing_Date,Account_Name,Contact_Name,Description,Modified_Time,Created_Time';
 const DEAL_STAGES = ['Quoted', 'Follow-Up 1', 'Follow-Up 2', 'Negotiating', 'PO Received', 'Closed Won', 'Closed Lost', 'On Hold'];
@@ -130,11 +131,17 @@ export default async function handler(req, res) {
         const existing = byZohoId.get(String(zd.id));
 
         if (existing) {
+          const idx = deals.findIndex(d => d.id === existing.id);
+          let next = existing;
           if (existing.stage !== localStage) {
-            const idx = deals.findIndex(d => d.id === existing.id);
-            if (idx >= 0) deals[idx] = { ...deals[idx], stage: localStage, zohoStage: zStage };
+            next = { ...next, stage: localStage, zohoStage: zStage };
             dealsUpdated++;
           }
+          if (idx >= 0 && !filledQuoteLines(existing.quoteItems).length) {
+            const qf = quoteFieldsFromZohoRecord(zd);
+            if (qf.quoteItems.length) next = { ...next, ...qf };
+          }
+          if (idx >= 0 && next !== existing) deals[idx] = next;
           continue;
         }
 
@@ -149,6 +156,7 @@ export default async function handler(req, res) {
           stage: localStage, zohoStage: zStage,
           notes: zd.Description || '', followUpDate: zd.Closing_Date || '',
           lastTouch: now, priority: 'warm', touchHistory: [], source: 'zoho-crm',
+          ...quoteFieldsFromZohoRecord(zd),
         };
         deals.push(fresh);
         byZohoId.set(String(zd.id), fresh);

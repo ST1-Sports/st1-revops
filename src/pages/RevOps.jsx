@@ -46,6 +46,17 @@ import {
   storyBeats,
 } from "../lib/analyticsStory.js";
 import { buildLockedQuotePayload } from "../lib/quoteLock.js";
+import {
+  emptyQuoteLine,
+  filledQuoteLines,
+  normalizeQuoteLines,
+  parseQuoteLinesFromDescription,
+  quoteFieldsFromZohoRecord,
+  quoteLinesForDeal,
+  quoteLinesSummary,
+  quoteLinesTotal,
+  quoteNotesFromDescription,
+} from "../lib/quoteLines.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
@@ -611,6 +622,82 @@ body: { data: [{ Subject: activityNote, Activity_Type: "Email", Due_Date: new Da
 }
 const crmCreate=(module,data)=>fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}`,method:"POST",body:{data:[data]}})}).catch(()=>{});
 const crmUpdate=(module,zohoId,fields)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:`/${module}/${zohoId}`,method:"PUT",body:{data:[{id:zohoId,...fields}]}})}).catch(()=>{}):null;
+function persistDealQuoteLines(deal, items, {dispatch, toast} = {}) {
+  const cleaned = filledQuoteLines(items);
+  const total = quoteLinesTotal(cleaned);
+  dispatch?.("UPDATE_DEAL", {
+    id: deal.id,
+    quoteItems: cleaned,
+    quoteAmount: total,
+    value: total,
+    product: cleaned[0]?.name || deal.product || "",
+    lastTouch: Date.now(),
+    ...(deal.quoteNumber != null ? { quoteNumber: deal.quoteNumber } : {}),
+  });
+  if (!deal.zohoId) {
+    toast?.("Quote lines saved", "success");
+    return Promise.resolve({ ok: true, localOnly: true, items: cleaned, amount: total });
+  }
+  return fetch("/api/crm/deal-lines", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      dealId: deal.zohoId,
+      quoteId: deal.zohoQuoteId || null,
+      accountName: deal.school || deal.company || "",
+      accountCity: deal.city || "",
+      accountState: deal.state || "",
+      items: cleaned,
+      notes: quoteNotesFromDescription(deal.quoteNotes || deal.notes || ""),
+    }),
+  }).then(r => r.json()).then(d => {
+    if (d?.quoteId && d.quoteId !== deal.zohoQuoteId) {
+      dispatch?.("UPDATE_DEAL", { id: deal.id, zohoQuoteId: d.quoteId });
+    }
+    if (d?.ok) {
+      toast?.(d.zohoWroteLines
+        ? "Quote lines saved to Zoho CRM"
+        : "Quote saved on the Zoho deal (description)", "success");
+    } else {
+      toast?.(d?.error || "Could not save lines to Zoho", "error");
+    }
+    return d;
+  }).catch(err => {
+    toast?.(`Quote saved locally — Zoho: ${err.message}`, "info");
+    return { ok: false, error: err.message };
+  });
+}
+function QuoteLinesEditor({items,onChange,onSave,busy,saving}){
+  const rows=items?.length?items:[emptyQuoteLine(mkId())];
+  const patch=(idx,field,val)=>onChange(rows.map((row,i)=>i===idx?{...row,[field]:val}:row));
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+        <Lbl>Quote line items</Lbl>
+        {busy&&<span style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>Loading from Zoho…</span>}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4}}>
+        {["ITEM","QTY","RATE","TOTAL",""].map(h=><div key={h} style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:B.muted,letterSpacing:1}}>{h}</div>)}
+      </div>
+      {rows.map((item,idx)=>(
+        <div key={item.id||idx} style={{display:"grid",gridTemplateColumns:"1fr 52px 72px 68px 22px",gap:4,marginBottom:4,alignItems:"center"}}>
+          <input value={item.name||""} onChange={e=>patch(idx,"name",e.target.value)} placeholder="Item / kit" style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 7px",fontSize:11}}/>
+          <input type="number" min="1" value={item.qty} onChange={e=>patch(idx,"qty",Number(e.target.value||1))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"center"}}/>
+          <input type="number" min="0" step="0.01" value={item.rate} onChange={e=>patch(idx,"rate",Number(e.target.value||0))} style={{background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:3,padding:"5px 6px",fontSize:11,textAlign:"right"}}/>
+          <div style={{fontFamily:"'Russo One',sans-serif",fontSize:11,color:B.orange,textAlign:"right"}}>{fmt$((item.qty||0)*(item.rate||0))}</div>
+          <button onClick={()=>onChange(rows.length<=1?[emptyQuoteLine(mkId())]:rows.filter((_,i)=>i!==idx))} style={{background:"none",border:"none",color:B.muted,fontSize:14,cursor:"pointer",padding:0,lineHeight:1}}>×</button>
+        </div>
+      ))}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:6,paddingTop:6,borderTop:`1px solid ${B.border}`,gap:8,flexWrap:"wrap"}}>
+        <button onClick={()=>onChange([...rows,emptyQuoteLine(mkId())])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>+ ADD LINE</button>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange}}>{fmt$(quoteLinesTotal(rows))}</span>
+          <OBtn sm onClick={onSave} disabled={saving}>{saving?"SAVING…":"SAVE LINES"}</OBtn>
+        </div>
+      </div>
+    </div>
+  );
+}
 const crmAddNote=(module,zohoId,content)=>zohoId?fetch("/api/zoho",{method:"POST",headers:{"Content-Type":"application/json",...internalAuthHeaders()},body:JSON.stringify({service:"crm",endpoint:"/Notes",method:"POST",body:{data:[{Note_Title:"RevOps Note",Note_Content:content,Parent_Id:{id:zohoId},se_module:module}]}})}).catch(()=>{}):null;
 const pushDealToZoho=(fields)=>fetch("/api/crm/deal",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(fields)}).then(r=>r.json()).catch(()=>({}));
 // Fires exactly once, on the transition into Closed Won — auto-drafts (not sends) an
@@ -1203,8 +1290,9 @@ const localStage=DEAL_STAGES.includes(zStage)?zStage:(dealStageMap[zStage]||"Quo
 if(existingDealZohoIds.has(zd.id)){
 const local=existingDeals.find(d=>d.zohoId===zd.id);
 if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}
+if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}
 }else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){
-dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});
+dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zs(zd.Deal_Name)||"Untitled",contact:zs(zd.Contact_Name),school:zs(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});
 dealsAdded++;
 }
 });
@@ -1882,6 +1970,9 @@ function ModAnalytics() {
   const {s,setMod,dispatch,toast,cu}=useApp();
   const [dealModalId,setDealModalId]=useState(null);
   const [valueDraft,setValueDraft]=useState("");
+  const [lineDraft,setLineDraft]=useState([]);
+  const [linesBusy,setLinesBusy]=useState(false);
+  const [linesSaving,setLinesSaving]=useState(false);
   const openAccountInCrm=(name)=>{
     if(!name) return;
     dispatch("SET_CRM_NAV",{school:name});
@@ -1903,6 +1994,40 @@ function ModAnalytics() {
     window.addEventListener("keydown",onKey);
     return ()=>window.removeEventListener("keydown",onKey);
   },[dealModalId]);
+  useEffect(()=>{
+    if(!dealModalId){setLineDraft([]);setLinesBusy(false);return;}
+    const deal=(s.deals||[]).find(d=>d.id===dealModalId);
+    const local=normalizeQuoteLines(deal?.quoteItems);
+    setLineDraft(local.length?local:[emptyQuoteLine(mkId())]);
+    const zohoId=deal?.zohoId;
+    if(!zohoId) return;
+    let cancelled=false;
+    setLinesBusy(true);
+    fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(zohoId)}`)
+      .then(r=>r.json())
+      .then(d=>{
+        if(cancelled||!d?.ok) return;
+        if(d.quoteId) dispatch("UPDATE_DEAL",{id:dealModalId,zohoQuoteId:d.quoteId});
+        const zohoItems=normalizeQuoteLines(d.items);
+        if(!zohoItems.length||local.length) return;
+        dispatch("UPDATE_DEAL",{id:dealModalId,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems),value:deal?.value||quoteLinesTotal(zohoItems)});
+        setLineDraft(zohoItems);
+      })
+      .catch(()=>{})
+      .finally(()=>{if(!cancelled)setLinesBusy(false);});
+    return ()=>{cancelled=true;};
+  },[dealModalId]);
+  const saveDealLines=()=>{
+    if(!liveDeal) return;
+    setLinesSaving(true);
+    persistDealQuoteLines(liveDeal,lineDraft,{dispatch,toast})
+      .then(()=>{
+        const filled=filledQuoteLines(lineDraft);
+        setValueDraft(String(quoteLinesTotal(filled)));
+        setLineDraft(filled.length?filled:[emptyQuoteLine(mkId())]);
+      })
+      .finally(()=>setLinesSaving(false));
+  };
   const setDealStage=(st)=>{
     const patch=dealStagePatch(liveDeal,st);
     if(!patch) return;
@@ -1960,11 +2085,14 @@ function ModAnalytics() {
   const PAGE=20;
   const attTone=(kind)=>kind==="overdue"?B.red:kind==="due"?B.orange:kind==="hold"?B.muted:B.yellow;
   const modalAtt=liveDeal?dealAttention(liveDeal):null;
-  const dealRow=(d)=>(
+  const dealRow=(d)=>{
+    const lineHint=quoteLinesSummary(quoteLinesForDeal(d));
+    return (
     <div key={d.id} onClick={()=>setDealModalId(d.id)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.name}</div>
         <div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.school||d.company||""}{d.contact?` · ${d.contact}`:""}</div>
+        {lineHint&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.textMid,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{lineHint}</div>}
         <div style={{display:"flex",gap:6,alignItems:"center",marginTop:4,flexWrap:"wrap"}}>
           <Pill v={d.stage} sc={DSC} bc={DBG}/>
           {d.attention&&<span style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:7,color:attTone(d.attentionKind),background:`${attTone(d.attentionKind)}18`,padding:"2px 6px",borderRadius:3,letterSpacing:.4}}>{d.attention.toUpperCase()}</span>}
@@ -1972,7 +2100,8 @@ function ModAnalytics() {
       </div>
       <div style={{fontFamily:"'Russo One',sans-serif",fontSize:13,color:B.orange,flexShrink:0}}>{fmt$K(d.value||0)}</div>
     </div>
-  );
+    );
+  };
   const accountRow=(a)=>(
     <div key={a.name} onClick={()=>openAccountInCrm(a.name)} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,padding:"8px 0",borderBottom:`1px solid ${B.border}`,cursor:"pointer"}}>
       <div style={{flex:1,minWidth:0}}>
@@ -2119,7 +2248,7 @@ function ModAnalytics() {
       )}
       {liveDeal&&(
         <div onClick={()=>setDealModalId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-          <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:460,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12,gap:10}}>
               <div style={{minWidth:0}}>
                 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:15,color:B.black}}>{liveDeal.name}</div>
@@ -2151,17 +2280,7 @@ function ModAnalytics() {
               <GBtn onClick={()=>setDealFollowUp(plusDaysISO(3))}>+3d</GBtn>
               <GBtn onClick={()=>setDealFollowUp(plusDaysISO(7))}>+7d</GBtn>
             </div>
-            {(liveDeal.quoteItems||[]).length>0&&(
-              <div style={{marginBottom:12}}>
-                <Lbl s={{marginBottom:6}}>What's in the deal</Lbl>
-                {(liveDeal.quoteItems||[]).map((it,i)=>(
-                  <div key={it.id||`${it.name}-${i}`} style={{display:"flex",justifyContent:"space-between",gap:8,padding:"4px 0",borderBottom:`1px solid ${B.border}`,fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.text}}>
-                    <span>{it.qty||1} × {it.name||"Item"}</span>
-                    <span style={{color:B.muted}}>{fmt$K(it.total||((it.qty||1)*(it.rate||0)))}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <QuoteLinesEditor items={lineDraft} onChange={setLineDraft} onSave={saveDealLines} busy={linesBusy} saving={linesSaving}/>
             <Lbl s={{marginBottom:3}}>Notes</Lbl>
             <textarea key={liveDeal.id} defaultValue={liveDeal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:liveDeal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
@@ -3881,6 +4000,37 @@ const [loadingBooksContacts,setLoadingBooksContacts]=useState(null);
 const [enrichingWebsite,setEnrichingWebsite]=useState(false);
 const [showAccountDeal,setShowAccountDeal]=useState(false);
 const [accountDealModal,setAccountDealModal]=useState(null);
+const [acctLinesBusy,setAcctLinesBusy]=useState(false);
+const [acctLinesSaving,setAcctLinesSaving]=useState(false);
+const openAccountDeal=d=>{
+  const local=quoteLinesForDeal(d);
+  setAccountDealModal({...d,quoteItems:local.length?local:[emptyQuoteLine(mkId())]});
+  setAcctLinesBusy(!!(d.zohoId&&!local.length));
+  if(!d.zohoId||local.length) return;
+  fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(d.zohoId)}`)
+    .then(r=>r.json())
+    .then(res=>{
+      if(!res?.ok) return;
+      const zohoItems=normalizeQuoteLines(res.items);
+      if(res.quoteId) dispatch("UPDATE_DEAL",{id:d.id,zohoQuoteId:res.quoteId});
+      if(!zohoItems.length) return;
+      dispatch("UPDATE_DEAL",{id:d.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems)});
+      setAccountDealModal(m=>m&&m.id===d.id?{...m,quoteItems:zohoItems,zohoQuoteId:res.quoteId||m.zohoQuoteId}:m);
+    })
+    .catch(()=>{})
+    .finally(()=>setAcctLinesBusy(false));
+};
+const saveAccountDealLines=()=>{
+  if(!accountDealModal) return;
+  setAcctLinesSaving(true);
+  persistDealQuoteLines(accountDealModal,accountDealModal.quoteItems,{dispatch,toast})
+    .then(()=>{
+      const filled=filledQuoteLines(accountDealModal.quoteItems);
+      const total=quoteLinesTotal(filled);
+      setAccountDealModal(m=>m?{...m,quoteItems:filled.length?filled:[emptyQuoteLine(mkId())],value:total,quoteAmount:total}:m);
+    })
+    .finally(()=>setAcctLinesSaving(false));
+};
 const [accountDealForm,setAccountDealForm]=useState({name:"",value:"",stage:"Quoted",product:"",contactId:"",notes:""});
 const [accountPdfBusy,setAccountPdfBusy]=useState(false);
 const [accountPdfDraft,setAccountPdfDraft]=useState(null);
@@ -4162,8 +4312,20 @@ setQuoteNum(activeDeal?.quoteNumber||"");
 setTtView(false);setTtContact(null);
 setDealValueInput(String(activeDeal?.value||activeDeal?.quoteAmount||0));
 setDealValueSaved(false);
-setQuoteItems(activeDeal?.quoteItems||[]);
+const localQuoteItems=normalizeQuoteLines(activeDeal?.quoteItems);
+setQuoteItems(localQuoteItems.length?localQuoteItems:parseQuoteLinesFromDescription(activeDeal?.notes||""));
 setOverviewEditDealId(null);
+const zohoId=activeDeal?.zohoId;
+if(zohoId&&!localQuoteItems.length){
+fetch(`/api/crm/deal-lines?dealId=${encodeURIComponent(zohoId)}`).then(r=>r.json()).then(d=>{
+if(!d?.ok) return;
+const zohoItems=normalizeQuoteLines(d.items);
+if(d.quoteId) dispatch("UPDATE_DEAL",{id:activeDeal.id,zohoQuoteId:d.quoteId});
+if(!zohoItems.length) return;
+setQuoteItems(zohoItems);
+dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems:zohoItems,quoteAmount:quoteLinesTotal(zohoItems)});
+}).catch(()=>{});
+}
 const c=selId?(contacts.find(x=>x.id===selId)||null):null;
 if(c) setProfileForm({firstName:c.firstName||"",lastName:c.lastName||"",title:c.title||"",school:c.school||"",state:c.state||"",city:c.city||"",email:c.email||"",phone:c.phone||"",sport:c.sport||"",orgType:c.orgType||"school",schoolClass:c.schoolClass||"",numAthletes:String(c.numAthletes||""),numSports:String(c.numSports||""),priority:c.priority||"medium",outreachStatus:c.outreachStatus||"new"});
 setProfileDirty(false);
@@ -5429,10 +5591,10 @@ return(<>
 {allDeals.length===0&&<div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:B.muted,marginBottom:8}}>No deals yet — add one or upload a quote PDF created elsewhere.</div>}
 <div style={{display:"flex",flexDirection:"column",gap:6}}>
 {allDeals.sort((a,b)=>{const o=["Closed Won","Closed Lost"];const ai=o.includes(a.stage)?1:0;const bi=o.includes(b.stage)?1:0;return ai-bi;}).map(d=>(
-<div key={d.id} onClick={()=>setAccountDealModal(d)} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:"pointer"}}>
+<div key={d.id} onClick={()=>openAccountDeal(d)} style={{background:B.white,border:`1px solid ${["Closed Won"].includes(d.stage)?B.green:["Closed Lost"].includes(d.stage)?B.border:B.border}`,borderLeft:`3px solid ${DSC[d.stage]||B.muted}`,borderRadius:6,padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,cursor:"pointer"}}>
 <div style={{flex:1,minWidth:0}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,fontWeight:500,color:B.text}}>{d.name}</div>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",(d.quoteItems?.[0]?.name||d.product||"")].filter(Boolean).join(" · ")}</div>
+<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted}}>{[d.contact,d.quoteNumber?`Quote #${d.quoteNumber}`:"",quoteLinesSummary(quoteLinesForDeal(d))||d.product||""].filter(Boolean).join(" · ")}</div>
 </div>
 <div style={{textAlign:"right",flexShrink:0}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:8,color:DSC[d.stage]||B.muted}}>{d.stage}</div>
@@ -5525,7 +5687,7 @@ return(<>
     id, not on a contact. */}
 {accountDealModal&&(
 <div onClick={()=>setAccountDealModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:440,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
+<div onClick={e=>e.stopPropagation()} style={{background:B.white,borderRadius:10,boxShadow:"0 24px 80px rgba(0,0,0,.25)",width:"100%",maxWidth:560,maxHeight:"90vh",overflowY:"auto",padding:"16px 18px"}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12}}>
 <div>
 <div style={{fontFamily:"'Russo One',sans-serif",fontSize:14,color:B.black}}>{accountDealModal.name}</div>
@@ -5557,6 +5719,13 @@ dispatch("UPDATE_DEAL",{id:accountDealModal.id,followUpDate:e.target.value});
 crmUpdate("Deals",accountDealModal.zohoId,{Closing_Date:e.target.value});
 setAccountDealModal(m=>({...m,followUpDate:e.target.value}));
 }} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,marginBottom:12}}/>
+<QuoteLinesEditor
+  items={accountDealModal.quoteItems||[]}
+  onChange={rows=>setAccountDealModal(m=>m?{...m,quoteItems:rows}:m)}
+  onSave={saveAccountDealLines}
+  busy={acctLinesBusy}
+  saving={acctLinesSaving}
+/>
 <Lbl s={{marginBottom:3}}>Notes</Lbl>
 <textarea defaultValue={accountDealModal.notes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:accountDealModal.id,notes:e.target.value})} rows={3} style={{width:"100%",boxSizing:"border-box",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"6px 8px",fontSize:12,resize:"vertical",marginBottom:14,fontFamily:"'Lexend',sans-serif"}}/>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -6038,7 +6207,7 @@ return (
 <button onClick={()=>setQuoteItems(qi=>[...qi,{id:mkId(),name:"",qty:1,rate:0}])} style={{background:"none",border:`1px dashed ${B.border}`,color:B.muted,borderRadius:4,padding:"6px 12px",fontSize:11,cursor:"pointer",width:"100%",marginBottom:12,fontFamily:"'Lexend',sans-serif"}}>+ ADD ITEM</button>
 <div style={{marginBottom:12}}><Lbl s={{marginBottom:4}}>Notes</Lbl><textarea defaultValue={activeDeal.quoteNotes||""} onBlur={e=>dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteNotes:e.target.value})} placeholder="Special pricing, terms, conditions..." rows={2} style={{width:"100%",background:B.surface,border:`1px solid ${B.border}`,color:B.text,borderRadius:4,padding:"7px 10px",fontSize:11,fontFamily:"'Lexend',sans-serif",resize:"vertical",boxSizing:"border-box"}}/></div>
 <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:10}}>
-<OBtn onClick={()=>{dispatch("UPDATE_DEAL",{id:activeDeal.id,quoteItems,quoteNumber:quoteNum,quoteAmount:qSubtotal,value:qSubtotal});setDealValueInput(String(qSubtotal));crmUpdate("Deals",activeDeal.zohoId,{Amount:qSubtotal});toast("Quote saved — deal value updated","success");}}>SAVE QUOTE</OBtn>
+<OBtn onClick={()=>{persistDealQuoteLines({...activeDeal,quoteNumber:quoteNum},quoteItems,{dispatch,toast});setDealValueInput(String(quoteLinesTotal(quoteItems)));}}>SAVE QUOTE</OBtn>
 <OBtn col={B.blue} onClick={printPDF} disabled={quoteItems.length===0}>PRINT / PDF</OBtn>
 {activeDeal.hasUploadedPdf&&<OBtn col={B.blue} onClick={()=>openStoredDealPdf(activeDeal.id,activeDeal.quotePdfName)}>OPEN PDF</OBtn>}
 <a href={zbUrl} target="_blank" rel="noreferrer" style={{background:B.surface,color:B.textMid,border:`1px solid ${B.borderD}`,borderRadius:5,padding:"8px 13px",fontFamily:"'Lexend',sans-serif",fontSize:11,textDecoration:"none",display:"inline-flex",alignItems:"center"}}>OPEN ZOHO BOOKS ↗</a>
@@ -8013,7 +8182,7 @@ dispatch("SET_CONTACTS_LAST_SYNC",now);
 const existingDeals=s.deals||[]; const existingDealZohoIds=new Set(existingDeals.map(d=>d.zohoId).filter(Boolean));
 const stageMap={"Qualification":"Quoted","Value Proposition":"Quoted","Id. Decision Makers":"Follow-Up 1","Perception Analysis":"Follow-Up 1","Proposal/Price Quote":"Quoted","Negotiation/Review":"Negotiating","Closed Won":"Closed Won","Closed Lost":"Closed Lost"};
 let dealsAdded=0,dealsUpdated=0;
-dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm"});dealsAdded++;}});
+dealRows.forEach(zd=>{const zn=v=>typeof v==="string"?v:v?.name||v?.display_value||"";const zStage=zn(zd.Stage)||"Quoted";const localStage=DEAL_STAGES.includes(zStage)?zStage:(stageMap[zStage]||"Quoted");if(existingDealZohoIds.has(zd.id)){const local=existingDeals.find(d=>d.zohoId===zd.id);if(local&&local.stage!==localStage){dispatch("UPDATE_DEAL",{id:local.id,stage:localStage,zohoStage:zStage});dealsUpdated++;autoInvoiceOnClosedWon(local,local.stage,localStage,toast);}if(local&&!filledQuoteLines(local.quoteItems).length){const qf=quoteFieldsFromZohoRecord(zd);if(qf.quoteItems.length)dispatch("UPDATE_DEAL",{id:local.id,...qf});}}else if(!dealIsSuppressed({id:"zoho_d_"+zd.id,zohoId:zd.id},s)){dispatch("ADD_DEAL",{id:"zoho_d_"+zd.id,zohoId:zd.id,name:zn(zd.Deal_Name)||"Untitled",contact:zn(zd.Contact_Name),school:zn(zd.Account_Name),value:Number(zd.Amount)||0,stage:localStage,zohoStage:zStage,notes:zd.Description||"",followUpDate:zd.Closing_Date||"",lastTouch:now,priority:"warm",touchHistory:[],source:"zoho-crm",...quoteFieldsFromZohoRecord(zd)});dealsAdded++;}});
 const liveDealIds=new Set(dealRows.map(zd=>zd.id));
 const deadDealIds=existingDeals.filter(d=>d.zohoId&&!liveDealIds.has(d.zohoId)).map(d=>d.id);
 if(deadDealIds.length) dispatch("REMOVE_DEALS",deadDealIds);

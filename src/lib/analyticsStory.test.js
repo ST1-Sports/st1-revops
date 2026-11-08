@@ -207,6 +207,7 @@ describe('matchesAnalyticsQuery', () => {
     assert.equal(matchesAnalyticsQuery(row, 'OVERDUE'), true);
     assert.equal(matchesAnalyticsQuery(row, 'glenwood'), false);
     assert.equal(matchesAnalyticsQuery(row, ''), true);
+    assert.equal(matchesAnalyticsQuery({ ...row, quoteItems: [{ name: 'Varsity jersey' }] }, 'jersey'), true);
   });
 });
 

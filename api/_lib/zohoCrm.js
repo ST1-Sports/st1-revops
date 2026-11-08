@@ -33,17 +33,39 @@ export function zohoRecordError(rec, fallback = 'Zoho request failed') {
   return `${rec.message || rec.code || fallback}${field}`
 }
 
-export async function zohoCrmCreateRecord(module, payload, headers) {
-  const res = await fetch(`${CRM_BASE}/${module}`, {
-    method: 'POST', headers, body: JSON.stringify({ data: [payload] }),
-  })
-  const data = await res.json().catch(() => null)
+function zohoResult(res, data) {
   const rec = data?.data?.[0]
   if (rec) return rec
   if (data?.code || data?.message || data?.status === 'error') {
     return { status: 'error', message: data.message || data.code || `Zoho ${res.status}`, raw: data }
   }
   return { status: 'error', message: `Zoho returned no record (${res.status})`, raw: data }
+}
+
+export async function zohoCrmCreateRecord(module, payload, headers) {
+  const res = await fetch(`${CRM_BASE}/${module}`, {
+    method: 'POST', headers, body: JSON.stringify({ data: [payload] }),
+  })
+  const data = await res.json().catch(() => null)
+  return zohoResult(res, data)
+}
+
+export async function zohoCrmUpdateRecord(module, id, payload, headers) {
+  if (!id) return { status: 'error', message: 'record id required' }
+  const res = await fetch(`${CRM_BASE}/${module}/${id}`, {
+    method: 'PUT', headers, body: JSON.stringify({ data: [{ id, ...payload }] }),
+  })
+  const data = await res.json().catch(() => null)
+  return zohoResult(res, data)
+}
+
+export async function zohoCrmGetRecord(module, id, fields, headers) {
+  if (!id) return null
+  const q = fields ? `?fields=${encodeURIComponent(fields)}` : ''
+  const res = await fetch(`${CRM_BASE}/${module}/${id}${q}`, { headers })
+  const data = await res.json().catch(() => null)
+  if (!res.ok) return null
+  return data?.data?.[0] || null
 }
 
 export async function zohoCrmDeleteRecords(module, ids, headers) {

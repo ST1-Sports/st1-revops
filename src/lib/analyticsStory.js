@@ -317,6 +317,7 @@ export function matchesAnalyticsQuery(row, q) {
     row.product,
     row.attention,
     row.label,
+    ...(Array.isArray(row.quoteItems) ? row.quoteItems.map(i => i?.name) : []),
   ].filter(Boolean).join(' ').toLowerCase();
   return hay.includes(needle);
 }
