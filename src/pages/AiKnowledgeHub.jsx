@@ -473,7 +473,6 @@ export default function AiKnowledgeHub({ embedded = false }) {
           <StatusPill ok={memory.chatSessionCount > 0} label={`${memory.chatSessionCount} SAVED CHATS`} />
           {status?.counts && (
             <>
-              <StatusPill ok={status.counts.priceItems > 0} label={`${status.counts.priceItems} PRICE ROWS`} />
               <StatusPill ok={status.counts.products > 0} label={`${status.counts.products} PRODUCTS`} />
               <StatusPill ok={status.counts.suppliers > 0} label={`${status.counts.suppliers} SUPPLIERS`} />
             </>
@@ -485,6 +484,7 @@ export default function AiKnowledgeHub({ embedded = false }) {
             <StatusPill ok={status.connectors.notion} label={status.connectors.notion ? 'NOTION TOKEN SET' : 'NOTION NOT SET'} />
             <StatusPill ok={status.connectors.googleDrive} label={status.connectors.googleDrive ? 'DRIVE TOKEN SET' : 'DRIVE NOT SET'} />
             <StatusPill ok={status.connectors.zoho} label={status.connectors.zoho ? 'ZOHO SET' : 'ZOHO NOT SET'} />
+            <StatusPill ok={status.connectors.pim} label={status.connectors.pim ? 'PIM CONNECTED' : 'PIM NOT SET'} />
             <StatusPill ok={status.connectors.toolAuth} label={status.connectors.toolAuth ? 'EXTERNAL TOOL KEY SET' : 'NO EXTERNAL TOOL KEY'} />
           </div>
         )}

@@ -94,7 +94,7 @@ describe('searchPimProducts', () => {
     const session = {
       async request(path) {
         calls.push(path);
-        if (path.startsWith('/admin/search?q=')) {
+        if (path.includes('/admin/products/search') || path.startsWith('/admin/search?q=')) {
           return {
             ok: true,
             status: 200,
@@ -116,7 +116,7 @@ describe('searchPimProducts', () => {
     assert.equal(rows.length, 1);
     assert.equal(rows[0].sku, 'AC-TF5000');
     assert.equal(rows[0].cost, 61.2);
-    assert.equal(calls[0].includes('/admin/search'), true);
+    assert.equal(calls.some(p => p.includes('/admin/products/search') || p.includes('/admin/search')), true);
   });
 
   it('skips an unfiltered catalog dump that does not match the model', async () => {

@@ -478,7 +478,8 @@ model alert_history {
 }
 
 // ── AGENT BRAIN ───────────────────────────────────────────────────────────────
-// Price lists: source of truth for quoting (Edgar reads this)
+// Historical uploaded dealer lists. Quoting (Scout / Edgar) now reads the
+// ST1 PIM catalog. Supplier + PriceItem remain for vendor-bill matching.
 
 model Supplier {
   id          String      @id @default(cuid())

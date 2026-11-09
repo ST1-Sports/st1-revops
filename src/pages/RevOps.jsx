@@ -422,6 +422,8 @@ return server.filter(u=>u?.repId).map(u=>({...localByRep[u.repId], ...u, pin: lo
 }
 function mergeServerState(base, server) {
 if (!server || typeof server !== "object") return base;
+const {priceLists:_ignoredPriceLists,...serverRest}=server;
+server = serverRest;
 const suppressedDealIds = mergeIdLists(base.suppressedDealIds, server.suppressedDealIds);
 const suppressedDealZohoIds = mergeIdLists(base.suppressedDealZohoIds, server.suppressedDealZohoIds);
 const suppressedContactIds = mergeIdLists(base.suppressedContactIds, server.suppressedContactIds);
@@ -456,7 +458,6 @@ reps:         mergeById(base.reps,         server.reps),
 orders:       mergeById(base.orders,       server.orders),
 alerts:       mergeById(base.alerts,       server.alerts),
 activity:     mergeById(base.activity,     server.activity),
-priceLists:   [],
 appUsers:     mergeAppUsers(base.appUsers, server.appUsers),
 };
 }
@@ -470,7 +471,8 @@ try {
 const saved = localStorage.getItem(STORE);
 if (saved) {
 const p = JSON.parse(saved);
-return {...SEED,...p,
+const {priceLists:_droppedPriceLists,...pRest}=p;
+return {...SEED,...pRest,
 deals:        filterLiveDeals(sanitizeLookupFields(Array.isArray(p.deals) ? p.deals : [], ["school","contact"]), p),
 invoices:     Array.isArray(p.invoices)     ? p.invoices     : [],
 rfps:         Array.isArray(p.rfps)         ? p.rfps         : [],
@@ -499,7 +501,6 @@ lastBriefDate: p.lastBriefDate||null,
 pendingBriefActions: Array.isArray(p.pendingBriefActions)?p.pendingBriefActions:[],
 appUsers:     Array.isArray(p.appUsers)     ? p.appUsers     : [],
 contactLists: Array.isArray(p.contactLists) ? p.contactLists : [],
-priceLists: [],
 };
 }
 } catch {}
@@ -522,16 +523,16 @@ const {agentHistory: _sah, ...serverClean} = d.state;
 setRaw(prev => {
 const merged = mergeServerState(prev, serverClean);
 setTimeout(() => {
-try { localStorage.setItem(STORE, JSON.stringify(merged)); } catch {}
+try { const {priceLists:_plSave,...persist}=merged; localStorage.setItem(STORE, JSON.stringify(persist)); } catch {}
 }, 0);
-const {currentUserId: _cid, agentHistory: _ah, ...toSync} = merged;
+const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl, ...toSync} = merged;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return merged;
 });
 } else {
 setRaw(prev => {
-const {currentUserId: _cid, agentHistory: _ah, ...toSync} = prev;
+const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl2, ...toSync} = prev;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 return prev;
@@ -552,11 +553,11 @@ setRaw(prev => {
 const next = typeof fn === "function" ? fn(prev) : {...prev,...fn};
 if (saveTimer.current) clearTimeout(saveTimer.current);
 saveTimer.current = setTimeout(() => {
-const doSave = () => { try { localStorage.setItem(STORE, JSON.stringify(next)); } catch {} };
+const doSave = () => { try { const {priceLists:_plSave,...persist}=next; localStorage.setItem(STORE, JSON.stringify(persist)); } catch {} };
 if (typeof requestIdleCallback !== "undefined") requestIdleCallback(doSave, {timeout:2000});
 else doSave();
 }, 300);
-const {currentUserId: _cid, agentHistory: _ah, ...toSync} = next;
+const {currentUserId: _cid, agentHistory: _ah, priceLists: _pl, ...toSync} = next;
 pendingServerSave.current = toSync;
 if (serverTimer.current) clearTimeout(serverTimer.current);
 serverTimer.current = setTimeout(() => {
@@ -1098,7 +1099,7 @@ const skipSync = new Set([
 "SET_INVOICES","SET_CONTACTS","SET_REORDERS","SET_ACTIVITIES",
 ]);
 if (!skipSync.has(action)) {
-const {currentUserId: _cid, contacts: _c, agentHistory: _ah, ...toSync} = next;
+const {currentUserId: _cid, contacts: _c, agentHistory: _ah, priceLists: _pl, ...toSync} = next;
 fetch("/api/state", {method:"POST", headers:{"Content-Type":"application/json"},
 body: JSON.stringify({state: toSync})}).catch(()=>{});
 }

@@ -19,8 +19,16 @@ export const config = {
   api: { bodyParser: { sizeLimit: "8mb" } },
 };
 
-// Fields that should never be synced (local-session only)
-const EXCLUDE_KEYS = new Set(["currentUserId"]);
+// Fields that should never be synced (local-session only). priceLists used
+// to hold uploaded dealer catalogs; quoting now reads the ST1 PIM, so that
+// blob is dropped on read and write rather than kept around empty.
+const EXCLUDE_KEYS = new Set(["currentUserId", "priceLists"]);
+
+function dropPriceLists(state) {
+  if (!state || typeof state !== "object") return state;
+  const { priceLists, ...rest } = state;
+  return rest;
+}
 
 // appUsers[].pin is checked server-side by /api/login and must never reach an
 // unauthenticated browser — a device only needs to know who's pickable, not
@@ -57,7 +65,7 @@ export default async function handler(req, res) {
       const raw = setting.value || {};
       const tombs = applyDealTombstones(raw, raw);
       const contactTombs = applyContactTombstones(raw, raw);
-      return res.json({ state: redactAppUserPins({ ...raw, ...tombs, ...contactTombs }) });
+      return res.json({ state: dropPriceLists(redactAppUserPins({ ...raw, ...tombs, ...contactTombs })) });
     } catch (e) {
       console.error("[state] GET error:", e.message);
       return res.status(500).json({ error: e.message });
@@ -85,7 +93,7 @@ export default async function handler(req, res) {
         const previous = previousRaw && typeof previousRaw === "object" ? previousRaw : {};
         const tombs = applyDealTombstones(clean, previous);
         const contactTombs = applyContactTombstones(clean, previous);
-        return { ...clean, ...tombs, ...contactTombs };
+        return dropPriceLists({ ...clean, ...tombs, ...contactTombs });
       });
       return res.json({ ok: true });
     } catch (e) {

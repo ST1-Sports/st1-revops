@@ -193,6 +193,7 @@ function searchPaths({ q, sku, productId, limit }) {
   }
   if (q) {
     const enc = encodeURIComponent(q);
+    paths.push(`/admin/products/search?q=${enc}&perPage=${per}`);
     paths.push(`/admin/search?q=${enc}`);
     paths.push(`/admin/products?q=${enc}&perPage=${per}`);
     paths.push(`/admin/products?search=${enc}&perPage=${per}`);
