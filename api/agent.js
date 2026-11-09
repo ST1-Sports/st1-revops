@@ -109,7 +109,7 @@ function messageFromEdgar(edgar) {
       const sell = li.quotedPrice != null ? `quote $${Number(li.quotedPrice).toFixed(2)}` : '';
       return `${li.name}${sku}: ${cost}${sell ? ` · ${sell}` : ''}`;
     });
-    return `Edgar pulled this from the dealer price lists:\n${lines.join('\n')}`;
+    return `Edgar pulled this from the ST1 PIM catalog:\n${lines.join('\n')}`;
   }
   return '';
 }
@@ -131,7 +131,7 @@ function messageFromToolResults(agentResults) {
     const sku = p.sku ? ` [${p.sku}]` : '';
     const from = p.supplier ? ` · ${p.supplier}` : '';
     if (price != null) return `${name}${sku}${from}: $${Number(price).toFixed(2)}.`;
-    return `${name}${sku} is in the price lists, but no customer price is on file.`;
+    return `${name}${sku} is in the PIM catalog, but no customer price is on file.`;
   }
   return '';
 }
@@ -283,7 +283,7 @@ const TOOLS = [
       properties: {
         competitor_name: { type: "string", description: "Company name exactly as it should appear (e.g. 'BSN Sports', 'VS Athletics', 'Track Supply Co')" },
         intel: { type: "string", description: "All intelligence gathered — product focus, pricing approach, strengths, weaknesses vs ST1, key states/customers, counter-tactics. Be specific and comprehensive." },
-        source: { type: "string", description: "How gathered: 'web search', 'RFP document', 'user provided', 'price list upload'" },
+        source: { type: "string", description: "How gathered: 'web search', 'RFP document', 'user provided'" },
       },
       required: ["competitor_name", "intel"],
     },
@@ -345,7 +345,7 @@ const TOOLS = [
             required: ["name"],
           },
         },
-        reprice: { type: "boolean", description: "True only if the user asked to refresh dealer-list cost or list price" },
+        reprice: { type: "boolean", description: "True only if the user asked to refresh PIM cost or list price" },
       },
       required: ["task"],
     },
@@ -525,7 +525,6 @@ async function buildSystemPrompt(localCtx, zoho) {
   const rfps     = localCtx.rfps     || [];
   const invoices = localCtx.invoices || [];
   const sequences = localCtx.sequences || [];
-  const priceLists = localCtx.priceLists || [];
   const storedIntel = localCtx.competeIntel || [];
   const brandVoice = localCtx.brandVoice || "";
   const lockedQuote = localCtx.lockedQuote || null;
@@ -556,7 +555,7 @@ async function buildSystemPrompt(localCtx, zoho) {
     ? `\n=== KNOWLEDGE DOCS (${knowledgeDocs.length} — call search_st1_knowledge with domains:["documents"]) ===\n${knowledgeDocs.slice(0, 20).map(d => `- ${d.title}${d.sourceType ? ` [${d.sourceType}]` : ''}`).join('\n')}\n`
     : '';
 
-  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For a cost, list, MAP, or "what's the price" question, call get_st1_pricing — that is the fast lookup on the same dealer lists Edgar uses. Only call call_edgar when the user explicitly wants a quote built (a school, qty, or the word quote). Do not invent prices. Do not ask for a SKU until a lookup has returned no match.
+  return `You are Scout — the home desk for ST1 Sports. You help with prices, pipeline, contacts, and next actions. For a cost, list, MAP, inventory, or "what's the price" question, call get_st1_pricing — that looks up the ST1 PIM catalog Edgar quotes from. Only call call_edgar when the user explicitly wants a quote built (a school, qty, or the word quote). Do not invent prices. Do not ask for a SKU until a lookup has returned no match.
 ${ST1}
 Today: ${new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
 ${orgMemory ? `\n=== ORG MEMORY ===\n${orgMemory}\n` : ''}${ratedAnswers ? `\n=== MATT'S RATED ANSWERS — FOLLOW THESE ===\n${ratedAnswers}\n` : ''}${docsBlock}
@@ -579,38 +578,7 @@ ${activeRfps.length === 0 ? "None" : activeRfps.map(r=>`· ${r.name} — ${r.sta
 === AR ===
 $${Math.round(ar).toLocaleString()} outstanding${invoices.filter(i=>i.status==="overdue").length>0?` — ${invoices.filter(i=>i.status==="overdue").length} overdue`:""}
 
-Product catalog lives on the dealer price lists. Call get_st1_pricing for a cost or list. Call call_edgar only for a formal quote.
-${(() => {
-  const own = priceLists.filter(pl => pl.type === "own");
-  const comp = priceLists.filter(pl => pl.type === "competitor");
-  let out = "";
-  if (own.length > 0) {
-    out += `\n=== OUR PRICE LISTS (${own.length} lists — names and counts only) ===\n`;
-    for (const pl of own) {
-      out += `${pl.name}${pl.source ? " ["+pl.source+"]" : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
-    }
-    out += `These lists can have thousands of SKUs. Never answer a product price from a sample. Always call get_st1_pricing with the product name/model. Use call_edgar only when they want a formal quote.\n`;
-  }
-  if (comp.length > 0) {
-    out += `\n=== COMPETITOR PRICING INTEL (${comp.length} sources) ===\n`;
-    for (const pl of comp) {
-      out += `${pl.competitorName || pl.name}${pl.source ? " ["+pl.source+"]" : ""}${pl.notes ? " — "+pl.notes : ""} — ${pl.itemCount || pl.items?.length || 0} items\n`;
-      const items = (pl.items || []).slice(0, 15);
-      for (const it of items) {
-        out += `  · ${it.name}${it.sku ? " ["+it.sku+"]" : ""}`;
-        if (it.price > 0) out += ` — $${Number(it.price).toFixed(2)}`;
-        if (it.notes) out += ` (${it.notes})`;
-        out += "\n";
-      }
-      if ((pl.itemCount || (pl.items || []).length) > 15) {
-        const extra = (pl.itemCount || pl.items.length) - 15;
-        out += `  ... and ${extra} more items\n`;
-      }
-    }
-    out += `Use competitor pricing to position ST1 competitively. When responding to RFPs, reference how ST1's pricing compares to known competitors — highlight our advantages (service, speed, quality) even when we're not cheapest.\n`;
-  }
-  return out;
-})()}
+Product catalog lives in the ST1 PIM (home-built). Call get_st1_pricing for a cost, list, MAP, or inventory check. Call call_edgar only for a formal quote. Never invent a price.
 ${storedIntel.length > 0 ? `=== STORED COMPETITOR INTEL (${storedIntel.length} competitors) ===
 ${storedIntel.map(c => `· ${c.name}: ${c.summary}`).join("\n")}
 (Use this when answering questions about competitors or building counter-strategies)
@@ -628,7 +596,7 @@ For every message, first classify the intent, then act:
 
 AUTHORITATIVE ST1 KNOWLEDGE — DO NOT GUESS:
 - Use search_st1_knowledge for broad questions about uploaded docs, policies, products, vendors, brands, customers, or internal ST1 knowledge.
-- For a named product cost, list, MAP, or margin check: call get_st1_pricing. Do not ask for a SKU first. Do not call Edgar unless they asked for a quote.
+- For a named product cost, list, MAP, inventory, or margin check: call get_st1_pricing. Do not ask for a SKU first. Do not call Edgar unless they asked for a quote.
 - Use call_edgar only when they want a formal quote built (school/customer, quantity, "quote this", "build a quote", "price this out for").
 - Use get_st1_product for product details, availability, catalog fields, or product source questions.
 - Use get_st1_customer for customer/contact/school/lead lookups when the answer depends on internal data.
@@ -662,7 +630,7 @@ USE propose_create_campaign_sequence when:
 
 USE get_st1_pricing (fast — default for price questions) when:
 - User asks cost, list, MAP, "how much", "what's our price", or names a model/SKU without asking to quote a school
-- The tool compares every dealer list we have for the same model/size (Athletic Connection, Spalding, Frazier-style uploads, and later lists). The cost on the card is the lowest unless they named a supplier.
+- The tool looks up the ST1 PIM catalog (products, cost, sell/MAP, inventory). The cost on the card is the lowest PIM supplier cost unless they named a supplier.
 - After it returns, write 1-2 short sentences only. If more than one list has the item, name the winning list and its cost. Do not paste markdown tables or cost dumps — the UI shows the vendor-cost card. Offer to quote if they name a school.
 - If not found, then ask for a SKU or a more specific name
 
@@ -670,7 +638,7 @@ USE call_edgar (formal quotes only) when:
 - User says "quote", "build a quote", "update the quote", "price this out for [school]", or gives a customer + qty they want on a quote
 - After Edgar returns, write 1-2 short sentences only. Do not paste markdown tables — the UI shows the quote card
 - After Edgar returns, chain propose_create_deal if a deal should be tracked, or propose_log_note to record it
-- If an OPEN QUOTE is listed below, keep that SKU's cost and sell price. Only change qty or add/remove lines. Set reprice:true only if they asked to refresh the dealer list.
+- If an OPEN QUOTE is listed below, keep that SKU's cost and sell price. Only change qty or add/remove lines. Set reprice:true only if they asked to refresh the PIM.
 
 USE call_ledger when:
 - A CRM deal is marked "Closed Won" and an invoice needs to be created → task:"invoice", pass crmDealId and crmDealName
@@ -722,7 +690,7 @@ USE propose_store_competitor_intel (auto-executes silently) when:
 8. propose_create_quote — build and create a real Zoho CRM Quote (linked to the Account) for a customer; fallback for when call_edgar can't price the items
 9. propose_store_competitor_intel — save competitor research to the Competitors tab (auto-executes, no user confirm needed)
 10. propose_create_campaign_sequence — write a multi-email sequence, match contacts by sport/state/title/score, and set up the campaign ready to schedule and launch
-11. call_edgar — formal quote only. Searches dealer lists, applies GM floor + MAP, returns edgar_quote. On an update of an open quote, hold cost and sell price unless they asked to reprice. Not for casual price checks.
+11. call_edgar — formal quote only. Searches the ST1 PIM catalog, applies GM floor + MAP, returns edgar_quote. On an update of an open quote, hold cost and sell price unless they asked to reprice. Not for casual price checks.
 12. call_brad — research leads and draft outreach with guardrails (DNC + 14-day re-touch + daily cap; returns brad_outreach action for human approval)
 13. call_ledger — create invoices (deal-won), reconcile deposits, process vendor bills, poll payment status (returns ledger_invoice / ledger_reconcile / ledger_vendor_bill / ledger_payments action)
 14. remember_this — save a fact to org memory so it persists across conversations (auto-executes, no user confirm)
@@ -749,10 +717,10 @@ COMPETITOR INTEL — ALWAYS DO THIS:
 - If new info about an already-stored competitor is found, update it with the combined/latest intel.
 
 PRICING & RFP STRATEGY:
-- When asked "how much should we charge", "what's our cost", or "what's the price" — call get_st1_pricing. Do not guess from list-name samples in this prompt. Call call_edgar only if they want a quote for a named school.
+- When asked "how much should we charge", "what's our cost", or "what's the price" — call get_st1_pricing (PIM). Do not invent a price. Call call_edgar only if they want a quote for a named school.
 - For RFP responses: always check COMPETITOR PRICING INTEL. If we have a competitor's price on the same or similar item, proactively note the comparison and suggest a strategy (match, undercut slightly, or justify higher with service/speed/quality).
 - When we have no price data, suggest 20–40% margin over cost as a general rule for athletic equipment, and recommend Matt reviews before submitting.
-- Always include confidence level when quoting prices: "Based on our price list" vs "Estimated — confirm with Matt before quoting".
+- Always include confidence level when quoting prices: "Based on the ST1 PIM" vs "Estimated — confirm with Matt before quoting".
 
 CAMPAIGN BUILDING:
 - When a user asks to "send a sequence", "build a campaign", "email X coaches", or "reach out to Y group", use propose_create_campaign_sequence.
@@ -780,8 +748,8 @@ ${lockedQuote?.items?.length ? `
 ${formatLockedQuoteBlock(lockedQuote)}
 This is the customer's LAST quote in this conversation. It is here so a SKU that reappears keeps its cost/sell price — it is NOT a starting template for every new quote request.
 - If the current message is about a DIFFERENT customer, or asks for products that have nothing to do with the list above, ignore this section entirely — call_edgar with only what was actually asked for.
-- If the current message is an "update the quote" / qty change / add-remove-a-line / CREATE IN ZOHO follow-up on THIS SAME quote: call_edgar and keep the same SKU, cost, and quotedPrice for lines still being requested; only change quantity or add/remove items they asked about; do NOT pick a new dealer-list cost or a new sell price.
-Only refresh cost/list if they say reprice, new cost, latest list, refresh price, or dealer list changed.
+- If the current message is an "update the quote" / qty change / add-remove-a-line / CREATE IN ZOHO follow-up on THIS SAME quote: call_edgar and keep the same SKU, cost, and quotedPrice for lines still being requested; only change quantity or add/remove items they asked about; do NOT pick a new PIM cost or a new sell price.
+Only refresh cost/list if they say reprice, new cost, latest catalog, refresh price, or PIM changed.
 If they name prices, apply each to the right line only: ball/program $ stays on the goods, customization/add-on $ stays on that add-on, shipping $ stays on shipping. Never copy the ball price onto customization. A line total like $2,294.60 is not a unit price. If they say cost is from Spalding, search Spalding — do not keep an Athletic Connection cost.
 ` : ''}`;
 }

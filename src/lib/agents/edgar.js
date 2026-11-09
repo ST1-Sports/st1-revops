@@ -1,9 +1,8 @@
 /**
  * Edgar — ST1's quoting agent.
  *
- * Reads the SAME price store the Price List tool writes (suppliers + price_items),
- * respects GM floors, factors in competitor/market data so quotes stay
- * competitive, and formats to the ST1 quote standard. Edgar has NO side effects —
+ * Reads the ST1 PIM catalog (products, cost, MAP, inventory),
+ * respects GM floors, and formats to the ST1 quote standard. Edgar has NO side effects —
  * he produces a quote; a human sends it.
  *
  * Client-side definition only. The real work (price lookup + memory + logging)
@@ -19,13 +18,13 @@ export default {
 
   // Routing logic — the orchestrator reads this to decide when to hand off.
   description:
-    'Builds accurate, on-brand ST1 quotes. Reads live dealer price lists from the ' +
-    'Price List tool, honors category GM floors and MAP, checks competitor/market ' +
-    'pricing so the quote stays competitive, and formats to the ST1 quote standard. ' +
-    'Use whenever a rep wants to quote a customer for products (e.g. "quote ' +
-    'Cheyenne Mtn HS for 12 discus and a set of hurdles"). Does not send anything.',
+    'Builds accurate, on-brand ST1 quotes. Reads the live ST1 PIM catalog for ' +
+    'products, dealer cost, sell/MAP, and inventory, honors GM floors and MAP, ' +
+    'and formats to the ST1 quote standard. Use whenever a rep wants to quote a ' +
+    'customer for products (e.g. "quote Cheyenne Mtn HS for 12 discus and a set of ' +
+    'hurdles"). Does not send anything.',
 
-  dataSources: ['suppliers', 'price_items', 'agent_memory'],
+  dataSources: ['st1_pim', 'agent_memory'],
 
   guardrails: {
     sideEffects:      false,        // produces a quote only

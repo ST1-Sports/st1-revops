@@ -6,11 +6,16 @@ import { BOOKS as BOOKS_BASE } from '../zoho-books.js';
 import { zohoCriteriaValue } from '../zohoAccount.js';
 import {
   minAcceptableScore,
-  prismaContainsOr,
-  prismaGenericAnd,
   rankPriceItems,
   tokenizePriceQuery,
 } from '../priceSearch.js';
+import {
+  isPimConfigured,
+  listPimSuppliers,
+  mapPimToCatalogProduct,
+  PIM_SOURCE,
+  searchPimProducts,
+} from '../st1Pim.js';
 
 export const ST1_BRAND_GUIDANCE = {
   id: 'st1-brand-voice',
@@ -44,10 +49,9 @@ export const PRICING_POLICY = {
   name: 'ST1 pricing policy',
   summary: 'Use authoritative internal price and cost sources first; never invent missing pricing.',
   rules: [
-    'Use ST1 dealer price lists (PriceItem / uploaded supplier lists) first — same database Edgar quotes from. Rank by model/SKU, not alphabetical generic words.',
+    'Use the ST1 PIM catalog first for products, dealer cost, sell/MAP/MSRP, and inventory — same source Edgar quotes from. Rank by model/SKU, not alphabetical generic words.',
     'For a named product cost or quote, prefer Edgar (call_edgar) so GM floor and MAP are applied.',
-    'Use Zoho Books item cost and price data when a list item is not on file.',
-    'Use the synced product catalog for customer-facing list/sale prices only as a last fallback.',
+    'Use Zoho Books item cost and price data only when the PIM has no match.',
     'When cost is not available, return null and explain the limitation.',
     'Never estimate internal cost unless the user explicitly asks for a non-authoritative estimate.',
     'Include source records and retrieval timestamps in pricing answers.',
@@ -148,6 +152,8 @@ export function mapProduct(product) {
   };
 }
 
+export { isPimConfigured, PIM_SOURCE };
+
 const PRODUCT_SELECT = {
   id: true,
   name: true,
@@ -167,48 +173,24 @@ const PRODUCT_SELECT = {
   date_modified: true,
 };
 
-const COMP_PREFIX = '__COMPETITOR__:';
-
-const OWN_LIST = { active: true, NOT: { category: { startsWith: COMP_PREFIX } } };
-
-async function queryPriceItemCandidates(or, take) {
-  if (!or.length) return [];
-  return prisma.priceItem.findMany({
-    where: { supplier: OWN_LIST, OR: or },
-    include: { supplier: { select: { id: true, name: true } } },
-    take,
-  });
-}
-
 /**
- * Ranked price-list lookup. Model/SKU tokens (TF-5000) are searched first so a
- * 4,000-row Athletic Connection list does not return unrelated "ball" rows.
+ * Ranked PIM lookup. Model/SKU tokens (TF-5000) are searched first so a
+ * large catalog does not return unrelated "ball" rows.
  */
-export async function findPriceItems({ query, sku, limit = 10 } = {}) {
+export async function findPriceItems({ query, sku, productId, limit = 10 } = {}) {
   const q = String(query || sku || '').trim();
-  if (q.length < 2 && !sku) return [];
+  if (q.length < 2 && !sku && !productId) return [];
   const tokens = tokenizePriceQuery([q, sku].filter(Boolean).join(' '));
-  const take = Math.min(120, Math.max(40, safeLimit(limit, 10, 25) * 8));
+  const take = Math.min(80, Math.max(20, safeLimit(limit, 10, 25) * 4));
 
   let rows = [];
-  if (tokens.models.length) {
-    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.models, sku), take);
-  }
-  if (!rows.length && tokens.distinctive.length) {
-    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.distinctive, sku), take);
-  }
-  if (!rows.length && !tokens.models.length && !tokens.distinctive.length && tokens.generic.length >= 2) {
-    const and = prismaGenericAnd(tokens.generic);
-    if (and.length) {
-      rows = await prisma.priceItem.findMany({
-        where: { supplier: OWN_LIST, AND: and },
-        include: { supplier: { select: { id: true, name: true } } },
-        take,
-      });
+  try {
+    rows = await searchPimProducts({ query: q, sku, productId, limit: take });
+  } catch (err) {
+    if (err?.code !== 'pim_not_configured') {
+      console.warn('[pim] findPriceItems:', err.message);
     }
-  }
-  if (!rows.length) {
-    rows = await queryPriceItemCandidates(prismaContainsOr(tokens.searchNeedles, sku), take);
+    return [];
   }
 
   const ranked = rankPriceItems(rows, q, { sku });
@@ -223,6 +205,20 @@ export async function findPriceItems({ query, sku, limit = 10 } = {}) {
 
 export async function findSuppliers({ query = '', limit = 10 } = {}) {
   const q = String(query || '').trim();
+  const take = safeLimit(limit, 10, 25);
+  try {
+    const pim = await listPimSuppliers({ query: q, limit: take });
+    if (pim.length) {
+      return pim.map(s => ({
+        ...s,
+        source: source(PIM_SOURCE, { recordId: s.id }),
+      }));
+    }
+  } catch (err) {
+    if (err?.code !== 'pim_not_configured') {
+      console.warn('[pim] findSuppliers:', err.message);
+    }
+  }
   if (q.length < 2) return [];
   const rows = await prisma.supplier.findMany({
     where: {
@@ -242,7 +238,7 @@ export async function findSuppliers({ query = '', limit = 10 } = {}) {
       notes: true,
       _count: { select: { items: true } },
     },
-    take: safeLimit(limit, 10, 25),
+    take,
     orderBy: { name: 'asc' },
   }).catch(() => []);
   return rows.map(s => ({
@@ -256,8 +252,24 @@ export async function findSuppliers({ query = '', limit = 10 } = {}) {
   }));
 }
 
-export async function findProducts({ query, productId, brand, limit = 10 } = {}) {
+export async function findProducts({ query, productId, brand, sku, limit = 10 } = {}) {
   const take = safeLimit(limit, 10, 50);
+  const q = String(query || sku || '').trim();
+  try {
+    const pim = await searchPimProducts({ query: q || brand, sku, productId, limit: take });
+    let mapped = pim.map(mapPimToCatalogProduct).filter(Boolean);
+    if (brand) {
+      const b = String(brand).toLowerCase();
+      const branded = mapped.filter(p => String(p.brand || '').toLowerCase().includes(b));
+      if (branded.length) mapped = branded;
+    }
+    if (mapped.length) return mapped.slice(0, take);
+  } catch (err) {
+    if (err?.code !== 'pim_not_configured') {
+      console.warn('[pim] findProducts:', err.message);
+    }
+  }
+
   const where = {};
   const or = [];
 

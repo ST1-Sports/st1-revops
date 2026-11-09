@@ -30,7 +30,7 @@ export function st1PriceActionFromPricing(output) {
       list,
       map: p.mapPrice ?? null,
       marginPct: p.marginPct ?? null,
-      source: p.customerPrice?.source || p.cost?.source || 'ST1 price list',
+      source: p.customerPrice?.source || p.cost?.source || 'ST1 PIM',
     },
     matches: Array.isArray(p.matches) ? p.matches : [],
     vendorRates: vendorRatesFromPricing(p),

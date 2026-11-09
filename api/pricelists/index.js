@@ -1,8 +1,9 @@
 /**
- * GET /api/pricelists — own supplier lists and competitor price lists.
- * Own suppliers: full cost + ourPrice data for margin calculations.
- * Competitors: tagged __COMPETITOR__: in category, cost = their sell price.
- * Edgar uses both: own for cost/margin, competitors for pricing strategy.
+ * GET /api/pricelists — legacy uploaded supplier / competitor lists.
+ *
+ * Quoting (Scout get_st1_pricing, Edgar) now reads the ST1 PIM catalog, not
+ * these rows. This endpoint remains for vendor-bill matching and any leftover
+ * historical PriceItem data; the Price Lists UI no longer writes here.
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'

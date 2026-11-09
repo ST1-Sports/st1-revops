@@ -98,7 +98,6 @@ The `src/lib/api.js` handles this automatically.
 |-----|-----------|
 | `/` | Main app — Daily Briefing, Deals, RFPs, Invoices, Reorder Engine, Prospecting, Marketing, Competitors, AI Agent |
 | `/rfp` | RFP Automation Tool — upload PDF bids, auto-price, export |
-| `/prices` | Price List Manager — supplier costs, margin alerts |
 | `/expansion` | State Expansion Playbook generator |
 | `/integrations` | Slack, Zoho Books, Zoho CRM, Shopify |
 
@@ -172,7 +171,6 @@ st1-revops/
 │   └── pages/
 │       ├── RevOps.jsx     ← Main unified app shell (Daily Briefing, Deals, etc.)
 │       ├── RFPTool.jsx    ← RFP Automation (PDF upload, auto-price, export)
-│       ├── PriceTool.jsx  ← Price List Manager
 │       ├── Expansion.jsx  ← State Expansion Playbook
 │       └── Integrations.jsx ← Slack, Zoho, Shopify hub
 ├── index.html             ← Entry HTML with PWA meta tags

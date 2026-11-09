@@ -25,7 +25,6 @@ const RevOps      = lazyWithReload(() => import('./pages/RevOps.jsx'))
 
 // Standalone tools — loaded on demand, keep bundle small
 const RFPTool     = lazyWithReload(() => import('./pages/RFPTool.jsx'))
-const PriceTool   = lazyWithReload(() => import('./pages/PriceTool.jsx'))
 const SponsorshipReveal = lazyWithReload(() => import('./pages/SponsorshipReveal.jsx'))
 
 // Top-level error boundary — catches crashes that escape the inner ErrBound
@@ -237,7 +236,6 @@ export default function App() {
         <Routes>
           {/* Standalone tools — opened in their own chrome, not the RevOps shell */}
           <Route path="/rfp"         element={<RFPTool />} />
-          <Route path="/prices"      element={<PriceTool />} />
           <Route path="/sponsorship-reveal" element={<SponsorshipReveal />} />
 
           {/* Daily-ops pages stay in RevOps so sidebar / back / history work.

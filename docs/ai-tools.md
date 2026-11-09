@@ -253,8 +253,8 @@ Claude should not guess. It should call:
 }
 ```
 
-The application calculates the answer from configured sources such as Zoho Books
-items and the synced ST1 product catalog, then returns JSON:
+The application calculates the answer from the ST1 PIM catalog (then Zoho Books
+if the PIM has no match), then returns JSON:
 
 ```json
 {

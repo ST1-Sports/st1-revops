@@ -2,14 +2,15 @@
  * POST /api/agents/edgar
  * { task: string, input?: { customer?: string, items?: { name, qty }[] } }
  *
- * Reads live dealer price data from the DB, respects GM floors and MAP,
- * factors competitor pricing, and returns a structured quote + prose summary.
+ * Reads live product/cost data from the ST1 PIM catalog, respects GM floors and MAP,
+ * and returns a structured quote + prose summary.
  * All guardrail checks (GM floor, MAP) run server-side after Claude responds.
  */
 import { setCors }             from '../_lib/cors.js'
 import { prisma }              from '../_lib/prisma.js'
 import { recall, logInteraction, recentActivity } from '../_lib/memory.js'
 import { findPriceItems }      from '../_lib/ai-tools/sources.js'
+import { listPimSuppliers }    from '../_lib/st1Pim.js'
 import {
   applyLockedPrices,
   applyQuoteRates,
@@ -50,22 +51,14 @@ function preferSupplierRows(items, name) {
 
 async function fetchPriceData(task, extraNames = []) {
   const query = [task, ...extraNames].filter(Boolean).join(' ')
-
-  const [ownSuppliers, matchedItems, competitors] = await Promise.all([
-    prisma.supplier.findMany({
-      where:   { active: true, NOT: { category: { startsWith: COMP_PREFIX } } },
-      select:  { id: true, name: true },
-      orderBy: { name: 'asc' },
-    }),
-    findPriceItems({ query, limit: 25 }).catch(() => []),
-    prisma.supplier.findMany({
-      where:   { active: true, category: { startsWith: COMP_PREFIX } },
-      include: { items: { orderBy: { name: 'asc' }, take: 20 } },
-      orderBy: { name: 'asc' },
-    }),
-  ])
-
-  return { ownSuppliers, matchedItems, competitors }
+  const matchedItems = await findPriceItems({ query, limit: 25 }).catch(() => [])
+  const listed = await listPimSuppliers({ limit: 40 }).catch(() => [])
+  const fromMatches = [...new Set(matchedItems.map(i => i.supplier?.name).filter(Boolean))]
+    .map(name => ({ id: name, name }))
+  const ownSuppliers = listed.length
+    ? listed.map(s => ({ id: s.id, name: s.name }))
+    : fromMatches
+  return { ownSuppliers, matchedItems, competitors: [] }
 }
 
 // ── Account context (Zoho CRM tie-back + interaction history) ─────────────────
@@ -113,12 +106,12 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
   const intro =
     'You are Edgar, ST1 Sports\'s quoting agent. ST1 Sports is a nationwide B2B athletic equipment ' +
     'supplier. You build accurate, professional quotes for K-12 athletic directors and coaches. ' +
-    'Quote only from the real price data below. If a product is not in the price list, say so — ' +
+    'Quote only from the ST1 PIM catalog data below. If a product is not in the PIM, say so — ' +
     'never invent a price.'
 
-  let priceSection = '\n=== SEARCH RESULTS (ranked matches from dealer price lists) ===\n'
+  let priceSection = '\n=== SEARCH RESULTS (ranked matches from the ST1 PIM catalog) ===\n'
   if (matchedItems.length === 0) {
-    priceSection += '(no close matches in the dealer price lists — do not invent a price)\n'
+    priceSection += '(no close matches in the ST1 PIM catalog — do not invent a price)\n'
   } else {
     const topKey = productFamilyKey(matchedItems[0])
     const bestCost = dealerCostOf(matchedItems[0])
@@ -129,9 +122,9 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
   }
 
   if (ownSuppliers.length) {
-    priceSection += `\n=== LISTS ON FILE (${ownSuppliers.length}) ===\n`
+    priceSection += `\n=== PIM SUPPLIERS (${ownSuppliers.length}) ===\n`
     priceSection += ownSuppliers.map(s => s.name).join(', ') + '\n'
-    priceSection += 'Quote only from SEARCH RESULTS above. These list names are context, not a catalog dump.\n'
+    priceSection += 'Quote only from SEARCH RESULTS above. Supplier names are context, not a catalog dump.\n'
   }
 
   let compSection = ''
@@ -148,9 +141,9 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
     compSection += '\nUse competitor pricing to confirm ST1 is competitive. Never lower ST1 prices below GM floor or MAP just to match a competitor.\n'
   }
 
-  const acctSection = accountBlock ? `\n=== ACCOUNT ON FILE (from CRM/Brad's prospect history) ===\n${accountBlock}\nUse this to inform tone, urgency, and whether to reference prior contact — but only quote real prices from the price data above.\n` : ''
+  const acctSection = accountBlock ? `\n=== ACCOUNT ON FILE (from CRM/Brad's prospect history) ===\n${accountBlock}\nUse this to inform tone, urgency, and whether to reference prior contact — but only quote real prices from the PIM data above.\n` : ''
   const memSection = memoryBlock ? `\n=== CUSTOMER HISTORY (recalled facts) ===\n${memoryBlock}\n` : ''
-  const heldSection = lockBlock ? `\n=== OPEN QUOTE — HOLD THESE PRICES (reference only) ===\n${lockBlock}\nThese are prices to reuse ONLY for a line the current task is still asking for — a SKU/name above that reappears keeps its cost/quotedPrice from this lock. Do not pick a different dealer-list row for a locked SKU. This is NOT a base line-item list: build lineItems only from what the current task actually requests. If none of these items are part of the current task, ignore this section and do not add any of them to lineItems.\n` : ''
+  const heldSection = lockBlock ? `\n=== OPEN QUOTE — HOLD THESE PRICES (reference only) ===\n${lockBlock}\nThese are prices to reuse ONLY for a line the current task is still asking for — a SKU/name above that reappears keeps its cost/quotedPrice from this lock. Do not pick a different PIM row for a locked SKU. This is NOT a base line-item list: build lineItems only from what the current task actually requests. If none of these items are part of the current task, ignore this section and do not add any of them to lineItems.\n` : ''
 
   const rules = `
 === HARD PRICING RULES ===
@@ -158,8 +151,8 @@ function buildSystem(ownSuppliers, matchedItems, competitors, memoryBlock, accou
 2. When Matt has not named a price: never quote below dealer cost, MAP, or GM floor. Formula: minimum price = cost ÷ (1 − gmFloor%). Default GM floor = 20% if none listed.
 3. Standard price = "Our list price" — already reviewed by Matt. Use it as your default when he has not named a program/override price.
 4. Quantity discounts: only if cost is known; stay above GM floor unless Matt named a price.
-5. Not found: respond "Not in current price list — Matt will confirm pricing."
-6. Same model and size on more than one dealer list (Athletic Connection, Spalding, Frazier-style uploads, or any later list): use the lowest dealer cost, marked BEST DEALER COST. Only use a higher-cost list if Matt named that supplier.
+5. Not found: respond "Not in the ST1 PIM catalog — Matt will confirm pricing."
+6. Same model and size from more than one PIM supplier: use the lowest dealer cost, marked BEST DEALER COST. Only use a higher-cost supplier if Matt named that supplier. Include inventory when the PIM has it so Matt knows what we can actually ship.
 
 === RESPONSE FORMAT ===
 Return valid JSON only (no prose outside the JSON):
@@ -197,15 +190,14 @@ function formatItem(item, supplierName, { best = false } = {}) {
   const floor    = item.gmFloorPct ?? DEFAULT_FLOOR
   let line = `  • ${item.name}`
   if (item.sku)         line += ` [${item.sku}]`
-  if (item.brand)       line += ` — ${item.brand}`   // manufacturer (e.g. "DeMarini") — a
-                                                       // distributor's price list can span many
-                                                       // brands, so this is never assumed from
-                                                       // the supplier/list name alone
+  if (item.brand)       line += ` — ${item.brand}`
   if (item.category)    line += ` (${item.category})`
   if (supplierName)     line += ` [via ${supplierName}]`
   if (cost != null)     line += ` | cost $${cost.toFixed(2)}`
   if (ourPrice != null) line += ` | list $${ourPrice.toFixed(2)}`
   if (map != null)      line += ` | MAP $${map.toFixed(2)}`
+  if (item.inventory != null) line += ` | on hand ${item.inventory}`
+  else if (item.stockStatus)  line += ` | stock ${item.stockStatus}`
   line += ` | GM floor ${Math.round(floor * 100)}%`
   if (best)             line += ' | BEST DEALER COST'
   return line + '\n'
@@ -396,7 +388,7 @@ export default async function handler(req, res) {
       userMsg += `\n\nMatt set these unit prices — apply each to the matching line only, never copy the ball price onto customization: ${bits.join('; ')}. Do not raise them for GM floor.`
     }
     if (preferredSupplier) {
-      userMsg += `\n\nUse dealer cost from ${preferredSupplier} lists/brand rows, not a generic Athletic Connection catalog ball.`
+      userMsg += `\n\nUse dealer cost from ${preferredSupplier} PIM/brand rows, not a generic catalog ball.`
     }
 
     // Call Claude
