@@ -8,6 +8,7 @@
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
 import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
+import { isBradFollowUpReply } from './_lib/junkReply.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -16,11 +17,12 @@ export default async function handler(req, res) {
   if (req.method === 'GET') {
     try {
       const rows = await prisma.agentInteraction.findMany({
-        where: { agentId: 'brad', action: 'reply_intent' },
+        where: { agentId: 'brad', action: 'reply_intent', outcome: 'pending' },
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      return res.json({ replies: rows })
+      // Display-only filter: never rewrite stored rows from a GET, so a matcher fix restores them.
+      return res.json({ replies: rows.filter(isBradFollowUpReply) })
     } catch (err) {
       return res.status(500).json({ error: err.message })
     }
