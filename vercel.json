@@ -38,7 +38,11 @@
     "api/webhooks/*.js":                           { "maxDuration": 30 },
     "api/team-store/*.js":                         { "maxDuration": 120 },
     "api/cron/team-store-sync.js":                 { "maxDuration": 120 },
-    "api/cron/zoho-deal-sync.js":                   { "maxDuration": 60 }
+    "api/cron/zoho-deal-sync.js":                   { "maxDuration": 60 },
+    "api/radar/connection.js":                     { "maxDuration": 300 },
+    "api/radar/draft.js":                          { "maxDuration": 60 },
+    "api/radar/*.js":                              { "maxDuration": 60 },
+    "api/cron/radar-sync.js":                      { "maxDuration": 300 }
   },
   "crons": [
     { "path": "/api/cron/send-batches",       "schedule": "*/15 * * * *" },
@@ -49,7 +53,8 @@
     { "path": "/api/cron/annie-digest-weekly",  "schedule": "0 12 * * 1" },
     { "path": "/api/cron/annie-digest-monthly", "schedule": "0 13 1 * *" },
     { "path": "/api/cron/team-store-sync",      "schedule": "0 10 * * *" },
-    { "path": "/api/cron/zoho-deal-sync",       "schedule": "0 * * * *" }
+    { "path": "/api/cron/zoho-deal-sync",       "schedule": "0 * * * *" },
+    { "path": "/api/cron/radar-sync",           "schedule": "*/30 * * * *" }
   ],
   "rewrites": [
     { "source": "/((?!api/).*)", "destination": "/index.html" }

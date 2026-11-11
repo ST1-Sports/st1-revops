@@ -32,7 +32,8 @@
 
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
-import { classifyEmailIntent, pickRep, notifyBradSlack, notifyBradEmail, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
+import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
+import { handOffBradReply } from './_lib/radar/brad.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
@@ -48,9 +49,9 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
       ? [contact.firstName, contact.lastName].filter(Boolean).join(' ') || fromEmail
       : fromEmail
 
-    const [slack, email] = await Promise.all([
+    const [slack, radar] = await Promise.all([
       notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText),
-      notifyBradEmail(host, assigned, contactName, fromEmail, subject, bodyText),
+      handOffBradReply(host, { assigned, fromEmail, contactName, subject, bodyText }),
     ])
 
     await prisma.agentInteraction.create({
@@ -63,7 +64,8 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
           assignedTo: assigned.email,
           assignedName: assigned.name,
           slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
-          email: email?.ok ? 'sent' : (email?.error || 'failed'),
+          radar: radar?.ok ? radar.followUpItemId : (radar?.error || 'failed'),
+          email: radar?.email,
         },
         outcome: 'pending',
         dryRun:  false,
@@ -72,7 +74,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
 
     if (contact && !contact.pushedToZoho) await promoteContactToZoho(host, contact.id)
 
-    console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name} slack=${slack?.ok} email=${email?.ok}`)
+    console.log(`[inbound-email] positive reply from ${fromEmail} → ${assigned.name} slack=${slack?.ok} radar=${radar?.ok}`)
   } catch (err) {
     console.error('[inbound-email] classifyAndPromote error:', err.message)
   }

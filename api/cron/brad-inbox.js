@@ -16,7 +16,8 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
-import { classifyEmailIntent, pickRep, notifyBradSlack, notifyBradEmail, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
+import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
+import { handOffBradReply } from '../_lib/radar/brad.js'
 import { replayFailedBradSlack, canSendBradSlack } from '../_lib/bradSlackReplay.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
@@ -124,9 +125,9 @@ async function pollInbox(host) {
   // Promote to Zoho (real Account + Contact, not a Lead — a genuine positive
   // reply being handed to a rep) and notify Slack, all in parallel.
   await Promise.all(postActions.map(async pa => {
-    const [slack, email] = await Promise.all([
+    const [slack, radar] = await Promise.all([
       notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
-      notifyBradEmail(host, pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
+      handOffBradReply(host, { assigned: pa.assigned, fromEmail: pa.from.email, contactName: pa.contactName, subject: pa.subject, bodyText: pa.bodyText }),
     ])
     await prisma.agentInteraction.create({
       data: {
@@ -138,7 +139,8 @@ async function pollInbox(host) {
           assignedTo: pa.assigned.email,
           assignedName: pa.assigned.name,
           slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
-          email: email?.ok ? 'sent' : (email?.error || 'failed'),
+          radar: radar?.ok ? radar.followUpItemId : (radar?.error || 'failed'),
+          email: radar?.email,
         },
         outcome: 'pending',
         dryRun:  false,

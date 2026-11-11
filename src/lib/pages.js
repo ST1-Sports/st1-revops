@@ -5,6 +5,7 @@ export const KNOWN_MODS = new Set([
   "alerts",
   "analytics",
   "crm",
+  "follow-up-radar",
   "sponsorships",
   "deals",
   "orders",
