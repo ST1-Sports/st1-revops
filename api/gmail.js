@@ -13,7 +13,8 @@
  */
 
 import { prisma } from './_lib/prisma.js';
-import { connectedRefreshTokenForKey } from './_lib/repGmailToken.js';
+import { connectedRefreshTokenForKey, normalizeGmailKey } from './_lib/repGmailToken.js';
+import { readRep } from './_lib/session.js';
 import { classifyEmailIntent } from './_lib/brad-shared.js';
 import { encodeMimeWord, encodeMailbox, encodeFilename } from './_lib/mimeHeader.js';
 
@@ -100,14 +101,53 @@ function extractBody(payload) {
   return "";
 }
 
+// Set only by callGmailInternal (server code in this deployment); a network request cannot carry it.
+const TRUSTED = Symbol("gmail-internal-call");
+// Shared team mailboxes any signed-in rep may use; every other key is one rep's own Gmail.
+const SHARED_KEYS = new Set(["", "BRAD"]);
+
+/** Who may use which mailbox. Pure; exported for tests. */
+export function gmailKeyAllowed(me, repEnvKey) {
+  if (!me) return false;
+  const key = normalizeGmailKey(repEnvKey);
+  if (SHARED_KEYS.has(key) || me.isAdmin) return true;
+  return Boolean(me.gmailEnvKey) && normalizeGmailKey(me.gmailEnvKey) === key;
+}
+
+/**
+ * For server jobs in this deployment (campaign batches, Brad sends, Annie's digest): runs the
+ * same actions in-process instead of over public HTTP. Returns { status, ok, data }.
+ */
+export async function callGmailInternal(body) {
+  let status = 200;
+  let data = null;
+  const res = {
+    setHeader() { return res; },
+    status(code) { status = code; return res; },
+    json(payload) { data = payload; return res; },
+    send(payload) { data = payload; return res; },
+    end() { return res; },
+  };
+  await handler({ method: "POST", headers: {}, body, [TRUSTED]: true }, res);
+  return { status, ok: status < 400, data: data || {} };
+}
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   const { action, messageId, maxResults = 30, query, to_email, to_name, subject, body: emailBody, htmlBody, cc, bcc, replyToMessageId, reply_to, from_name, repEnvKey, attachments } = req.body || {};
+
+  // Reads mail and sends as a person: signed-in reps only, and a personal mailbox only for its
+  // owner (or an admin). Server jobs come in through callGmailInternal.
+  if (!req[TRUSTED]) {
+    const me = await readRep(req);
+    if (!me) return res.status(401).json({ error: "Sign in again to use Gmail." });
+    if (!gmailKeyAllowed(me, repEnvKey)) return res.status(403).json({ error: "That mailbox belongs to another rep." });
+  }
 
   if (!action) return res.status(400).json({ error: "Missing action" });
 

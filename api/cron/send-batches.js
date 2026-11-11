@@ -25,10 +25,10 @@
  */
 
 import { prisma } from '../_lib/prisma.js';
+import { callGmailInternal } from '../gmail.js';
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js';
 import { claimedEmails, emailKey, leadStoppedAuto } from '../_lib/outreachSent.js';
 
-const APP_URL = process.env.APP_URL || "https://revops.st1sports.com";
 
 const SEND_PAUSE_MS   = 30_000;  // 30s between emails
 const MAX_DURATION_MS = 300_000; // must match vercel.json maxDuration for this function
@@ -312,10 +312,7 @@ export default async function handler(req, res) {
           const to_name = c.fullName || `${c.firstName || ""} ${c.lastName || ""}`.trim();
 
           try {
-            const gmailRes = await fetch(`${APP_URL}/api/gmail`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+            const { data: gmailData } = await callGmailInternal({
                 action: "send",
                 to_email: c.email,
                 to_name,
@@ -329,10 +326,7 @@ export default async function handler(req, res) {
                 ...(camp.fromBrad
                   ? { from_name: "Brad Hofer", from_email: "brad@shopst1sports.com", reply_to: "brad@shopst1sports.com", repEnvKey: "BRAD" }
                   : { ...(rep?.gmailEnvKey ? { repEnvKey: rep.gmailEnvKey } : {}), ...(rep?.email ? { reply_to: rep.email, from_name: rep.name } : {}) }),
-              }),
             });
-
-            const gmailData = await gmailRes.json();
 
             if (gmailData.sent) {
               const idx = updEnr.findIndex(e => e.contactId === contactId);

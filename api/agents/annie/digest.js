@@ -42,6 +42,8 @@
  */
 
 import { setCors }   from '../../_lib/cors.js'
+import { callGmailInternal } from '../../gmail.js'
+import { requireRep } from '../../_lib/session.js'
 import { prisma }    from '../../_lib/prisma.js'
 import { postSlackMessage } from '../../_lib/slack.js'
 import { logInteraction }   from '../../_lib/memory.js'
@@ -281,15 +283,10 @@ function formatMonthlyEmailHtml({ monthLabel, narrativeLines, forecastVsActual, 
   `.trim()
 }
 
-// gmail.js has no importable send function — only its own POST handler — so
-// this follows the same internal-fetch convention the ledger crons use.
-async function sendDigestEmail({ host, to, subject, htmlBody, textBody }) {
-  const r = await fetch(`https://${host}/api/gmail`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ action: 'send', to_email: to, subject, body: textBody, htmlBody }),
-  })
-  return r.json().catch(() => ({ ok: false, error: 'invalid_json_response' }))
+// In-process Gmail send (same actions as /api/gmail, without a public HTTP hop).
+async function sendDigestEmail({ to, subject, htmlBody, textBody }) {
+  const { data } = await callGmailInternal({ action: 'send', to_email: to, subject, body: textBody, htmlBody })
+  return data
 }
 
 async function deliverMonthlyDigest(content, { dryRun = true, host, recipientOverride } = {}) {
@@ -345,6 +342,10 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
+  // Financial digest: signed-in admins only. The weekly/monthly crons call the run functions directly.
+  const me = await requireRep(req, res)
+  if (!me) return
+  if (!me.isAdmin) return res.status(403).json({ error: 'Admins only' })
   const { task = 'weekly', dryRun = true, channel, recipient } = req.body || {}
   const host = req.headers.host
 

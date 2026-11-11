@@ -70,7 +70,12 @@ export async function readRep(req) {
   const appUser = (Array.isArray(state.appUsers) ? state.appUsers : []).find(u => u?.repId === session.sub);
   if (!appUser) return null;
   const rep = (Array.isArray(state.reps) ? state.reps : []).find(r => r?.id === session.sub);
-  return { repId: session.sub, isAdmin: !!appUser.isAdmin, email: String(rep?.email || '').toLowerCase() };
+  return {
+    repId: session.sub,
+    isAdmin: !!appUser.isAdmin,
+    email: String(rep?.email || '').toLowerCase(),
+    gmailEnvKey: String(rep?.gmailEnvKey || ''),
+  };
 }
 
 /**

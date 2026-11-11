@@ -9,6 +9,8 @@
  */
 
 import { setCors }        from '../_lib/cors.js'
+import { requireRep }     from '../_lib/session.js'
+import { callGmailInternal } from '../gmail.js'
 import { logInteraction } from '../_lib/memory.js'
 import { loadAllOutreachBatches } from '../_lib/outreachLoad.js'
 import { claimForEmail, stoppedLeadForEmail } from '../_lib/outreachSent.js'
@@ -19,6 +21,8 @@ export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
+  // Sends as Brad: signed-in reps only.
+  if (!(await requireRep(req, res))) return
 
   const { contactEmail, contactName, subject, body, contactId, batchId } = req.body || {}
   if (!contactEmail) return res.status(400).json({ error: 'contactEmail required' })
@@ -31,7 +35,6 @@ export default async function handler(req, res) {
     })
   }
 
-  const baseUrl = `https://${req.headers.host}`
 
   try {
     const batches = await loadAllOutreachBatches()
@@ -58,10 +61,7 @@ export default async function handler(req, res) {
       })
     }
 
-    const gmailRes = await fetch(`${baseUrl}/api/gmail`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    const { data: gmailData } = await callGmailInternal({
         action:     'send',
         to_email:   contactEmail,
         to_name:    contactName,
@@ -71,9 +71,7 @@ export default async function handler(req, res) {
         from_email: 'brad@shopst1sports.com',
         reply_to:   'brad@shopst1sports.com',
         repEnvKey:  'BRAD',
-      }),
     })
-    const gmailData = await gmailRes.json()
     if (!gmailData.sent) {
       return res.status(500).json({ ok: false, error: gmailData.error || 'Gmail send failed' })
     }

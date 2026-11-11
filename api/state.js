@@ -10,7 +10,7 @@
  */
 
 import { guardAccessFields } from "./_lib/appUsersGuard.js";
-import { readRep } from "./_lib/session.js";
+import { requireRep } from "./_lib/session.js";
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { updateSettingSafely } from './_lib/settingSync.js';
@@ -75,6 +75,9 @@ function sanitize(state) {
 export default async function handler(req, res) {
   setCors(res, "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
+  // The whole workspace (contacts, deals, reps, settings): signed-in reps only, read and write.
+  const caller = await requireRep(req, res);
+  if (!caller) return;
 
   if (req.method === "GET") {
     try {
@@ -98,7 +101,6 @@ export default async function handler(req, res) {
     try {
       const clean = sanitize(state);
       // Access fields (appUsers, admin flags, Gmail keys) change only for a signed-in admin.
-      const caller = await readRep(req);
       // updateSettingSafely, not a plain findUnique-then-upsert — this is the
       // single most frequently written endpoint in the app (every dispatch()
       // POSTs here), so two near-simultaneous writes from different actions,

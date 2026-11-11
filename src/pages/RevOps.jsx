@@ -61,7 +61,7 @@ import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, ou
 import { isBradFollowUpReply } from "../lib/junkReply.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
-import { radarFetch, saveSessionToken, sessionHeaders } from "../lib/session.js";
+import { radarFetch, saveSessionToken, sessionHeaders, SIGNED_OUT_EVENT } from "../lib/session.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -579,7 +579,8 @@ useEffect(() => {
 const flush = () => {
 if (!pendingServerSave.current) return;
 try {
-navigator.sendBeacon?.('/api/state', new Blob([JSON.stringify({state: pendingServerSave.current})], {type: 'application/json'}));
+// keepalive fetch survives unload like sendBeacon, and can carry the session header.
+fetch('/api/state', {method:'POST', keepalive:true, headers:{'Content-Type':'application/json',...sessionHeaders()}, body: JSON.stringify({state: pendingServerSave.current})}).catch(()=>{});
 } catch {}
 };
 const onVisibility = () => { if (document.visibilityState === 'hidden') flush(); };
@@ -1125,6 +1126,18 @@ const initials = (rep.name||"?").split(" ").map(w=>w[0]).join("").slice(0,2).toU
 const appUser = (s.appUsers||[]).find(u=>u.repId===s.currentUserId);
 return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: appUser?.isAdmin || false };
 })();
+// The server rejected this browser's session (expired, or signed in before sessions existed).
+useEffect(()=>{
+const onSignedOut=()=>{
+if(!s.currentUserId) return;
+saveSessionToken(null);
+// The login screen shows this (the app shell, and its toasts, unmount on sign-out).
+try{sessionStorage.setItem("st1_login_notice","Please sign in again (Google or email code). Sign-in now protects your workspace and Gmail.");}catch{/* storage unavailable */}
+dispatch("LOGOUT");
+};
+window.addEventListener(SIGNED_OUT_EVENT,onSignedOut);
+return ()=>window.removeEventListener(SIGNED_OUT_EVENT,onSignedOut);
+},[s.currentUserId,dispatch]);
 useEffect(()=>{
 if(!s.currentUserId) return;
 radarFetch("/api/radar/items?counts=1")
@@ -1394,7 +1407,7 @@ return(
 </div>
 );
 }
-if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]} appUsers={s.appUsers||[]}/>;
+if (!s.currentUserId) return <Login dispatch={dispatch} reps={s.reps||[]}/>;
 const navLabel = (id) => {
 for (const n of NAV) {
 if (n.id === id) return n.label;
@@ -1713,14 +1726,16 @@ google_failed:"Google sign-in didn't complete. Try again, or use an email code."
 google_not_configured:"Google sign-in isn't set up yet. Use an email code for now.",
 session_key_missing:"Sign-in isn't fully configured yet (SESSION_SECRET). Ask an admin.",
 };
-function Login({dispatch, reps=[], appUsers=[]}) {
+function Login({dispatch, reps=[]}) {
 const [mode,setMode]=useState("google"); // "google" (default) or "email" (fallback code)
 const [shake,setShake]=useState(false);
 // Returning from Google: the signed session arrives in the URL fragment (never sent to a server).
 const [googleBusy,setGoogleBusy]=useState(()=>/(?:^|[#&])session=/.test(window.location.hash||""));
 const [googleError,setGoogleError]=useState(()=>{
 const err=new URLSearchParams(window.location.search).get("login_error");
-return err?(LOGIN_ERRORS[err]||"Sign-in failed. Try again."):"";
+if(err) return LOGIN_ERRORS[err]||"Sign-in failed. Try again.";
+try{const notice=sessionStorage.getItem("st1_login_notice");if(notice){sessionStorage.removeItem("st1_login_notice");return notice;}}catch{/* storage unavailable */}
+return "";
 });
 useEffect(()=>{
 const hasError=new URLSearchParams(window.location.search).has("login_error");
@@ -1837,16 +1852,6 @@ style={{width:"100%",background:code.length===6?B.orange:B.border,color:code.len
 <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
 <button onClick={()=>{setMode("google");setEmailError("");}} style={{background:"none",border:"none",color:B.muted,fontSize:10,fontFamily:"'Lexend',sans-serif",textDecoration:"underline",cursor:"pointer",padding:0}}>Back to Sign in with Google</button>
 </div>
-</div>
-)}
-{/* Admin bypass — only visible when no admin accounts are set up */}
-{!appUsers.some(au=>au.isAdmin)&&(
-<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${B.border}`,textAlign:"center"}}>
-<div style={{fontFamily:"'Lexend',sans-serif",fontSize:10,color:B.muted,marginBottom:8}}>No admin account configured yet</div>
-<button onClick={()=>dispatch("LOGIN","__owner__")}
-style={{background:B.orange,color:B.white,border:"none",borderRadius:5,padding:"8px 18px",fontFamily:"'Lexend Zetta',sans-serif",fontSize:10,fontWeight:700,letterSpacing:.5,cursor:"pointer"}}>
-ADMIN ACCESS →
-</button>
 </div>
 )}
 </div>
