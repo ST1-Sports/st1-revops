@@ -61,23 +61,27 @@ function bearer(req) {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 }
 
+/** The signed-in rep for this request, or null (never writes a response). */
+export async function readRep(req) {
+  const session = verifyPayload('session', bearer(req));
+  if (!session?.sub) return null;
+  const setting = await prisma.setting.findUnique({ where: { key: 'app_state' } }).catch(() => null);
+  const state = setting?.value || {};
+  const appUser = (Array.isArray(state.appUsers) ? state.appUsers : []).find(u => u?.repId === session.sub);
+  if (!appUser) return null;
+  const rep = (Array.isArray(state.reps) ? state.reps : []).find(r => r?.id === session.sub);
+  return { repId: session.sub, isAdmin: !!appUser.isAdmin, email: String(rep?.email || '').toLowerCase() };
+}
+
 /**
  * Resolves the signed-in rep, or writes a 401 and returns null. Admin status comes from the
  * stored appUsers list, never from the request.
  */
 export async function requireRep(req, res) {
-  const session = verifyPayload('session', bearer(req));
-  if (!session?.sub) {
-    res.status(401).json({ error: 'Sign in again with your email code to use Follow-Up Radar.' });
+  const me = await readRep(req);
+  if (!me) {
+    res.status(401).json({ error: 'Sign in again (Google or email code) to use this.' });
     return null;
   }
-  const setting = await prisma.setting.findUnique({ where: { key: 'app_state' } }).catch(() => null);
-  const state = setting?.value || {};
-  const appUser = (Array.isArray(state.appUsers) ? state.appUsers : []).find(u => u?.repId === session.sub);
-  if (!appUser) {
-    res.status(401).json({ error: 'This account is no longer active. Sign in again.' });
-    return null;
-  }
-  const rep = (Array.isArray(state.reps) ? state.reps : []).find(r => r?.id === session.sub);
-  return { repId: session.sub, isAdmin: !!appUser.isAdmin, email: String(rep?.email || '').toLowerCase() };
+  return me;
 }

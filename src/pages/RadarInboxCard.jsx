@@ -26,20 +26,8 @@ export default function RadarInboxCard({ userId, isAdmin = false, hideAdminHint 
 
   useEffect(() => { load(); }, [load]);
 
-  const connect = async () => {
-    setBusy("connect");
-    setMsg("");
-    try {
-      const r = await radarFetch("/api/radar/oauth", { method: "POST" });
-      const d = await r.json();
-      if (!r.ok || !d.url) throw new Error(d.error || "Could not start Gmail connect");
-      window.location.href = d.url;
-      return;
-    } catch (e) {
-      setMsg(e.message);
-    }
-    setBusy("");
-  };
+  // One Google sign-in connects Gmail for Radar, outreach and the inbox.
+  const connect = () => { window.location.href = "/api/auth/google?consent=1"; };
 
   const act = async (method, body) => {
     setBusy(method);
@@ -68,8 +56,8 @@ export default function RadarInboxCard({ userId, isAdmin = false, hideAdminHint 
     <div className="card" style={{ padding: 16, marginBottom: 13, borderTop: `3px solid ${B.orange}` }}>
       <div style={{ fontFamily: "'Lexend Zetta',sans-serif", fontSize: 8, color: B.orange, letterSpacing: 2.5, marginBottom: 10 }}>FOLLOW-UP RADAR INBOX</div>
       <div style={{ fontFamily: "'Lexend',sans-serif", fontSize: 12, color: B.text, marginBottom: 10, lineHeight: 1.5 }}>
-        Connect <strong>your</strong> Gmail. Radar reads sent mail and creates unsent threaded drafts — it never sends.
-        Scopes: gmail.readonly + gmail.compose. Configure the Google OAuth app as Internal to st1sports.com.
+        Your <strong>@st1sports.com</strong> Gmail, connected when you sign in with Google. Radar reads your mail, writes reply
+        drafts for you to review, and sends only when you click Send.
       </div>
       {connected ? (
         <div>
@@ -85,7 +73,7 @@ export default function RadarInboxCard({ userId, isAdmin = false, hideAdminHint 
       ) : (
         <button type="button" disabled={!!busy} onClick={connect}
           style={{ display: "inline-block", background: B.orange, color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-          {busy === "connect" ? "Opening Google…" : "Connect Gmail"}
+          Sign in with Google to connect Gmail
         </button>
       )}
       {msg && <div style={{ marginTop: 8, fontSize: 11, color: B.muted }}>{msg}</div>}

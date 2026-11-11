@@ -9,6 +9,8 @@
  * any device that logs in — instead of being trapped in localStorage.
  */
 
+import { guardAccessFields } from "./_lib/appUsersGuard.js";
+import { readRep } from "./_lib/session.js";
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { updateSettingSafely } from './_lib/settingSync.js';
@@ -95,6 +97,8 @@ export default async function handler(req, res) {
     }
     try {
       const clean = sanitize(state);
+      // Access fields (appUsers, admin flags, Gmail keys) change only for a signed-in admin.
+      const caller = await readRep(req);
       // updateSettingSafely, not a plain findUnique-then-upsert — this is the
       // single most frequently written endpoint in the app (every dispatch()
       // POSTs here), so two near-simultaneous writes from different actions,
@@ -109,7 +113,8 @@ export default async function handler(req, res) {
         const previous = previousRaw && typeof previousRaw === "object" ? previousRaw : {};
         const tombs = applyDealTombstones(clean, previous);
         const contactTombs = applyContactTombstones(clean, previous);
-        return carryForwardPreserved({ ...clean, ...tombs, ...contactTombs }, previous);
+        const guarded = guardAccessFields(clean, previous, { callerIsAdmin: !!caller?.isAdmin });
+        return carryForwardPreserved({ ...guarded, ...tombs, ...contactTombs }, previous);
       });
       return res.json({ ok: true });
     } catch (e) {
