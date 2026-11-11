@@ -45,12 +45,15 @@ describe('junkReplyReason — warmup tools', () => {
     }), 'warmup');
   });
 
-  it('catches Instantly-style tags that appear in the subject and again in the body', () => {
-    assert.equal(junkReplyReason({
-      subject: 'Re: quick hello xK92mP',
-      body: 'Sounds good, talk soon.\n\nxK92mP',
-      fromEmail: 'someone@gmail.com',
-    }), 'warmup');
+  it('does not use subject tags alone: real replies repeat quote and invoice numbers', () => {
+    for (const [subject, body] of [
+      ['Re: quick hello xK92mP', 'Sounds good, talk soon.\n\nxK92mP'],
+      ['Re: Quote Q-10234', 'Please resend Q-10234 with the new sizes.'],
+      ['Re: Invoice INV-000123', 'Paid INV-000123 today, thanks.'],
+      ['Re: Estimate EST-0042', 'Approved EST-0042, go ahead.'],
+      ['Re: Spring order 2027A', 'Can we add 10 more to 2027A?'],
+    ])
+      assert.equal(junkReplyReason({ subject, body, fromEmail: 'coach@school.org' }), null, subject);
   });
 
   it('does not treat sports "warm up" as a warmup tool', () => {
@@ -102,5 +105,31 @@ describe('isBradFollowUpReply', () => {
       outcome: 'handled',
       input: { subject: 'Re: helmets', snippet: 'Can you send pricing?', fromEmail: 'ad@lincoln.k12.ia.us' },
     }), false);
+  });
+});
+
+describe('junkReplyReason — real buyer replies are never hidden', () => {
+  it('ignores the everyday word "instantly" and tool names without warmup wording', () => {
+    assert.equal(junkReplyReason({
+      subject: 'Re: track spikes',
+      body: 'Yes! I can instantly approve this, send pricing.',
+    }), null);
+    assert.equal(junkReplyReason({ subject: 'Re: hello', body: 'We use Smartlead for our newsletter, but yes, send a quote.' }), null);
+  });
+  it('lets a person mention being away when there is no autoresponder cue', () => {
+    assert.equal(junkReplyReason({
+      subject: 'Re: uniforms',
+      body: 'I will be away next week but yes, interested — send pricing.',
+    }), null);
+    assert.equal(junkReplyReason({
+      subject: 'Re: uniforms',
+      body: "I'm out of the office today, but please send the quote over.",
+    }), null);
+  });
+  it('still catches an out-of-office body with an autoresponder cue', () => {
+    assert.equal(junkReplyReason({
+      subject: 'Re: uniforms',
+      body: 'I will be away until June 3 with limited replies. I will respond to your email upon my return.',
+    }), 'ooo');
   });
 });

@@ -8,7 +8,7 @@
 import { setCors } from './_lib/cors.js'
 import { prisma }  from './_lib/prisma.js'
 import { notifyBradSlack, notifyBradEmail } from './_lib/brad-shared.js'
-import { junkReplyFromStored, isBradFollowUpReply } from './_lib/junkReply.js'
+import { isBradFollowUpReply } from './_lib/junkReply.js'
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS')
@@ -21,13 +21,7 @@ export default async function handler(req, res) {
         orderBy: { createdAt: 'desc' },
         take: 50,
       })
-      const junkIds = rows.filter(r => junkReplyFromStored(r)).map(r => r.id)
-      if (junkIds.length) {
-        await prisma.agentInteraction.updateMany({
-          where: { id: { in: junkIds } },
-          data: { outcome: 'ignored_junk', outcomeAt: new Date() },
-        }).catch(() => {})
-      }
+      // Display-only filter: never rewrite stored rows from a GET, so a matcher fix restores them.
       return res.json({ replies: rows.filter(isBradFollowUpReply) })
     } catch (err) {
       return res.status(500).json({ error: err.message })
@@ -55,13 +49,6 @@ export default async function handler(req, res) {
       const row = await prisma.agentInteraction.findUnique({ where: { id } })
       if (!row || row.agentId !== 'brad' || row.action !== 'reply_intent') {
         return res.status(404).json({ error: 'reply not found' })
-      }
-      if (junkReplyFromStored(row)) {
-        await prisma.agentInteraction.update({
-          where: { id },
-          data: { outcome: 'ignored_junk', outcomeAt: new Date() },
-        }).catch(() => {})
-        return res.json({ ok: true, slack: 'skipped', email: 'skipped', ignored: 'junk' })
       }
       const inp = row.input || {}
       const out = row.output || {}

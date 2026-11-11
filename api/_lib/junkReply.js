@@ -7,6 +7,11 @@
  *
  * Sports copy like "warm up before the game" is not a match: every warmup
  * pattern is tied to email/deliverability wording or a known warmup host.
+ *
+ * A false positive silently drops a real buyer reply (no Slack, no queue, no
+ * score), so every rule needs strong evidence: a header, a known warmup host,
+ * explicit warmup wording, or an out-of-office phrase together with a return
+ * or absence cue. Bare tool names ("instantly") and subject tags are not used.
  */
 
 const OOO_SUBJECT = [
@@ -20,18 +25,32 @@ const OOO_SUBJECT = [
   /\bautoreply\b/i,
 ]
 
-const OOO_BODY = [
-  /\bi\s+am\s+(currently\s+)?out\s+of\s+(the\s+)?office\b/i,
+// Unambiguous autoresponder wording: enough on its own.
+const OOO_BODY_STRONG = [
+  /\bthis\s+is\s+an\s+automatic(?:ally\s+generated)?\s+(reply|response)\b/i,
+  /\bmailbox\s+is\s+unattended\b/i,
+  /\blimited\s+access\s+to\s+(e-?mail|my\s+inbox)\b/i,
+]
+// Absence wording that a person might also write in a real reply ("I'll be away next week but
+// yes, send pricing"). Counts only together with an autoresponder cue below.
+const OOO_BODY_ABSENCE = [
+  /\bi(?:'m| am)\s+(currently\s+)?out\s+of\s+(the\s+)?office\b/i,
   /\bi(?:'m| am)\s+currently\s+away\b/i,
   /\bi(?:'ll| will)\s+be\s+(out\s+of\s+(the\s+)?office|away)\b/i,
-  /\bi\s+am\s+(not\s+in|away\s+from)\s+(the\s+)?(office|email|desk)\b/i,
-  /\blimited\s+access\s+to\s+(e-?mail|my\s+inbox)\b/i,
-  /\bthis\s+is\s+an\s+automatic(?:ally\s+generated)?\s+(reply|response)\b/i,
-  /\bautomatic\s+reply(?:\s+from)?\b/i,
-  /\bi\s+am\s+on\s+(annual\s+|parental\s+|maternity\s+|medical\s+)?leave\b/i,
-  /\bmailbox\s+is\s+unattended\b/i,
-  /\bi\s+am\s+unavailable\s+until\b/i,
+  /\bi(?:'m| am)\s+(not\s+in|away\s+from)\s+(the\s+)?(office|email|desk)\b/i,
+  /\bi(?:'m| am)\s+on\s+(annual\s+|parental\s+|maternity\s+|medical\s+)?leave\b/i,
+  /\bi(?:'m| am)\s+unavailable\s+until\b/i,
 ]
+const DAY = '(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\\d)'
+const OOO_AUTORESPONDER_CUE = [
+  /\b(will|shall)\s+(respond|reply|get\s+back)\s+(to\s+(you|your\s+(e-?mail|message))\s+)?(upon|when|after|as\s+soon\s+as)\b/i,
+  /\bupon\s+my\s+return\b/i,
+  /\b(urgent|immediate)\s+(matters?|requests?|needs?|assistance|issues?|questions?)\b[^.\n]{0,40}\b(contact|e-?mail|call|reach)\b/i,
+  new RegExp(`\\bwill\\s+(be\\s+)?(back|return(ing)?)\\s+(to\\s+the\\s+office\\s+|in\\s+the\\s+office\\s+)?(on\\s+|by\\s+)?${DAY}`, 'i'),
+  new RegExp(`\\breturning\\s+(to\\s+the\\s+office\\s+)?(on\\s+)?${DAY}`, 'i'),
+]
+// A reply that asks to buy is a reply, whatever else it says about being away.
+const BUYING_INTENT = /\b(send|need|want|get)\s+(me\s+|us\s+)?(a\s+|the\s+)?(pricing|price|quote|estimate)|\binterested\b|\bplace\s+(an?\s+)?order\b|\bpurchase\s+order\b/i
 
 const WARMUP_HOSTS = [
   'mailwarm.com',
@@ -57,21 +76,7 @@ const WARMUP_TEXT = [
   /\bthis\s+(message|email)\s+is\s+(part\s+of\s+)?(an?\s+)?(automated\s+)?warm[- ]?up\b/i,
   /\bsent\s+(via|by|from)\s+(an?\s+)?(instantly|mailwarm|folderly|mailreach|warmy|lemwarm|warmup inbox|smartlead)\b/i,
   /\binstantly\.ai\s+warm[- ]?up\b/i,
-  /\b(instantly|mailwarm|folderly|mailreach|warmy|lemwarm|smartlead|trulyinbox)\b/i,
 ]
-
-/** Instantly puts the same mixed letter+digit tag in the subject and at the bottom of the copy. */
-function instantlyWarmupTag(subject, body) {
-  const sub = String(subject || '').trim()
-  const bod = String(body || '')
-  const bracket = sub.match(/\[([a-zA-Z0-9]{5,12})\]\s*$/)
-  const raw = bracket?.[1] || (sub.split(/\s+/).filter(Boolean).pop() || '')
-  const tag = raw.replace(/^[\[(]+|[^\w]+$/g, '')
-  if (tag.length < 5 || tag.length > 12) return false
-  if (!/[a-z]/i.test(tag) || !/\d/.test(tag)) return false
-  if (/^st1/i.test(tag)) return false
-  return bod.includes(tag)
-}
 
 function headerValue(headers, name) {
   if (!headers) return ''
@@ -107,9 +112,14 @@ export function junkReplyReason({ subject = '', body = '', fromEmail = '', heade
 
   const hay = `${subject}\n${body}`
   if (WARMUP_TEXT.some(re => re.test(hay))) return 'warmup'
-  if (instantlyWarmupTag(subject, body)) return 'warmup'
   if (OOO_SUBJECT.some(re => re.test(subject))) return 'ooo'
-  if (OOO_BODY.some(re => re.test(body))) return 'ooo'
+  if (OOO_BODY_STRONG.some(re => re.test(body))) return 'ooo'
+  if (
+    OOO_BODY_ABSENCE.some(re => re.test(body)) &&
+    OOO_AUTORESPONDER_CUE.some(re => re.test(body)) &&
+    !BUYING_INTENT.test(body)
+  )
+    return 'ooo'
   return null
 }
 

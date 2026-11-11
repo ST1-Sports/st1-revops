@@ -84,7 +84,8 @@ async function pollInbox(host) {
     const subject = getHdr('Subject') || '(no subject)'
     const inboundHeaders = {
       'auto-submitted': getHdr('Auto-Submitted'),
-      'x-autoreply': getHdr('X-Autoreply') || getHdr('X-Auto-Response-Suppress'),
+      // X-Auto-Response-Suppress is not used: Outlook can set it on ordinary mail.
+      'x-autoreply': getHdr('X-Autoreply'),
     }
 
     // Extract body text
