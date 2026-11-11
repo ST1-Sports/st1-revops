@@ -6,6 +6,7 @@
 
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { bindCaller, requireCaller } from '../_lib/agentGate.js';
 
 const QUESTIONS = [
   { phase: 'RAPPORT', order: 1, inputType: 'TEXT',     questionText: 'How long have you been the AD here?',                               helpText: 'Have they always been in athletic administration?' },
@@ -37,6 +38,8 @@ const QUESTIONS = [
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res, { adminOnly: true }))) return;
 
   try {
     await prisma.talkTrackQuestion.deleteMany({});

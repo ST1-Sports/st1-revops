@@ -22,10 +22,16 @@ import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { recordChatFeedback } from './_lib/memory.js';
 import { packChatPayload, splitChatPayload } from '../src/lib/chatMemory.js';
+import { bindCaller, requireCaller } from './_lib/agentGate.js';
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  const caller = bindCaller(await requireCaller(req, res));
+  if (!caller) return;
+  // Ownership comes from the signed-in rep, never from userId in the request.
+  const me = caller.repId;
 
   // ── GET ───────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
@@ -41,7 +47,7 @@ export default async function handler(req, res) {
 
       const where = {};
       if (context) where.context = context;
-      if (userId)  where.userId  = userId;
+      if (userId)  where.userId  = me;
 
       const sessions = await prisma.chatSession.findMany({
         where,
@@ -68,7 +74,7 @@ export default async function handler(req, res) {
       if (body.action === 'start_session') {
         const session = await prisma.chatSession.create({
           data: {
-            userId:   body.userId   || null,
+            userId:   me || null,
             userName: body.userName || null,
             context:  body.context  || 'home',
           },
@@ -136,11 +142,11 @@ export default async function handler(req, res) {
       }
 
       if (body.action === 'delete_session') {
-        const { sessionId, userId } = body;
+        const { sessionId } = body;
         if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
         const session = await prisma.chatSession.findUnique({ where: { id: sessionId } });
         if (!session) return res.json({ ok: true, deleted: 0 });
-        if (userId && session.userId && session.userId !== userId) {
+        if (session.userId && session.userId !== me && !caller.isAdmin) {
           return res.status(403).json({ error: 'Not your chat' });
         }
         await prisma.chatSession.delete({ where: { id: sessionId } });
@@ -148,8 +154,8 @@ export default async function handler(req, res) {
       }
 
       if (body.action === 'delete_all') {
-        if (!body.userId) return res.status(400).json({ error: 'userId required' });
-        const result = await prisma.chatSession.deleteMany({ where: { userId: body.userId } });
+        if (!me) return res.status(400).json({ error: 'Sign in to delete your chats' });
+        const result = await prisma.chatSession.deleteMany({ where: { userId: me } });
         return res.json({ ok: true, deleted: result.count });
       }
 
@@ -177,7 +183,7 @@ export default async function handler(req, res) {
           query: body.query || '',
           answer: body.answer || msg?.content || '',
           messageId: msg?.id || null,
-          userId: body.userId || null,
+          userId: me || null,
         });
         return res.json({ ok: true, vote, messageId: msg?.id || null });
       }

@@ -1,3 +1,4 @@
+import { resolveCaller } from '../agentGate.js';
 import { timingSafeEqual } from 'crypto';
 
 export const ALL_READ_SCOPES = [
@@ -102,18 +103,22 @@ export function getBearerToken(req) {
 }
 
 /**
- * Hub and Scout run inside the signed-in app. If no bearer is sent, treat
- * the caller as the RevOps app with full tool scopes. External Claude/MCP
- * clients still send a bearer and are checked as usual.
+ * Hub and Scout run inside the signed-in app: a rep's session (or a server job of this
+ * deployment) gets the app's full read scopes. External Claude/MCP clients send their API
+ * key as the bearer and are checked as usual. A request with neither is rejected (it used to
+ * get full scopes, including dealer cost, with no credentials at all).
  */
-export function allowAppOrToolAuth(req) {
-  const token = getBearerToken(req);
-  if (!token) {
+export async function allowAppOrToolAuth(req) {
+  const caller = await resolveCaller(req);
+  if (caller) {
     return {
       ok: true,
-      subject: 'revops-app',
+      subject: caller.server ? 'revops-server' : `revops-app:${caller.repId}`,
       scopes: new Set(ALL_READ_SCOPES),
     };
+  }
+  if (!getBearerToken(req)) {
+    return { ok: false, status: 401, error: 'Sign in to Rev-Ops, or send an AI tool API key' };
   }
   return authenticateToolRequest(req);
 }

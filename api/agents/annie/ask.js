@@ -35,6 +35,7 @@ import { setCors }   from '../../_lib/cors.js'
 import { prisma }    from '../../_lib/prisma.js'
 import { logInteraction } from '../../_lib/memory.js'
 import { aggregateSnapshot } from './aggregate.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 
 const API_KEY = process.env.ANTHROPIC_KEY
 const STALE_AFTER_DAYS = 8 // weekly cadence + a few days' slack before treating cache as stale
@@ -165,6 +166,8 @@ export async function answerQuestion({ mode = 'ask', question = '', forceLive = 
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
   if (!API_KEY)                return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' })
 

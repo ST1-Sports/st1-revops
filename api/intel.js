@@ -14,6 +14,7 @@
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { updateSettingSafely } from './_lib/settingSync.js';
+import { bindCaller, requireCaller } from './_lib/agentGate.js';
 
 const KEY = 'intel_library';
 const MAX_ITEMS = 50;
@@ -21,6 +22,8 @@ const MAX_ITEMS = 50;
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return;
 
   if (req.method === 'GET') {
     try {

@@ -27,6 +27,7 @@ import {
   userWantsReprice,
 } from '../../src/lib/quoteLock.js'
 import { dealerCostOf, orderQuotePriceRows, productFamilyKey } from '../_lib/priceSearch.js'
+import { bindCaller, requireCaller } from '../_lib/agentGate.js'
 
 const COMP_PREFIX   = '__COMPETITOR__:'
 const MAX_MATCHED   = 40
@@ -373,6 +374,8 @@ function buildCategoryBreakdown(lineItems, itemLookup) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
   if (!API_KEY)                return res.status(500).json({ error: 'ANTHROPIC_KEY not configured' })
 

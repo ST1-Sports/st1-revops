@@ -54,7 +54,7 @@ export default async function handler(req, res) {
     return sendError(res, 405, 'method_not_allowed', 'Use GET, POST, or DELETE.');
   }
 
-  const auth = allowAppOrToolAuth(req);
+  const auth = await allowAppOrToolAuth(req);
   if (!auth.ok) return sendAuthError(res, auth);
 
   const neededScope = req.method === 'GET' ? 'knowledge:read' : 'knowledge:write';

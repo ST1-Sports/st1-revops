@@ -1,6 +1,7 @@
 import { prisma }                    from '../_lib/prisma.js';
 import { setCors }                   from '../_lib/cors.js';
 import { recordOutcome, remember }   from '../_lib/memory.js';
+import { serverCallHeaders } from '../_lib/agentGate.js';
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } };
 
@@ -107,6 +108,7 @@ export default async function handler(req, res) {
           method:  'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...serverCallHeaders(),
             ...(process.env.INTERNAL_SECRET ? { 'x-internal-secret': process.env.INTERNAL_SECRET } : {}),
           },
           body:    JSON.stringify({

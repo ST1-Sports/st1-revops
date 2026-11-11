@@ -11,6 +11,7 @@
 
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
+import { bindCaller, requireCaller } from '../_lib/agentGate.js';
 
 const VALID_MODULES  = ['Contact', 'Lead'];
 const VALID_STATUSES = ['IN_PROGRESS', 'COMPLETE'];
@@ -18,14 +19,17 @@ const VALID_STATUSES = ['IN_PROGRESS', 'COMPLETE'];
 export default async function handler(req, res) {
   setCors(res, 'GET, PATCH, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  const caller = bindCaller(await requireCaller(req, res));
+  if (!caller) return;
 
   const { id } = req.query;
   if (!id) return res.status(400).json({ error: 'Session id is required' });
 
   // ── GET ─────────────────────────────────────────────────────────────────────
   if (req.method === 'GET') {
-    const repId = req.query.repId;
-    if (!repId) return res.status(400).json({ error: 'repId query param is required' });
+    const repId = caller.repId;
+    if (!repId) return res.status(400).json({ error: 'Sign in to open this talk track' });
 
     try {
       const session = await prisma.talkTrackSession.findUnique({ where: { id } });
@@ -41,8 +45,8 @@ export default async function handler(req, res) {
   // ── PATCH ───────────────────────────────────────────────────────────────────
   if (req.method === 'PATCH') {
     const body  = req.body || {};
-    const repId = body.repId;
-    if (!repId) return res.status(400).json({ error: 'repId is required' });
+    const repId = caller.repId;
+    if (!repId) return res.status(400).json({ error: 'Sign in to update this talk track' });
 
     try {
       const existing = await prisma.talkTrackSession.findUnique({ where: { id } });
