@@ -5,6 +5,7 @@
  */
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
+import { bindCaller, requireCaller } from '../_lib/agentGate.js'
 
 const SCOPE  = 'tools'
 const ENTITY = 'registry'
@@ -12,6 +13,8 @@ const ENTITY = 'registry'
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res, { adminOnly: req.method !== 'GET' }))) return
 
   try {
     if (req.method === 'GET') {

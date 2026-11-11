@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { allowAppOrToolAuth } from '../../api/_lib/ai-tools/auth.js';
 
 describe('allowAppOrToolAuth', () => {
-  it('treats a request with no bearer as the in-app Hub', () => {
-    const auth = allowAppOrToolAuth({ headers: {} });
-    assert.equal(auth.ok, true);
-    assert.equal(auth.subject, 'revops-app');
-    assert.equal(auth.scopes.has('knowledge:write'), true);
+  // The in-app Hub is now identified by the signed-in session (see api/_lib/agentGate.test.js);
+  // a request with no credentials used to get full scopes and is now rejected.
+  it('rejects a request with no session and no API key', async () => {
+    const auth = await allowAppOrToolAuth({ headers: {} });
+    assert.equal(auth.ok, false);
+    assert.equal(auth.status, 401);
   });
 });

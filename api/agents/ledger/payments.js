@@ -18,6 +18,7 @@
 import { setCors }             from '../../_lib/cors.js'
 import { prisma }             from '../../_lib/prisma.js'
 import { postSlackMessage }   from '../../_lib/slack.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 import { booksGet,
          isPrismaTableMissing } from '../../_lib/zoho-books.js'
 
@@ -336,6 +337,8 @@ async function buildAndSendSlack(overdueList, upcomingList, nowPaid, changes) {
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const {

@@ -17,6 +17,7 @@ import {
   clipText,
   feedbackMemoryKey,
 } from '../../src/lib/chatMemory.js'
+import { currentCaller } from './agentGate.js'
 
 // ── MEMORY ────────────────────────────────────────────────────────────────────
 
@@ -155,8 +156,10 @@ export async function logInteraction({
   agentId, userId = null, action, entity = null,
   input = {}, output = {}, outcome = 'pending', blockedBy = null, dryRun = false,
 }) {
+  // The signed-in rep who asked (set by the agent gate), unless the caller passed one.
+  const by = userId ?? currentCaller()?.repId ?? null
   return prisma.agentInteraction.create({
-    data: { agentId, userId, action, entity, input, output, outcome, blockedBy, dryRun },
+    data: { agentId, userId: by, action, entity, input, output, outcome, blockedBy, dryRun },
   })
 }
 

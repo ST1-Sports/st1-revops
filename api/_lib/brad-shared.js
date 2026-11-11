@@ -5,6 +5,7 @@
 import { prisma } from './prisma.js'
 import { sendSlackText } from './slack.js'
 import { junkReplyReason } from './junkReply.js'
+import { serverCallHeaders } from './agentGate.js'
 
 export async function classifyEmailIntent(subject, bodyText, extra = {}) {
   if (junkReplyReason({
@@ -164,7 +165,7 @@ export async function promoteContactToZoho(host, contactId) {
   if (!host) return
   await fetch(`https://${host}/api/contacts/promote`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...serverCallHeaders() },
     body:    JSON.stringify({ contactId }),
   }).catch(() => {})
 }

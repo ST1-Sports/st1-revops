@@ -6,6 +6,7 @@ import { setCors } from '../_lib/cors.js';
 import { prisma } from '../_lib/prisma.js';
 import { getConfiguredToolKeys } from '../_lib/ai-tools/auth.js';
 import { isPimConfigured, listKnowledgeDocuments } from '../_lib/ai-tools/sources.js';
+import { bindCaller, requireCaller } from '../_lib/agentGate.js';
 
 export const config = { maxDuration: 20 };
 
@@ -20,6 +21,8 @@ function driveConfigured() {
 export default async function handler(req, res) {
   setCors(res, 'GET, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return;
   if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'GET only' });
 
   try {

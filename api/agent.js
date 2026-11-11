@@ -20,6 +20,7 @@ import { listKnowledgeDocuments } from './_lib/ai-tools/sources.js';
 import { ALL_READ_SCOPES } from './_lib/ai-tools/auth.js';
 import { AI_TOOLS, getTool, invokeTool } from './_lib/ai-tools/registry.js';
 import { mergeScoutActions, st1PriceActionFromPricing } from './_lib/st1PriceAction.js';
+import { bindCaller, requireCaller } from './_lib/agentGate.js';
 import {
   formatLockedQuoteBlock,
   lockedPricingToolResult,
@@ -799,6 +800,8 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return;
   if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
   // Hard deadline — ensures we always send a response before Vercel can drop the connection

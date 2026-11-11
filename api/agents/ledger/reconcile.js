@@ -34,6 +34,7 @@ import { setCors }                              from '../../_lib/cors.js'
 import { prisma }                              from '../../_lib/prisma.js'
 import { recall, remember }                    from '../../_lib/memory.js'
 import { postSlackMessage }                    from '../../_lib/slack.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 import { booksGet, booksPost,
          isPrismaTableMissing,
          ST1_OPERATING_ACCOUNT_ID }             from '../../_lib/zoho-books.js'
@@ -760,6 +761,8 @@ async function approveDeposit({ depositId, accountId, label }) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const {

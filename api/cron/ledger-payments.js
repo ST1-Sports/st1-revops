@@ -6,6 +6,8 @@
  * and sends Slack reminders for overdue and upcoming-due invoices.
  */
 
+import { serverCallHeaders } from '../_lib/agentGate.js'
+
 export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret) {
@@ -19,7 +21,7 @@ export default async function handler(req, res) {
 
   const r = await fetch(`${base}/api/agents/ledger/payments`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...serverCallHeaders() },
     body:    JSON.stringify({ dryRun: false, lookAheadDays: 7, limit: 200 }),
   })
 

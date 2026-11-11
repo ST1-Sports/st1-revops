@@ -50,6 +50,7 @@ import { setCors }      from '../../_lib/cors.js'
 import { prisma }       from '../../_lib/prisma.js'
 import { getZohoToken } from '../../_lib/zoho-token.js'
 import { booksGet }     from '../../_lib/zoho-books.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 
 const CRM = 'https://www.zohoapis.com/crm/v3'
 const CLOSED_STAGES = ['Closed Won', 'Closed Lost']
@@ -399,6 +400,8 @@ export async function aggregateSnapshot({ periodType = 'WEEKLY', toDate, dryRun 
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const {

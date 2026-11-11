@@ -42,6 +42,7 @@
 import { setCors }        from '../../_lib/cors.js'
 import { prisma }         from '../../_lib/prisma.js'
 import { fetchAllDeals }  from './aggregate.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 
 const CLOSED_STAGES = ['Closed Won', 'Closed Lost']
 const DEFAULT_GROSS_MARGIN_PCT = 35 // fallback when no snapshot or quote history has margin data
@@ -348,6 +349,8 @@ export async function backfillActuals() {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const { task = 'forecast', horizonMonths = 3, dryRun = true } = req.body || {}

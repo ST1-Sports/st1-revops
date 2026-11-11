@@ -11,6 +11,7 @@
  */
 
 import { setCors } from '../_lib/cors.js';
+import { bindCaller, requireCaller } from '../_lib/agentGate.js';
 
 const MODEL = 'claude-sonnet-4-20250514';
 
@@ -19,6 +20,8 @@ const SYSTEM = `You are a sales rep for ST1 Sports, a nationwide athletic equipm
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return;
   if (req.method !== 'POST')    return res.status(405).json({ error: 'POST only' });
 
   const apiKey = process.env.ANTHROPIC_KEY;

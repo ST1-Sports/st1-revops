@@ -13,6 +13,8 @@
  * store names from the last 90 days of Stripe charge history before classifying.
  */
 
+import { serverCallHeaders } from '../_lib/agentGate.js'
+
 export default async function handler(req, res) {
   // Vercel cron sends Authorization: Bearer $CRON_SECRET — validate if set
   const cronSecret = process.env.CRON_SECRET
@@ -27,7 +29,7 @@ export default async function handler(req, res) {
 
   const r = await fetch(`${base}/api/agents/ledger/reconcile`, {
     method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...serverCallHeaders() },
     body:    JSON.stringify({ task: 'reconcile', dryRun: false, limit: 50 }),
   })
 

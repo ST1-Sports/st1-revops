@@ -76,6 +76,7 @@ import { prisma }        from '../../_lib/prisma.js'
 import { booksGet }      from '../../_lib/zoho-books.js'
 import { logInteraction, remember } from '../../_lib/memory.js'
 import { fetchAllDeals, classifyQuote } from './aggregate.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 import {
   SEASONALITY,
   addDays,
@@ -716,6 +717,8 @@ export async function generateInsights({ dryRun = true } = {}) {
 export default async function handler(req, res) {
   setCors(res)
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
 
   const { task = 'generate', dryRun = true, command } = req.body || {}

@@ -23,6 +23,7 @@ import { getZohoToken }                 from '../../_lib/zoho-token.js'
 import { booksGet, booksPost,
          isPrismaTableMissing }          from '../../_lib/zoho-books.js'
 import { requireInternalSecret }        from '../../_lib/internalAuth.js'
+import { bindCaller, requireCaller } from '../../_lib/agentGate.js'
 
 export const config = { api: { bodyParser: { sizeLimit: '1mb' } } }
 
@@ -314,6 +315,8 @@ async function getInvoiceStatus(dealInvoiceId) {
 export default async function handler(req, res) {
   setCors(res, 'POST, OPTIONS')
   if (req.method === 'OPTIONS') return res.status(200).end()
+  // Agents spend model credits and read company data: signed-in reps (or this deployment's server jobs).
+  if (!bindCaller(await requireCaller(req, res))) return
   if (req.method !== 'POST')   return res.status(405).json({ error: 'POST only' })
   if (!requireInternalSecret(req, res)) return
 
