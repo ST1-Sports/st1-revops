@@ -2,6 +2,8 @@ import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { seedRadarConfig } from '../_lib/radar/seed.js';
 import { syncConnection } from '../_lib/radar/sync.js';
+import { requireRep } from '../_lib/session.js';
+import { decryptSecret } from '../_lib/radar/crypto.js';
 
 export const config = { maxDuration: 300 };
 
@@ -25,8 +27,9 @@ export default async function handler(req, res) {
   setCors(res, 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const userId = String(req.query?.userId || req.body?.userId || '').trim();
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const me = await requireRep(req, res);
+  if (!me) return;
+  const userId = me.repId;
 
   if (req.method === 'GET') {
     const row = await prisma.inboxConnection.findUnique({
@@ -48,6 +51,19 @@ export default async function handler(req, res) {
       where: { userId_provider: { userId, provider: 'gmail' } },
     });
     if (!row) return res.json({ ok: true, disconnected: true });
+    // Best effort: revoke the grant at Google too, not only locally.
+    if (row.encryptedRefreshToken) {
+      try {
+        await fetch('https://oauth2.googleapis.com/revoke', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ token: decryptSecret(row.encryptedRefreshToken) }).toString(),
+          signal: AbortSignal.timeout(8000),
+        });
+      } catch (err) {
+        console.warn('[radar] token revoke failed:', err.message);
+      }
+    }
     await prisma.inboxConnection.update({
       where: { id: row.id },
       data: { status: 'disconnected', encryptedRefreshToken: '', lastError: null },
@@ -72,7 +88,9 @@ export default async function handler(req, res) {
       return res.json({ ok: true, connection: publicConnection(updated) });
     }
     await seedRadarConfig();
-    const result = await syncConnection(row.id, { mode: action === 'incremental' ? 'incremental' : 'backfill' });
+    // 'resync' picks incremental or (unfinished) backfill automatically; 'backfill' forces a full pass.
+    const mode = action === 'incremental' || action === 'backfill' ? action : undefined;
+    const result = await syncConnection(row.id, { mode });
     const fresh = await prisma.inboxConnection.findUnique({ where: { id: row.id } });
     return res.json({ ...result, connection: publicConnection(fresh) });
   }

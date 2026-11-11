@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { radarFetch } from "../lib/session.js";
 
 const B = {
   white: "#FFFFFF", surface: "#F8F8F8",
@@ -12,24 +13,42 @@ export default function RadarInboxCard({ userId, isAdmin = false, hideAdminHint 
   const [busy, setBusy] = useState("");
   const [msg, setMsg] = useState("");
 
-  const load = () => {
+  const load = useCallback(() => {
     if (!userId) return;
-    fetch(`/api/radar/connection?userId=${encodeURIComponent(userId)}`)
-      .then(r => r.json())
-      .then(d => setConn(d.connection || null))
+    radarFetch("/api/radar/connection")
+      .then(async r => {
+        const d = await r.json();
+        if (r.status === 401) setMsg(d.error || "Sign in again to use Follow-Up Radar.");
+        setConn(d.connection || null);
+      })
       .catch(() => {});
-  };
+  }, [userId]);
 
-  useEffect(() => { load(); }, [userId]);
+  useEffect(() => { load(); }, [load]);
+
+  const connect = async () => {
+    setBusy("connect");
+    setMsg("");
+    try {
+      const r = await radarFetch("/api/radar/oauth", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok || !d.url) throw new Error(d.error || "Could not start Gmail connect");
+      window.location.href = d.url;
+      return;
+    } catch (e) {
+      setMsg(e.message);
+    }
+    setBusy("");
+  };
 
   const act = async (method, body) => {
     setBusy(method);
     setMsg("");
     try {
-      const r = await fetch("/api/radar/connection", {
+      const r = await radarFetch("/api/radar/connection", {
         method,
         headers: { "Content-Type": "application/json" },
-        body: method === "GET" ? undefined : JSON.stringify({ userId, ...body }),
+        body: method === "GET" ? undefined : JSON.stringify({ ...body }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || r.statusText);
@@ -64,10 +83,10 @@ export default function RadarInboxCard({ userId, isAdmin = false, hideAdminHint 
           </div>
         </div>
       ) : (
-        <a href={`/api/radar/oauth?userId=${encodeURIComponent(userId || "")}`}
-          style={{ display: "inline-block", background: B.orange, color: "#fff", textDecoration: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 600 }}>
-          Connect Gmail
-        </a>
+        <button type="button" disabled={!!busy} onClick={connect}
+          style={{ display: "inline-block", background: B.orange, color: "#fff", border: "none", borderRadius: 4, padding: "8px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+          {busy === "connect" ? "Opening Google…" : "Connect Gmail"}
+        </button>
       )}
       {msg && <div style={{ marginTop: 8, fontSize: 11, color: B.muted }}>{msg}</div>}
       {isAdmin && !hideAdminHint && (

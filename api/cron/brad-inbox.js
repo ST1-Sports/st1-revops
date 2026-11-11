@@ -17,7 +17,7 @@
 import { setCors } from '../_lib/cors.js'
 import { prisma }  from '../_lib/prisma.js'
 import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from '../_lib/brad-shared.js'
-import { upsertBradFollowUp } from '../_lib/radar/brad.js'
+import { handOffBradReply } from '../_lib/radar/brad.js'
 import { replayFailedBradSlack, canSendBradSlack } from '../_lib/bradSlackReplay.js'
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
@@ -83,6 +83,11 @@ async function pollInbox(host) {
 
     const from    = parseAddr(getHdr('From'))
     const subject = getHdr('Subject') || '(no subject)'
+    const inboundHeaders = {
+      'auto-submitted': getHdr('Auto-Submitted'),
+      // X-Auto-Response-Suppress is not used: Outlook can set it on ordinary mail.
+      'x-autoreply': getHdr('X-Autoreply'),
+    }
 
     // Extract body text
     let bodyText = ''
@@ -99,7 +104,7 @@ async function pollInbox(host) {
 
     const contact = await prisma.salesContact.findUnique({ where: { email: from.email } }).catch(() => null)
 
-    const verdict = await classifyEmailIntent(subject, bodyText)
+    const verdict = await classifyEmailIntent(subject, bodyText, { fromEmail: from.email, headers: inboundHeaders })
 
     await fetch(`${GMAIL_BASE}/messages/${msg.id}/modify`, {
       method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' },
@@ -122,7 +127,7 @@ async function pollInbox(host) {
   await Promise.all(postActions.map(async pa => {
     const [slack, radar] = await Promise.all([
       notifyBradSlack(pa.assigned, pa.contactName, pa.from.email, pa.subject, pa.bodyText),
-      upsertBradFollowUp({ assigned: pa.assigned, fromEmail: pa.from.email, contactName: pa.contactName, subject: pa.subject, bodyText: pa.bodyText }),
+      handOffBradReply(host, { assigned: pa.assigned, fromEmail: pa.from.email, contactName: pa.contactName, subject: pa.subject, bodyText: pa.bodyText }),
     ])
     await prisma.agentInteraction.create({
       data: {
@@ -135,6 +140,7 @@ async function pollInbox(host) {
           assignedName: pa.assigned.name,
           slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
           radar: radar?.ok ? radar.followUpItemId : (radar?.error || 'failed'),
+          email: radar?.email,
         },
         outcome: 'pending',
         dryRun:  false,

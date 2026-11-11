@@ -18,6 +18,7 @@ import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { updateSettingSafely } from './_lib/settingSync.js';
 import { hashLoginCode, isAllowedLoginEmail, normalizeLoginEmail, repNameFromEmail, safeEqual } from './_lib/loginCode.js';
+import { issueSessionToken } from './_lib/session.js';
 
 const MAX_ATTEMPTS = 5;
 
@@ -80,6 +81,8 @@ export default async function handler(req, res) {
       repId: repOut.id,
       rep: repOut,
       appUser: { repId: appUserOut.repId, isAdmin: !!appUserOut.isAdmin },
+      // Proves this rep's identity to routes with per-rep data (Follow-Up Radar).
+      sessionToken: issueSessionToken(repOut.id),
     });
   } catch (e) {
     console.error('[login-verify-code]', e.message);

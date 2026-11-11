@@ -58,7 +58,6 @@ async function attachLabelNames(thread, labelMap) {
 }
 
 async function upsertSnapshot(connection, thread, filterReason) {
-  const last = thread.messages?.[thread.messages.length - 1];
   const participants = [];
   const seen = new Set();
   for (const m of thread.messages || []) {
@@ -232,13 +231,19 @@ export async function syncConnection(connectionId, { mode } = {}) {
   try {
     const accessToken = await refreshAccessToken(connection.encryptedRefreshToken);
     const me = await profile(accessToken);
+    // Owner detection and draft From: use the mailbox's real address from the first run.
+    const ownerEmail = String(me.emailAddress || connection.email || '').toLowerCase();
     const labels = await listLabels(accessToken);
     const labelMap = new Map(labels.map(l => [l.id, l.name]));
     const vendors = await vendorDomainSet();
     const days = connection.backfillDays || 120;
     const afterYmd = ymdDaysAgo(days);
 
-    const useIncremental = (mode || (connection.lastSyncAt && connection.historyId ? 'incremental' : 'backfill')) === 'incremental';
+    // An unfinished backfill (saved page cursor) is completed before switching to incremental.
+    const backfillPending = Boolean(connection.syncCursor?.pageToken);
+    const useIncremental =
+      (mode || (connection.lastSyncAt && connection.historyId && !backfillPending ? 'incremental' : 'backfill')) ===
+      'incremental';
     let threadIds = [];
     let nextHistoryId = me.historyId || connection.historyId;
     let nextPageToken = null;
@@ -297,11 +302,11 @@ export async function syncConnection(connectionId, { mode } = {}) {
     });
     const snapEvents = recentSnaps.map(snap => ({
       subject: snap.subject,
-      recipients: (Array.isArray(snap.participants) ? snap.participants : []).map(p => p.email).filter(e => e && e !== connection.email),
+      recipients: (Array.isArray(snap.participants) ? snap.participants : []).map(p => p.email).filter(e => e && e !== ownerEmail),
       at: snap.lastMessageAt || Date.now(),
     }));
     const campaign = campaignSubjectKeys([
-      ...sentEventsFromThreads(threads, connection.email),
+      ...sentEventsFromThreads(threads, ownerEmail),
       ...snapEvents,
     ]);
     const toClassify = [];
@@ -312,7 +317,7 @@ export async function syncConnection(connectionId, { mode } = {}) {
       }).catch(() => null);
       const hash = threadHash(t);
       const filt = hardFilter(t, {
-        ownerEmail: connection.email,
+        ownerEmail,
         vendorDomains: vendors,
         campaignSubjects: campaign,
       });
@@ -333,7 +338,7 @@ export async function syncConnection(connectionId, { mode } = {}) {
     const classifiedItems = [];
     await runPool(toClassify, CLASSIFY_CONCURRENCY, async (t) => {
       try {
-        const cls = await classifyThread(t, { ownerEmail: connection.email });
+        const cls = await classifyThread(t, { ownerEmail });
         stats.classified++;
         const item = await upsertFollowUp(connection, t, cls);
         if (item.bucket === 'owes_reply' || item.bucket === 'awaiting_them') {
@@ -345,8 +350,15 @@ export async function syncConnection(connectionId, { mode } = {}) {
       }
     });
 
+    // Only recent conversations get an automatic draft; a first backfill must not fill Drafts
+    // with replies to stale threads. Older ones can still be drafted on request.
+    const maxDraftAgeMs = Math.max(1, Number(process.env.RADAR_AUTO_DRAFT_MAX_AGE_DAYS) || 14) * 86400000;
     for (const { item, thread } of classifiedItems) {
       if (item.bucket !== 'owes_reply') continue;
+      if (!item.lastTouchAt || Date.now() - new Date(item.lastTouchAt).getTime() > maxDraftAgeMs) {
+        stats.skippedDraft++;
+        continue;
+      }
       if (emailedWithinBusinessDays(item.lastTouchAt, item.lastTouchBy, 3)) {
         stats.skippedDraft++;
         continue;
@@ -356,7 +368,12 @@ export async function syncConnection(connectionId, { mode } = {}) {
       });
       if (existingDraft) continue;
       try {
-        const result = await createRadarDraft({ connection, item, thread, skipRecentCheck: true });
+        const result = await createRadarDraft({
+          connection: { ...connection, email: ownerEmail || connection.email },
+          item,
+          thread,
+          skipRecentCheck: true,
+        });
         if (result.skipped) stats.skippedDraft++;
         else stats.drafted++;
       } catch (err) {
@@ -372,7 +389,7 @@ export async function syncConnection(connectionId, { mode } = {}) {
         status: 'active',
         lastSyncAt: new Date(),
         historyId: nextHistoryId ? String(nextHistoryId) : connection.historyId,
-        email: me.emailAddress || connection.email,
+        email: ownerEmail || connection.email,
         syncCursor: nextPageToken ? { pageToken: nextPageToken } : null,
         lastError: stats.errors.length ? stats.errors.slice(0, 8).join('; ') : null,
       },
@@ -392,7 +409,8 @@ export async function syncAllConnections() {
   await seedRadarConfig();
   const conns = await prisma.inboxConnection.findMany({
     where: { status: { in: ['active', 'error', 'syncing'] } },
-    orderBy: { lastSyncAt: 'asc' },
+    // Never-synced (new) connections first, so a long list cannot starve them.
+    orderBy: { lastSyncAt: { sort: 'asc', nulls: 'first' } },
   });
   const results = [];
   for (const c of conns) {

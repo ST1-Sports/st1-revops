@@ -1,6 +1,7 @@
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { loadLiveDeals, summarizeDeals } from '../_lib/radar/matchDeals.js';
+import { requireRep } from '../_lib/session.js';
 
 function openWhere(userId, extra = {}) {
   return {
@@ -49,9 +50,11 @@ export default async function handler(req, res) {
   setCors(res, 'GET, POST, PATCH, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const userId = String(req.query?.userId || req.body?.userId || '').trim();
-  if (!userId) return res.status(400).json({ error: 'userId required' });
-  const isAdmin = req.query?.isAdmin === '1' || req.body?.isAdmin === true;
+  // The rep comes from the signed session, never from the request; admin status is server-side.
+  const me = await requireRep(req, res);
+  if (!me) return;
+  const userId = me.repId;
+  const isAdmin = me.isAdmin;
 
   if (req.method === 'GET') {
     if (req.query?.counts === '1') {

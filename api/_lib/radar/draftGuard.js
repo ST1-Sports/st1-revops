@@ -3,7 +3,7 @@
  * Facts not present in the thread must be [BRACKETED PLACEHOLDERS].
  */
 
-const PLACEHOLDER_RE = /\[([A-Z][A-Z0-9 _/\-]{1,40})\]/g;
+const PLACEHOLDER_RE = /\[([A-Z][A-Z0-9 _/-]{1,40})\]/g;
 const QTY_RE = /\b(\d{1,5})\s*(pcs?|pieces?|units?|sets?|dozens?|pairs?|cases?|each|ea)\b/gi;
 const DATE_RE = /\b(?:\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?)\b/gi;
 const ETA_RE = /\b(?:eta|in stock|ships?|lead time)\b[^.\n]{0,40}?\b(\d{1,3})\s*(?:day|week|business)\b/gi;

@@ -6,6 +6,7 @@ import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { createRadarDraft } from '../_lib/radar/drafts.js';
 import { getFullThread, refreshAccessToken } from '../_lib/radar/gmail.js';
+import { requireRep } from '../_lib/session.js';
 
 export const config = { maxDuration: 60 };
 
@@ -14,8 +15,10 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
 
-  const { userId, ids, id, skipRecentCheck } = req.body || {};
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const me = await requireRep(req, res);
+  if (!me) return;
+  const userId = me.repId;
+  const { ids, id, skipRecentCheck } = req.body || {};
   const itemIds = Array.isArray(ids) ? ids : (id ? [id] : []);
   if (!itemIds.length) return res.status(400).json({ error: 'id or ids required' });
 

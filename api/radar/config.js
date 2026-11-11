@@ -1,12 +1,15 @@
 import { prisma } from '../_lib/prisma.js';
 import { setCors } from '../_lib/cors.js';
 import { seedRadarConfig } from '../_lib/radar/seed.js';
+import { requireRep } from '../_lib/session.js';
 
 export default async function handler(req, res) {
   setCors(res, 'GET, POST, DELETE, OPTIONS');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  const isAdmin = req.query?.isAdmin === '1' || req.body?.isAdmin === true;
+  const me = await requireRep(req, res);
+  if (!me) return;
+  const isAdmin = me.isAdmin;
   if (req.method === 'GET') {
     await seedRadarConfig();
     const vendors = await prisma.radarVendorDomain.findMany({ orderBy: { domain: 'asc' } });

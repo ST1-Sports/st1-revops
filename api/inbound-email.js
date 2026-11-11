@@ -33,7 +33,7 @@
 import { prisma } from './_lib/prisma.js';
 import { setCors } from './_lib/cors.js';
 import { classifyEmailIntent, pickRep, notifyBradSlack, parseAddr, promoteContactToZoho } from './_lib/brad-shared.js';
-import { upsertBradFollowUp } from './_lib/radar/brad.js';
+import { handOffBradReply } from './_lib/radar/brad.js';
 
 // Classify a Brad reply; on positive intent, assign to a rep + promote to Zoho.
 // Runs fire-and-forget so the inbound webhook returns fast.
@@ -41,7 +41,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
   try {
     const contact = await prisma.salesContact.findUnique({ where: { email: fromEmail } }).catch(() => null)
 
-    const verdict = await classifyEmailIntent(subject, bodyText)
+    const verdict = await classifyEmailIntent(subject, bodyText, { fromEmail })
     if (verdict !== 'INTENT') return
 
     const assigned    = await pickRep()
@@ -51,7 +51,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
 
     const [slack, radar] = await Promise.all([
       notifyBradSlack(assigned, contactName, fromEmail, subject, bodyText),
-      upsertBradFollowUp({ assigned, fromEmail, contactName, subject, bodyText }),
+      handOffBradReply(host, { assigned, fromEmail, contactName, subject, bodyText }),
     ])
 
     await prisma.agentInteraction.create({
@@ -65,6 +65,7 @@ async function classifyAndPromote(fromEmail, subject, bodyText, host) {
           assignedName: assigned.name,
           slack: slack?.ok ? 'sent' : (slack?.error || 'failed'),
           radar: radar?.ok ? radar.followUpItemId : (radar?.error || 'failed'),
+          email: radar?.email,
         },
         outcome: 'pending',
         dryRun:  false,

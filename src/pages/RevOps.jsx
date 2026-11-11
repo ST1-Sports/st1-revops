@@ -58,8 +58,10 @@ import {
   quoteNotesFromDescription,
 } from "../lib/quoteLines.js";
 import { fetchAllAreaContactIds, createOutreachBatchFromIds, listNameForArea, outreachPathForBatch } from "../lib/prospectingOutreach.js";
+import { isBradFollowUpReply } from "../lib/junkReply.js";
 import { COACH_ROLES } from "../../api/_lib/roleUtils.js";
 import { internalAuthHeaders } from "../lib/internalAuth.js";
+import { radarFetch, saveSessionToken } from "../lib/session.js";
 const HOME_AGENT_NAME = "Scout";
 const CmdCenter      = lazy(() => import('./CommandCenter.jsx'))
 const ExpansionPage  = lazy(() => import('./Expansion.jsx'))
@@ -1133,7 +1135,7 @@ return { ...rep, initials, color: B.blue, role: rep.title || "rep", isAdmin: app
 })();
 useEffect(()=>{
 if(!s.currentUserId) return;
-fetch(`/api/radar/items?userId=${encodeURIComponent(s.currentUserId)}&counts=1`)
+radarFetch("/api/radar/items?counts=1")
 .then(r=>r.json()).then(d=>setRadarOwes(Number(d.owesReply)||0)).catch(()=>{});
 },[s.currentUserId,mod]);
 const crmSyncRef = useRef(null);
@@ -1523,13 +1525,13 @@ style={{width:"100%",background:mod===n.id?"rgba(243,115,33,0.15)":"transparent"
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:11,color:"#fff",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{cu?.name||s.currentUserId}</div>
 {cu&&<div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:6,color:"rgba(255,255,255,0.35)",letterSpacing:1}}>{(cu.role||"").toUpperCase()}</div>}
 </div>
-<button onClick={()=>dispatch("LOGOUT")} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.5)",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>OUT</button>
+<button onClick={()=>{saveSessionToken(null);dispatch("LOGOUT");}} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.5)",fontSize:9,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.5,padding:"3px 7px",borderRadius:4,cursor:"pointer"}}>OUT</button>
 </div>}
 {s.currentUserId&&slim&&<div style={{padding:"8px 0",borderTop:"1px solid rgba(255,255,255,0.07)",display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
 {cu&&<div style={{width:26,height:26,borderRadius:"50%",background:cu.color,display:"flex",alignItems:"center",justifyContent:"center"}}>
 <span style={{fontFamily:"'Russo One',sans-serif",fontSize:9,color:B.white}}>{cu.initials}</span>
 </div>}
-<button onClick={()=>dispatch("LOGOUT")} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.4)",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
+<button onClick={()=>{saveSessionToken(null);dispatch("LOGOUT");}} style={{background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",color:"rgba(255,255,255,0.4)",fontSize:7,fontFamily:"'Lexend Zetta',sans-serif",letterSpacing:.3,padding:"2px 5px",borderRadius:3,cursor:"pointer"}}>OUT</button>
 </div>}
 </aside>
 {mobileNavOpen&&<div onClick={()=>setMobileNavOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",zIndex:49}}/>}
@@ -1747,6 +1749,7 @@ if(d.ok){
 if(reps.some(x=>x.id===d.repId)) dispatch("UPDATE_REP",d.rep);
 else dispatch("ADD_REP",d.rep);
 dispatch("SET_APP_USER",d.appUser);
+saveSessionToken(d.sessionToken||null);
 dispatch("LOGIN",d.repId);
 }else{
 setEmailError(d.error||"Incorrect code");
@@ -7865,7 +7868,7 @@ setBradRepliesLoading(true);
 try{
 const r=await fetch('/api/brad-replies');
 const d=await r.json();
-setBradReplies((d.replies||[]).filter(r=>r.outcome==='pending'));
+setBradReplies((d.replies||[]).filter(isBradFollowUpReply));
 }catch{}
 setBradRepliesLoading(false);
 };
@@ -9525,13 +9528,13 @@ setEnrollingContact(null);
 </div>
 {bradTab==="prospect"&&<div>
 {/* Positive reply queue */}
-{bradReplies.length>0&&(
+{bradReplies.filter(isBradFollowUpReply).length>0&&(
 <div style={{background:B.white,border:`2px solid ${B.green}`,borderRadius:8,padding:14,marginBottom:20}}>
 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:6}}>
 <div style={{fontFamily:"'Lexend Zetta',sans-serif",fontSize:9,color:B.green,letterSpacing:1}}>🔥 POSITIVE REPLIES — NEEDS FOLLOW-UP</div>
 <button onClick={loadBradReplies} style={{background:"none",border:"none",color:B.muted,fontSize:10,cursor:"pointer",fontFamily:"'Lexend',sans-serif"}}>↺ refresh</button>
 </div>
-{bradReplies.some(r=>(r.output||{}).slack!=="sent")&&(
+{bradReplies.filter(isBradFollowUpReply).some(r=>(r.output||{}).slack!=="sent")&&(
 <div style={{background:B.redBg,border:`1px solid ${B.red}40`,borderRadius:6,padding:"10px 12px",marginBottom:10}}>
 <div style={{fontFamily:"'Lexend',sans-serif",fontSize:12,color:B.text,marginBottom:6,lineHeight:1.45}}>
 Slack alerts are not posting. The Slack app only has incoming-webhook. Paste the Incoming Webhook URL from api.slack.com → your app → Incoming Webhooks (pick #sales). Saving it sends every missed reply to Slack now.
@@ -9547,7 +9550,7 @@ style={{background:bradSlackSaving||!bradSlackWebhook.trim()?B.border:B.orange,c
 </div>
 )}
 <div style={{display:"flex",flexDirection:"column",gap:8}}>
-{bradReplies.map(rep=>{
+{bradReplies.filter(isBradFollowUpReply).map(rep=>{
 const inp=rep.input||{};const out=rep.output||{};
 return(
 <div key={rep.id} style={{background:B.surface,borderRadius:6,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:12,borderLeft:`3px solid ${B.green}`,flexWrap:"wrap"}}>
@@ -10675,7 +10678,7 @@ if(candidates.length){
 // +50 "replied" score that pushes a contact toward a real Zoho record.
 // Classify before crediting it, same INTENT/PASS check Brad's inbound-
 // email pipeline already uses for exactly this reason.
-const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||""};});
+const items=candidates.map(({c})=>{const m=byEmail.get(c.email.toLowerCase());return {subject:m.subject||"",snippet:m.snippet||"",fromEmail:c.email||""};});
 const cls=await fetch("/api/gmail",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify-intent",items})}).then(r=>r.json()).catch(()=>({results:[]}));
 candidates.forEach(({e},i)=>{
 if((cls.results||[])[i]==="INTENT"){markReplied(campId,e.contactId);found++;}

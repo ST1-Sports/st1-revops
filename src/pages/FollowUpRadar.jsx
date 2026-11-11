@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import RadarInboxCard from "./RadarInboxCard.jsx";
+import { radarFetch } from "../lib/session.js";
 
 const B = {
   pageBg: "#F4F4F4", white: "#FFFFFF", surface: "#F8F8F8",
@@ -33,31 +34,35 @@ export default function FollowUpRadarPage({ s, cu }) {
   const [linkFor, setLinkFor] = useState(null);
   const [err, setErr] = useState("");
 
-  const qs = `userId=${encodeURIComponent(userId)}`;
+  // Identity and admin status come from the signed session on the server.
 
   const loadCounts = useCallback(() => {
     if (!userId) return;
     const roll = isAdmin ? `&rollup=1${teamDetails ? "&details=1" : ""}` : "";
-    fetch(`/api/radar/items?${qs}&counts=1&deals=1&isAdmin=${isAdmin ? "1" : "0"}${roll}`)
-      .then(r => r.json())
+    radarFetch(`/api/radar/items?counts=1&deals=1${roll}`)
+      .then(async r => {
+        const d = await r.json();
+        if (r.status === 401) setErr(d.error || "Sign in again to use Follow-Up Radar.");
+        return d;
+      })
       .then(d => {
         setCounts({ owesReply: d.owesReply || 0, awaiting: d.awaiting || 0 });
         setTeam(d.team || null);
         setDeals(d.deals || []);
       })
       .catch(() => {});
-  }, [userId, isAdmin, teamDetails, qs]);
+  }, [userId, isAdmin, teamDetails]);
 
   const loadItems = useCallback(() => {
     if (!userId) return;
-    fetch(`/api/radar/items?${qs}&bucket=${tab}`)
+    radarFetch(`/api/radar/items?bucket=${tab}`)
       .then(r => r.json())
       .then(d => setItems(d.items || []))
       .catch(e => setErr(e.message));
-  }, [userId, tab, qs]);
+  }, [userId, tab]);
 
   useEffect(() => { loadCounts(); }, [loadCounts]);
-  useEffect(() => { loadItems(); setSel(new Set()); }, [loadItems]);
+  useEffect(() => { loadItems(); }, [loadItems]);
 
   const sorted = useMemo(() => {
     return [...items].sort((a, b) => (b.intentScore - a.intentScore) || ((b.daysSinceLastTouch || 0) - (a.daysSinceLastTouch || 0)));
@@ -66,10 +71,10 @@ export default function FollowUpRadarPage({ s, cu }) {
   const patch = async (id, action, extra = {}) => {
     setBusy(id + action);
     try {
-      const r = await fetch("/api/radar/items", {
+      const r = await radarFetch("/api/radar/items", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, isAdmin, id, action, ...extra }),
+        body: JSON.stringify({ id, action, ...extra }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "update failed");
@@ -86,10 +91,10 @@ export default function FollowUpRadarPage({ s, cu }) {
     setBusy("draft");
     setErr("");
     try {
-      const r = await fetch("/api/radar/draft", {
+      const r = await radarFetch("/api/radar/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, ids, action: regenerate ? "regenerate" : "create", skipRecentCheck: regenerate }),
+        body: JSON.stringify({ ids, action: regenerate ? "regenerate" : "create", skipRecentCheck: regenerate }),
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || "draft failed");
@@ -144,7 +149,7 @@ export default function FollowUpRadarPage({ s, cu }) {
           { id: "owes_reply", label: "You owe a reply", n: counts.owesReply },
           { id: "awaiting_them", label: "Waiting on them", n: counts.awaiting },
         ].map(t => (
-          <button key={t.id} onClick={() => setTab(t.id)}
+          <button key={t.id} onClick={() => { setTab(t.id); setSel(new Set()); }}
             style={{ background: tab === t.id ? B.orange : B.white, color: tab === t.id ? "#fff" : B.text, border: `1px solid ${tab === t.id ? B.orange : B.border}`, borderRadius: 16, padding: "6px 12px", fontSize: 12 }}>
             {t.label} <strong>{t.n}</strong>
           </button>
